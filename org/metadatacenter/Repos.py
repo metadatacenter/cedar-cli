@@ -77,6 +77,8 @@ class Repos:
         self.map["cedar-docs"] = Repo("cedar-docs", "misc")
         self.map["cedar-util"] = Repo("cedar-util", "misc")
 
+        self.map["cedar-cli"] = Repo("cedar-cli", "python")
+
         self.map["cedar-cee-demo-api-php"] = Repo("cedar-cee-demo-api-php", "php")
 
     def get_list(self):

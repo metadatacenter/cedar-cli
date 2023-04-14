@@ -3,7 +3,9 @@
 
 ```bash
 
-gocedar
+export CEDAR_HOME='/Users/cedar-dev/CEDAR/'
+
+cd ${CEDAR_HOME}
 git clone https://github.com/metadatacenter/cedar-cli
 
 cd cedar-cli
