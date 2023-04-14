@@ -4,7 +4,10 @@
 ```bash
 
 gocedar
+git clone https://github.com/metadatacenter/cedar-cli
+
 cd cedar-cli
+git checkout develop
 
 python -m venv ./.venv
 pip install -r requirements.txt
