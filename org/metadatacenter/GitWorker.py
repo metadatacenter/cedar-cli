@@ -9,6 +9,7 @@ from rich.style import Style
 from rich.table import Table
 
 from org.metadatacenter import Repos, Repo
+from org.metadatacenter.ResultTable import ResultTable
 
 console = Console()
 
@@ -31,9 +32,7 @@ class GitWorker:
                                  status_line="Processing",
                                  repo_list=None
                                  ):
-        table = Table(show_lines=show_lines)
-        for column_name in headers:
-            table.add_column(column_name)
+        result = ResultTable(headers, show_lines)
         if repo_list is None:
             repo_list = self.repos.get_list()
         with Progress() as progress:
@@ -57,12 +56,24 @@ class GitWorker:
                     err += str(e)
                 except:
                     err += "Error in subprocess"
-                table.add_row(repo.name, out, err)
+                result.add_line(repo.name, out, err)
                 progress.print(out)
                 if len(err) > 0:
                     progress.print(err)
                     progress.print(Panel(err, title="[bold yellow]Error", subtitle="[bold yellow]" + repo.name, style=Style(color="red")))
                 progress.update(task, advance=1)
+        result.print_table()
+        return result
+
+    def render_status_table(self, result):
+        table = Table("Repo", "Output", "Error", "Suggested", show_lines=True)
+        for repo in result.lines:
+            if ("our branch is behind" in repo[1]):
+                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Pull")
+            elif ("ntracked files" in repo[1]):
+                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add and Push")
+            elif ("hanges not staged" in repo[1]):
+                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add and Push")
         console.print(table)
 
     def list_repos(self):
@@ -91,9 +102,10 @@ class GitWorker:
         )
 
     def status(self):
-        self.execute_shell_with_table(
+        result = self.execute_shell_with_table(
             command_list=["git status"],
         )
+        self.render_status_table(result)
 
     def checkout(self, branch: str):
         self.execute_shell_with_table(
