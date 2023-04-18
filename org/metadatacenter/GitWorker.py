@@ -1,4 +1,3 @@
-import os
 import subprocess
 
 from rich.console import Console
@@ -10,16 +9,16 @@ from rich.table import Table
 
 from org.metadatacenter import Repos, Repo
 from org.metadatacenter.ResultTable import ResultTable
+from org.metadatacenter.Worker import Worker
 
 console = Console()
 
 git_base = "https://github.com/metadatacenter/"
 
 
-class GitWorker:
+class GitWorker(Worker):
     def __init__(self, repos: Repos):
-        self.repos = repos
-        self.cedar_home = os.environ['CEDAR_HOME']
+        super().__init__(repos)
 
     def get_wd(self, repo: Repo):
         return self.cedar_home + "/" + repo.name
@@ -45,7 +44,7 @@ class GitWorker:
                 err = ""
                 try:
                     cwd = self.get_wd(repo) if cwd_is_home is False else self.cedar_home
-                    print(commands_to_execute)
+                    # print(commands_to_execute)
                     process = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
                     stdout, stderr = process.communicate()
                     out = stdout.decode('utf-8').strip()
