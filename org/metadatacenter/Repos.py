@@ -4,10 +4,10 @@ from org.metadatacenter.Repo import Repo
 class Repos:
     def __init__(self):
         self.map = {}
-        self.map["cedar-parent"] = Repo("cedar-parent", "java-wrapper")
-        self.map["cedar-libraries"] = Repo("cedar-libraries", "java-wrapper")
-        self.map["cedar-project"] = Repo("cedar-project", "java-wrapper")
-        self.map["cedar-clients"] = Repo("cedar-clients", "java-wrapper")
+        self.map["cedar-parent"] = Repo("cedar-parent", "java-wrapper", expected_build_lines=24)
+        self.map["cedar-libraries"] = Repo("cedar-libraries", "java-wrapper", expected_build_lines=709)
+        self.map["cedar-project"] = Repo("cedar-project", "java-wrapper", expected_build_lines=26506)
+        self.map["cedar-clients"] = Repo("cedar-clients", "java-wrapper", expected_build_lines=171)
 
         self.map["cedar-artifact-library"] = Repo("cedar-artifact-library", "java", is_library=True)
         self.map["cedar-config-library"] = Repo("cedar-config-library", "java", is_library=True)
@@ -42,25 +42,25 @@ class Repos:
 
         self.map["cedar-template-editor"] = Repo("cedar-template-editor", "angularJS")
 
-        self.map["cedar-artifacts"] = Repo("cedar-artifacts", "angular")
+        self.map["cedar-artifacts"] = Repo("cedar-artifacts", "angular", expected_build_lines=24)
         self.map["cedar-artifacts-dist"] = Repo("cedar-artifacts-dist", "js", dist_src="cedar-artifacts")
 
-        self.map["cedar-monitoring"] = Repo("cedar-monitoring", "angular")
+        self.map["cedar-monitoring"] = Repo("cedar-monitoring", "angular", expected_build_lines=24)
         self.map["cedar-monitoring-dist"] = Repo("cedar-monitoring-dist", "js", dist_src="cedar-monitoring")
 
-        self.map["cedar-openview"] = Repo("cedar-openview", "angular")
+        self.map["cedar-openview"] = Repo("cedar-openview", "angular", expected_build_lines=30)
         self.map["cedar-openview-dist"] = Repo("cedar-openview-dist", "js", dist_src="cedar-openview")
 
         self.map["cedar-artifacts"] = Repo("cedar-artifacts", "angular")
         self.map["cedar-artifacts-dist"] = Repo("cedar-artifacts-dist", "js", dist_src="cedar-artifacts")
 
-        self.map["cedar-embeddable-editor"] = Repo("cedar-embeddable-editor", "angular")
-        self.map["cedar-metadata-form"] = Repo("cedar-metadata-form", "angular")
+        self.map["cedar-embeddable-editor"] = Repo("cedar-embeddable-editor", "angular", expected_build_lines=29)
+        self.map["cedar-metadata-form"] = Repo("cedar-metadata-form", "angular", expected_build_lines=31)
 
-        self.map["cedar-cee-demo-angular"] = Repo("cedar-cee-demo-angular", "angular")
+        self.map["cedar-cee-demo-angular"] = Repo("cedar-cee-demo-angular", "angular", expected_build_lines=26)
         self.map["cedar-cee-demo-angular-dist"] = Repo("cedar-cee-demo-angular-dist", "js", dist_src="cedar-cee-demo-angular")
 
-        self.map["cedar-cee-docs-angular"] = Repo("cedar-cee-docs-angular", "angular")
+        self.map["cedar-cee-docs-angular"] = Repo("cedar-cee-docs-angular", "angular", expected_build_lines=40)
         self.map["cedar-cee-docs-angular-dist"] = Repo("cedar-cee-docs-angular-dist", "js", dist_src="cedar-cee-docs-angular")
 
         self.map["cedar-mkdocs"] = Repo("cedar-mkdocs", "mkdocs")
@@ -86,3 +86,30 @@ class Repos:
 
     def get_for_docker_list(self):
         return [repo for repo in list(self.map.values()) if repo.for_docker is True]
+
+    def get_parent(self):
+        for name, repo in self.map.items():
+            if repo.repo_type == "java-wrapper" and "parent" in repo.name:
+                return repo
+
+    def get_libraries(self):
+        for name, repo in self.map.items():
+            if repo.repo_type == "java-wrapper" and "libraries" in repo.name:
+                return repo
+
+    def get_project(self):
+        for name, repo in self.map.items():
+            if repo.repo_type == "java-wrapper" and "project" in repo.name:
+                return repo
+
+    def get_clients(self):
+        for name, repo in self.map.items():
+            if repo.repo_type == "java-wrapper" and "clients" in repo.name:
+                return repo
+
+    def get_angular_frontends(self):
+        repos = []
+        for name, repo in self.map.items():
+            if repo.repo_type == "angular":
+                repos.append(repo)
+        return repos

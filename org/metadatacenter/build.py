@@ -1,33 +1,42 @@
 import typer
 
+from org.metadatacenter.BuildWorker import BuildWorker
+from org.metadatacenter.Repos import Repos
+
 app = typer.Typer()
+
+repos = Repos()
+build_worker = BuildWorker(repos)
 
 
 @app.command("parent")
 def parent():
-    print("Not implemented yet!")
+    build_worker.parent()
 
 
 @app.command("libraries")
 def libraries():
-    print("Not implemented yet!")
+    build_worker.libraries()
 
 
 @app.command("project")
 def project():
-    print("Not implemented yet!")
+    build_worker.project()
 
 
 @app.command("clients")
 def clients():
-    print("Not implemented yet!")
-
-
-@app.command("frontends")
-def frontends():
-    print("Not implemented yet!")
+    build_worker.clients()
 
 
 @app.command("all")
 def all():
-    print("Not implemented yet!")
+    build_worker.parent()
+    build_worker.libraries()
+    build_worker.project()
+    build_worker.clients()
+
+
+@app.command("frontends")
+def frontends():
+    build_worker.frontends()
