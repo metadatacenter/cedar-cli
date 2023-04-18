@@ -70,9 +70,13 @@ class GitWorker(Worker):
             if ("our branch is behind" in repo[1]):
                 table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Pull")
             elif ("ntracked files" in repo[1]):
-                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add and Push")
+                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add, Commit, Push")
             elif ("hanges not staged" in repo[1]):
-                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add and Push")
+                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add, Commit, Push")
+            elif ("hanges to be committed" in repo[1]):
+                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Commit, Push")
+            elif ("our branch is ahead of" in repo[1]):
+                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Push")
         console.print(table)
 
     def list_repos(self):
