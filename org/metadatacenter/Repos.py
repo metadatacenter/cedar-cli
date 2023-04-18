@@ -74,7 +74,6 @@ class Repos:
         self.map["cedar-docker-deploy"] = Repo("cedar-docker-deploy", "docker", for_docker=True)
 
         self.map["cedar-development"] = Repo("cedar-development", "misc", for_docker=True)
-        self.map["cedar-docs"] = Repo("cedar-docs", "misc")
         self.map["cedar-util"] = Repo("cedar-util", "misc")
 
         self.map["cedar-cli"] = Repo("cedar-cli", "python")

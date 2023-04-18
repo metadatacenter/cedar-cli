@@ -29,8 +29,8 @@ def clients():
     build_worker.clients()
 
 
-@app.command("all")
-def all():
+@app.command("java")
+def java():
     build_worker.parent()
     build_worker.libraries()
     build_worker.project()
@@ -39,4 +39,13 @@ def all():
 
 @app.command("frontends")
 def frontends():
+    build_worker.frontends()
+
+
+@app.command("all")
+def all():
+    build_worker.parent()
+    build_worker.libraries()
+    build_worker.project()
+    build_worker.clients()
     build_worker.frontends()

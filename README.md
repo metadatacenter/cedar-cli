@@ -40,3 +40,10 @@ python cedar.py build frontends
 
 
 ```
+
+or use the alias
+
+
+```bash
+cedarcli build all
+```
