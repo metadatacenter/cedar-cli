@@ -65,19 +65,31 @@ class GitWorker(Worker):
         return result
 
     def render_status_table(self, result):
-        table = Table("Repo", "Output", "Error", "Suggested", show_lines=True)
+        table = Table("Repo", "Output", "Error", "Suggested", show_lines=True, title="Repos that require attention")
+        cnt = 0;
         for repo in result.lines:
             if ("our branch is behind" in repo[1]):
                 table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Pull")
+                cnt += 1
             elif ("ntracked files" in repo[1]):
                 table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add, Commit, Push")
+                cnt += 1
             elif ("hanges not staged" in repo[1]):
                 table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add, Commit, Push")
+                cnt += 1
             elif ("hanges to be committed" in repo[1]):
                 table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Commit, Push")
+                cnt += 1
             elif ("our branch is ahead of" in repo[1]):
                 table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Push")
-        console.print(table)
+                cnt += 1
+        if cnt > 0:
+            table.caption = str(cnt) + " repos to act on"
+            table.style = Style(color="red")
+            console.print()
+            console.print(table)
+        else:
+            console.print(Panel("Nothing to add, commit or push, all changes are published", style=Style(color="green")))
 
     def list_repos(self):
         table = Table("Repo", "Type", "distSrc", "isLibrary", "isClient", "isMicroservice", "isPrivate", "forDocker")
