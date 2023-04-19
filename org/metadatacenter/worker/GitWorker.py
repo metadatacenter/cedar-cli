@@ -7,9 +7,9 @@ from rich.rule import Rule
 from rich.style import Style
 from rich.table import Table
 
-from org.metadatacenter import Repos, Repo
-from org.metadatacenter.ResultTable import ResultTable
-from org.metadatacenter.Worker import Worker
+from org.metadatacenter.model import Repo, Repos
+from org.metadatacenter.util.ResultTable import ResultTable
+from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
@@ -33,7 +33,7 @@ class GitWorker(Worker):
                                  ):
         result = ResultTable(headers, show_lines)
         if repo_list is None:
-            repo_list = self.repos.get_list()
+            repo_list = self.repos.get_list_top()
         with Progress() as progress:
             task = progress.add_task("[red]" + status_line + "...", total=len(repo_list))
             for repo in repo_list:
@@ -90,17 +90,6 @@ class GitWorker(Worker):
             console.print(table)
         else:
             console.print(Panel("Nothing to add, commit or push, all changes are published", style=Style(color="green")))
-
-    def list_repos(self):
-        table = Table("Repo", "Type", "distSrc", "isLibrary", "isClient", "isMicroservice", "isPrivate", "forDocker")
-        for repo in self.repos.get_list():
-            is_library = "✅" if repo.is_library else ""
-            is_client = "✅" if repo.is_client else ""
-            is_microservice = "✅" if repo.is_microservice else ""
-            is_private = "✅" if repo.is_private else ""
-            for_docker = "✅" if repo.for_docker else ""
-            table.add_row(repo.name, repo.repo_type, repo.dist_src, is_library, is_client, is_microservice, is_private, for_docker)
-        console.print(table)
 
     def branch(self):
         self.execute_shell_with_table(

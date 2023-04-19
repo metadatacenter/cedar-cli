@@ -1,12 +1,17 @@
 import typer
 
-from org.metadatacenter.BuildWorker import BuildWorker
-from org.metadatacenter.Repos import Repos
+from org.metadatacenter.model.Repos import Repos
+from org.metadatacenter.worker.BuildWorker import BuildWorker
 
 app = typer.Typer()
 
 repos = Repos()
 build_worker = BuildWorker(repos)
+
+
+@app.command("this")
+def this(wd: str = typer.Option(None, help="Working directory")):
+    build_worker.this(wd)
 
 
 @app.command("parent")

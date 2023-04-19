@@ -1,7 +1,7 @@
 import typer
 
-from org.metadatacenter.GitWorker import GitWorker
-from org.metadatacenter.Repos import Repos
+from org.metadatacenter.worker.GitWorker import GitWorker
+from org.metadatacenter.model.Repos import Repos
 
 app = typer.Typer()
 

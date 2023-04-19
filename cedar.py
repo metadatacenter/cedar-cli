@@ -1,8 +1,9 @@
 import typer
 
-from org.metadatacenter import git, server, build, deploy, clean
+from org.metadatacenter import git, server, build, deploy, clean, repo
 
 app = typer.Typer()
+app.add_typer(repo.app, name="repo")
 app.add_typer(git.app, name="git")
 app.add_typer(server.app, name="server")
 app.add_typer(build.app, name="build")

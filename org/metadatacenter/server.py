@@ -1,6 +1,6 @@
 import typer
 
-from org.metadatacenter.ServerWorker import ServerWorker
+from org.metadatacenter.worker.ServerWorker import ServerWorker
 
 app = typer.Typer()
 
