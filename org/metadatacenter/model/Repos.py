@@ -50,16 +50,18 @@ class Repos:
         self.add_repo(Repo("cedar-artifacts", RepoType.ANGULAR, is_frontend=True, expected_build_lines=24))
         self.add_repo(Repo("cedar-artifacts-dist", "js", is_frontend=True))
 
-        self.add_repo(Repo("cedar-monitoring", RepoType.ANGULAR, is_frontend=True, expected_build_lines=24))
-        self.add_repo(Repo("cedar-monitoring-dist", "js", is_frontend=True))
+        monitoring_src = Repo("cedar-monitoring", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST, is_frontend=True)
+        monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, is_frontend=True)
+        monitoring_multi.add_sub_repo(monitoring_src)
+        monitoring_multi.add_sub_repo(monitoring_dist)
+        self.add_repo(monitoring_multi)
 
         openview_src = Repo("cedar-openview", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
-        openview_dist = Repo("cedar-openview-dist", "angular-dist", is_frontend=True)
-
+        openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST, is_frontend=True)
         openview_multi = Repo("cedar-openview", RepoType.MULTI, is_frontend=True)
         openview_multi.add_sub_repo(openview_src)
         openview_multi.add_sub_repo(openview_dist)
-
         self.add_repo(openview_multi)
 
         self.add_repo(Repo("cedar-embeddable-editor", RepoType.ANGULAR, is_frontend=True, expected_build_lines=29))

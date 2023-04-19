@@ -70,7 +70,8 @@ class GitWorker(Worker):
         return result
 
     def register_active_repo(self, triple, table, active_repos, suggestion):
-        table.add_row(triple.repo.name, triple.out[0:GIT_STATUS_CHAR_LIMIT] + '...', triple.err, suggestion)
+        table.add_row(triple.repo.name, triple.out[0:GIT_STATUS_CHAR_LIMIT] + '...' if len(triple.out) > 0 else '', "[red]" + triple.err,
+                      suggestion)
         active_repos.append(triple.repo)
 
     def render_status_table(self, result):
@@ -92,6 +93,9 @@ class GitWorker(Worker):
                 cnt += 1
             elif "our branch is ahead of" in triple.out:
                 self.register_active_repo(triple, table, active_repos, "Push")
+                cnt += 1
+            elif len(triple.err) > 0:
+                self.register_active_repo(triple, table, active_repos, "Handle error")
                 cnt += 1
         if cnt > 0:
             table.caption = str(cnt) + " repos to act on"

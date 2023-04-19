@@ -3,6 +3,7 @@ class RepoType:
     JAVA = "java"
     ANGULAR_JS = "angularJS"
     ANGULAR = "angular"
+    ANGULAR_DIST = "angular-dist"
     MULTI = "multi"
     CONTENT_DELIVERY = "content-delivery"
     PYTHON = "python"
