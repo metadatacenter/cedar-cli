@@ -1,0 +1,52 @@
+import os
+
+from rich.console import Console
+from rich.style import Style
+from rich.table import Table
+
+from org.metadatacenter.model.Repos import Repos
+from org.metadatacenter.worker.Worker import Worker
+
+console = Console()
+
+core_list = ['CEDAR_HOME', 'CEDAR_DOCKER_HOME', 'CEDAR_HOST', 'CEDAR_VERSION', 'CEDAR_FRONTEND_TARGET', 'CEDAR_NET_GATEWAY',
+             'CEDAR_NET_SUBNET']
+
+
+class EnvWorker(Worker):
+    def __init__(self, repos: Repos):
+        super().__init__(repos)
+
+    def list(self):
+        cnt = 0
+        table = Table("Name", "Value", title="CEDAR environment variables")
+        for name, value in os.environ.items():
+            if name.startswith("CEDAR_"):
+                table.add_row(name, value)
+                cnt += 1
+        table.caption = str(cnt) + " variables"
+        table.style = Style(color="green")
+        console.print(table)
+
+    def core(self):
+        table = Table("Name", "Value", title="CEDAR core environment variables")
+        present_cnt = 0
+        missing_cnt = 0
+        core_map = {}
+        for name, value in os.environ.items():
+            if name.startswith("CEDAR_"):
+                core_map[name] = value
+        for name in core_list:
+            if name in core_map:
+                table.add_row("[yellow]" + name, "✅ [green]" + core_map[name])
+                present_cnt += 1
+            else:
+                table.add_row("[yellow]" + name, '❌ [red]MISSING')
+                missing_cnt += 1
+
+        caption = str(present_cnt) + " variables present"
+        if missing_cnt > 0:
+            caption += ", [red]" + str(missing_cnt) + " missing"
+        table.caption = caption
+        table.style = Style(color="green")
+        console.print(table)
