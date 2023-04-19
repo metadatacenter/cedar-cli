@@ -47,8 +47,12 @@ class Repos:
 
         self.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, is_frontend=True, expected_build_lines=14))
 
-        self.add_repo(Repo("cedar-artifacts", RepoType.ANGULAR, is_frontend=True, expected_build_lines=24))
-        self.add_repo(Repo("cedar-artifacts-dist", "js", is_frontend=True))
+        artifacts_src = Repo("cedar-artifacts", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        artifacts_dist = Repo("cedar-artifacts-dist", RepoType.ANGULAR_DIST, is_frontend=True)
+        artifacts_multi = Repo("cedar-artifacts", RepoType.MULTI, is_frontend=True)
+        artifacts_multi.add_sub_repo(artifacts_src)
+        artifacts_multi.add_sub_repo(artifacts_dist)
+        self.add_repo(artifacts_multi)
 
         monitoring_src = Repo("cedar-monitoring", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
         monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST, is_frontend=True)
