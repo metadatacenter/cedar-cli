@@ -42,7 +42,9 @@ class Worker:
             return file.read().rstrip()
 
     def delete_cedar_file(self, file_name):
-        os.remove(self.get_cedar_file(file_name))
+        path = self.get_cedar_file(file_name)
+        if os.path.exists(path):
+            os.remove(path)
 
     def get_cedar_file(self, file_name):
         parent_path = os.path.expanduser('~/.cedar/')
