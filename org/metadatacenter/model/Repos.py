@@ -68,11 +68,17 @@ class Repos:
         openview_multi.add_sub_repo(openview_dist)
         self.add_repo(openview_multi)
 
+        cee_demo_angular_src = Repo("cedar-cee-demo-angular", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, is_frontend=True)
+        cee_demo_api_php = Repo("cedar-cee-demo-api-php", RepoType.PHP, is_frontend=True)
+        cee_demo_angular_multi = Repo("cedar-cee-demo", RepoType.MULTI, is_frontend=True)
+        cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
+        cee_demo_angular_multi.add_sub_repo(cee_demo_angular_dist)
+        cee_demo_angular_multi.add_sub_repo(cee_demo_api_php)
+        self.add_repo(cee_demo_angular_multi)
+
         self.add_repo(Repo("cedar-embeddable-editor", RepoType.ANGULAR, is_frontend=True, expected_build_lines=29))
         self.add_repo(Repo("cedar-metadata-form", "angular", is_frontend=True, expected_build_lines=31))
-
-        self.add_repo(Repo("cedar-cee-demo-angular", RepoType.ANGULAR, is_frontend=True, expected_build_lines=26))
-        self.add_repo(Repo("cedar-cee-demo-angular-dist", "js", is_frontend=True))
 
         self.add_repo(Repo("cedar-cee-docs-angular", RepoType.ANGULAR, is_frontend=True, expected_build_lines=40))
         self.add_repo(Repo("cedar-cee-docs-angular-dist", "js", is_frontend=True))
@@ -91,8 +97,6 @@ class Repos:
         self.add_repo(Repo("cedar-util", RepoType.MISC))
 
         self.add_repo(Repo("cedar-cli", RepoType.PYTHON))
-
-        self.add_repo(Repo("cedar-cee-demo-api-php", RepoType.PHP))
 
     def add_repo(self, repo):
         name = repo.name
