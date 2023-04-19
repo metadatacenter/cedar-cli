@@ -29,3 +29,7 @@ def pull():
 @app.command("checkout")
 def checkout(branch: str):
     git_worker.checkout(branch)
+
+@app.command("next")
+def next():
+    git_worker.next()

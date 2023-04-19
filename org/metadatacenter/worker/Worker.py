@@ -30,6 +30,26 @@ class Worker:
                     repos.append(sub_repo)
         return repos
 
+    def write_cedar_file(self, file_name, content):
+        with open(self.get_cedar_file(file_name), "w") as file:
+            file.write(content)
+
+    def read_cedar_file(self, file_name):
+        path = self.get_cedar_file(file_name)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r') as file:
+            return file.read().rstrip()
+
+    def delete_cedar_file(self, file_name):
+        os.remove(self.get_cedar_file(file_name))
+
+    def get_cedar_file(self, file_name):
+        parent_path = os.path.expanduser('~/.cedar/')
+        if not os.path.exists(parent_path):
+            os.makedirs(parent_path)
+        return os.path.join(parent_path, file_name)
+
     @staticmethod
     def handle_shell_stdout(proc_stream, my_buffer, progress, task, echo_streams=True):
         try:

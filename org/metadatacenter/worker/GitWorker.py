@@ -8,6 +8,7 @@ from rich.style import Style
 from rich.table import Table
 
 from org.metadatacenter.model import Repo, Repos
+from org.metadatacenter.util.RepoResultTriple import RepoResultTriple
 from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.worker.Worker import Worker
 
@@ -55,7 +56,7 @@ class GitWorker(Worker):
                     err += str(e)
                 except:
                     err += "Error in subprocess"
-                result.add_line(repo.name, out, err)
+                result.add_result(RepoResultTriple(repo, out, err))
                 progress.print(out)
                 if len(err) > 0:
                     progress.print(err)
@@ -64,24 +65,29 @@ class GitWorker(Worker):
         result.print_table()
         return result
 
+    def register_active_repo(self, triple, table, active_repos, suggestion):
+        table.add_row(triple.repo.name, triple.out[0:300] + '...', triple.err, suggestion)
+        active_repos.append(triple.repo)
+
     def render_status_table(self, result):
+        active_repos = []
         table = Table("Repo", "Output", "Error", "Suggested", show_lines=True, title="Repos that require attention")
-        cnt = 0;
-        for repo in result.lines:
-            if ("our branch is behind" in repo[1]):
-                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Pull")
+        cnt = 0
+        for triple in result.results:
+            if "our branch is behind" in triple.out:
+                self.register_active_repo(triple, table, active_repos, "Pull")
                 cnt += 1
-            elif ("ntracked files" in repo[1]):
-                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add, Commit, Push")
+            elif "ntracked files" in triple.out:
+                self.register_active_repo(triple, table, active_repos, "Add, Commit, Push")
                 cnt += 1
-            elif ("hanges not staged" in repo[1]):
-                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Add, Commit, Push")
+            elif "hanges not staged" in triple.out:
+                self.register_active_repo(triple, table, active_repos, "Add, Commit, Push")
                 cnt += 1
-            elif ("hanges to be committed" in repo[1]):
-                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Commit, Push")
+            elif "hanges to be committed" in triple.out:
+                self.register_active_repo(triple, table, active_repos, "Commit, Push")
                 cnt += 1
-            elif ("our branch is ahead of" in repo[1]):
-                table.add_row(repo[0], repo[1][0:300] + '...', repo[2], "Push")
+            elif "our branch is ahead of" in triple.out:
+                self.register_active_repo(triple, table, active_repos, "Push")
                 cnt += 1
         if cnt > 0:
             table.caption = str(cnt) + " repos to act on"
@@ -90,6 +96,7 @@ class GitWorker(Worker):
             console.print(table)
         else:
             console.print(Panel("Nothing to add, commit or push, all changes are published", style=Style(color="green")))
+        return active_repos
 
     def branch(self):
         self.execute_shell_with_table(
@@ -109,7 +116,7 @@ class GitWorker(Worker):
         result = self.execute_shell_with_table(
             command_list=["git status"],
         )
-        self.render_status_table(result)
+        return self.render_status_table(result)
 
     def checkout(self, branch: str):
         self.execute_shell_with_table(
@@ -131,3 +138,26 @@ class GitWorker(Worker):
             command_list=["git clone " + git_base + "{0}"],
             cwd_is_home=True,
         )
+
+    def next(self):
+        active_repos = self.status()
+        if len(active_repos) > 0:
+            last_repo_path = self.read_cedar_file('last_git_repo')
+            found_idx = -1
+
+            if last_repo_path is not None:
+                for idx, repo in enumerate(active_repos):
+                    if self.get_wd(repo) == last_repo_path:
+                        found_idx = idx
+
+            found_idx += 1
+            if found_idx >= len(active_repos):
+                found_idx = 0
+            next_repo = active_repos[found_idx]
+            path = self.get_wd(next_repo)
+            console.print("Found repo with activity, changing current working directory to: " + path)
+            self.write_cedar_file('last_git_repo', path + "\n")
+            self.write_cedar_file('next_git_repo', path + "\n")
+        else:
+            self.delete_cedar_file('next_git_repo')
+            self.delete_cedar_file('last_git_repo')
