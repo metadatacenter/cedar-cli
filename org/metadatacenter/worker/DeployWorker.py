@@ -2,6 +2,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.style import Style
 
+from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.Repos import Repos
 from org.metadatacenter.worker.Worker import Worker
 
@@ -35,12 +36,12 @@ class DeployWorker(Worker):
         console.print(Panel(msg, style=Style(color="cyan")))
         for repo in repo_list_flat:
             # console.print("Build: " + (repo.parent_repo.name + " " if repo.is_sub_repo else "") + repo.name + " T:" + repo.repo_type)
-            if repo.repo_type == "java-wrapper":
+            if repo.repo_type == RepoType.JAVA_WRAPPER:
                 self.execute_shell(repo, ["mvn deploy -DskipTests"], progress_text)
-            elif repo.repo_type == "angular":
+            elif repo.repo_type == RepoType.ANGULAR:
                 self.execute_shell(repo, ["pwd; npm install --legacy-peer-deps; ng build --configuration=production; npm publish"],
                                    progress_text)
-            elif repo.repo_type == "angularJS":
+            elif repo.repo_type == RepoType.ANGULAR_JS:
                 self.execute_shell(repo, ["pwd; npm install; npm publish"], progress_text)
 
     def this(self, wd: str):

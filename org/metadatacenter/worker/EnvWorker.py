@@ -9,8 +9,10 @@ from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
-core_list = ['CEDAR_HOME', 'CEDAR_DOCKER_HOME', 'CEDAR_HOST', 'CEDAR_VERSION', 'CEDAR_FRONTEND_TARGET', 'CEDAR_NET_GATEWAY',
-             'CEDAR_NET_SUBNET']
+core_list = ['CEDAR_HOME', 'CEDAR_DOCKER_HOME', 'CEDAR_HOST', 'CEDAR_VERSION', 'CEDAR_FRONTEND_TARGET',
+             'CEDAR_NET_GATEWAY', 'CEDAR_NET_SUBNET']
+
+CEDAR_ENV_PREFIX = 'CEDAR_'
 
 
 class EnvWorker(Worker):
@@ -21,7 +23,7 @@ class EnvWorker(Worker):
         cnt = 0
         table = Table("Name", "Value", title="CEDAR environment variables")
         for name, value in os.environ.items():
-            if name.startswith("CEDAR_"):
+            if name.startswith(CEDAR_ENV_PREFIX):
                 table.add_row(name, value)
                 cnt += 1
         table.caption = str(cnt) + " variables"
@@ -34,7 +36,7 @@ class EnvWorker(Worker):
         missing_cnt = 0
         core_map = {}
         for name, value in os.environ.items():
-            if name.startswith("CEDAR_"):
+            if name.startswith(CEDAR_ENV_PREFIX):
                 core_map[name] = value
         for name in core_list:
             if name in core_map:

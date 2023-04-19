@@ -1,0 +1,12 @@
+class RepoType:
+    JAVA_WRAPPER = "java-wrapper"
+    JAVA = "java"
+    ANGULAR_JS = "angularJS"
+    ANGULAR = "angular"
+    MULTI = "multi"
+    CONTENT_DELIVERY = "content-delivery"
+    PYTHON = "python"
+    MISC = "misc"
+    DOCKER = "docker"
+    MKDOCS = "mkdocs"
+    PHP = "php"

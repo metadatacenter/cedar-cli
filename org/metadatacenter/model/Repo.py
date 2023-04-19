@@ -1,4 +1,5 @@
 class Repo:
+
     def __init__(self, name, repo_type, is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
                  is_frontend=False, expected_build_lines=100):
         self.name = name

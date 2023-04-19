@@ -15,6 +15,10 @@ from org.metadatacenter.worker.Worker import Worker
 console = Console()
 
 git_base = "https://github.com/metadatacenter/"
+NEXT_GIT_FILE = 'next_git_repo'
+LAST_GIT_FILE = 'last_git_repo'
+UTF_8 = 'utf-8'
+GIT_STATUS_CHAR_LIMIT = 300
 
 
 class GitWorker(Worker):
@@ -48,8 +52,8 @@ class GitWorker(Worker):
                     # print(commands_to_execute)
                     process = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
                     stdout, stderr = process.communicate()
-                    out = stdout.decode('utf-8').strip()
-                    err = stderr.decode('utf-8').strip()
+                    out = stdout.decode(UTF_8).strip()
+                    err = stderr.decode(UTF_8).strip()
                 except subprocess.CalledProcessError as e:
                     err += str(e)
                 except OSError as e:
@@ -66,7 +70,7 @@ class GitWorker(Worker):
         return result
 
     def register_active_repo(self, triple, table, active_repos, suggestion):
-        table.add_row(triple.repo.name, triple.out[0:300] + '...', triple.err, suggestion)
+        table.add_row(triple.repo.name, triple.out[0:GIT_STATUS_CHAR_LIMIT] + '...', triple.err, suggestion)
         active_repos.append(triple.repo)
 
     def render_status_table(self, result):
@@ -156,8 +160,8 @@ class GitWorker(Worker):
             next_repo = active_repos[found_idx]
             path = self.get_wd(next_repo)
             console.print("Found repo with activity, changing current working directory to: " + path)
-            self.write_cedar_file('last_git_repo', path + "\n")
-            self.write_cedar_file('next_git_repo', path + "\n")
+            self.write_cedar_file(LAST_GIT_FILE, path + "\n")
+            self.write_cedar_file(NEXT_GIT_FILE, path + "\n")
         else:
-            self.delete_cedar_file('next_git_repo')
-            self.delete_cedar_file('last_git_repo')
+            self.delete_cedar_file(LAST_GIT_FILE)
+            self.delete_cedar_file(NEXT_GIT_FILE)
