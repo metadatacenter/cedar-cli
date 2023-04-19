@@ -70,18 +70,19 @@ class Repos:
 
         cee_demo_angular_src = Repo("cedar-cee-demo-angular", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
         cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, is_frontend=True)
+        cee_docs_angular_src = Repo("cedar-cee-docs-angular", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, is_frontend=True)
         cee_demo_api_php = Repo("cedar-cee-demo-api-php", RepoType.PHP, is_frontend=True)
         cee_demo_angular_multi = Repo("cedar-cee-demo", RepoType.MULTI, is_frontend=True)
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_dist)
+        cee_demo_angular_multi.add_sub_repo(cee_docs_angular_src)
+        cee_demo_angular_multi.add_sub_repo(cee_docs_angular_dist)
         cee_demo_angular_multi.add_sub_repo(cee_demo_api_php)
         self.add_repo(cee_demo_angular_multi)
 
         self.add_repo(Repo("cedar-embeddable-editor", RepoType.ANGULAR, is_frontend=True, expected_build_lines=29))
         self.add_repo(Repo("cedar-metadata-form", "angular", is_frontend=True, expected_build_lines=31))
-
-        self.add_repo(Repo("cedar-cee-docs-angular", RepoType.ANGULAR, is_frontend=True, expected_build_lines=40))
-        self.add_repo(Repo("cedar-cee-docs-angular-dist", "js", is_frontend=True))
 
         self.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS))
         self.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, is_private=True))
