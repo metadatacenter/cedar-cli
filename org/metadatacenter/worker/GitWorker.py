@@ -7,9 +7,10 @@ from rich.rule import Rule
 from rich.style import Style
 from rich.table import Table
 
-from org.metadatacenter.model import Repo, Repos
+from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.RepoResultTriple import RepoResultTriple
 from org.metadatacenter.util.ResultTable import ResultTable
+from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -22,11 +23,9 @@ GIT_STATUS_CHAR_LIMIT = 300
 
 
 class GitWorker(Worker):
-    def __init__(self, repos: Repos):
-        super().__init__(repos)
 
-    def get_wd(self, repo: Repo):
-        return self.cedar_home + "/" + repo.name
+    def __init__(self):
+        super().__init__()
 
     def execute_shell_with_table(self,
                                  command_list,
@@ -38,7 +37,7 @@ class GitWorker(Worker):
                                  ):
         result = ResultTable(headers, show_lines)
         if repo_list is None:
-            repo_list = self.repos.get_list_top()
+            repo_list = GlobalContext.repos.get_list_top()
         with Progress() as progress:
             task = progress.add_task("[red]" + status_line + "...", total=len(repo_list))
             for repo in repo_list:
@@ -48,7 +47,7 @@ class GitWorker(Worker):
                 out = ""
                 err = ""
                 try:
-                    cwd = self.get_wd(repo) if cwd_is_home is False else self.cedar_home
+                    cwd = Util.get_wd(repo) if cwd_is_home is False else self.cedar_home
                     # print(commands_to_execute)
                     process = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
                     stdout, stderr = process.communicate()
@@ -155,14 +154,14 @@ class GitWorker(Worker):
 
             if last_repo_path is not None:
                 for idx, repo in enumerate(active_repos):
-                    if self.get_wd(repo) == last_repo_path:
+                    if Util.get_wd(repo) == last_repo_path:
                         found_idx = idx
 
             found_idx += 1
             if found_idx >= len(active_repos):
                 found_idx = 0
             next_repo = active_repos[found_idx]
-            path = self.get_wd(next_repo)
+            path = Util.get_wd(next_repo)
             console.print("Found repo with activity, changing current working directory to: " + path)
             self.write_cedar_file(LAST_GIT_FILE, path + "\n")
             self.write_cedar_file(NEXT_GIT_FILE, path + "\n")

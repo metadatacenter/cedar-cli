@@ -1,19 +1,26 @@
 from rich.console import Console
-from rich.table import Table
+from rich.table import Table, Column
 
-from org.metadatacenter.model import Repos
+from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
 
 class RepoWorker(Worker):
-    def __init__(self, repos: Repos):
-        super().__init__(repos)
+    def __init__(self):
+        super().__init__()
 
     def list_repos(self):
-        table = Table("Repo", "Type", "Library", "Client", "Microservice", "Frontend", "Private", "Docker")
-        for repo in self.repos.get_list_all():
+        table = Table("Repo",
+                      Column(header="Type", justify="center"),
+                      Column(header="Library", justify="center"),
+                      Column(header="Client", justify="center"),
+                      Column(header="Microservice", justify="center"),
+                      Column(header="Frontend", justify="center"),
+                      Column(header="Private", justify="center"),
+                      Column(header="Docker", justify="center"))
+        for repo in GlobalContext.repos.get_list_all():
             self.add_table_row(repo, table)
         console.print(table)
 

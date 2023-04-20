@@ -1,12 +1,10 @@
 import typer
 
-from org.metadatacenter.model.ReposFactory import ReposFactory
 from org.metadatacenter.worker.EnvWorker import EnvWorker
 
 app = typer.Typer()
 
-repos = ReposFactory.build_repos()
-env_worker = EnvWorker(repos)
+env_worker = EnvWorker()
 
 
 @app.command("list")

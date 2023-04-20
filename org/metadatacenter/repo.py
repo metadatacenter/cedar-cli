@@ -1,12 +1,10 @@
 import typer
 
-from org.metadatacenter.model.ReposFactory import ReposFactory
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 
 app = typer.Typer()
 
-repos = ReposFactory.build_repos()
-repo_worker = RepoWorker(repos)
+repo_worker = RepoWorker()
 
 
 @app.command("list")

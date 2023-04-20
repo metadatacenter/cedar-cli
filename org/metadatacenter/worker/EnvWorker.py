@@ -4,7 +4,6 @@ from rich.console import Console
 from rich.style import Style
 from rich.table import Table
 
-from org.metadatacenter.model.Repos import Repos
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -16,8 +15,8 @@ CEDAR_ENV_PREFIX = 'CEDAR_'
 
 
 class EnvWorker(Worker):
-    def __init__(self, repos: Repos):
-        super().__init__(repos)
+    def __init__(self):
+        super().__init__()
 
     def list(self):
         cnt = 0

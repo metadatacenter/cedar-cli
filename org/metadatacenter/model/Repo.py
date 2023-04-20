@@ -1,3 +1,7 @@
+from org.metadatacenter.model.Task import Task
+from org.metadatacenter.model.WorkerType import WorkerType
+
+
 class Repo:
 
     def __init__(self, name, repo_type, is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
@@ -14,6 +18,7 @@ class Repo:
         self.is_sub_repo = False
         self.sub_repos = []
         self.parent_repo = None
+        self.post_tasks = {}
 
     def add_sub_repo(self, sub_repo):
         self.sub_repos.append(sub_repo)
@@ -25,3 +30,8 @@ class Repo:
             return self.parent_repo.name + "/" + self.name
         else:
             return self.name
+
+    def add_post_task(self, task_type: WorkerType, post_task: Task):
+        if task_type not in self.post_tasks:
+            self.post_tasks[task_type] = []
+        self.post_tasks[task_type].append(post_task)

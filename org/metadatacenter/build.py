@@ -1,56 +1,62 @@
 import typer
 
-from org.metadatacenter.model.ReposFactory import ReposFactory
-from org.metadatacenter.worker.BuildWorker import BuildWorker
+from org.metadatacenter.assembler.BuildAssembler import BuildAssembler
 
 app = typer.Typer()
 
-repos = ReposFactory.build_repos()
-build_worker = BuildWorker(repos)
+build_assembler = BuildAssembler()
 
 
 @app.command("this")
 def this(wd: str = typer.Option(None, help="Working directory")):
-    build_worker.this(wd)
+    build_assembler.this(wd)
+    build_assembler.execute_task_list()
 
 
 @app.command("parent")
 def parent():
-    build_worker.parent()
+    build_assembler.parent()
+    build_assembler.execute_task_list()
 
 
 @app.command("libraries")
 def libraries():
-    build_worker.libraries()
+    build_assembler.libraries()
+    build_assembler.execute_task_list()
 
 
 @app.command("project")
 def project():
-    build_worker.project()
+    build_assembler.project()
+    build_assembler.execute_task_list()
 
 
 @app.command("clients")
 def clients():
-    build_worker.clients()
+    build_assembler.clients()
+    build_assembler.execute_task_list()
 
 
 @app.command("java")
 def java():
-    build_worker.parent()
-    build_worker.libraries()
-    build_worker.project()
-    build_worker.clients()
+    build_assembler.parent()
+    build_assembler.libraries()
+    build_assembler.project()
+    build_assembler.clients()
+    build_assembler.execute_task_list()
 
 
 @app.command("frontends")
 def frontends():
-    build_worker.frontends()
+    build_assembler.frontends()
+    build_assembler.execute_task_list()
 
 
 @app.command("all")
 def all():
-    build_worker.parent()
-    build_worker.libraries()
-    build_worker.project()
-    build_worker.clients()
-    build_worker.frontends()
+    build_assembler.parent()
+    build_assembler.libraries()
+    build_assembler.project()
+    build_assembler.clients()
+    build_assembler.frontends()
+    build_assembler.execute_task_list()

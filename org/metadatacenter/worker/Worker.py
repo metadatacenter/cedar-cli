@@ -7,19 +7,12 @@ from rich.panel import Panel
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TimeElapsedColumn, SpinnerColumn
 from rich.style import Style
 
-from org.metadatacenter.model import Repo, Repos
+from org.metadatacenter.util.Util import Util
 
 console = Console()
 
 
 class Worker:
-    def __init__(self, repos: Repos):
-        self.repos = repos
-        self.cedar_home = os.environ['CEDAR_HOME']
-
-    def get_wd(self, repo: Repo):
-        return self.cedar_home + "/" + repo.get_wd()
-
     @staticmethod
     def get_flat_repo_list(repo_list):
         repos = []
@@ -72,11 +65,11 @@ class Worker:
                       cwd_is_home=False,
                       ):
         commands_to_execute = [cmd.format(repo.name) for cmd in command_list]
-        cwd = self.get_wd(repo) if cwd_is_home is False else self.cedar_home
-        console.print(Panel("[yellow]" + status + "\n" +
-                            "Location : " + cwd + "\n" +
-                            "Repo type: " + repo.repo_type + "\n" +
-                            "Commands : " + "\n".join(commands_to_execute)),
+        cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
+        console.print(Panel("[yellow]Execute shell" +
+                            "\n  " + " 📂️ Location  : " + cwd +
+                            "\n  " + " 🏷️️  Repo type : " + repo.repo_type +
+                            "\n  " + " 🖥️  Commands  : " + "\n".join(commands_to_execute), title="Shell subprocess"),
                       style=Style(color="green"))
         proc = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd)
 
@@ -100,5 +93,13 @@ class Worker:
         msg = "[green]" + status + " " + repo.name + ' done. '
         if len(stdout_parts) != repo.expected_build_lines:
             msg += "[yellow]" + str(len(stdout_parts)) + ' lines vs expected ' + str(repo.expected_build_lines)
-        console.print(Panel(msg, style=Style(color="green")))
+        console.print(Panel(msg, style=Style(color="green"), subtitle="Shell subprocess"))
         return stdout_parts
+
+    def execute_none(self, repo, status):
+        cwd = Util.get_wd(repo)
+        console.print(Panel("[yellow]Execute none" +
+                            "\n  " + " ➡️️  Repo      : " + repo.get_wd() +
+                            "\n  " + " 📂️ Location  : " + cwd +
+                            "\n  " + " 🏷️️  Repo type : " + repo.repo_type, title="None", subtitle=status),
+                      style=Style(color="green"))
