@@ -29,11 +29,11 @@ class DeployWorker(Worker):
                 self.execute_shell(repo, ["mvn deploy -DskipTests"], progress_text)
                 handled = True
             elif repo.repo_type == RepoType.ANGULAR:
-                self.execute_shell(repo, ["pwd; npm install --legacy-peer-deps; ng build --configuration=production; npm publish"],
+                self.execute_shell(repo, ["npm install --legacy-peer-deps; ng build --configuration=production; npm publish"],
                                    progress_text)
                 handled = True
             elif repo.repo_type == RepoType.ANGULAR_JS:
-                self.execute_shell(repo, ["pwd; npm install; npm publish"], progress_text)
+                self.execute_shell(repo, ["npm install; npm publish"], progress_text)
                 handled = True
             if not handled:
                 self.execute_none(repo, progress_text)

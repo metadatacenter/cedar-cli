@@ -31,7 +31,8 @@ class Repo:
         else:
             return self.name
 
-    def add_post_task(self, task_type: WorkerType, post_task: Task):
-        if task_type not in self.post_tasks:
-            self.post_tasks[task_type] = []
-        self.post_tasks[task_type].append(post_task)
+    def add_post_task(self, task_types: [WorkerType], post_task: Task):
+        for task_type in task_types:
+            if task_type not in self.post_tasks:
+                self.post_tasks[task_type] = []
+            self.post_tasks[task_type].append(post_task)

@@ -55,9 +55,9 @@ class ReposFactory:
         artifacts_dist = Repo("cedar-artifacts-dist", RepoType.ANGULAR_DIST, is_frontend=True)
         artifacts_multi.add_sub_repo(artifacts_src)
         artifacts_multi.add_sub_repo(artifacts_dist)
-        artifacts_src.add_post_task(WorkerType.BUILD, Task(WorkerType.COPY_ANGULAR_DIST, [],
-                                                           "Copy compiled code", "Copying compiled code",
-                                                           {'target_repo': artifacts_dist}))
+        artifacts_src.add_post_task([WorkerType.BUILD, WorkerType.DEPLOY], Task(WorkerType.COPY_ANGULAR_DIST, [],
+                                                                                "Copy compiled code", "Copying compiled code",
+                                                                                {'target_repo': artifacts_dist}))
         repos.add_repo(artifacts_multi)
 
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, is_frontend=True)
@@ -65,9 +65,9 @@ class ReposFactory:
         monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST, is_frontend=True)
         monitoring_multi.add_sub_repo(monitoring_src)
         monitoring_multi.add_sub_repo(monitoring_dist)
-        monitoring_src.add_post_task(WorkerType.BUILD, Task(WorkerType.COPY_ANGULAR_DIST, [],
-                                                            "Copy compiled code", "Copying compiled code",
-                                                            {'target_repo': monitoring_dist}))
+        monitoring_src.add_post_task([WorkerType.BUILD, WorkerType.DEPLOY], Task(WorkerType.COPY_ANGULAR_DIST, [],
+                                                                                 "Copy compiled code", "Copying compiled code",
+                                                                                 {'target_repo': monitoring_dist}))
         repos.add_repo(monitoring_multi)
 
         openview_multi = Repo("cedar-openview", RepoType.MULTI, is_frontend=True)
@@ -75,9 +75,9 @@ class ReposFactory:
         openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST, is_frontend=True)
         openview_multi.add_sub_repo(openview_src)
         openview_multi.add_sub_repo(openview_dist)
-        openview_src.add_post_task(WorkerType.BUILD, Task(WorkerType.COPY_ANGULAR_DIST, [],
-                                                          "Copy compiled code", "Copying compiled code",
-                                                          {'target_repo': openview_dist}))
+        openview_src.add_post_task([WorkerType.BUILD, WorkerType.DEPLOY], Task(WorkerType.COPY_ANGULAR_DIST, [],
+                                                                               "Copy compiled code", "Copying compiled code",
+                                                                               {'target_repo': openview_dist}))
         repos.add_repo(openview_multi)
 
         cee_demo_angular_multi = Repo("cedar-cee-demo", RepoType.MULTI, is_frontend=True)
@@ -88,14 +88,14 @@ class ReposFactory:
         cee_demo_api_php = Repo("cedar-cee-demo-api-php", RepoType.PHP, is_frontend=True)
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_dist)
-        cee_demo_angular_src.add_post_task(WorkerType.BUILD, Task(WorkerType.COPY_ANGULAR_DIST, [],
-                                                                  "Copy compiled code", "Copying compiled code",
-                                                                  {'target_repo': cee_demo_angular_dist}))
+        cee_demo_angular_src.add_post_task([WorkerType.BUILD, WorkerType.DEPLOY], Task(WorkerType.COPY_ANGULAR_DIST, [],
+                                                                                       "Copy compiled code", "Copying compiled code",
+                                                                                       {'target_repo': cee_demo_angular_dist}))
         cee_demo_angular_multi.add_sub_repo(cee_docs_angular_src)
         cee_demo_angular_multi.add_sub_repo(cee_docs_angular_dist)
-        cee_docs_angular_src.add_post_task(WorkerType.BUILD, Task(WorkerType.COPY_ANGULAR_DIST, [],
-                                                                  "Copy compiled code", "Copying compiled code",
-                                                                  {'target_repo': cee_docs_angular_dist}))
+        cee_docs_angular_src.add_post_task([WorkerType.BUILD, WorkerType.DEPLOY], Task(WorkerType.COPY_ANGULAR_DIST, [],
+                                                                                       "Copy compiled code", "Copying compiled code",
+                                                                                       {'target_repo': cee_docs_angular_dist}))
         cee_demo_angular_multi.add_sub_repo(cee_demo_api_php)
         repos.add_repo(cee_demo_angular_multi)
 
