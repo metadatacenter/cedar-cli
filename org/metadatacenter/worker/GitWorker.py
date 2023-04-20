@@ -47,7 +47,7 @@ class GitWorker(Worker):
                 out = ""
                 err = ""
                 try:
-                    cwd = Util.get_wd(repo) if cwd_is_home is False else self.cedar_home
+                    cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
                     # print(commands_to_execute)
                     process = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
                     stdout, stderr = process.communicate()
