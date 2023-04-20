@@ -1,11 +1,11 @@
 import typer
 
+from org.metadatacenter.model.ReposFactory import ReposFactory
 from org.metadatacenter.worker.GitWorker import GitWorker
-from org.metadatacenter.model.Repos import Repos
 
 app = typer.Typer()
 
-repos = Repos()
+repos = ReposFactory.build_repos()
 git_worker = GitWorker(repos)
 
 

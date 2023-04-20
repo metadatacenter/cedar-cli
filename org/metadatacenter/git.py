@@ -1,13 +1,13 @@
 import typer
 
 from org.metadatacenter import git_clone
-from org.metadatacenter.model.Repos import Repos
+from org.metadatacenter.model.ReposFactory import ReposFactory
 from org.metadatacenter.worker.GitWorker import GitWorker
 
 app = typer.Typer()
 app.add_typer(git_clone.app, name="clone")
 
-repos = Repos()
+repos = ReposFactory.build_repos()
 git_worker = GitWorker(repos)
 
 
@@ -29,6 +29,7 @@ def pull():
 @app.command("checkout")
 def checkout(branch: str):
     git_worker.checkout(branch)
+
 
 @app.command("next")
 def next():
