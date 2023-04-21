@@ -7,6 +7,7 @@ from rich.rule import Rule
 from rich.style import Style
 from rich.table import Table
 
+from org.metadatacenter.model.ReposFactory import ReposFactory
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.RepoResultTriple import RepoResultTriple
 from org.metadatacenter.util.ResultTable import ResultTable
@@ -15,7 +16,6 @@ from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
-git_base = "https://github.com/metadatacenter/"
 NEXT_GIT_FILE = 'next_git_repo'
 LAST_GIT_FILE = 'last_git_repo'
 UTF_8 = 'utf-8'
@@ -47,8 +47,7 @@ class GitWorker(Worker):
                 out = ""
                 err = ""
                 try:
-                    cwd = Util.get_wd(repo) if cwd_is_home is False else self.cedar_home
-                    # print(commands_to_execute)
+                    cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
                     process = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
                     stdout, stderr = process.communicate()
                     out = stdout.decode(UTF_8).strip()
@@ -135,14 +134,14 @@ class GitWorker(Worker):
         self.execute_shell_with_table(
             status_line="Cloning",
             repo_list=self.repos.get_for_docker_list(),
-            command_list=["git clone " + git_base + "{0}"],
+            command_list=["git clone " + ReposFactory.git_base + "{0}"],
             cwd_is_home=True,
         )
 
     def clone_all(self):
         self.execute_shell_with_table(
             status_line="Cloning",
-            command_list=["git clone " + git_base + "{0}"],
+            command_list=["git clone " + ReposFactory.git_base + "{0}"],
             cwd_is_home=True,
         )
 
