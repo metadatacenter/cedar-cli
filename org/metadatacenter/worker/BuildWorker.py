@@ -26,17 +26,18 @@ class BuildWorker(Worker):
         for repo in repo_list_flat:
             handled = False
             if repo.repo_type == RepoType.JAVA_WRAPPER:
-                self.execute_shell(repo, ["mvn clean install -DskipTests"], progress_text)
+                self.execute_shell_command_list(repo, ["mvn clean install -DskipTests"], progress_text)
                 handled = True
             elif repo.repo_type == RepoType.JAVA:
-                self.execute_shell(repo, ["mvn clean install -DskipTests"], progress_text)
+                self.execute_shell_command_list(repo, ["mvn clean install -DskipTests"], progress_text)
                 handled = True
             elif repo.repo_type == RepoType.ANGULAR:
-                self.execute_shell(repo, ["npm install --legacy-peer-deps; ng build --configuration=production"],
-                                   progress_text)
+                self.execute_shell_command_list(repo, ["npm install --legacy-peer-deps",
+                                          "ng build --configuration=production"],
+                                                progress_text)
                 handled = True
             elif repo.repo_type == RepoType.ANGULAR_JS:
-                self.execute_shell(repo, ["npm install"], progress_text)
+                self.execute_shell_command_list(repo, ["npm install"], progress_text)
                 handled = True
             if not handled:
                 self.execute_none(repo, progress_text)

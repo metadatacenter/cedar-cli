@@ -24,10 +24,12 @@ class TaskListExecutor:
         }
 
     def execute_task_list(self, task_list: TaskList):
-        msg = "[bright_cyan]Execute task list"
+        msg = "[bright_cyan]"
+        sep = ""
         for task in task_list.tasks:
-            msg += "\n  " + "️ ⚙️️  " + task.title + " " + task.worker_type
-        console.print(Panel(msg, style=Style(color="bright_cyan"), title="Task list"))
+            msg += sep + " ⚙️️  " + task.title + " " + task.worker_type
+            sep = "\n"
+        console.print(Panel(msg, style=Style(color="bright_cyan"), title="Execute task list", title_align = "left"))
         for task in task_list.tasks:
             worker = self.get_worker(task.worker_type)
             worker.work(task)
