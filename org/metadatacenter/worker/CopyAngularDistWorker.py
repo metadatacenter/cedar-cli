@@ -23,5 +23,3 @@ class CopyAngularDistWorker(Worker):
         msg += "\n  Source repo: " + "️ ➡️  " + parent_task_repo.get_wd()
         msg += "\n  Target repo: " + "️ ➡️  " + target_repo.get_wd()
         console.print(Panel(msg, style=Style(color="cyan"), title="Copy Angular Dist worker"))
-        command = f"cp -a {source_path}/dist/{parent_task_repo.name}/* {target_path}/."
-        self.execute_shell_command_list(parent_task_repo, [command], progress_text)

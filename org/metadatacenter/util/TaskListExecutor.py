@@ -7,9 +7,8 @@ from org.metadatacenter.model import TaskList
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.Task import Task
 from org.metadatacenter.model.WorkerType import WorkerType
-from org.metadatacenter.worker.BuildWorker import BuildWorker
-from org.metadatacenter.worker.CopyAngularDistWorker import CopyAngularDistWorker
 from org.metadatacenter.worker.DeployWorker import DeployWorker
+from org.metadatacenter.worker.ReleasePrepareWorker import ReleasePrepareWorker
 
 console = Console()
 
@@ -18,9 +17,8 @@ class TaskListExecutor:
 
     def __init__(self):
         self.worker_map = {
-            WorkerType.BUILD: BuildWorker(),
             WorkerType.DEPLOY: DeployWorker(),
-            WorkerType.COPY_ANGULAR_DIST: CopyAngularDistWorker(),
+            WorkerType.RELEASE_PREPARE: ReleasePrepareWorker(),
         }
 
     def execute_task_list(self, task_list: TaskList):
@@ -29,14 +27,12 @@ class TaskListExecutor:
         for task in task_list.tasks:
             msg += sep + " ⚙️️  " + task.title + " " + task.worker_type
             sep = "\n"
-        console.print(Panel(msg, style=Style(color="bright_cyan"), title="Execute task list", title_align = "left"))
+        console.print(Panel(msg, style=Style(color="bright_cyan"), title="Execute task list", title_align="left"))
         for task in task_list.tasks:
             worker = self.get_worker(task.worker_type)
             worker.work(task)
 
     def get_worker(self, worker_type: WorkerType):
-        if worker_type not in self.worker_map:
-            self.worker_map[worker_type] = self.build_worker_for(worker_type)
         return self.worker_map[worker_type]
 
     def post_task(self, repo: Repo, parent_task: Task):

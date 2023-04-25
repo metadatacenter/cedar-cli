@@ -14,3 +14,13 @@ class Util(object):
     @staticmethod
     def get_wd(repo: Repo):
         return Util.cedar_home + "/" + repo.get_wd()
+
+    @staticmethod
+    def get_flat_repo_list(repo_list):
+        repos = []
+        for repo in repo_list:
+            repos.append(repo)
+            if len(repo.sub_repos) > 0:
+                for sub_repo in repo.sub_repos:
+                    repos.append(sub_repo)
+        return repos
