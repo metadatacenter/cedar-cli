@@ -1,5 +1,6 @@
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.model.Repo import Repo
+from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.TaskType import TaskType
 
 
@@ -56,6 +57,8 @@ class ShellTaskFactory:
         from org.metadatacenter.util.GlobalContext import GlobalContext
         task = PlanTask("Prepare release of java wrapper", TaskType.SHELL, repo)
 
+        # TODO read release version from command line
+        # Make it with variable interpolation or with ENV var literal
         CEDAR_RELEASE_VERSION = '2.6.26'
         release_branch_name = 'release/pre-' + CEDAR_RELEASE_VERSION
         release_tag_name = 'release-' + CEDAR_RELEASE_VERSION
@@ -66,8 +69,12 @@ class ShellTaskFactory:
         build_command = ''
         if repo in GlobalContext.repos.get_parent():
             replace_version_command_1 = "xmlstarlet ed -L -u '_:project/_:version' -v '" + CEDAR_RELEASE_VERSION + "' pom.xml"
-            replace_version_command_2 = "xmlstarlet ed -L -u '_:project/_:parent/_:version' -v '" + CEDAR_RELEASE_VERSION + "' pom.xml"
-            replace_version_command_3 = "xmlstarlet ed -L -u '_:project/_:properties/_:cedar.version' -v '" + CEDAR_RELEASE_VERSION + "' pom.xml"
+            replace_version_command_2 = "xmlstarlet ed -L -u '_:project/_:properties/_:cedar.version' -v '" + CEDAR_RELEASE_VERSION + "' pom.xml"
+            build_command = 'mvn clean install -DskipTests'
+        elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
+            replace_version_command_1 = 'mvn versions:set -DnewVersion="' + CEDAR_RELEASE_VERSION + '" -DupdateMatchingVersions=false'
+            replace_version_command_2 = 'mvn versions:update-parent versions:update-child-modules'
+            replace_version_command_3 = 'mvn -DallowSnapshots=false versions:update-properties'
             build_command = 'mvn clean install -DskipTests'
 
         task.command_list = [

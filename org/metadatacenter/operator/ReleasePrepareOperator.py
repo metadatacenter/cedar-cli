@@ -25,7 +25,7 @@ class ReleasePrepareOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.JAVA:
                 shell_wrapper = PlanTask("Prepare release of java project", TaskType.SHELL_WRAPPER, repo)
-                # shell_wrapper.add_task_as_task(ShellTaskFactory.maven_clean_install_skip_tests(repo))
+                shell_wrapper.add_task_as_task(ShellTaskFactory.release_prepare_java_wrapper(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR:
                 shell_wrapper = PlanTask("Prepare release of angular project", TaskType.SHELL_WRAPPER, repo)
