@@ -80,11 +80,11 @@ class Repos:
 
     def get_release_all(self) -> [Repo]:
         repos = []
-        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_parent())
-        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_libraries())
-        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_project())
-        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_clients())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_parent())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_libraries())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_project())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_clients())
         repos = repos + Util.get_flat_repo_list_pre_post(self.get_frontends())
-        # remainder = list(set(self.get_list_all()) - set(repos))
-        # repos = repos + remainder
+        remainder = list(set(self.get_list_all()) - set(repos))
+        repos = repos + remainder
         return repos

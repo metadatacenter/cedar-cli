@@ -26,11 +26,11 @@ class ReleasePrepareOperator(Operator):
         for repo in repo_list:
             if repo.repo_type == RepoType.JAVA_WRAPPER:
                 shell_wrapper = PlanTask("Prepare release of java wrapper project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_java_wrapper(repo))
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_java(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.JAVA:
                 shell_wrapper = PlanTask("Prepare release of java project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_java_wrapper(repo))
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_java(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR:
                 if repo.pre_post_type == PrePostType.SUB:
