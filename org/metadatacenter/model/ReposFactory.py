@@ -1,8 +1,9 @@
 from org.metadatacenter.model.PlanPostTask import PlanPostTask
 from org.metadatacenter.model.Repo import Repo
+from org.metadatacenter.model.RepoRelation import RepoRelation
+from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.Repos import Repos
-from org.metadatacenter.model.Task import Task
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.model.WorkerType import WorkerType
 
@@ -75,14 +76,17 @@ class ReposFactory:
         # repos.add_repo(monitoring_multi)
 
         openview_multi = Repo("cedar-openview", RepoType.MULTI, is_frontend=True)
-        openview_src = Repo("cedar-openview", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        openview_src = Repo("cedar-openview-src", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
         openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST, is_frontend=True)
         openview_multi.add_sub_repo(openview_src)
         openview_multi.add_sub_repo(openview_dist)
-        openview_src.add_post_task([WorkerType.BUILD, WorkerType.DEPLOY], PlanPostTask("Copy angular dist",
-                                                                                       TaskType.COPY_ANGULAR_DIST,
-                                                                                       TaskType.SHELL_WRAPPER,
-                                                                                       {'target_repo': openview_dist}))
+
+        openview_src_dist_relation = RepoRelation(openview_src, RepoRelationType.IS_SOURCE_OF, openview_dist)
+        repos.add_relation(openview_src_dist_relation)
+        # openview_src.add_post_task([WorkerType.BUILD, WorkerType.DEPLOY], PlanPostTask("Copy angular dist",
+        #                                                                                TaskType.COPY_ANGULAR_DIST,
+        #                                                                                TaskType.SHELL_WRAPPER,
+        #                                                                                {'target_repo': openview_dist}))
         repos.add_repo(openview_multi)
 
         # cee_demo_angular_multi = Repo("cedar-cee-demo", RepoType.MULTI, is_frontend=True)

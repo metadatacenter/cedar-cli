@@ -3,4 +3,3 @@ class WorkerType:
     RELEASE_COMMIT = "release/commit"
     BUILD = "build"
     DEPLOY = "deploy"
-    COPY_ANGULAR_DIST = "copy-angular-dist"

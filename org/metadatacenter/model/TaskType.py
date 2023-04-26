@@ -3,7 +3,7 @@ class TaskType:
     DEPLOY = "deploy"
     SHELL = "shell"
     SHELL_WRAPPER = "shell-wrapper"
-    SKIP = "skip"
+    NOOP = "noop"
     COPY_ANGULAR_DIST = "copy-angular-dist"
     RELEASE_PREPARE = "release/prepare"
     RELEASE_COMMIT = "release/commit"

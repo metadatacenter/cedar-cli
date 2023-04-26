@@ -1,6 +1,10 @@
+from typing import List
+
 from rich.console import Console
 
 from org.metadatacenter.model.Repo import Repo
+from org.metadatacenter.model.RepoRelation import RepoRelation
+from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.util.Util import Util
 
@@ -10,6 +14,7 @@ console = Console()
 class Repos:
     def __init__(self):
         self.map = {}
+        self.relations: List[RepoRelation] = []
 
     def add_repo(self, repo):
         name = repo.name
@@ -17,6 +22,15 @@ class Repos:
             console.log("Repo already present in registry:" + name)
         else:
             self.map[name] = repo
+
+    def add_relation(self, relation: RepoRelation):
+        self.relations.append(relation)
+
+    def get_relation(self, source_repo: Repo, relation_type: RepoRelationType):
+        for rel in self.relations:
+            if rel.source_repo.get_wd() == source_repo.get_wd() and rel.relation_type == relation_type:
+                return rel
+        return None
 
     def get_list_top(self) -> [Repo]:
         return list(self.map.values())
@@ -66,11 +80,11 @@ class Repos:
 
     def get_release_all(self) -> [Repo]:
         repos = []
-        repos = repos + Util.get_flat_repo_list(self.get_parent())
-        repos = repos + Util.get_flat_repo_list(self.get_libraries())
-        repos = repos + Util.get_flat_repo_list(self.get_project())
-        repos = repos + Util.get_flat_repo_list(self.get_clients())
-        repos = repos + Util.get_flat_repo_list(self.get_frontends())
-        remainder = list(set(self.get_list_all()) - set(repos))
-        repos = repos + remainder
+        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_parent())
+        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_libraries())
+        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_project())
+        # repos = repos + Util.get_flat_repo_list_pre_post(self.get_clients())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_frontends())
+        # remainder = list(set(self.get_list_all()) - set(repos))
+        # repos = repos + remainder
         return repos

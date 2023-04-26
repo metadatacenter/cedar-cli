@@ -1,5 +1,4 @@
-from org.metadatacenter.model.Task import Task
-from org.metadatacenter.model.WorkerType import WorkerType
+from org.metadatacenter.model.PrePostType import PrePostType
 
 
 class Repo:
@@ -18,7 +17,8 @@ class Repo:
         self.is_sub_repo = False
         self.sub_repos = []
         self.parent_repo = None
-        self.post_tasks = {}
+        self.pre_post_type : PrePostType = None
+        # self.post_tasks = {}
 
     def add_sub_repo(self, sub_repo):
         self.sub_repos.append(sub_repo)
@@ -31,8 +31,8 @@ class Repo:
         else:
             return self.name
 
-    def add_post_task(self, task_types: [WorkerType], post_task: Task):
-        for task_type in task_types:
-            if task_type not in self.post_tasks:
-                self.post_tasks[task_type] = []
-            self.post_tasks[task_type].append(post_task)
+    # def add_post_task(self, task_types: [WorkerType], post_task: Task):
+    #     for task_type in task_types:
+    #         if task_type not in self.post_tasks:
+    #             self.post_tasks[task_type] = []
+    #         self.post_tasks[task_type].append(post_task)

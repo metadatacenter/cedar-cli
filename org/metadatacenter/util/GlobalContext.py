@@ -1,11 +1,9 @@
 from rich.console import Console
 
-from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.ReposFactory import ReposFactory
-from org.metadatacenter.model.Task import Task
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.operator.Operator import Operator
-from org.metadatacenter.operator.ReleasePrepareOperator import ReleasePrepareOperator
+from org.metadatacenter.util.Util import Util
 
 console = Console()
 
@@ -25,23 +23,23 @@ class GlobalContext(object):
     def __init__(self):
         from org.metadatacenter.util.TaskListExecutor import TaskListExecutor
         self.task_list_executor = TaskListExecutor()
+        Util.check_cedar_home()
 
-    def trigger_post_task(self, repo: Repo, parent_task: Task):
-        self.task_list_executor.post_task(repo, parent_task)
+    # def trigger_post_task(self, repo: Repo, parent_task: Task):
+    #     self.task_list_executor.post_task(repo, parent_task)
 
     @classmethod
-    def start(cls, task_type: TaskType):
+    def mark_global_task_type(cls, task_type: TaskType):
         cls.task_type = task_type
 
     @classmethod
     def init_task_operators(cls):
         from org.metadatacenter.operator.BuildOperator import BuildOperator
         from org.metadatacenter.operator.DeployOperator import DeployOperator
-        from org.metadatacenter.operator.CopyAngularDistOperator import CopyAngularDistOperator
+        from org.metadatacenter.operator.ReleasePrepareOperator import ReleasePrepareOperator
         cls.task_operators = {
             TaskType.BUILD: BuildOperator(),
             TaskType.DEPLOY: DeployOperator(),
-            TaskType.COPY_ANGULAR_DIST: CopyAngularDistOperator(),
             TaskType.RELEASE_PREPARE: ReleasePrepareOperator()
         }
 

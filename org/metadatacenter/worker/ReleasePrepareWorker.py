@@ -68,4 +68,4 @@ class ReleasePrepareWorker(Worker):
 
             if not handled:
                 self.execute_none(repo, progress_text)
-            GlobalContext().trigger_post_task(repo, task)
+            # GlobalContext().trigger_post_task(repo, task)
