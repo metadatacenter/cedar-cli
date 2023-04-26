@@ -119,6 +119,12 @@ class GitWorker(Worker):
             status_line="Pulling",
         )
 
+    def fetch(self):
+        self.execute_shell_with_table(
+            command_list=["git fetch"],
+            status_line="Fetching",
+        )
+
     def status(self):
         result = self.execute_shell_with_table(
             command_list=["git status"],
