@@ -6,7 +6,7 @@
 export CEDAR_HOME='/Users/cedar-dev/CEDAR/'
 
 cd ${CEDAR_HOME}
-git clone https://github.com/metadatacenter/cedar-cli
+git clone https://github.com/egyedia/cedar-cli
 
 cd cedar-cli
 git checkout develop

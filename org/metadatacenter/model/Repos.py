@@ -1,6 +1,12 @@
+from typing import List
+
 from rich.console import Console
 
+from org.metadatacenter.model.Repo import Repo
+from org.metadatacenter.model.RepoRelation import RepoRelation
+from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
+from org.metadatacenter.util.Util import Util
 
 console = Console()
 
@@ -8,6 +14,7 @@ console = Console()
 class Repos:
     def __init__(self):
         self.map = {}
+        self.relations: List[RepoRelation] = []
 
     def add_repo(self, repo):
         name = repo.name
@@ -16,10 +23,19 @@ class Repos:
         else:
             self.map[name] = repo
 
-    def get_list_top(self):
+    def add_relation(self, relation: RepoRelation):
+        self.relations.append(relation)
+
+    def get_relation(self, source_repo: Repo, relation_type: RepoRelationType):
+        for rel in self.relations:
+            if rel.source_repo.get_fqn() == source_repo.get_fqn() and rel.relation_type == relation_type:
+                return rel
+        return None
+
+    def get_list_top(self) -> [Repo]:
         return list(self.map.values())
 
-    def get_list_all(self):
+    def get_list_all(self) -> [Repo]:
         repos = []
         for name, repo in self.map.items():
             repos.append(repo)
@@ -28,32 +44,47 @@ class Repos:
                     repos.append(sub_repo)
         return repos
 
-    def get_for_docker_list(self):
+    def get_for_docker_list(self) -> [Repo]:
         return [repo for repo in list(self.map.values()) if repo.for_docker is True]
 
-    def get_parent(self):
+    def get_parent(self) -> [Repo]:
         for name, repo in self.map.items():
             if repo.repo_type == RepoType.JAVA_WRAPPER and "parent" in repo.name:
-                return repo
+                return [repo]
+        return []
 
-    def get_libraries(self):
+    def get_libraries(self) -> [Repo]:
         for name, repo in self.map.items():
             if repo.repo_type == RepoType.JAVA_WRAPPER and "libraries" in repo.name:
-                return repo
+                return [repo]
+        return []
 
-    def get_project(self):
+    def get_project(self) -> [Repo]:
         for name, repo in self.map.items():
             if repo.repo_type == RepoType.JAVA_WRAPPER and "project" in repo.name:
-                return repo
+                return [repo]
+        return []
 
-    def get_clients(self):
+    def get_clients(self) -> [Repo]:
         for name, repo in self.map.items():
             if repo.repo_type == RepoType.JAVA_WRAPPER and "clients" in repo.name:
-                return repo
+                return [repo]
+        return []
 
-    def get_frontends(self):
+    def get_frontends(self) -> [Repo]:
         repos = []
         for name, repo in self.map.items():
             if repo.is_frontend:
                 repos.append(repo)
+        return repos
+
+    def get_release_all(self) -> [Repo]:
+        repos = []
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_parent())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_libraries())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_project())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_clients())
+        repos = repos + Util.get_flat_repo_list_pre_post(self.get_frontends())
+        remainder = list(set(self.get_list_all()) - set(repos))
+        repos = repos + remainder
         return repos

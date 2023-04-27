@@ -23,6 +23,10 @@ def branch():
 def pull():
     git_worker.pull()
 
+@app.command("fetch")
+def pull():
+    git_worker.fetch()
+
 
 @app.command("checkout")
 def checkout(branch: str):
