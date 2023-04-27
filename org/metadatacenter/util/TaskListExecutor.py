@@ -1,13 +1,9 @@
-import jsonpickle as jsonpickle
 from rich.console import Console
 from rich.panel import Panel
 from rich.style import Style
 
 from org.metadatacenter.model import TaskList
-from org.metadatacenter.model.Repo import Repo
-from org.metadatacenter.model.Task import Task
 from org.metadatacenter.model.WorkerType import WorkerType
-from org.metadatacenter.worker.DeployWorker import DeployWorker
 from org.metadatacenter.worker.ReleasePrepareWorker import ReleasePrepareWorker
 
 console = Console()
@@ -17,7 +13,6 @@ class TaskListExecutor:
 
     def __init__(self):
         self.worker_map = {
-            WorkerType.DEPLOY: DeployWorker(),
             WorkerType.RELEASE_PREPARE: ReleasePrepareWorker(),
         }
 

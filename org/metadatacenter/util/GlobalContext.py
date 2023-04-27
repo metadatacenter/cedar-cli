@@ -13,11 +13,13 @@ class GlobalContext(object):
     operator = Operator()
     task_type = None
     task_operators = {}
+    task_executors = {}
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(GlobalContext, cls).__new__(cls)
             cls.instance.init_task_operators()
+            cls.instance.init_task_executors()
         return cls.instance
 
     def __init__(self):
@@ -44,8 +46,32 @@ class GlobalContext(object):
         }
 
     @classmethod
+    def init_task_executors(cls):
+        from org.metadatacenter.taskexecutor.BuildTaskExecutor import BuildTaskExecutor
+        from org.metadatacenter.taskexecutor.DeployTaskExecutor import DeployTaskExecutor
+        from org.metadatacenter.taskexecutor.ReleasePrepareTaskExecutor import ReleasePrepareTaskExecutor
+        from org.metadatacenter.taskexecutor.ShellWrapperTaskExecutor import ShellWrapperTaskExecutor
+        from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
+        from org.metadatacenter.taskexecutor.NoopTaskExecutor import NoopTaskExecutor
+        cls.task_executors = {
+            TaskType.BUILD: BuildTaskExecutor(),
+            TaskType.DEPLOY: DeployTaskExecutor(),
+            TaskType.RELEASE_PREPARE: ReleasePrepareTaskExecutor(),
+            TaskType.SHELL_WRAPPER: ShellWrapperTaskExecutor(),
+            TaskType.SHELL: ShellTaskExecutor(),
+            TaskType.NOOP: NoopTaskExecutor()
+        }
+
+    @classmethod
     def get_task_operator(cls, task_type):
         if task_type in cls.task_operators:
             return cls.task_operators[task_type]
+        else:
+            return None
+
+    @classmethod
+    def get_task_executor(cls, task_type):
+        if task_type in cls.task_executors:
+            return cls.task_executors[task_type]
         else:
             return None

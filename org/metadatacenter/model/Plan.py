@@ -34,3 +34,12 @@ class Plan:
         from org.metadatacenter.util.GlobalContext import GlobalContext
         for task in tasks:
             GlobalContext.operator.expand_task(task)
+
+    def get_max_depth(self):
+        return self.get_max_depth_recursively(self, 0)
+
+    def get_max_depth_recursively(self, plan: 'Plan', depth):
+        max_depth = 0
+        for task in plan.tasks:
+            max_depth = max(max_depth, self.get_max_depth_recursively(task, depth))
+        return max_depth + 1

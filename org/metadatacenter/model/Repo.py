@@ -17,8 +17,17 @@ class Repo:
         self.is_sub_repo = False
         self.sub_repos = []
         self.parent_repo = None
-        self.pre_post_type : PrePostType = None
+        self.pre_post_type: PrePostType = None
         # self.post_tasks = {}
+
+    def __eq__(self, obj):
+        return isinstance(obj, Repo) and obj.get_wd() == self.get_wd()
+
+    def __ne__(self, obj):
+        return not self == obj
+
+    def __hash__(self) -> int:
+        return hash(self.get_wd())
 
     def add_sub_repo(self, sub_repo):
         self.sub_repos.append(sub_repo)
