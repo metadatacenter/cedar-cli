@@ -6,7 +6,7 @@ from org.metadatacenter.model.Repos import Repos
 
 
 class ReposFactory:
-    git_base = "https://github.com/egyedia/"
+    git_base = "https://github.com/metadatacenter/"
 
     def __init__(self):
         super().__init__()
