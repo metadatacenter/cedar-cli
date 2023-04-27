@@ -6,6 +6,7 @@ from rich.progress import Progress
 from rich.style import Style
 
 from org.metadatacenter.model.PlanTask import PlanTask
+from org.metadatacenter.model.PrePostType import PrePostType
 
 
 class TaskExecutor(ABC):
@@ -18,6 +19,6 @@ class TaskExecutor(ABC):
         pass
 
     def display_header(self, task: PlanTask, job_progress: Progress, color: str, title: str):
-        msg = task.name + (" => " + task.repo.pre_post_type if task.repo.pre_post_type is not None else "")
-        msg += "\n" + "️ ➡️  " + task.repo.get_wd()
+        msg = task.name + (" ➡️  " + task.repo.pre_post_type if task.repo.pre_post_type != PrePostType.NONE else "")
+        msg += "\n" + "️ ➡️  " + task.repo.get_fqn()
         job_progress.print(Panel(msg, style=Style(color=color), title=title))

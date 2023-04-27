@@ -28,7 +28,7 @@ class Repos:
 
     def get_relation(self, source_repo: Repo, relation_type: RepoRelationType):
         for rel in self.relations:
-            if rel.source_repo.get_wd() == source_repo.get_wd() and rel.relation_type == relation_type:
+            if rel.source_repo.get_fqn() == source_repo.get_fqn() and rel.relation_type == relation_type:
                 return rel
         return None
 

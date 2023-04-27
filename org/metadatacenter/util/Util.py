@@ -29,7 +29,7 @@ class Util(object):
 
     @staticmethod
     def get_wd(repo: Repo):
-        return Util.cedar_home + "/" + repo.get_wd()
+        return Util.cedar_home + "/" + repo.get_fqn()
 
     @staticmethod
     def get_flat_repo_list(repo_list):

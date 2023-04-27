@@ -23,12 +23,7 @@ class GlobalContext(object):
         return cls.instance
 
     def __init__(self):
-        from org.metadatacenter.util.TaskListExecutor import TaskListExecutor
-        self.task_list_executor = TaskListExecutor()
         Util.check_cedar_home()
-
-    # def trigger_post_task(self, repo: Repo, parent_task: Task):
-    #     self.task_list_executor.post_task(repo, parent_task)
 
     @classmethod
     def mark_global_task_type(cls, task_type: TaskType):

@@ -17,31 +17,24 @@ class Repo:
         self.is_sub_repo = False
         self.sub_repos = []
         self.parent_repo = None
-        self.pre_post_type: PrePostType = None
-        # self.post_tasks = {}
+        self.pre_post_type: PrePostType = PrePostType.NONE
 
     def __eq__(self, obj):
-        return isinstance(obj, Repo) and obj.get_wd() == self.get_wd()
+        return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()
 
     def __ne__(self, obj):
         return not self == obj
 
     def __hash__(self) -> int:
-        return hash(self.get_wd())
+        return hash(self.get_fqn())
 
     def add_sub_repo(self, sub_repo):
         self.sub_repos.append(sub_repo)
         sub_repo.is_sub_repo = True
         sub_repo.parent_repo = self
 
-    def get_wd(self):
+    def get_fqn(self):
         if self.is_sub_repo:
             return self.parent_repo.name + "/" + self.name
         else:
             return self.name
-
-    # def add_post_task(self, task_types: [WorkerType], post_task: Task):
-    #     for task_type in task_types:
-    #         if task_type not in self.post_tasks:
-    #             self.post_tasks[task_type] = []
-    #         self.post_tasks[task_type].append(post_task)
