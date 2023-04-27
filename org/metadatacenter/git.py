@@ -28,6 +28,9 @@ def pull():
 def pull():
     git_worker.fetch()
 
+@app.command("remote")
+def remote():
+    git_worker.remote()
 
 @app.command("checkout")
 def checkout(branch: str):

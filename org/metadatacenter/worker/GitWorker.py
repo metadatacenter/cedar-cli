@@ -174,3 +174,9 @@ class GitWorker(Worker):
         else:
             self.delete_cedar_file(LAST_GIT_FILE)
             self.delete_cedar_file(NEXT_GIT_FILE)
+
+    def remote(self):
+        self.execute_shell_with_table(
+            status_line="Checking remote",
+            command_list=["git remote -v"],
+        )
