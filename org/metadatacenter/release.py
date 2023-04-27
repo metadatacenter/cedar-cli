@@ -7,7 +7,7 @@ from org.metadatacenter.planner.ReleasePreparePlanner import ReleasePreparePlann
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
-app = typer.Typer()
+app = typer.Typer(no_args_is_help=True)
 
 release_prepare_planner = ReleasePreparePlanner()
 

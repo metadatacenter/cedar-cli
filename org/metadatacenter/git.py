@@ -3,7 +3,7 @@ import typer
 from org.metadatacenter import git_clone
 from org.metadatacenter.worker.GitWorker import GitWorker
 
-app = typer.Typer()
+app = typer.Typer(no_args_is_help=True)
 app.add_typer(git_clone.app, name="clone")
 
 git_worker = GitWorker()
@@ -22,6 +22,7 @@ def branch():
 @app.command("pull")
 def pull():
     git_worker.pull()
+
 
 @app.command("fetch")
 def pull():

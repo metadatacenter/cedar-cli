@@ -6,7 +6,7 @@ from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.DeployPlanner import DeployPlanner
 from org.metadatacenter.util.GlobalContext import GlobalContext
 
-app = typer.Typer()
+app = typer.Typer(no_args_is_help=True)
 
 deploy_planner = DeployPlanner()
 

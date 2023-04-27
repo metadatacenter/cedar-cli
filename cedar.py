@@ -5,7 +5,7 @@ from org.metadatacenter.util.GlobalContext import GlobalContext
 
 GlobalContext()
 
-app = typer.Typer()
+app = typer.Typer(no_args_is_help=True)
 app.add_typer(repo.app, name="repo")
 app.add_typer(git.app, name="git")
 app.add_typer(server.app, name="server")

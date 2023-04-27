@@ -2,7 +2,7 @@ import typer
 
 from org.metadatacenter.worker.EnvWorker import EnvWorker
 
-app = typer.Typer()
+app = typer.Typer(no_args_is_help=True)
 
 env_worker = EnvWorker()
 
