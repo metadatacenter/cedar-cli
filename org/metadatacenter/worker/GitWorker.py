@@ -1,16 +1,9 @@
-import subprocess
-
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress
-from rich.rule import Rule
 from rich.style import Style
 from rich.table import Table
 
 from org.metadatacenter.model.ReposFactory import ReposFactory
-from org.metadatacenter.util.GlobalContext import GlobalContext
-from org.metadatacenter.util.RepoResultTriple import RepoResultTriple
-from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
@@ -18,7 +11,6 @@ console = Console()
 
 NEXT_GIT_FILE = 'next_git_repo'
 LAST_GIT_FILE = 'last_git_repo'
-UTF_8 = 'utf-8'
 GIT_STATUS_CHAR_LIMIT = 300
 
 
@@ -26,47 +18,6 @@ class GitWorker(Worker):
 
     def __init__(self):
         super().__init__()
-
-    def execute_shell_with_table(self,
-                                 command_list,
-                                 cwd_is_home=False,
-                                 headers=["Repo", "Output", "Error"],
-                                 show_lines=True,
-                                 status_line="Processing",
-                                 repo_list=None
-                                 ):
-        result = ResultTable(headers, show_lines)
-        if repo_list is None:
-            repo_list = GlobalContext.repos.get_list_top()
-        with Progress() as progress:
-            task = progress.add_task("[red]" + status_line + "...", total=len(repo_list))
-            for repo in repo_list:
-                commands_to_execute = [cmd.format(repo.name) for cmd in command_list]
-                rule = Rule("[bold red]" + repo.name)
-                progress.print(rule)
-                out = ""
-                err = ""
-                try:
-                    cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
-                    # print(commands_to_execute)
-                    process = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
-                    stdout, stderr = process.communicate()
-                    out = stdout.decode(UTF_8).strip()
-                    err = stderr.decode(UTF_8).strip()
-                except subprocess.CalledProcessError as e:
-                    err += str(e)
-                except OSError as e:
-                    err += str(e)
-                except:
-                    err += "Error in subprocess"
-                result.add_result(RepoResultTriple(repo, out, err))
-                progress.print(out)
-                if len(err) > 0:
-                    progress.print(err)
-                    progress.print(Panel(err, title="[bold yellow]Error", subtitle="[bold yellow]" + repo.name, style=Style(color="red")))
-                progress.update(task, advance=1)
-        result.print_table()
-        return result
 
     def register_active_repo(self, triple, table, active_repos, suggestion):
         table.add_row(triple.repo.name, triple.out[0:GIT_STATUS_CHAR_LIMIT] + '...' if len(triple.out) > 0 else '', "[red]" + triple.err,
@@ -106,7 +57,7 @@ class GitWorker(Worker):
         return active_repos
 
     def branch(self):
-        self.execute_shell_with_table(
+        self.execute_shell_on_all_repos_with_table(
             command_list=["echo $(git rev-parse --abbrev-ref HEAD)"],
             headers=["Repo", "Branch", "Error"],
             show_lines=False,
@@ -114,31 +65,31 @@ class GitWorker(Worker):
         )
 
     def pull(self):
-        self.execute_shell_with_table(
+        self.execute_shell_on_all_repos_with_table(
             command_list=["git pull"],
             status_line="Pulling",
         )
 
     def fetch(self):
-        self.execute_shell_with_table(
+        self.execute_shell_on_all_repos_with_table(
             command_list=["git fetch"],
             status_line="Fetching",
         )
 
     def status(self):
-        result = self.execute_shell_with_table(
+        result = self.execute_shell_on_all_repos_with_table(
             command_list=["git status"],
         )
         return self.render_status_table(result)
 
     def checkout(self, branch: str):
-        self.execute_shell_with_table(
+        self.execute_shell_on_all_repos_with_table(
             command_list=["git checkout " + branch],
             status_line="Checking out",
         )
 
     def clone_docker(self):
-        self.execute_shell_with_table(
+        self.execute_shell_on_all_repos_with_table(
             status_line="Cloning",
             repo_list=self.repos.get_for_docker_list(),
             command_list=["git clone " + ReposFactory.git_base + "{0}"],
@@ -146,7 +97,7 @@ class GitWorker(Worker):
         )
 
     def clone_all(self):
-        self.execute_shell_with_table(
+        self.execute_shell_on_all_repos_with_table(
             status_line="Cloning",
             command_list=["git clone " + ReposFactory.git_base + "{0}"],
             cwd_is_home=True,
@@ -176,7 +127,7 @@ class GitWorker(Worker):
             self.delete_cedar_file(NEXT_GIT_FILE)
 
     def remote(self):
-        self.execute_shell_with_table(
+        self.execute_shell_on_all_repos_with_table(
             status_line="Checking remote",
             command_list=["git remote -v"],
         )

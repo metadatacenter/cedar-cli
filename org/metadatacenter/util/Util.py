@@ -102,3 +102,7 @@ class Util(object):
         release_branch_name = 'release/pre-' + release_version + '/' + cls.release_tag_time
         release_tag_name = 'release-' + release_version
         return release_version, release_branch_name, release_tag_name
+
+    @classmethod
+    def get_osa_script_path(cls, script_name):
+        return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
