@@ -1,13 +1,16 @@
 import typer
 
+from org.metadatacenter.worker.CleanMavenWorker import CleanMavenWorker
+
 app = typer.Typer(no_args_is_help=True)
+clean_maven_worker = CleanMavenWorker()
 
 
 @app.command("all")
 def all():
-    print("Not implemented yet! 31")
+    clean_maven_worker.all()
 
 
 @app.command("cedar")
 def cedar():
-    print("Not implemented yet! 32")
+    clean_maven_worker.cedar()
