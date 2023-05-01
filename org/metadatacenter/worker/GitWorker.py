@@ -9,8 +9,6 @@ from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
-NEXT_GIT_FILE = 'next_git_repo'
-LAST_GIT_FILE = 'last_git_repo'
 GIT_STATUS_CHAR_LIMIT = 300
 
 
@@ -106,7 +104,7 @@ class GitWorker(Worker):
     def next(self):
         active_repos = self.status()
         if len(active_repos) > 0:
-            last_repo_path = self.read_cedar_file('last_git_repo')
+            last_repo_path = Util.read_cedar_file('last_git_repo')
             found_idx = -1
 
             if last_repo_path is not None:
@@ -120,11 +118,11 @@ class GitWorker(Worker):
             next_repo = active_repos[found_idx]
             path = Util.get_wd(next_repo)
             console.print("Found repo with activity, changing current working directory to: " + path)
-            self.write_cedar_file(LAST_GIT_FILE, path + "\n")
-            self.write_cedar_file(NEXT_GIT_FILE, path + "\n")
+            Util.write_cedar_file(Util.LAST_GIT_FILE, path + "\n")
+            Util.write_cedar_file(Util.NEXT_GIT_FILE, path + "\n")
         else:
-            self.delete_cedar_file(LAST_GIT_FILE)
-            self.delete_cedar_file(NEXT_GIT_FILE)
+            Util.delete_cedar_file(Util.LAST_GIT_FILE)
+            Util.delete_cedar_file(Util.NEXT_GIT_FILE)
 
     def remote(self):
         self.execute_shell_on_all_repos_with_table(

@@ -28,8 +28,15 @@ class PlanExecutor(Executor):
         plan_script = self.get_plan_script(plan)
         console.print(Panel(plan_json, style=Style(color="cyan"), title="Plan JSON"))
         console.print(Panel(plan_script, style=Style(color="cyan"), title="Plan script"))
+
+        console.print("Saving plan files")
+        json_path = Util.write_cedar_file(Util.LAST_PLAN_JSON_FILE, plan_json)
+        script_path = Util.write_cedar_file(Util.LAST_PLAN_SCRIPT_FILE, plan_script)
+
         if dry_run:
-            console.print("Do DRY RUN")
+            console.print("Dry run only, plan files saved:")
+            console.print("JSON plan:" + json_path)
+            console.print("Script plan:" + script_path)
         else:
             console.print("EXECUTE PLAN")
             self.start_long_execution(plan)

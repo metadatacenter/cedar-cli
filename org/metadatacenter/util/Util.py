@@ -16,6 +16,11 @@ console = Console()
 
 
 class Util(object):
+    NEXT_GIT_FILE = 'next_git_repo'
+    LAST_GIT_FILE = 'last_git_repo'
+    LAST_PLAN_JSON_FILE = 'last_plan_content.json'
+    LAST_PLAN_SCRIPT_FILE = 'last_plan_content.sh'
+
     cedar_home: str = None
 
     cedar_release_version: str = None
@@ -106,3 +111,31 @@ class Util(object):
     @classmethod
     def get_osa_script_path(cls, script_name):
         return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
+
+    @classmethod
+    def write_cedar_file(cls, file_name, content):
+        file_path = cls.get_cedar_file(file_name)
+        with open(file_path, "w") as file:
+            file.write(content)
+        return file_path
+
+    @classmethod
+    def read_cedar_file(cls, file_name):
+        path = cls.get_cedar_file(file_name)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r') as file:
+            return file.read().rstrip()
+
+    @classmethod
+    def delete_cedar_file(cls, file_name):
+        path = cls.get_cedar_file(file_name)
+        if os.path.exists(path):
+            os.remove(path)
+
+    @classmethod
+    def get_cedar_file(cls, file_name):
+        parent_path = os.path.expanduser('~/.cedar/')
+        if not os.path.exists(parent_path):
+            os.makedirs(parent_path)
+        return os.path.join(parent_path, file_name)
