@@ -102,13 +102,33 @@ class ReposFactory:
         cee_demo_angular_multi.add_sub_repo(cee_demo_api_php)
         repos.add_repo(cee_demo_angular_multi)
 
-        repos.add_repo(Repo("cedar-embeddable-editor", RepoType.ANGULAR, is_frontend=True, expected_build_lines=29))
-        repos.add_repo(Repo("cedar-metadata-form", "angular", is_frontend=True, expected_build_lines=31))
+        embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, is_frontend=True, expected_build_lines=29)
+        repos.add_repo(embeddable_editor)
+
+        metadata_form = Repo("cedar-metadata-form", "angular", is_frontend=True, expected_build_lines=31)
+        repos.add_repo(metadata_form)
+
+        component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST)
+        repos.add_repo(component_distribution)
+        embeddable_editor_dist_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, component_distribution,
+                                                       parameters={
+                                                           RepoRelation.TARGET_SUB_FOLDER: "cedar-embeddable-editor",
+                                                           RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
+                                                           RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor-${CEDAR_VERSION}.js'
+                                                       })
+        metadata_form_dist_relation = RepoRelation(metadata_form, RepoRelationType.IS_SOURCE_OF, component_distribution,
+                                                   parameters={
+                                                       RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-form",
+                                                       RepoRelation.TARGET_SUB_FOLDER: "cedar-form",
+                                                       RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
+                                                       RepoRelation.DESTINATION_CONCAT: 'cedar-form-${CEDAR_VERSION}.js'
+                                                   })
+        repos.add_relation(embeddable_editor_dist_relation)
+        repos.add_relation(metadata_form_dist_relation)
 
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS))
         repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, is_private=True))
 
-        repos.add_repo(Repo("cedar-component-distribution", RepoType.ANGULAR_DIST))
         repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY))
         repos.add_repo(Repo("cedar-swagger-ui", RepoType.CONTENT_DELIVERY))
 

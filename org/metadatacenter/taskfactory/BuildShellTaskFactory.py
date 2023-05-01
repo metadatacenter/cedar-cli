@@ -28,8 +28,15 @@ class BuildShellTaskFactory:
 
     @classmethod
     def copy_src_content_to_dest(cls, source_path: str, target_path: str, repo: Repo) -> PlanTask:
-        task = PlanTask("Copy source content into destination", TaskType.SHELL, repo)
-        command = f"cp -a {source_path}/* {target_path}/."
+        task = PlanTask("Copy source directory content into destination directory", TaskType.SHELL, repo)
+        command = "cp -a " + source_path + " " + target_path
+        task.command_list = [command]
+        return task
+
+    @classmethod
+    def cat_src_content_to_dest(cls, source_path: str, target_path: str, repo: Repo) -> PlanTask:
+        task = PlanTask("Cat source directory content into destination directory", TaskType.SHELL, repo)
+        command = "cat " + source_path + " > " + target_path
         task.command_list = [command]
         return task
 

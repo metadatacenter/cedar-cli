@@ -25,7 +25,8 @@ class ShellTaskExecutor(TaskExecutor):
 
     def execute_shell_command_list(self, task: PlanTask, job_progress: Progress):
         repo = task.repo
-        commands_to_execute = [cmd.format(repo.name) for cmd in task.command_list]
+        # commands_to_execute = [cmd.format(repo.name) for cmd in task.command_list]
+        commands_to_execute = task.command_list
         cwd = Util.get_wd(repo)
         job_progress.print(Panel(
             "[green]" +
