@@ -139,3 +139,10 @@ class Util(object):
         if not os.path.exists(parent_path):
             os.makedirs(parent_path)
         return os.path.join(parent_path, file_name)
+
+    @classmethod
+    def read_file(cls, file_path):
+        if not os.path.exists(file_path):
+            return None
+        with open(file_path, 'r') as file:
+            return file.read().rstrip()
