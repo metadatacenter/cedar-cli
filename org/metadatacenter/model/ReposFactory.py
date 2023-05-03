@@ -126,14 +126,14 @@ class ReposFactory:
         # repos.add_relation(embeddable_editor_dist_relation)
         # repos.add_relation(metadata_form_dist_relation)
         #
-        # repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS))
+        repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS))
         # repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, is_private=True))
         #
-        # repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY))
+        repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY))
         # repos.add_repo(Repo("cedar-swagger-ui", RepoType.CONTENT_DELIVERY))
         #
-        # repos.add_repo(Repo("cedar-docker-build", RepoType.DOCKER, for_docker=True))
-        # repos.add_repo(Repo("cedar-docker-deploy", RepoType.DOCKER, for_docker=True))
+        repos.add_repo(Repo("cedar-docker-build", RepoType.DOCKER, for_docker=True))
+        repos.add_repo(Repo("cedar-docker-deploy", RepoType.DOCKER, for_docker=True))
 
         repos.add_repo(Repo("cedar-development", RepoType.MISC, for_docker=True))
         # repos.add_repo(Repo("cedar-util", RepoType.MISC))
