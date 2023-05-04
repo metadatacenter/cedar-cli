@@ -54,6 +54,7 @@ class ReleasePrepareShellTaskFactory:
         ]
         return task
 
+    @classmethod
     def prepare_angular_src(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Prepare release of angular standalone project", TaskType.SHELL, repo)
         task.command_list = [
