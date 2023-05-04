@@ -65,7 +65,8 @@ class VersionWorker(Worker):
             self.analyze_angular_js(repo, report)
         elif repo.repo_type == RepoType.ANGULAR_DIST:
             self.analyze_angular_dist(repo, report)
-        elif repo.repo_type == RepoType.MULTI or repo.repo_type == RepoType.PYTHON or repo.repo_type == RepoType.MKDOCS or repo.repo_type == RepoType.CONTENT_DELIVERY:
+        elif repo.repo_type == RepoType.MULTI or repo.repo_type == RepoType.PYTHON or repo.repo_type == RepoType.MKDOCS\
+                or repo.repo_type == RepoType.CONTENT_DELIVERY or repo.repo_type == RepoType.PHP or repo.repo_type == RepoType.MISC:
             self.mark_empty(repo, report)
         elif repo.repo_type == RepoType.DOCKER_BUILD:
             self.analyze_docker_build(repo, report)
