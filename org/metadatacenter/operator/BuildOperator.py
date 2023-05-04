@@ -56,7 +56,7 @@ class BuildOperator(Operator):
         target_repo = source_of_relation.target_repo
         if source_repo.repo_type == RepoType.ANGULAR:
 
-            action ="copy"
+            action = "copy"
             params = source_of_relation.parameters
             relative_source_path = 'dist/' + source_repo.name
             if RepoRelation.SOURCE_SUB_FOLDER in params:
@@ -73,6 +73,7 @@ class BuildOperator(Operator):
             target_selector = '.'
             if RepoRelation.DESTINATION_CONCAT in params:
                 target_selector = params[RepoRelation.DESTINATION_CONCAT]
+                target_selector = target_selector.replace('${CEDAR_RELEASE_VERSION}', Util.cedar_release_version)
                 action = "concat"
 
             source_path = os.path.join(Util.get_wd(source_repo), relative_source_path, source_selector)
