@@ -72,6 +72,12 @@ class ReleasePrepareShellTaskFactory:
         ]
         return task
 
+    def prepare_plain_sub(cls, repo):
+        task = PlanTask("Prepare release of plain sub repo", TaskType.SHELL, repo)
+        task.command_list = [
+        ]
+        return task
+
     @classmethod
     def prepare_multi_pre(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Prepare release of multi directory project", TaskType.SHELL, repo)

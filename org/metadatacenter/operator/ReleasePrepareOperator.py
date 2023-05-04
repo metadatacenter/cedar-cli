@@ -72,9 +72,10 @@ class ReleasePrepareOperator(Operator):
                 shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.PHP:
-                shell_wrapper = PlanTask("Prepare release of PHP repo", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain(repo))
-                task.add_task_as_task(shell_wrapper)
+                if repo.pre_post_type == PrePostType.SUB:
+                    shell_wrapper = PlanTask("Prepare release of PHP sub-project", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain_sub(repo))
+                    task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.DEVELOPMENT:
                 shell_wrapper = PlanTask("Prepare release of development repo", TaskType.SHELL_WRAPPER, repo)
                 shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_development(repo))
