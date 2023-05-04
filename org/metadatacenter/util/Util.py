@@ -1,9 +1,11 @@
 import copy
 import os
+import re
 import sys
 from datetime import datetime
 from typing import List
 
+import rich
 from rich.console import Console
 from rich.panel import Panel
 from rich.style import Style
@@ -146,3 +148,45 @@ class Util(object):
             return None
         with open(file_path, 'r') as file:
             return file.read().rstrip()
+
+    @classmethod
+    def match_cedar_docker_version(cls, value):
+        x = re.search("CEDAR_DOCKER_VERSION=(.*)", value)
+        if x is None:
+            return None
+        return x.group(1)
+
+    @classmethod
+    def match_cedar_version(cls, value):
+        x = re.search("ENV CEDAR_VERSION=(.*)", value, re.MULTILINE)
+        if x is None:
+            return None
+        return x.group(1)
+
+    @classmethod
+    def match_from_metadatacenter_version(cls, value):
+        x = re.search("FROM metadatacenter/(.*):(.*)", value, re.MULTILINE)
+        if x is None:
+            return None
+        return x.group(2)
+
+    @classmethod
+    def match_image_version(cls, value):
+        x = re.search("export IMAGE_VERSION=(.*)", value, re.MULTILINE)
+        if x is None:
+            return None
+        return x.group(1)
+
+    @classmethod
+    def match_export_cedar_version(cls, value):
+        x = re.search("export CEDAR_VERSION=(.*)", value, re.MULTILINE)
+        if x is None:
+            return None
+        return x.group(1)
+
+    @classmethod
+    def write_rich_cedar_file(cls, file_name, rich_object):
+        file_path = cls.get_cedar_file(file_name)
+        with open(file_path, "w") as file:
+            rich.print(rich_object, file=file)
+        return file_path

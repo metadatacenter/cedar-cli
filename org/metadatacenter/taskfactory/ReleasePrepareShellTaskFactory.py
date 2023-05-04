@@ -90,6 +90,49 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
+    def prepare_plain(cls, repo):
+        task = PlanTask("Prepare release of plain repo", TaskType.SHELL, repo)
+        task.command_list = [
+            *cls.macro_create_pre_release_branch(),
+            *cls.macro_commit_changes(),
+            *cls.macro_tag_repo()
+        ]
+        return task
+
+    @classmethod
+    def prepare_development(cls, repo):
+        task = PlanTask("Prepare release of development repo", TaskType.SHELL, repo)
+        task.command_list = [
+            *cls.macro_create_pre_release_branch(),
+            *cls.macro_update_development_cedar_version(),
+            *cls.macro_commit_changes(),
+            *cls.macro_tag_repo()
+        ]
+        return task
+
+    @classmethod
+    def prepare_docker_deploy(cls, repo):
+        task = PlanTask("Prepare release of Docker deploy repo", TaskType.SHELL, repo)
+        task.command_list = [
+            *cls.macro_create_pre_release_branch(),
+            *cls.macro_update_env_cedar_docker_version(),
+            *cls.macro_commit_changes(),
+            *cls.macro_tag_repo()
+        ]
+        return task
+
+    @classmethod
+    def prepare_docker_build(cls, repo):
+        task = PlanTask("Prepare release of Docker build repo", TaskType.SHELL, repo)
+        task.command_list = [
+            *cls.macro_create_pre_release_branch(),
+            *cls.macro_update_docker_build_versions(),
+            *cls.macro_commit_changes(),
+            *cls.macro_tag_repo()
+        ]
+        return task
+
+    @classmethod
     def macro_tag_repo(cls):
         release_version, release_branch_name, release_tag_name = Util.get_release_vars()
         return ('echo "Tag repo with release version"',
@@ -127,6 +170,28 @@ class ReleasePrepareShellTaskFactory:
         return ('echo "Update to next release version"',
                 "      jq '.version=\"'" + release_version + "'\"' package.json | sponge package.json",
                 "      sed -i '' 's/- CEDAR_VERSION\s*=.*\".*\"/- CEDAR_VERSION=\"'" + release_version + "'\"/g' .travis.yml")
+
+    @classmethod
+    def macro_update_development_cedar_version(cls):
+        release_version, release_branch_name, release_tag_name = Util.get_release_vars()
+        return ('echo "Update to next release version"',
+                "      sed -i '' 's/^export CEDAR_VERSION=.*$/export CEDAR_VERSION=\"'" + release_version + "'\"/' ./bin/util/set-env-generic.sh")
+
+    @classmethod
+    def macro_update_env_cedar_docker_version(cls):
+        release_version, release_branch_name, release_tag_name = Util.get_release_vars()
+        return ('echo "Update to next release version"',
+                "      find . -name .env -exec sed -i '' 's/^CEDAR_DOCKER_VERSION=.*$/export CEDAR_DOCKER_VERSION=\"'" + release_version + "'\"/' {} \; -print")
+
+    @classmethod
+    def macro_update_docker_build_versions(cls):
+        release_version, release_branch_name, release_tag_name = Util.get_release_vars()
+        return ('echo "Update to next release version"',
+                "      find . -name Dockerfile -exec sed -i '' 's/^FROM metadatacenter\/cedar-microservice:.*$/FROM metadatacenter\/cedar-microservice:'" + release_version + "'/' {} \; -print",
+                "      find . -name Dockerfile -exec sed -i '' 's/^FROM metadatacenter\/cedar-java:.*$/FROM metadatacenter\/cedar-java:'" + release_version + "'/' {} \; -print",
+                "      find . -name Dockerfile -exec sed -i '' 's/^ENV CEDAR_VERSION=.*$/ENV CEDAR_VERSION=\"'" + release_version + "'\"/' {} \; -print",
+                "      sed -i '' 's/^export IMAGE_VERSION=.*$/export IMAGE_VERSION=\"'" + release_version + "'\"/' ./bin/cedar-images-base.sh"
+                )
 
     @classmethod
     def macro_build_angular(cls):
