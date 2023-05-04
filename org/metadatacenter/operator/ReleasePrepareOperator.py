@@ -46,6 +46,10 @@ class ReleasePrepareOperator(Operator):
                     shell_wrapper = PlanTask("Prepare release of angular dist sub-project", TaskType.SHELL_WRAPPER, repo)
                     shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_dist_sub(repo))
                     task.add_task_as_task(shell_wrapper)
+                elif repo.pre_post_type == PrePostType.NONE:
+                    shell_wrapper = PlanTask("Prepare release of angular dist standalone project", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_dist(repo))
+                    task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_JS:
                 shell_wrapper = PlanTask("Prepare release of angularJS project", TaskType.SHELL_WRAPPER, repo)
                 shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_js(repo))

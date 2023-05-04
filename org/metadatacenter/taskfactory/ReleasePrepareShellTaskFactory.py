@@ -68,6 +68,18 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
+    def prepare_angular_dist(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Prepare release of angular dist standalone project", TaskType.SHELL, repo)
+        task.command_list = [
+            *cls.macro_create_pre_release_branch(),
+            *cls.macro_update_package_json_and_travis(),
+            *cls.macro_build_angular(),
+            *cls.macro_commit_changes(),
+            *cls.macro_tag_repo()
+        ]
+        return task
+
+    @classmethod
     def prepare_angular_src_sub(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Prepare release of angular sub-project", TaskType.SHELL, repo)
         task.command_list = [
@@ -193,13 +205,13 @@ class ReleasePrepareShellTaskFactory:
     def macro_update_development_cedar_version(cls):
         release_version, release_branch_name, release_tag_name = Util.get_release_vars()
         return ('echo "Update to next release version"',
-                "      sed -i '' 's/^export CEDAR_VERSION=.*$/export CEDAR_VERSION=\"'" + release_version + "'\"/' ./bin/util/set-env-generic.sh")
+                "      sed -i '' 's/^export CEDAR_VERSION=.*$/export CEDAR_VERSION='" + release_version + "'/' ./bin/util/set-env-generic.sh")
 
     @classmethod
     def macro_update_env_cedar_docker_version(cls):
         release_version, release_branch_name, release_tag_name = Util.get_release_vars()
         return ('echo "Update to next release version"',
-                "      find . -name .env -exec sed -i '' 's/^CEDAR_DOCKER_VERSION=.*$/export CEDAR_DOCKER_VERSION=\"'" + release_version + "'\"/' {} \; -print")
+                "      find . -name .env -exec sed -i '' 's/^CEDAR_DOCKER_VERSION=.*$/export CEDAR_DOCKER_VERSION='" + release_version + "'/' {} \; -print")
 
     @classmethod
     def macro_update_docker_build_versions(cls):
@@ -207,8 +219,8 @@ class ReleasePrepareShellTaskFactory:
         return ('echo "Update to next release version"',
                 "      find . -name Dockerfile -exec sed -i '' 's/^FROM metadatacenter\/cedar-microservice:.*$/FROM metadatacenter\/cedar-microservice:'" + release_version + "'/' {} \; -print",
                 "      find . -name Dockerfile -exec sed -i '' 's/^FROM metadatacenter\/cedar-java:.*$/FROM metadatacenter\/cedar-java:'" + release_version + "'/' {} \; -print",
-                "      find . -name Dockerfile -exec sed -i '' 's/^ENV CEDAR_VERSION=.*$/ENV CEDAR_VERSION=\"'" + release_version + "'\"/' {} \; -print",
-                "      sed -i '' 's/^export IMAGE_VERSION=.*$/export IMAGE_VERSION=\"'" + release_version + "'\"/' ./bin/cedar-images-base.sh"
+                "      find . -name Dockerfile -exec sed -i '' 's/^ENV CEDAR_VERSION=.*$/ENV CEDAR_VERSION='" + release_version + "'/' {} \; -print",
+                "      sed -i '' 's/^export IMAGE_VERSION=.*$/export IMAGE_VERSION='" + release_version + "'/' ./bin/cedar-images-base.sh"
                 )
 
     @classmethod
