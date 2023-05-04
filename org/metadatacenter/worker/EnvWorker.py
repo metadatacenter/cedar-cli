@@ -4,12 +4,22 @@ from rich.console import Console
 from rich.style import Style
 from rich.table import Table
 
+from org.metadatacenter.util.Const import Const
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
-core_list = ['CEDAR_HOME', 'CEDAR_DOCKER_HOME', 'CEDAR_HOST', 'CEDAR_VERSION', 'CEDAR_RELEASE_VERSION', 'CEDAR_NEXT_DEVELOPMENT_VERSION',
-             'CEDAR_FRONTEND_TARGET', 'CEDAR_NET_GATEWAY', 'CEDAR_NET_SUBNET']
+core_list = [
+    Const.CEDAR_HOME,
+    'CEDAR_DOCKER_HOME',
+    'CEDAR_HOST',
+    Const.CEDAR_VERSION,
+    Const.CEDAR_RELEASE_VERSION,
+    Const.CEDAR_NEXT_DEVELOPMENT_VERSION,
+    'CEDAR_FRONTEND_TARGET',
+    'CEDAR_NET_GATEWAY',
+    'CEDAR_NET_SUBNET'
+]
 
 CEDAR_ENV_PREFIX = 'CEDAR_'
 

@@ -80,6 +80,7 @@ class Util(object):
     def check_cedar_home(cls):
         if Const.CEDAR_HOME in os.environ:
             cls.cedar_home = os.environ[Const.CEDAR_HOME]
+            cls.cedar_release_version = os.environ[Const.CEDAR_VERSION]
         else:
             err = 'CEDAR_HOME environment variable is not set. In order to proceed, please set it to an existing folder'
             console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
