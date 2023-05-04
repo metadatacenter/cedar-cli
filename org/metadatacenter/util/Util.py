@@ -10,8 +10,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.style import Style
 
+from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.model.PrePostType import PrePostType
 from org.metadatacenter.model.Repo import Repo
+from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.util.Const import Const
 
 console = Console()
@@ -24,7 +26,6 @@ class Util(object):
     LAST_PLAN_SCRIPT_FILE = 'last_plan_content.sh'
 
     cedar_home: str = None
-
     cedar_release_version: str = None
     cedar_next_development_version: str = None
     release_tag_time: str = None
@@ -80,7 +81,6 @@ class Util(object):
     def check_cedar_home(cls):
         if Const.CEDAR_HOME in os.environ:
             cls.cedar_home = os.environ[Const.CEDAR_HOME]
-            cls.cedar_release_version = os.environ[Const.CEDAR_VERSION]
         else:
             err = 'CEDAR_HOME environment variable is not set. In order to proceed, please set it to an existing folder'
             console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
@@ -191,3 +191,14 @@ class Util(object):
         with open(file_path, "w") as file:
             rich.print(rich_object, file=file)
         return file_path
+
+    @classmethod
+    def get_build_version(cls, task: PlanTask):
+        if task.task_type == TaskType.BUILD:
+            return os.environ[Const.CEDAR_VERSION]
+        elif task.task_type == TaskType.RELEASE_PREPARE:
+            return Util.cedar_release_version
+        else:
+            err = 'Build version not found for TaskType:' + task.task_type
+            console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
+            sys.exit(1)
