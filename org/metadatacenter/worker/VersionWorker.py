@@ -67,11 +67,11 @@ class VersionWorker(Worker):
             self.analyze_angular_dist(repo, report)
         elif repo.repo_type == RepoType.MULTI or repo.repo_type == RepoType.PYTHON or repo.repo_type == RepoType.MKDOCS or repo.repo_type == RepoType.CONTENT_DELIVERY:
             self.mark_empty(repo, report)
-        elif repo.repo_type == RepoType.DOCKER and repo.name == 'cedar-docker-build':
+        elif repo.repo_type == RepoType.DOCKER_BUILD:
             self.analyze_docker_build(repo, report)
-        elif repo.repo_type == RepoType.DOCKER and repo.name == 'cedar-docker-deploy':
+        elif repo.repo_type == RepoType.DOCKER_DEPLOY:
             self.analyze_docker_deploy(repo, report)
-        elif repo.repo_type == RepoType.MISC and repo.name == 'cedar-development':
+        elif repo.repo_type == RepoType.DEVELOPMENT:
             self.analyze_development(repo, report)
         else:
             self.mark_unknown(repo, report)

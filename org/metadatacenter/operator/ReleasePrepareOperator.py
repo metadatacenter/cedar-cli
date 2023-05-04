@@ -55,6 +55,38 @@ class ReleasePrepareOperator(Operator):
                     shell_wrapper = PlanTask("Wrap up release multi project", TaskType.SHELL_WRAPPER, repo)
                     shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_multi_post(repo))
                     task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.MKDOCS:
+                shell_wrapper = PlanTask("Prepare release of mkdocs repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain(repo))
+                task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.CONTENT_DELIVERY:
+                shell_wrapper = PlanTask("Prepare release of content delivery repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain(repo))
+                task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.MISC:
+                shell_wrapper = PlanTask("Prepare release of miscellaneous repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain(repo))
+                task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.PYTHON:
+                shell_wrapper = PlanTask("Prepare release of python repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain(repo))
+                task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.PHP:
+                shell_wrapper = PlanTask("Prepare release of PHP repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain(repo))
+                task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.DEVELOPMENT:
+                shell_wrapper = PlanTask("Prepare release of development repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_development(repo))
+                task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.DOCKER_DEPLOY:
+                shell_wrapper = PlanTask("Prepare release of Docker deploy repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_docker_deploy(repo))
+                task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.DOCKER_BUILD:
+                shell_wrapper = PlanTask("Prepare release of Docker build repo", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_docker_build(repo))
+                task.add_task_as_task(shell_wrapper)
             else:
                 not_handled = PlanTask("Skip repo", TaskType.NOOP, repo)
                 not_handled.add_task_as_task(BuildShellTaskFactory.noop(repo))

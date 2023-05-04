@@ -132,10 +132,10 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY))
         # repos.add_repo(Repo("cedar-swagger-ui", RepoType.CONTENT_DELIVERY))
         #
-        repos.add_repo(Repo("cedar-docker-build", RepoType.DOCKER, for_docker=True))
-        repos.add_repo(Repo("cedar-docker-deploy", RepoType.DOCKER, for_docker=True))
+        repos.add_repo(Repo("cedar-docker-build", RepoType.DOCKER_BUILD, for_docker=True))
+        repos.add_repo(Repo("cedar-docker-deploy", RepoType.DOCKER_DEPLOY, for_docker=True))
 
-        repos.add_repo(Repo("cedar-development", RepoType.MISC, for_docker=True))
+        repos.add_repo(Repo("cedar-development", RepoType.DEVELOPMENT, for_docker=True))
         # repos.add_repo(Repo("cedar-util", RepoType.MISC))
         #
         repos.add_repo(Repo("cedar-cli", RepoType.PYTHON))
