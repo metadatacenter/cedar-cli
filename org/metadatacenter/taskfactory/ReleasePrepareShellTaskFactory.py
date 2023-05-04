@@ -72,6 +72,7 @@ class ReleasePrepareShellTaskFactory:
         ]
         return task
 
+    @classmethod
     def prepare_plain_sub(cls, repo):
         task = PlanTask("Prepare release of plain sub repo", TaskType.SHELL, repo)
         task.command_list = [
