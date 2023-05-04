@@ -54,12 +54,24 @@ class ReleasePrepareShellTaskFactory:
         ]
         return task
 
+    def prepare_angular_src(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Prepare release of angular standalone project", TaskType.SHELL, repo)
+        task.command_list = [
+            *cls.macro_create_pre_release_branch(),
+            *cls.macro_update_package_json_and_travis(),
+            *cls.macro_update_index_html_version_numbers(),
+            *cls.macro_build_angular(),
+            *cls.macro_commit_changes(),
+            *cls.macro_tag_repo()
+        ]
+        return task
+
     @classmethod
     def prepare_angular_src_sub(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Prepare release of angular sub-project", TaskType.SHELL, repo)
         task.command_list = [
             *cls.macro_update_package_json_and_travis(),
-            *cls.macro_update_openview_index_html(),
+            *cls.macro_update_index_html_version_numbers(),
             *cls.macro_build_angular(),
         ]
         return task
@@ -163,13 +175,11 @@ class ReleasePrepareShellTaskFactory:
                 '      git push origin ' + release_branch_name)
 
     @classmethod
-    def macro_update_openview_index_html(cls):
+    def macro_update_index_html_version_numbers(cls):
         release_version, release_branch_name, release_tag_name = Util.get_release_vars()
         return ('echo "Update openview index.html"',
                 "      sed -i '' 's/\/cedar-form-.*\.js/\/cedar-form-'" + release_version + "'\.js/g' src/index.html",
-                "      sed -i '' 's/\/component\.metadatacenter\..*\/cedar-form\//\/component\.metadatacenter\.org\/cedar-form\//g' src/index.html",
-                "      sed -i '' 's/\/cedar-embeddable-editor-.*\.js/\/cedar-embeddable-editor-'" + release_version + "'\.js/g' src/index.html",
-                "      sed -i '' 's/\/component\.metadatacenter\..*\/cedar-embeddable-editor\//\/component\.metadatacenter\.org\/cedar-embeddable-editor\//g' src/index.html")
+                "      sed -i '' 's/\/cedar-embeddable-editor-.*\.js/\/cedar-embeddable-editor-'" + release_version + "'\.js/g' src/index.html")
 
     @classmethod
     def macro_update_package_json_and_travis(cls):
