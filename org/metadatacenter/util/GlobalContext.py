@@ -34,10 +34,12 @@ class GlobalContext(object):
         from org.metadatacenter.operator.BuildOperator import BuildOperator
         from org.metadatacenter.operator.DeployOperator import DeployOperator
         from org.metadatacenter.operator.ReleasePrepareOperator import ReleasePrepareOperator
+        from org.metadatacenter.operator.ReleaseRollbackOperator import ReleaseRollbackOperator
         cls.task_operators = {
             TaskType.BUILD: BuildOperator(),
             TaskType.DEPLOY: DeployOperator(),
-            TaskType.RELEASE_PREPARE: ReleasePrepareOperator()
+            TaskType.RELEASE_PREPARE: ReleasePrepareOperator(),
+            TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator()
         }
 
     @classmethod
@@ -48,10 +50,12 @@ class GlobalContext(object):
         from org.metadatacenter.taskexecutor.ShellWrapperTaskExecutor import ShellWrapperTaskExecutor
         from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
         from org.metadatacenter.taskexecutor.NoopTaskExecutor import NoopTaskExecutor
+        from org.metadatacenter.taskexecutor.ReleaseRollbackTaskExecutor import ReleaseRollbackTaskExecutor
         cls.task_executors = {
             TaskType.BUILD: BuildTaskExecutor(),
             TaskType.DEPLOY: DeployTaskExecutor(),
             TaskType.RELEASE_PREPARE: ReleasePrepareTaskExecutor(),
+            TaskType.RELEASE_ROLLBACK: ReleaseRollbackTaskExecutor(),
             TaskType.SHELL_WRAPPER: ShellWrapperTaskExecutor(),
             TaskType.SHELL: ShellTaskExecutor(),
             TaskType.NOOP: NoopTaskExecutor()

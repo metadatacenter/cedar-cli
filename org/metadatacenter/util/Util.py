@@ -29,6 +29,8 @@ class Util(object):
     cedar_release_version: str = None
     cedar_next_development_version: str = None
     release_tag_time: str = None
+    rollback_branch: str = None
+    rollback_tag: str = None
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
@@ -107,9 +109,11 @@ class Util(object):
     @classmethod
     def get_release_vars(cls):
         release_version = Util.cedar_release_version
-        release_branch_name = 'release/pre-' + release_version + '/' + cls.release_tag_time
+        release_pre_branch_name = 'release/pre-' + release_version + '/' + cls.release_tag_time
         release_tag_name = 'release-' + release_version
-        return release_version, release_branch_name, release_tag_name
+        release_next_dev_version = Util.cedar_next_development_version
+        release_post_branch_name = 'release/post-' + release_next_dev_version + '/' + cls.release_tag_time
+        return release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name
 
     @classmethod
     def get_osa_script_path(cls, script_name):
@@ -202,3 +206,15 @@ class Util(object):
             err = 'Build version not found for TaskType:' + task.task_type
             console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
             sys.exit(1)
+
+    @classmethod
+    def mark_rollback_branch(cls, rollback_branch: str):
+        cls.rollback_branch = rollback_branch
+
+    @classmethod
+    def mark_rollback_tag(cls, rollback_tag: str):
+        cls.rollback_tag = rollback_tag
+
+    @classmethod
+    def get_rollback_vars(cls):
+        return cls.rollback_branch, cls.rollback_tag

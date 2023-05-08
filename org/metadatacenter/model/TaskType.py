@@ -6,4 +6,5 @@ class TaskType:
     NOOP = "noop"
     COPY_ANGULAR_DIST = "copy-angular-dist"
     RELEASE_PREPARE = "release/prepare"
+    RELEASE_ROLLBACK = "release/rollback"
     RELEASE_COMMIT = "release/commit"

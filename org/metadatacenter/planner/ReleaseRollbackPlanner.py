@@ -4,16 +4,16 @@ from org.metadatacenter.planner.Planner import Planner
 from org.metadatacenter.util.GlobalContext import GlobalContext
 
 
-class ReleasePreparePlanner(Planner):
+class ReleaseRollbackPlanner(Planner):
 
     def __init__(self):
         super().__init__()
 
     @staticmethod
-    def prepare(plan: Plan):
+    def rollback(plan: Plan):
         for repo in GlobalContext.repos.get_release_all():
             plan.add_task(
-                "Prepare release of repo",
-                TaskType.RELEASE_PREPARE,
+                "Rollback release of repo",
+                TaskType.RELEASE_ROLLBACK,
                 [repo]
             )
