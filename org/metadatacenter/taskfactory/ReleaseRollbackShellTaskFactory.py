@@ -11,7 +11,7 @@ class ReleaseRollbackShellTaskFactory:
 
     @classmethod
     def rollback_generic(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Rollback release of angularJS project", TaskType.SHELL, repo)
+        task = PlanTask("Rollback release of generic repo", TaskType.SHELL, repo)
 
         rollback_branch, rollback_tag = Util.get_rollback_vars()
 
@@ -21,6 +21,15 @@ class ReleaseRollbackShellTaskFactory:
                 *cls.macro_delete_local_and_remote_branch(rollback_branch),
                 *cls.macro_delete_local_and_remote_tag(rollback_tag)
             ]
+            return task
+        elif rollback_branch.startswith('release/post'):
+            task.command_list = [
+                *cls.macro_checkout_develop(),
+                *cls.macro_delete_local_and_remote_branch(rollback_branch),
+            ]
+            return task
+        else:
+            task = PlanTask("Rollback not supported", TaskType.SHELL, repo)
             return task
 
     @classmethod
