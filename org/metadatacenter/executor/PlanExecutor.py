@@ -52,7 +52,7 @@ class PlanExecutor(Executor):
         if isinstance(plan, PlanTask):
             if plan.command_list is not None:
                 lines.append('echo "---- ' + plan.repo.get_fqn() + ' ----"')
-                lines.append("pushd " + Util.get_wd(plan.repo))
+                lines.append("      pushd " + Util.get_wd(plan.repo))
                 lines.extend(plan.command_list)
                 lines.append("popd\n")
 
