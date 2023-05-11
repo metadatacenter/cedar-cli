@@ -4,6 +4,7 @@ import typer
 
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
+from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.ReleasePreparePlanner import ReleasePreparePlanner
 from org.metadatacenter.planner.ReleaseRollbackPlanner import ReleaseRollbackPlanner

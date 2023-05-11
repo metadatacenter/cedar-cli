@@ -11,17 +11,17 @@ class Plan:
         self.name = name
         self.tasks = []
 
-    def add_task(self, name: str, task_type: TaskType, repo_list: list[Repo]):
+    def add_task(self, name: str, task_type: TaskType, repo_list: list[Repo], parameters: dict = {}):
         from org.metadatacenter.model.PlanTask import PlanTask
         proper_list = list(filter(None, repo_list))
         to_expand = []
         if len(proper_list) == 1:
-            task = PlanTask(name, task_type, proper_list[0])
+            task = PlanTask(name, task_type, proper_list[0], parameters)
             self.tasks.append(task)
             to_expand.append(task)
         else:
             for repo in proper_list:
-                task = PlanTask(name, task_type, repo)
+                task = PlanTask(name, task_type, repo, parameters)
                 self.tasks.append(task)
                 to_expand.append(task)
         self.expand_tasks(to_expand)

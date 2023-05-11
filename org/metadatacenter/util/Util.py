@@ -12,6 +12,7 @@ from rich.style import Style
 
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.model.PrePostType import PrePostType
+from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.util.Const import Const
@@ -107,13 +108,16 @@ class Util(object):
         cls.release_tag_time = current_datetime.strftime("%Y%m%d-%H%M%S")
 
     @classmethod
-    def get_release_vars(cls):
-        release_version = Util.cedar_release_version
-        release_pre_branch_name = 'release/pre-' + release_version + '/' + cls.release_tag_time
-        release_tag_name = 'release-' + release_version
-        release_next_dev_version = Util.cedar_next_development_version
-        release_post_branch_name = 'release/post-' + release_next_dev_version + '/' + cls.release_tag_time
-        return release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name
+    def get_release_vars(cls, branch_type: PreReleaseBranchType):
+        if branch_type == PreReleaseBranchType.RELEASE:
+            release_version = Util.cedar_release_version
+            release_pre_branch_name = 'release/pre-' + release_version + '/' + cls.release_tag_time
+            release_tag_name = 'release-' + release_version
+            return release_version, release_pre_branch_name, release_tag_name
+        elif branch_type == PreReleaseBranchType.NEXT_DEV:
+            release_next_dev_version = Util.cedar_next_development_version
+            release_post_branch_name = 'release/post-' + release_next_dev_version + '/' + cls.release_tag_time
+            return release_next_dev_version, release_post_branch_name, None
 
     @classmethod
     def get_osa_script_path(cls, script_name):

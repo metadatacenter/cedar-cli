@@ -1,4 +1,5 @@
 from org.metadatacenter.model.PlanTask import PlanTask
+from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.TaskType import TaskType
@@ -11,16 +12,11 @@ class ReleasePrepareShellTaskFactory:
         super().__init__()
 
     @classmethod
-    def prepare_java(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Prepare release of java wrapper", TaskType.SHELL, repo)
+    def prepare_java(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("java wrapper", branch_type), TaskType.SHELL, repo)
         task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_java_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_java_internal(repo, task, release_next_dev_version, release_post_branch_name)
-        return task
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
 
-    @classmethod
-    def prepare_java_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
         from org.metadatacenter.util.GlobalContext import GlobalContext
         replace_version_commands = []
         build_command = ''
@@ -46,17 +42,13 @@ class ReleasePrepareShellTaskFactory:
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
 
-    @classmethod
-    def prepare_angular_js(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Prepare release of angularJS project", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_angular_js_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_angular_js_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_angular_js_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_angular_js(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("angularJS project", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_package_json_and_travis(version),
@@ -64,18 +56,13 @@ class ReleasePrepareShellTaskFactory:
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
-
-    @classmethod
-    def prepare_angular_src(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Prepare release of angular standalone project", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_angular_src_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_angular_src_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_angular_src_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_angular_src(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("angular standalone project", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_package_json_and_travis(version),
@@ -84,18 +71,13 @@ class ReleasePrepareShellTaskFactory:
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
-
-    @classmethod
-    def prepare_angular_dist(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Prepare release of angular dist standalone project", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_angular_dist_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_angular_dist_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_angular_dist_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_angular_dist(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("angular dist standalone project", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_package_json_and_travis(version),
@@ -103,147 +85,108 @@ class ReleasePrepareShellTaskFactory:
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
-
-    @classmethod
-    def prepare_angular_src_sub(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Prepare release of angular sub-project", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_angular_src_sub_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_angular_src_sub_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_angular_src_sub_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_angular_src_sub(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("angular sub-project", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_update_package_json_and_travis(version),
             *cls.macro_update_index_html_version_numbers(version),
             *cls.macro_build_angular(),
         ])
-
-    @classmethod
-    def prepare_angular_dist_sub(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Prepare release of angular dist sub-project", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_angular_dist_sub_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_angular_dist_sub_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_angular_dist_sub_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_angular_dist_sub(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("angular dist sub-project", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_update_package_json_and_travis(version),
         ])
+        return task
 
     @classmethod
-    def prepare_plain_sub(cls, repo):
-        task = PlanTask("Prepare release of plain sub repo", TaskType.SHELL, repo)
+    def prepare_plain_sub(cls, repo: Repo, branch_type: PreReleaseBranchType):
+        task = PlanTask(cls.get_typed_name("plain sub repo", branch_type), TaskType.SHELL, repo)
         task.command_list = [
         ]
         return task
 
     @classmethod
-    def prepare_multi_pre(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Prepare release of multi directory project", TaskType.SHELL, repo)
+    def prepare_multi_pre(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("PRE multi directory project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_multi_pre_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_multi_pre_internal(repo, task, release_next_dev_version, release_post_branch_name)
-        return task
-
-    @classmethod
-    def prepare_multi_pre_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
         ])
-
-    @classmethod
-    def prepare_multi_post(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Wrap up release of multi directory project", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_multi_post_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_multi_post_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_multi_post_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_multi_post(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+        task = PlanTask(cls.get_typed_name("POST multi directory project", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
-
-    @classmethod
-    def prepare_plain(cls, repo):
-        task = PlanTask("Prepare release of plain repo", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_plain_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_plain_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_plain_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_plain(cls, repo: Repo, branch_type: PreReleaseBranchType):
+        task = PlanTask(cls.get_typed_name("plain repo", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
-
-    @classmethod
-    def prepare_development(cls, repo):
-        task = PlanTask("Prepare release of development repo", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_development_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_development_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_development_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_development(cls, repo: Repo, branch_type: PreReleaseBranchType):
+        task = PlanTask(cls.get_typed_name("development repo", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_development_cedar_version(version),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
-
-    @classmethod
-    def prepare_docker_deploy(cls, repo):
-        task = PlanTask("Prepare release of Docker deploy repo", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_docker_deploy_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_docker_deploy_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_docker_deploy_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_docker_deploy(cls, repo: Repo, branch_type: PreReleaseBranchType):
+        task = PlanTask(cls.get_typed_name("Docker deploy repo", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_env_cedar_docker_version(version),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
-
-    @classmethod
-    def prepare_docker_build(cls, repo):
-        task = PlanTask("Prepare release of Docker build repo", TaskType.SHELL, repo)
-        task.command_list = []
-        release_version, release_pre_branch_name, release_tag_name, release_next_dev_version, release_post_branch_name = Util.get_release_vars()
-        cls.prepare_docker_build_internal(repo, task, release_version, release_pre_branch_name, release_tag_name)
-        cls.prepare_docker_build_internal(repo, task, release_next_dev_version, release_post_branch_name)
         return task
 
     @classmethod
-    def prepare_docker_build_internal(cls, repo: Repo, task: PlanTask, version: str, branch_name: str, tag_name: str = None):
+    def prepare_docker_build(cls, repo: Repo, branch_type: PreReleaseBranchType):
+        task = PlanTask(cls.get_typed_name("Docker build repo", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
             *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_docker_build_versions(version),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
+        return task
 
     @classmethod
     def macro_tag_repo(cls, tag_name: str):
@@ -306,3 +249,9 @@ class ReleasePrepareShellTaskFactory:
     def macro_build_angular_js(cls):
         return ('echo "Build release version"',
                 '      npm install')
+
+    @classmethod
+    def get_typed_name(cls, name, branch_type: PreReleaseBranchType):
+        s = "Prepare " + name + " for "
+        s += " pre-release" if branch_type == PreReleaseBranchType.RELEASE else "next dev"
+        return s
