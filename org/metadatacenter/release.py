@@ -4,7 +4,6 @@ import typer
 
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
-from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.ReleasePreparePlanner import ReleasePreparePlanner
 from org.metadatacenter.planner.ReleaseRollbackPlanner import ReleaseRollbackPlanner
@@ -35,7 +34,6 @@ def rollback(branch: Annotated[str, typer.Option(help="Branch to delete")],
     plan = Plan("Prepare rollback release all")
     ReleaseRollbackPlanner.rollback(plan)
     plan_executor.execute(plan, dry_run)
-    pass
 
 
 @app.command("commit")

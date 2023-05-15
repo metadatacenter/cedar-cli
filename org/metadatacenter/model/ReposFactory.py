@@ -14,10 +14,10 @@ class ReposFactory:
     @staticmethod
     def build_repos():
         repos = Repos()
-        repos.add_repo(Repo("cedar-parent", RepoType.JAVA_WRAPPER, expected_build_lines=20))
-        repos.add_repo(Repo("cedar-libraries", RepoType.JAVA_WRAPPER, expected_build_lines=705))
-        repos.add_repo(Repo("cedar-project", RepoType.JAVA_WRAPPER, expected_build_lines=26502))
-        repos.add_repo(Repo("cedar-clients", RepoType.JAVA_WRAPPER, expected_build_lines=167))
+        repos.add_repo(Repo("cedar-parent", RepoType.JAVA_WRAPPER))
+        repos.add_repo(Repo("cedar-libraries", RepoType.JAVA_WRAPPER))
+        repos.add_repo(Repo("cedar-project", RepoType.JAVA_WRAPPER))
+        repos.add_repo(Repo("cedar-clients", RepoType.JAVA_WRAPPER))
 
         repos.add_repo(Repo("cedar-artifact-library", RepoType.JAVA, is_library=True))
         repos.add_repo(Repo("cedar-config-library", RepoType.JAVA, is_library=True))
@@ -51,10 +51,10 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-admin-tool", RepoType.JAVA))
         repos.add_repo(Repo("cedar-cadsr-tools", RepoType.JAVA))
 
-        repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, is_frontend=True, expected_build_lines=14))
+        repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, is_frontend=True))
 
         artifacts_multi = Repo("cedar-artifacts", RepoType.MULTI, is_frontend=True)
-        artifacts_src = Repo("cedar-artifacts-src", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        artifacts_src = Repo("cedar-artifacts-src", RepoType.ANGULAR, is_frontend=True)
         artifacts_dist = Repo("cedar-artifacts-dist", RepoType.ANGULAR_DIST, is_frontend=True)
 
         artifacts_multi.add_sub_repo(artifacts_src)
@@ -64,7 +64,7 @@ class ReposFactory:
         repos.add_repo(artifacts_multi)
 
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, is_frontend=True)
-        monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, is_frontend=True)
         monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST, is_frontend=True)
 
         monitoring_multi.add_sub_repo(monitoring_src)
@@ -74,7 +74,7 @@ class ReposFactory:
         repos.add_repo(monitoring_multi)
 
         openview_multi = Repo("cedar-openview", RepoType.MULTI, is_frontend=True)
-        openview_src = Repo("cedar-openview-src", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        openview_src = Repo("cedar-openview-src", RepoType.ANGULAR, is_frontend=True)
         openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST, is_frontend=True)
 
         openview_multi.add_sub_repo(openview_src)
@@ -84,9 +84,9 @@ class ReposFactory:
         repos.add_repo(openview_multi)
 
         cee_demo_angular_multi = Repo("cedar-cee-demo", RepoType.MULTI, is_frontend=True)
-        cee_demo_angular_src = Repo("cedar-cee-demo-angular-src", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        cee_demo_angular_src = Repo("cedar-cee-demo-angular-src", RepoType.ANGULAR, is_frontend=True)
         cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, is_frontend=True)
-        cee_docs_angular_src = Repo("cedar-cee-docs-angular-src", RepoType.ANGULAR, is_frontend=True, expected_build_lines=30)
+        cee_docs_angular_src = Repo("cedar-cee-docs-angular-src", RepoType.ANGULAR, is_frontend=True)
         cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, is_frontend=True)
         cee_demo_api_php = Repo("cedar-cee-demo-api-php", RepoType.PHP, is_frontend=True)
 
@@ -103,10 +103,10 @@ class ReposFactory:
         cee_demo_angular_multi.add_sub_repo(cee_demo_api_php)
         repos.add_repo(cee_demo_angular_multi)
 
-        embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, is_frontend=True, expected_build_lines=29)
+        embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, is_frontend=True)
         repos.add_repo(embeddable_editor)
 
-        metadata_form = Repo("cedar-metadata-form", "angular", is_frontend=True, expected_build_lines=31)
+        metadata_form = Repo("cedar-metadata-form", "angular", is_frontend=True)
         repos.add_repo(metadata_form)
 
         component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST)
