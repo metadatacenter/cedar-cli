@@ -120,6 +120,13 @@ class Util(object):
             return release_next_dev_version, release_post_branch_name, None
 
     @classmethod
+    def get_allow_snapshots(cls, branch_type):
+        if branch_type == PreReleaseBranchType.RELEASE:
+            return False
+        elif branch_type == PreReleaseBranchType.NEXT_DEV:
+            return True
+
+    @classmethod
     def get_osa_script_path(cls, script_name):
         return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
 

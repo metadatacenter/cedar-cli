@@ -16,6 +16,8 @@ class ReleasePrepareShellTaskFactory:
         task = PlanTask(cls.get_typed_name("java wrapper", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
+        allow_snapshots = Util.get_allow_snapshots(branch_type)
+        allow_snapshots_flag = '-DallowSnapshots=' + 'true' if allow_snapshots else 'false'
 
         from org.metadatacenter.util.GlobalContext import GlobalContext
         replace_version_commands = []
@@ -28,8 +30,8 @@ class ReleasePrepareShellTaskFactory:
         elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
             replace_version_commands = [
                 '      mvn versions:set -DnewVersion="' + version + '" -DupdateMatchingVersions=false',
-                '      mvn versions:update-parent versions:update-child-modules',
-                '      mvn -DallowSnapshots=false versions:update-properties']
+                '      mvn versions:update-parent versions:update-child-modules ' + allow_snapshots_flag,
+                '      mvn versions:update-properties ' + allow_snapshots_flag]
             build_command = '      mvn clean install -DskipTests'
 
         task.command_list.extend([
