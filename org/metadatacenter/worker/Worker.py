@@ -1,8 +1,8 @@
-import fcntl
 import os
 import subprocess
 from typing import List
 
+import fcntl
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress

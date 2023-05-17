@@ -129,3 +129,26 @@ class GitWorker(Worker):
             status_line="Checking remote",
             command_list=["git remote -v"],
         )
+
+    def list_tag(self):
+        self.execute_shell_on_all_repos_with_table(
+            command_list=[
+                "echo Local\n" +
+                "git --no-pager branch -r --sort=creatordate | head -3\n" +
+                "echo Remote\n" +
+                "git --no-pager ls-remote --tag --sort=-creatordate | head -3 | awk '{{ print \" \",$2}}'"
+            ],
+            status_line="Listing tags",
+        )
+
+    def list_branch(self):
+        self.execute_shell_on_all_repos_with_table(
+            command_list=[
+                "echo Local\n" +
+                "git --no-pager branch --sort=creatordate | head -3\n" +
+                "echo Remote\n" +
+                "git --no-pager branch -r --sort=creatordate | head -3"
+            ],
+            status_line="Listing branches",
+        )
+
