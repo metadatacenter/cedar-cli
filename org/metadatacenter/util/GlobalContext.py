@@ -3,6 +3,8 @@ from rich.console import Console
 from org.metadatacenter.model.ReposFactory import ReposFactory
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.operator.Operator import Operator
+from org.metadatacenter.operator.ReleaseCommitOperator import ReleaseCommitOperator
+from org.metadatacenter.taskexecutor.ReleaseCommitTaskExecutor import ReleaseCommitTaskExecutor
 from org.metadatacenter.util.Util import Util
 
 console = Console()
@@ -39,7 +41,8 @@ class GlobalContext(object):
             TaskType.BUILD: BuildOperator(),
             TaskType.DEPLOY: DeployOperator(),
             TaskType.RELEASE_PREPARE: ReleasePrepareOperator(),
-            TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator()
+            TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator(),
+            TaskType.RELEASE_COMMIT: ReleaseCommitOperator()
         }
 
     @classmethod
@@ -56,6 +59,7 @@ class GlobalContext(object):
             TaskType.DEPLOY: DeployTaskExecutor(),
             TaskType.RELEASE_PREPARE: ReleasePrepareTaskExecutor(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackTaskExecutor(),
+            TaskType.RELEASE_COMMIT: ReleaseCommitTaskExecutor(),
             TaskType.SHELL_WRAPPER: ShellWrapperTaskExecutor(),
             TaskType.SHELL: ShellTaskExecutor(),
             TaskType.NOOP: NoopTaskExecutor()
