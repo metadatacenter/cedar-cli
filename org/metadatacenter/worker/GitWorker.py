@@ -134,7 +134,7 @@ class GitWorker(Worker):
         self.execute_shell_on_all_repos_with_table(
             command_list=[
                 "echo Local\n" +
-                "git --no-pager branch -r --sort=-creatordate | head -4\n" +
+                "git --no-pager branch --sort=-creatordate | head -4\n" +
                 "echo Remote\n" +
                 "git --no-pager ls-remote --tag --sort=-creatordate | head -4 | awk '{{ print \" \",$2}}'"
             ],
