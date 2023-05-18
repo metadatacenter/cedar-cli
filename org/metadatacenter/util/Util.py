@@ -25,6 +25,9 @@ class Util(object):
     LAST_GIT_FILE = 'last_git_repo'
     LAST_PLAN_JSON_FILE = 'last_plan_content.json'
     LAST_PLAN_SCRIPT_FILE = 'last_plan_content.sh'
+    LAST_RELEASE_PRE_BRANCH = 'last_release_pre_branch'
+    LAST_RELEASE_POST_BRANCH = 'last_release_post_branch'
+    LAST_RELEASE_TAG = 'last_release_tag'
 
     cedar_home: str = None
     cedar_release_version: str = None

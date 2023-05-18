@@ -36,6 +36,14 @@ def rollback(branch: Annotated[str, typer.Option(help="Branch to delete")],
     plan_executor.execute(plan, dry_run)
 
 
+def commit(dry_run: bool = typer.Option(False, help="Dry run")):
+    Util.check_release_variables()
+    GlobalContext.mark_global_task_type(TaskType.RELEASE_COMMIT)
+    plan = Plan("Commit prepared release all")
+    # ReleasePreparePlanner.prepare(plan)
+    # plan_executor.execute(plan, dry_run)
+
+
 @app.command("commit")
 def commit():
     pass
