@@ -134,9 +134,9 @@ class GitWorker(Worker):
         self.execute_shell_on_all_repos_with_table(
             command_list=[
                 "echo Local\n" +
-                "git --no-pager branch -r --sort=creatordate | head -3\n" +
+                "git --no-pager branch -r --sort=-creatordate | head -4\n" +
                 "echo Remote\n" +
-                "git --no-pager ls-remote --tag --sort=-creatordate | head -3 | awk '{{ print \" \",$2}}'"
+                "git --no-pager ls-remote --tag --sort=-creatordate | head -4 | awk '{{ print \" \",$2}}'"
             ],
             status_line="Listing tags",
         )
@@ -145,9 +145,9 @@ class GitWorker(Worker):
         self.execute_shell_on_all_repos_with_table(
             command_list=[
                 "echo Local\n" +
-                "git --no-pager branch --sort=creatordate | head -3\n" +
+                "git --no-pager branch --sort=-creatordate | head -4\n" +
                 "echo Remote\n" +
-                "git --no-pager branch -r --sort=creatordate | head -3"
+                "git --no-pager branch -r --sort=-creatordate | head -4"
             ],
             status_line="Listing branches",
         )
