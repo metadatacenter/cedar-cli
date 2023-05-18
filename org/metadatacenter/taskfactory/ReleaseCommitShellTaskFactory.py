@@ -22,11 +22,11 @@ class ReleaseCommitShellTaskFactory:
         task.command_list.extend([
             'git checkout main',
             'git pull',
-            'git merge -X theirs --no-ff -m "' + release_version + '" "' + release_tag + '"',
+            'git merge -X theirs --no-ff -m "Updating main to release ' + release_version + '" "' + release_tag + '"',
             'git push',
             'git checkout develop',
             'git pull',
-            'git merge -X theirs --no-ff -m "' + next_dev_version + '" "' + post_branch + '"',
+            'git merge -X theirs --no-ff -m "Updating develop to next snapshot ' + next_dev_version + '" "' + post_branch + '"',
             'git push',
         ])
         return task
