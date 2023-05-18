@@ -28,6 +28,8 @@ class Util(object):
     LAST_RELEASE_PRE_BRANCH = 'last_release_pre_branch'
     LAST_RELEASE_POST_BRANCH = 'last_release_post_branch'
     LAST_RELEASE_TAG = 'last_release_tag'
+    LAST_RELEASE_VERSION = 'last_release_version'
+    LAST_RELEASE_NEXT_DEV_VERSION = 'last_release_next_dev_version'
 
     cedar_home: str = None
     cedar_release_version: str = None
@@ -232,3 +234,12 @@ class Util(object):
     @classmethod
     def get_rollback_vars(cls):
         return cls.rollback_branch, cls.rollback_tag
+
+    @classmethod
+    def check_release_commit_variables(cls):
+        pre_branch = Util.read_cedar_file(Util.LAST_RELEASE_PRE_BRANCH)
+        post_branch = Util.read_cedar_file(Util.LAST_RELEASE_POST_BRANCH)
+        tag = Util.read_cedar_file(Util.LAST_RELEASE_TAG)
+        release_version = Util.read_cedar_file(Util.LAST_RELEASE_VERSION)
+        next_dev_version = Util.read_cedar_file(Util.LAST_RELEASE_NEXT_DEV_VERSION)
+        return pre_branch, post_branch, tag, release_version, next_dev_version
