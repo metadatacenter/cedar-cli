@@ -1,6 +1,6 @@
 from rich.console import Console
 
-from org.metadatacenter.model.ReposFactory import ReposFactory
+from org.metadatacenter.ReposFactory import ReposFactory
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.operator.Operator import Operator
 from org.metadatacenter.operator.ReleaseCommitOperator import ReleaseCommitOperator
