@@ -109,7 +109,7 @@ class ReposFactory:
         metadata_form = Repo("cedar-metadata-form", "angular", is_frontend=True)
         repos.add_repo(metadata_form)
 
-        component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST)
+        component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST, is_frontend=True)
         repos.add_repo(component_distribution)
         embeddable_editor_dist_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, component_distribution,
                                                        parameters={

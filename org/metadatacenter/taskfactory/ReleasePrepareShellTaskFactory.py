@@ -230,7 +230,7 @@ class ReleasePrepareShellTaskFactory:
     @classmethod
     def macro_update_env_cedar_docker_version(cls, version: str):
         return ('echo "Update to next release version"',
-                "      find . -name .env -exec sed -i '' 's/^CEDAR_DOCKER_VERSION=.*$/export CEDAR_DOCKER_VERSION='" + version + "'/' {} \; -print")
+                "      find . -name .env -exec sed -i '' 's/^CEDAR_DOCKER_VERSION=.*$/CEDAR_DOCKER_VERSION='" + version + "'/' {} \; -print")
 
     @classmethod
     def macro_update_docker_build_versions(cls, version: str):

@@ -214,7 +214,7 @@ class Util(object):
 
     @classmethod
     def get_build_version(cls, task: PlanTask):
-        if task.task_type == TaskType.BUILD:
+        if task.task_type == TaskType.BUILD or task.task_type == TaskType.DEPLOY:
             return os.environ[Const.CEDAR_VERSION]
         elif task.task_type == TaskType.RELEASE_PREPARE:
             return Util.cedar_release_version
