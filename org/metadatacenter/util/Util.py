@@ -38,6 +38,9 @@ class Util(object):
     rollback_branch: str = None
     rollback_tag: str = None
 
+    pre_branch: str = None
+    post_branch: str = None
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(Util, cls).__new__(cls)
@@ -234,6 +237,18 @@ class Util(object):
     @classmethod
     def get_rollback_vars(cls):
         return cls.rollback_branch, cls.rollback_tag
+
+    @classmethod
+    def mark_pre_branch(cls, pre_branch: str):
+        cls.pre_branch = pre_branch
+
+    @classmethod
+    def mark_post_branch(cls, post_branch: str):
+        cls.post_branch = post_branch
+
+    @classmethod
+    def get_cleanup_vars(cls):
+        return cls.pre_branch, cls.post_branch
 
     @classmethod
     def check_release_commit_variables(cls):
