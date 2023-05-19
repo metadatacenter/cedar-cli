@@ -28,7 +28,6 @@ class ReleasePrepareOperator(Operator):
     def expand_for_release(cls, task, branch_type: PreReleaseBranchType):
 
         repo_list = [task.repo]
-        # repo_list_flat = Util.get_flat_repo_list(repo_list)
 
         for repo in repo_list:
             if repo.repo_type == RepoType.JAVA_WRAPPER:

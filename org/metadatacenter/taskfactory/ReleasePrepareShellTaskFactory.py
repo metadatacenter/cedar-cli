@@ -220,6 +220,8 @@ class ReleasePrepareShellTaskFactory:
     def macro_update_package_json_and_travis(cls, version: str):
         return ('echo "Update to next release version"',
                 "      jq '.version=\"'" + version + "'\"' package.json | sponge package.json",
+                "      jq '.version=\"'" + version + "'\"' package-lock.json | sponge package-lock.json",
+                "      jq '.packages[\"\"].version=\"'" + version + "'\"' package-lock.json | sponge package-lock.json",
                 "      sed -i '' 's/- CEDAR_VERSION\s*=.*\".*\"/- CEDAR_VERSION=\"'" + version + "'\"/g' .travis.yml")
 
     @classmethod

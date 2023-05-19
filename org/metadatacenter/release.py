@@ -6,6 +6,7 @@ from rich.console import Console
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
+from org.metadatacenter.planner.ReleaseCleanupPlanner import ReleaseCleanupPlanner
 from org.metadatacenter.planner.ReleaseCommitPlanner import ReleaseCommitPlanner
 from org.metadatacenter.planner.ReleasePreparePlanner import ReleasePreparePlanner
 from org.metadatacenter.planner.ReleaseRollbackPlanner import ReleaseRollbackPlanner
@@ -69,4 +70,29 @@ def commit(pre_branch: str = typer.Option(None, help="Branch to merge into main"
             'next_dev_version': next_dev_version
         }
         ReleaseCommitPlanner.commit(plan, params)
+        plan_executor.execute(plan, dry_run)
+
+
+@app.command("cleanup")
+def cleanup(pre_branch: str = typer.Option(None, help="Pre-branch to delete"),
+            post_branch: str = typer.Option(None, help="Post-branch to delete"),
+            dry_run: bool = typer.Option(False, help="Dry run")):
+    pre_branch_old, post_branch_old, _, _, _ = Util.check_release_commit_variables()
+    if pre_branch is None or post_branch is None:
+        command = 'cedarcli release cleanup'
+        command += ' --pre-branch=' + pre_branch_old
+        command += ' --post-branch=' + post_branch_old
+        console.print("Previous release data found. Use this command to clean up the release:\n")
+        console.print(command + "\n")
+    else:
+        console.print("Cleaning up previous release")
+        Util.mark_pre_branch(pre_branch)
+        Util.mark_post_branch(post_branch)
+        GlobalContext.mark_global_task_type(TaskType.RELEASE_CLEANUP)
+        plan = Plan("Clean up release all")
+        params = {
+            'pre_branch': pre_branch,
+            'post_branch': post_branch,
+        }
+        ReleaseCleanupPlanner.cleanup(plan, params)
         plan_executor.execute(plan, dry_run)
