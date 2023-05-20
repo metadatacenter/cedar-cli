@@ -5,7 +5,6 @@ from rich.console import Console
 
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
-from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.ReleaseCleanupPlanner import ReleaseCleanupPlanner
@@ -142,4 +141,3 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
         plan_wrapper.add_task_as_task_no_expand(task3)
 
     plan_executor.execute(plan_wrapper, dry_run)
-
