@@ -30,6 +30,9 @@ class Plan:
         self.tasks.append(task)
         self.expand_tasks([task])
 
+    def add_task_as_task_no_expand(self, task):
+        self.tasks.append(task)
+
     def expand_tasks(self, tasks):
         from org.metadatacenter.util.GlobalContext import GlobalContext
         for task in tasks:

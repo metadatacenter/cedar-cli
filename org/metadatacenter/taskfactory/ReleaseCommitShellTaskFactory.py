@@ -10,7 +10,7 @@ class ReleaseCommitShellTaskFactory:
 
     @classmethod
     def commit_generic(cls, repo: Repo, parent_task: PlanTask) -> PlanTask:
-        task = PlanTask("Commiting generic repo", TaskType.SHELL, repo)
+        task = PlanTask("Committing generic repo", TaskType.SHELL, repo)
         task.command_list = []
         task.parameters = parent_task.parameters
 
