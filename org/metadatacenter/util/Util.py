@@ -258,3 +258,8 @@ class Util(object):
         release_version = Util.read_cedar_file(Util.LAST_RELEASE_VERSION)
         next_dev_version = Util.read_cedar_file(Util.LAST_RELEASE_NEXT_DEV_VERSION)
         return pre_branch, post_branch, tag, release_version, next_dev_version
+
+    @staticmethod
+    def get_servers():
+        from org.metadatacenter.util.GlobalContext import GlobalContext
+        return GlobalContext.servers.map.values()

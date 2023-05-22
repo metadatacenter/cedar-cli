@@ -3,7 +3,7 @@ from rich.panel import Panel
 from rich.style import Style
 from rich.table import Table
 
-from org.metadatacenter.ReposFactory import ReposFactory
+from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
