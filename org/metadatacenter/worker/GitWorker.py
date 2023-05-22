@@ -4,6 +4,7 @@ from rich.style import Style
 from rich.table import Table
 
 from org.metadatacenter.config.ReposFactory import ReposFactory
+from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
@@ -89,7 +90,7 @@ class GitWorker(Worker):
     def clone_docker(self):
         self.execute_shell_on_all_repos_with_table(
             status_line="Cloning",
-            repo_list=self.repos.get_for_docker_list(),
+            repo_list=GlobalContext.repos.get_for_docker_list(),
             command_list=["git clone " + ReposFactory.git_base + "{0}"],
             cwd_is_home=True,
         )
@@ -151,4 +152,3 @@ class GitWorker(Worker):
             ],
             status_line="Listing branches",
         )
-
