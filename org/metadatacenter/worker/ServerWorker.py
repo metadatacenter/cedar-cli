@@ -47,6 +47,7 @@ class ServerWorker(Worker):
             current_server_tag = server.tag
             if prev_server_tag is not None and prev_server_tag != current_server_tag:
                 table.add_section()
+                table.add_row("[bold magenta]" + server.server_type, '', '', '')
 
             prev_server_tag = current_server_tag
             if error != '':
@@ -62,9 +63,9 @@ class ServerWorker(Worker):
                 self.check_status_of_server(server, server_status_map)
 
     def check_status_of_server(self, server: Server, server_status_map: dict):
-        console.log('----------------------------------------------------------------')
-        console.log(server.name)
-        console.log(server.check_running)
+        # console.log('----------------------------------------------------------------')
+        # console.log(server.name)
+        # console.log(server.check_running)
         if server.check_running == CheckRunning.HEALTH_CHECK:
             self.check_status_by_health_check(server, server_status_map)
         elif server.check_running == CheckRunning.RESPONSE:
@@ -73,30 +74,48 @@ class ServerWorker(Worker):
             self.check_status_by_open_port(server, server_status_map)
 
     def check_status_by_health_check(self, server: Server, server_status_map: dict):
-        url = 'http://localhost:' + str(server.admin_port) + '/healthcheck'
         server_status_report = ServerStatusReport(server)
-        try:
-            response = requests.head(url)
-            server_status_report.set_status_code(response.status_code)
-        except Exception as e:
-            server_status_report.add_exception(str(e))
+        port_open = self.is_port_open('localhost', server.port)
+        if not port_open:
+            server_status_report.status = ServerStatus.NOT_RUNNING
+            server_status_report.exception = "Port not open"
+        else:
+            url = 'http://localhost:' + str(server.admin_port) + '/healthcheck'
+            try:
+                response = requests.head(url)
+                server_status_report.set_status_code(response.status_code)
+            except Exception as e:
+                server_status_report.add_exception(str(e))
         server_status_map[server.name] = server_status_report
 
     def check_status_by_response(self, server: Server, server_status_map: dict):
-        url = 'http://localhost:' + str(server.port)
         server_status_report = ServerStatusReport(server)
-        try:
-            response = requests.head(url)
-            server_status_report.set_status_code(response.status_code)
-        except Exception as e:
-            server_status_report.add_exception(str(e))
+        port_open = self.is_port_open('localhost', server.port)
+        if not port_open:
+            server_status_report.status = ServerStatus.NOT_RUNNING
+            server_status_report.exception = "Port not open"
+        else:
+            url = 'http://localhost:' + str(server.port)
+            try:
+                response = requests.head(url)
+                server_status_report.set_status_code(response.status_code)
+            except Exception as e:
+                server_status_report.add_exception(str(e))
         server_status_map[server.name] = server_status_report
 
     def check_status_by_open_port(self, server: Server, server_status_map: dict):
         server_status_report = ServerStatusReport(server)
-        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-            if sock.connect_ex(('localhost', server.port)) == 0:
-                server_status_report.status = ServerStatus.OK
-            else:
-                server_status_report.status = ServerStatus.NOT_RUNNING
+        port_open = self.is_port_open('localhost', server.port)
+        if port_open:
+            server_status_report.status = ServerStatus.OK
+        else:
+            server_status_report.status = ServerStatus.NOT_RUNNING
+            server_status_report.exception = "Port not open"
         server_status_map[server.name] = server_status_report
+
+    def is_port_open(self, host: str, port: int):
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            if sock.connect_ex((host, port)) == 0:
+                return True
+            else:
+                return False
