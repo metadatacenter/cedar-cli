@@ -38,7 +38,7 @@ class DeployOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_DIST:
                 shell_wrapper = PlanTask("Deploy angular dist project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(DeployShellTaskFactory.npm_install_legacy_ng_build_publish(repo))
+                shell_wrapper.add_task_as_task(DeployShellTaskFactory.npm_publish(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_JS:
                 shell_wrapper = PlanTask("Deploy angularJS project", TaskType.SHELL_WRAPPER, repo)

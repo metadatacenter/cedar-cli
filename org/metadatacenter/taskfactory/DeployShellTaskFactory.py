@@ -15,9 +15,9 @@ class DeployShellTaskFactory:
         return task
 
     @classmethod
-    def npm_install_legacy_ng_build_publish(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("NPM install, NG build, NPM publish", TaskType.SHELL, repo)
-        task.command_list = ['npm install --legacy-peer-deps', 'ng build --configuration=production', 'npm publish']
+    def npm_publish(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("NPM publish", TaskType.SHELL, repo)
+        task.command_list = ['npm publish']
         return task
 
     @classmethod
