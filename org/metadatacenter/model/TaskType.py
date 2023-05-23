@@ -9,3 +9,4 @@ class TaskType:
     RELEASE_ROLLBACK = "release/rollback"
     RELEASE_COMMIT = "release/commit"
     RELEASE_CLEANUP = "release/cleanup"
+    RELEASE_BRANCH_CHECKOUT = "release/branch-checkout"

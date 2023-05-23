@@ -9,4 +9,4 @@ server_worker = ServerWorker()
 
 @app.command("status")
 def status():
-    print("Not implemented yet! 11")
+    server_worker.status()

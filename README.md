@@ -6,14 +6,14 @@
 export CEDAR_HOME='/Users/cedar-dev/CEDAR/'
 
 cd ${CEDAR_HOME}
-git clone https://github.com/egyedia/cedar-cli
+git clone https://github.com/metadatacenter/cedar-cli
 
 cd cedar-cli
 git checkout develop
 
 python -m venv ./.venv
-pip install -r requirements.txt
 source .venv/bin/activate
+pip install -r requirements.txt
 
 python cedar.py --help
 

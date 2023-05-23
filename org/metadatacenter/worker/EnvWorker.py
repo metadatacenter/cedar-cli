@@ -11,7 +11,6 @@ console = Console()
 
 core_list = [
     Const.CEDAR_HOME,
-    'CEDAR_DOCKER_HOME',
     'CEDAR_HOST',
     Const.CEDAR_VERSION,
     Const.CEDAR_RELEASE_VERSION,

@@ -8,8 +8,6 @@ from org.metadatacenter.util.GlobalContext import GlobalContext
 
 app = typer.Typer(no_args_is_help=True)
 
-deploy_planner = DeployPlanner()
-
 plan_executor = PlanExecutor()
 
 
@@ -19,7 +17,7 @@ def this(wd: str = typer.Option(None, help="Working directory"),
          ):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy this")
-    deploy_planner.this(plan, wd)
+    DeployPlanner.this(plan, wd)
     plan_executor.execute(plan, dry_run)
 
 
@@ -27,7 +25,7 @@ def this(wd: str = typer.Option(None, help="Working directory"),
 def parent(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy parent")
-    deploy_planner.parent(plan)
+    DeployPlanner.parent(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -35,7 +33,7 @@ def parent(dry_run: bool = typer.Option(False, help="Dry run")):
 def libraries(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy libraries")
-    deploy_planner.libraries(plan)
+    DeployPlanner.libraries(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -43,7 +41,7 @@ def libraries(dry_run: bool = typer.Option(False, help="Dry run")):
 def project(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy project")
-    deploy_planner.project(plan)
+    DeployPlanner.project(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -51,7 +49,7 @@ def project(dry_run: bool = typer.Option(False, help="Dry run")):
 def clients(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy clients")
-    deploy_planner.clients(plan)
+    DeployPlanner.clients(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -59,10 +57,10 @@ def clients(dry_run: bool = typer.Option(False, help="Dry run")):
 def java(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy java")
-    deploy_planner.parent(plan)
-    deploy_planner.libraries(plan)
-    deploy_planner.project(plan)
-    deploy_planner.clients(plan)
+    DeployPlanner.parent(plan)
+    DeployPlanner.libraries(plan)
+    DeployPlanner.project(plan)
+    DeployPlanner.clients(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -70,7 +68,7 @@ def java(dry_run: bool = typer.Option(False, help="Dry run")):
 def frontends(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy frontends")
-    deploy_planner.frontends(plan)
+    DeployPlanner.frontends(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -78,9 +76,9 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run")):
 def all(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy all")
-    deploy_planner.parent(plan)
-    deploy_planner.libraries(plan)
-    deploy_planner.project(plan)
-    deploy_planner.clients(plan)
-    deploy_planner.frontends(plan)
+    DeployPlanner.parent(plan)
+    DeployPlanner.libraries(plan)
+    DeployPlanner.project(plan)
+    DeployPlanner.clients(plan)
+    DeployPlanner.frontends(plan)
     plan_executor.execute(plan, dry_run)

@@ -237,7 +237,8 @@ class ReleasePrepareShellTaskFactory:
     @classmethod
     def macro_update_docker_build_versions(cls, version: str):
         return ('echo "Update to next release version"',
-                "      find . -name Dockerfile -exec sed -i '' 's/^FROM metadatacenter\/cedar-microservice:.*$/FROM metadatacenter\/cedar-microservice:'" + version + "'/' {} \; -print",
+                "      mc"
+                "find . -name Dockerfile -exec sed -i '' 's/^FROM metadatacenter\/cedar-microservice:.*$/FROM metadatacenter\/cedar-microservice:'" + version + "'/' {} \; -print",
                 "      find . -name Dockerfile -exec sed -i '' 's/^FROM metadatacenter\/cedar-java:.*$/FROM metadatacenter\/cedar-java:'" + version + "'/' {} \; -print",
                 "      find . -name Dockerfile -exec sed -i '' 's/^ENV CEDAR_VERSION=.*$/ENV CEDAR_VERSION='" + version + "'/' {} \; -print",
                 "      sed -i '' 's/^export IMAGE_VERSION=.*$/export IMAGE_VERSION='" + version + "'/' ./bin/cedar-images-base.sh"
