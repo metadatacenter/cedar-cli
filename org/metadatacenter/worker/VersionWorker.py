@@ -45,13 +45,13 @@ class VersionWorker(Worker):
 
         report.summarize()
 
-        for dir in report.dirs:
-            if len(dir.versions) > 0:
-                for version_type, version in dir.versions.items():
-                    table.add_row(dir.repo.name, dir.dir_suffix, dir.repo.repo_type, dir.file_name, version_type, version,
-                                  dir.status)
+        for directory in report.dirs:
+            if len(directory.versions) > 0:
+                for version_type, version in directory.versions.items():
+                    table.add_row(directory.repo.name, directory.dir_suffix, directory.repo.repo_type, directory.file_name, version_type, version,
+                                  directory.status)
             else:
-                table.add_row(dir.repo.name, dir.dir_suffix, dir.repo.repo_type, '', '', '', dir.status)
+                table.add_row(directory.repo.name, directory.dir_suffix, directory.repo.repo_type, '', '', '', directory.status)
             table.add_section()
 
         table.caption = report.get_caption()
@@ -67,15 +67,15 @@ class VersionWorker(Worker):
             self.analyze_angular_dist(repo, report)
         elif repo.repo_type == RepoType.MULTI or repo.repo_type == RepoType.PYTHON or repo.repo_type == RepoType.MKDOCS\
                 or repo.repo_type == RepoType.CONTENT_DELIVERY or repo.repo_type == RepoType.PHP or repo.repo_type == RepoType.MISC:
-            self.mark_empty(repo, report)
+            VersionWorker.mark_empty(repo, report)
         elif repo.repo_type == RepoType.DOCKER_BUILD:
-            self.analyze_docker_build(repo, report)
+            VersionWorker.analyze_docker_build(repo, report)
         elif repo.repo_type == RepoType.DOCKER_DEPLOY:
-            self.analyze_docker_deploy(repo, report)
+            VersionWorker.analyze_docker_deploy(repo, report)
         elif repo.repo_type == RepoType.DEVELOPMENT:
-            self.analyze_development(repo, report)
+            VersionWorker.analyze_development(repo, report)
         else:
-            self.mark_unknown(repo, report)
+            VersionWorker.mark_unknown(repo, report)
 
     def analyze_java_wrapper(self, repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
@@ -119,12 +119,14 @@ class VersionWorker(Worker):
         if len(match) == 1:
             return match[0].value
 
-    def mark_unknown(self, repo, report):
+    @staticmethod
+    def mark_unknown(repo, report):
         root_dir = Util.get_wd(repo)
         dir_suffix = root_dir[len(Util.cedar_home):]
         report.add_dir(VersionDirReport(repo, dir_suffix, ''))
 
-    def mark_empty(self, repo, report):
+    @staticmethod
+    def mark_empty(repo, report):
         root_dir = Util.get_wd(repo)
         dir_suffix = root_dir[len(Util.cedar_home):]
         dir_report = VersionDirReport(repo, dir_suffix, '')
@@ -169,7 +171,8 @@ class VersionWorker(Worker):
             version_report.add_version(VersionType.PACKAGE_OWN, version)
             report.add_dir(version_report)
 
-    def analyze_docker_build(self, repo, report: VersionReport):
+    @staticmethod
+    def analyze_docker_build(repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
         root_dir_suffix = root_dir[len(Util.cedar_home):]
 
@@ -201,7 +204,8 @@ class VersionWorker(Worker):
             version_report.add_version(VersionType.IMAGE_VERSION, docker_version)
             report.add_dir(version_report)
 
-    def analyze_docker_deploy(self, repo, report: VersionReport):
+    @staticmethod
+    def analyze_docker_deploy(repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
 
         dir_list = os.listdir(root_dir)
@@ -217,7 +221,8 @@ class VersionWorker(Worker):
                 version_report.add_version(VersionType.ENV_CEDAR_DOCKER_VERSION, docker_version)
                 report.add_dir(version_report)
 
-    def analyze_development(self, repo, report: VersionReport):
+    @staticmethod
+    def analyze_development(repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
         root_dir_suffix = root_dir[len(Util.cedar_home):]
 

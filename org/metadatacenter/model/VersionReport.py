@@ -17,8 +17,8 @@ class VersionReport:
 
     def summarize(self):
         freq = {}
-        for dir in self.dirs:
-            for version_type, version in dir.versions.items():
+        for directory in self.dirs:
+            for version_type, version in directory.versions.items():
                 if version in freq:
                     freq[version] += 1
                 else:
@@ -28,11 +28,11 @@ class VersionReport:
 
         self.cnt_ok = 0
         self.cnt_nok = 0
-        for dir in self.dirs:
-            dir.compute_status(self.version_candidate)
-            self.cnt_ok += dir.cnt_ok
-            self.cnt_nok += dir.cnt_nok
-            self.cnt_unknown += dir.cnt_unknown
+        for directory in self.dirs:
+            directory.compute_status(self.version_candidate)
+            self.cnt_ok += directory.cnt_ok
+            self.cnt_nok += directory.cnt_nok
+            self.cnt_unknown += directory.cnt_unknown
 
     def get_caption(self):
         caption = 'Target version: ' + self.version_candidate + '; ' + str(self.cnt_ok) + " versions matching"

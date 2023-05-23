@@ -19,4 +19,4 @@ def repo_status():
 
 @app.command("report")
 def repo_report():
-    repo_worker.repo_report()
+    RepoWorker.repo_report()

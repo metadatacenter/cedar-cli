@@ -27,7 +27,8 @@ class EnvWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def list(self):
+    @staticmethod
+    def list():
         cnt = 0
         table = Table("Name", "Value", title="CEDAR environment variables")
         for name, value in os.environ.items():
@@ -38,7 +39,8 @@ class EnvWorker(Worker):
         table.style = Style(color="green")
         console.print(table)
 
-    def core(self):
+    @staticmethod
+    def core():
         table = Table("Name", "Value", title="CEDAR core environment variables")
         present_cnt = 0
         missing_cnt = 0

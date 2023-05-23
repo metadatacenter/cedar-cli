@@ -18,7 +18,8 @@ class TaskExecutor(ABC):
     def execute(self, plan: PlanTask, job_progress: Progress):
         pass
 
-    def display_header(self, task: PlanTask, job_progress: Progress, color: str, title: str):
-        msg = task.name + (" ➡️  " + task.repo.pre_post_type if task.repo.pre_post_type != PrePostType.NONE else "")
+    @staticmethod
+    def display_header(task: PlanTask, job_progress: Progress, color: str, title: str):
+        msg = task.name + (" ➡️  " + str(task.repo.pre_post_type) if task.repo.pre_post_type != PrePostType.NONE else "")
         msg += "\n" + "️ ➡️  " + task.repo.get_fqn()
         job_progress.print(Panel(msg, style=Style(color=color), title=title))

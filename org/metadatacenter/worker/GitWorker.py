@@ -18,7 +18,8 @@ class GitWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def register_active_repo(self, triple, table, active_repos, suggestion):
+    @staticmethod
+    def register_active_repo(triple, table, active_repos, suggestion):
         table.add_row(triple.repo.name, triple.out[0:GIT_STATUS_CHAR_LIMIT] + '...' if len(triple.out) > 0 else '', "[red]" + triple.err,
                       suggestion)
         active_repos.append(triple.repo)

@@ -16,7 +16,7 @@ def status():
 
 
 @app.command("branch")
-def branch():
+def git_1branch():
     git_worker.branch()
 
 
@@ -41,5 +41,5 @@ def checkout(branch: str):
 
 
 @app.command("next")
-def next():
+def git_next():
     git_worker.next()

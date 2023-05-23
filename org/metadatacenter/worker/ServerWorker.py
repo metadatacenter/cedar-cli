@@ -20,13 +20,14 @@ class ServerWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def status(self):
+    @staticmethod
+    def status():
         server_status_map = {}
-        self.check_status_of(ServerTag.MICROSERVICE, server_status_map)
-        self.check_status_of(ServerTag.INFRASTRUCTURE, server_status_map)
-        self.check_status_of(ServerTag.FRONTEND, server_status_map)
-        self.check_status_of(ServerTag.DASHBOARD, server_status_map)
-        self.check_status_of(ServerTag.FRONTEND_NON_ESSENTIAL, server_status_map)
+        ServerWorker.check_status_of(ServerTag.MICROSERVICE, server_status_map)
+        ServerWorker.check_status_of(ServerTag.INFRASTRUCTURE, server_status_map)
+        ServerWorker.check_status_of(ServerTag.FRONTEND, server_status_map)
+        ServerWorker.check_status_of(ServerTag.DASHBOARD, server_status_map)
+        ServerWorker.check_status_of(ServerTag.FRONTEND_NON_ESSENTIAL, server_status_map)
         table = Table("Server", "Status", "Port", 'Error', title="CEDAR Server status list")
         prev_server_tag = None
         for server in Util.get_servers():
@@ -57,25 +58,28 @@ class ServerWorker(Worker):
                 table.add_section()
         console.print(table)
 
-    def check_status_of(self, tag: ServerTag, server_status_map: dict):
+    @staticmethod
+    def check_status_of(tag: ServerTag, server_status_map: dict):
         for server in Util.get_servers():
             if server.tag == tag:
-                self.check_status_of_server(server, server_status_map)
+                ServerWorker.check_status_of_server(server, server_status_map)
 
-    def check_status_of_server(self, server: Server, server_status_map: dict):
+    @staticmethod
+    def check_status_of_server(server: Server, server_status_map: dict):
         # console.log('----------------------------------------------------------------')
         # console.log(server.name)
         # console.log(server.check_running)
         if server.check_running == CheckRunning.HEALTH_CHECK:
-            self.check_status_by_health_check(server, server_status_map)
+            ServerWorker.check_status_by_health_check(server, server_status_map)
         elif server.check_running == CheckRunning.RESPONSE:
-            self.check_status_by_response(server, server_status_map)
+            ServerWorker.check_status_by_response(server, server_status_map)
         elif server.check_running == CheckRunning.OPEN_PORT:
-            self.check_status_by_open_port(server, server_status_map)
+            ServerWorker.check_status_by_open_port(server, server_status_map)
 
-    def check_status_by_health_check(self, server: Server, server_status_map: dict):
+    @staticmethod
+    def check_status_by_health_check(server: Server, server_status_map: dict):
         server_status_report = ServerStatusReport(server)
-        port_open = self.is_port_open('localhost', server.port)
+        port_open = ServerWorker.is_port_open('localhost', server.port)
         if not port_open:
             server_status_report.status = ServerStatus.NOT_RUNNING
             server_status_report.exception = "Port not open"
@@ -88,9 +92,10 @@ class ServerWorker(Worker):
                 server_status_report.add_exception(str(e))
         server_status_map[server.name] = server_status_report
 
-    def check_status_by_response(self, server: Server, server_status_map: dict):
+    @staticmethod
+    def check_status_by_response(server: Server, server_status_map: dict):
         server_status_report = ServerStatusReport(server)
-        port_open = self.is_port_open('localhost', server.port)
+        port_open = ServerWorker.is_port_open('localhost', server.port)
         if not port_open:
             server_status_report.status = ServerStatus.NOT_RUNNING
             server_status_report.exception = "Port not open"
@@ -103,9 +108,10 @@ class ServerWorker(Worker):
                 server_status_report.add_exception(str(e))
         server_status_map[server.name] = server_status_report
 
-    def check_status_by_open_port(self, server: Server, server_status_map: dict):
+    @staticmethod
+    def check_status_by_open_port(server: Server, server_status_map: dict):
         server_status_report = ServerStatusReport(server)
-        port_open = self.is_port_open('localhost', server.port)
+        port_open = ServerWorker.is_port_open('localhost', server.port)
         if port_open:
             server_status_report.status = ServerStatus.OK
         else:
@@ -113,7 +119,8 @@ class ServerWorker(Worker):
             server_status_report.exception = "Port not open"
         server_status_map[server.name] = server_status_report
 
-    def is_port_open(self, host: str, port: int):
+    @staticmethod
+    def is_port_open(host: str, port: int):
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
             if sock.connect_ex((host, port)) == 0:
                 return True

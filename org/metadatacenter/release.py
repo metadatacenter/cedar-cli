@@ -62,7 +62,7 @@ def commit(pre_branch: str = typer.Option(None, help="Branch to merge into main"
         console.print("Previous release prepare data found. Use this command to commit the release:\n")
         console.print(command + "\n")
     else:
-        console.print("Commiting previously prepared release")
+        console.print("Committing previously prepared release")
         GlobalContext.mark_global_task_type(TaskType.RELEASE_COMMIT)
         plan = Plan("Commit prepared release all")
         params = {

@@ -8,8 +8,6 @@ from org.metadatacenter.util.GlobalContext import GlobalContext
 
 app = typer.Typer(no_args_is_help=True)
 
-build_planner = BuildPlanner()
-
 plan_executor = PlanExecutor()
 
 
@@ -19,7 +17,7 @@ def this(
         wd: str = typer.Option(None, help="Working directory")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build this")
-    build_planner.this(plan, wd)
+    BuildPlanner.this(plan, wd)
     plan_executor.execute(plan, dry_run)
 
 
@@ -27,7 +25,7 @@ def this(
 def parent(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build parent")
-    build_planner.parent(plan)
+    BuildPlanner.parent(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -35,7 +33,7 @@ def parent(dry_run: bool = typer.Option(False, help="Dry run")):
 def libraries(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build libraries")
-    build_planner.libraries(plan)
+    BuildPlanner.libraries(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -43,7 +41,7 @@ def libraries(dry_run: bool = typer.Option(False, help="Dry run")):
 def project(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build project")
-    build_planner.project(plan)
+    BuildPlanner.project(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -51,7 +49,7 @@ def project(dry_run: bool = typer.Option(False, help="Dry run")):
 def clients(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build clients")
-    build_planner.clients(plan)
+    BuildPlanner.clients(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -59,10 +57,10 @@ def clients(dry_run: bool = typer.Option(False, help="Dry run")):
 def java(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build java")
-    build_planner.parent(plan)
-    build_planner.libraries(plan)
-    build_planner.project(plan)
-    build_planner.clients(plan)
+    BuildPlanner.parent(plan)
+    BuildPlanner.libraries(plan)
+    BuildPlanner.project(plan)
+    BuildPlanner.clients(plan)
     plan_executor.execute(plan, dry_run)
 
 
@@ -70,17 +68,17 @@ def java(dry_run: bool = typer.Option(False, help="Dry run")):
 def frontends(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
-    build_planner.frontends(plan)
+    BuildPlanner.frontends(plan)
     plan_executor.execute(plan, dry_run)
 
 
 @app.command("all")
-def all(dry_run: bool = typer.Option(False, help="Dry run")):
+def build_all(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
-    build_planner.parent(plan)
-    build_planner.libraries(plan)
-    build_planner.project(plan)
-    build_planner.clients(plan)
-    build_planner.frontends(plan)
+    BuildPlanner.parent(plan)
+    BuildPlanner.libraries(plan)
+    BuildPlanner.project(plan)
+    BuildPlanner.clients(plan)
+    BuildPlanner.frontends(plan)
     plan_executor.execute(plan, dry_run)

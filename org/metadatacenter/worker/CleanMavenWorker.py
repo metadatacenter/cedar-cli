@@ -10,14 +10,16 @@ class CleanMavenWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def all(self):
-        self.execute_generic_shell_commands(
+    @staticmethod
+    def all():
+        Worker.execute_generic_shell_commands(
             ["rm -rf ~/.m2/repository/"],
             title="Removing all local maven repository content",
         )
 
-    def cedar(self):
-        self.execute_generic_shell_commands(
+    @staticmethod
+    def cedar():
+        Worker.execute_generic_shell_commands(
             ["rm -rf ~/.m2/repository/org/metadatacenter/"],
             title="Removing org.metadatacenter local maven repository content",
         )

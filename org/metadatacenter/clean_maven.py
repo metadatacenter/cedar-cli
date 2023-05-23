@@ -7,7 +7,7 @@ clean_maven_worker = CleanMavenWorker()
 
 
 @app.command("all")
-def all():
+def clean_all():
     clean_maven_worker.all()
 
 
