@@ -43,3 +43,8 @@ def checkout(branch: str):
 @app.command("next")
 def git_next():
     git_worker.next()
+
+
+@app.command("add-commit-push")
+def git_add_commit_push(comment: str):
+    git_worker.git_add_commit_push(comment)

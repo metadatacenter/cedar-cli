@@ -153,3 +153,13 @@ class GitWorker(Worker):
             ],
             status_line="Listing branches",
         )
+
+    def git_add_commit_push(self, comment: str):
+        self.execute_shell_on_all_repos_with_table(
+            command_list=[
+                "git add .\n" +
+                "git commit -m '" + comment + "'\n" +
+                "git push"
+            ],
+            status_line="Listing branches",
+        )
