@@ -81,7 +81,7 @@ class Worker:
         panel = Panel(
             "[yellow]" +
             ((" 📂️ Location  : " + cwd + "\n") if cwd else '') +
-            " 🖥️  Command   : " + str(command_list),
+            " 🖥️  Command   : " + Worker.command_list_as_string(command_list),
             title=title,
             title_align="left")
         console.print(panel, style=Style(color="yellow"))
@@ -110,3 +110,15 @@ class Worker:
                         console.print(out, markup=False)
         except IOError:
             pass
+
+    @staticmethod
+    def command_list_as_string(command_list):
+        s = ""
+        sep = ""
+        for command in command_list:
+            s += command + sep
+            sep = "\n"
+        s = s.strip()
+        if "\n" in s:
+            s = "\n" + s
+        return s
