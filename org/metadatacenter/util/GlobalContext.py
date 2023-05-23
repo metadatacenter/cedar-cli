@@ -39,13 +39,15 @@ class GlobalContext(object):
         from org.metadatacenter.operator.ReleaseRollbackOperator import ReleaseRollbackOperator
         from org.metadatacenter.operator.ReleaseCleanupOperator import ReleaseCleanupOperator
         from org.metadatacenter.operator.ReleaseCommitOperator import ReleaseCommitOperator
+        from org.metadatacenter.operator.ReleaseBranchCheckoutOperator import ReleaseBranchCheckoutOperator
         cls.task_operators = {
             TaskType.BUILD: BuildOperator(),
             TaskType.DEPLOY: DeployOperator(),
             TaskType.RELEASE_PREPARE: ReleasePrepareOperator(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator(),
             TaskType.RELEASE_COMMIT: ReleaseCommitOperator(),
-            TaskType.RELEASE_CLEANUP: ReleaseCleanupOperator()
+            TaskType.RELEASE_CLEANUP: ReleaseCleanupOperator(),
+            TaskType.RELEASE_BRANCH_CHECKOUT: ReleaseBranchCheckoutOperator()
         }
 
     @classmethod
@@ -59,6 +61,7 @@ class GlobalContext(object):
         from org.metadatacenter.taskexecutor.ReleaseRollbackTaskExecutor import ReleaseRollbackTaskExecutor
         from org.metadatacenter.taskexecutor.ReleaseCleanupTaskExecutor import ReleaseCleanupTaskExecutor
         from org.metadatacenter.taskexecutor.ReleaseCommitTaskExecutor import ReleaseCommitTaskExecutor
+        from org.metadatacenter.taskexecutor.ReleaseBranchCheckoutTaskExecutor import ReleaseBranchCheckoutTaskExecutor
         cls.task_executors = {
             TaskType.BUILD: BuildTaskExecutor(),
             TaskType.DEPLOY: DeployTaskExecutor(),
@@ -66,6 +69,7 @@ class GlobalContext(object):
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackTaskExecutor(),
             TaskType.RELEASE_COMMIT: ReleaseCommitTaskExecutor(),
             TaskType.RELEASE_CLEANUP: ReleaseCleanupTaskExecutor(),
+            TaskType.RELEASE_BRANCH_CHECKOUT: ReleaseBranchCheckoutTaskExecutor(),
             TaskType.SHELL_WRAPPER: ShellWrapperTaskExecutor(),
             TaskType.SHELL: ShellTaskExecutor(),
             TaskType.NOOP: NoopTaskExecutor()

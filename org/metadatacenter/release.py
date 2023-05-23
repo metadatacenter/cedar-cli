@@ -8,6 +8,7 @@ from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.DeployPlanner import DeployPlanner
+from org.metadatacenter.planner.ReleaseBranchCheckoutPlanner import ReleaseBranchCheckoutPlanner
 from org.metadatacenter.planner.ReleaseCleanupPlanner import ReleaseCleanupPlanner
 from org.metadatacenter.planner.ReleaseCommitPlanner import ReleaseCommitPlanner
 from org.metadatacenter.planner.ReleasePreparePlanner import ReleasePreparePlanner
@@ -134,7 +135,11 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
     }
     ReleaseCleanupPlanner.cleanup(plan_cleanup, params_cleanup)
 
-    #TODO: switch to main here
+    plan_checkout_main = Plan("Check out main")
+    params_checkout_main = {
+        'branch': 'main'
+    }
+    ReleaseBranchCheckoutPlanner.checkout(plan_checkout_main, params_checkout_main)
 
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan_deploy = Plan("Deploy all")
@@ -150,7 +155,9 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
         plan_wrapper.add_task_as_task_no_expand(task2)
     for task3 in plan_cleanup.tasks:
         plan_wrapper.add_task_as_task_no_expand(task3)
-    for task4 in plan_deploy.tasks:
+    for task4 in plan_checkout_main.tasks:
         plan_wrapper.add_task_as_task_no_expand(task4)
+    for task5 in plan_deploy.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task5)
 
     plan_executor.execute(plan_wrapper, dry_run)
