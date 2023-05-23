@@ -59,3 +59,11 @@ class DeployPlanner(Planner):
                     TaskType.DEPLOY,
                     [repo]
                 )
+
+    @staticmethod
+    def all(plan: Plan):
+        DeployPlanner.parent(plan)
+        DeployPlanner.libraries(plan)
+        DeployPlanner.project(plan)
+        DeployPlanner.clients(plan)
+        DeployPlanner.frontends(plan)

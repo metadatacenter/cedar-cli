@@ -76,9 +76,5 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run")):
 def deploy_all(dry_run: bool = typer.Option(False, help="Dry run")):
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan = Plan("Deploy all")
-    DeployPlanner.parent(plan)
-    DeployPlanner.libraries(plan)
-    DeployPlanner.project(plan)
-    DeployPlanner.clients(plan)
-    DeployPlanner.frontends(plan)
+    DeployPlanner.all(plan)
     plan_executor.execute(plan, dry_run)
