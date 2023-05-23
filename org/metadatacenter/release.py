@@ -62,7 +62,7 @@ def commit(pre_branch: str = typer.Option(None, help="Branch to merge into main"
         console.print("Previous release prepare data found. Use this command to commit the release:\n")
         console.print(command + "\n")
     else:
-        console.print("Commiting previously prepared release")
+        console.print("Committing previously prepared release")
         GlobalContext.mark_global_task_type(TaskType.RELEASE_COMMIT)
         plan = Plan("Commit prepared release all")
         params = {
@@ -107,6 +107,16 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
 
     Util.check_release_variables()
 
+    plan_checkout_develop = Plan("Check out develop")
+    params_checkout_develop = {
+        'branch': 'develop'
+    }
+    ReleaseBranchCheckoutPlanner.checkout(plan_checkout_develop, params_checkout_develop)
+
+    GlobalContext.mark_global_task_type(TaskType.DEPLOY)
+    plan_deploy = Plan("Deploy all")
+    DeployPlanner.all(plan_deploy)
+
     release_version, pre_branch, tag = Util.get_release_vars(PreReleaseBranchType.RELEASE)
     next_dev_version, post_branch, _ = Util.get_release_vars(PreReleaseBranchType.NEXT_DEV)
 
@@ -149,15 +159,19 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
     DeployPlanner.clients(plan_deploy)
     DeployPlanner.frontends(plan_deploy)
 
-    for task1 in plan_prepare.tasks:
-        plan_wrapper.add_task_as_task_no_expand(task1)
-    for task2 in plan_commit.tasks:
-        plan_wrapper.add_task_as_task_no_expand(task2)
-    for task3 in plan_cleanup.tasks:
-        plan_wrapper.add_task_as_task_no_expand(task3)
-    for task4 in plan_checkout_main.tasks:
-        plan_wrapper.add_task_as_task_no_expand(task4)
-    for task5 in plan_deploy.tasks:
-        plan_wrapper.add_task_as_task_no_expand(task5)
+    for task in plan_checkout_develop.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task)
+    for task in plan_deploy.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task)
+    for task in plan_prepare.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task)
+    for task in plan_commit.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task)
+    for task in plan_cleanup.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task)
+    for task in plan_checkout_main.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task)
+    for task in plan_deploy.tasks:
+        plan_wrapper.add_task_as_task_no_expand(task)
 
     plan_executor.execute(plan_wrapper, dry_run)

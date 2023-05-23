@@ -222,7 +222,7 @@ class Util(object):
         elif task.task_type == TaskType.RELEASE_PREPARE:
             return Util.cedar_release_version
         else:
-            err = 'Build version not found for TaskType:' + task.task_type
+            err = 'Build version not found for TaskType:' + str(task.task_type)
             console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
             sys.exit(1)
 

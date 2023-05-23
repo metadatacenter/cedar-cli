@@ -36,11 +36,13 @@ class Worker:
     @staticmethod
     def execute_shell_on_all_repos_with_table(command_list,
                                               cwd_is_home=False,
-                                              headers=["Repo", "Output", "Error"],
+                                              headers=None,
                                               show_lines=True,
                                               status_line="Processing",
                                               repo_list=None
                                               ):
+        if headers is None:
+            headers = ["Repo", "Output", "Error"]
         result = ResultTable(headers, show_lines)
         if repo_list is None:
             repo_list = GlobalContext.repos.get_list_top()
@@ -74,7 +76,8 @@ class Worker:
         result.print_table()
         return result
 
-    def execute_generic_shell_commands(self, command_list: List[str], title: str, cwd: str = None):
+    @staticmethod
+    def execute_generic_shell_commands(command_list: List[str], title: str, cwd: str = None):
         panel = Panel(
             "[yellow]" +
             ((" 📂️ Location  : " + cwd + "\n") if cwd else '') +

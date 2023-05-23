@@ -46,7 +46,7 @@ class PlanExecutor(Executor):
         self.recurse_plan_script(plan, lines)
         return "\n".join(lines)
 
-    def recurse_plan_script(self, plan: PlanTask, lines: [str]):
+    def recurse_plan_script(self, plan: PlanTask or Plan, lines: [str]):
         for task in plan.tasks:
             self.recurse_plan_script(task, lines)
         if isinstance(plan, PlanTask):

@@ -8,7 +8,7 @@ git_worker = GitWorker()
 
 
 @app.command("branch")
-def all():
+def list_all():
     git_worker.list_branch()
 
 

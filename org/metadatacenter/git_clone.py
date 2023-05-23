@@ -8,7 +8,7 @@ git_worker = GitWorker()
 
 
 @app.command("all")
-def all():
+def clone_all():
     git_worker.clone_all()
 
 

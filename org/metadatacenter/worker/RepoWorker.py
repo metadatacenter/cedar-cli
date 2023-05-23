@@ -69,7 +69,8 @@ class RepoWorker(Worker):
         table.add_row(name, repo.repo_type, dir_status)
         return cnt_ok, cnt_nok
 
-    def repo_report(self):
+    @staticmethod
+    def repo_report():
         table = Table("File/Dir",
                       Column(header="Type", justify="center"),
                       Column(header="Recognized as", justify="center"),
@@ -86,7 +87,7 @@ class RepoWorker(Worker):
         for entry in dir_list:
             full_path = os.path.join(Util.cedar_home, entry)
             entry_type = '🗂️  dir' if os.path.isdir(full_path) else '📄 file'
-            recognized_as, status, status_icon = self.analyze_entry(entry, repo_map)
+            recognized_as, status, status_icon = RepoWorker.analyze_entry(entry, repo_map)
             if status == 'ok':
                 cnt_ok += 1
             else:
@@ -102,7 +103,8 @@ class RepoWorker(Worker):
 
         console.print(table)
 
-    def analyze_entry(self, entry, repo_map):
+    @staticmethod
+    def analyze_entry(entry, repo_map):
         recognized_as = 'unknown'
         status = 'unknown'
         status_icon = '❓'

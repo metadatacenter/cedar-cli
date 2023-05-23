@@ -3,32 +3,31 @@ import typer
 from org.metadatacenter.worker.StartFrontendWorker import StartFrontendWorker
 
 app = typer.Typer(no_args_is_help=True)
-start_frontend_worker = StartFrontendWorker()
 
 
 @app.command("main")
 def main():
-    start_frontend_worker.main()
+    StartFrontendWorker.main()
 
 
 @app.command("openview")
 def openview():
-    start_frontend_worker.openview()
+    StartFrontendWorker.openview()
 
 
 @app.command("monitoring")
 def monitoring():
-    start_frontend_worker.monitoring()
+    StartFrontendWorker.monitoring()
 
 
 @app.command("artifacts")
 def artifacts():
-    start_frontend_worker.artifacts()
+    StartFrontendWorker.artifacts()
 
 
 @app.command("all")
-def all():
-    start_frontend_worker.main()
-    start_frontend_worker.openview()
-    start_frontend_worker.monitoring()
-    start_frontend_worker.artifacts()
+def frontend_all():
+    StartFrontendWorker.main()
+    StartFrontendWorker.openview()
+    StartFrontendWorker.monitoring()
+    StartFrontendWorker.artifacts()

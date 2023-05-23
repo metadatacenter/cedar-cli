@@ -4,14 +4,12 @@ from org.metadatacenter.worker.EnvWorker import EnvWorker
 
 app = typer.Typer(no_args_is_help=True)
 
-env_worker = EnvWorker()
-
 
 @app.command("list")
-def list():
-    env_worker.list()
+def env_list():
+    EnvWorker.list()
 
 
 @app.command("core")
 def core():
-    env_worker.core()
+    EnvWorker.core()

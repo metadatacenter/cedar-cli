@@ -18,7 +18,8 @@ class GitWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def register_active_repo(self, triple, table, active_repos, suggestion):
+    @staticmethod
+    def register_active_repo(triple, table, active_repos, suggestion):
         table.add_row(triple.repo.name, triple.out[0:GIT_STATUS_CHAR_LIMIT] + '...' if len(triple.out) > 0 else '', "[red]" + triple.err,
                       suggestion)
         active_repos.append(triple.repo)
@@ -149,6 +150,16 @@ class GitWorker(Worker):
                 "git --no-pager branch --sort=-creatordate | head -4\n" +
                 "echo Remote\n" +
                 "git --no-pager branch -r --sort=-creatordate | head -4"
+            ],
+            status_line="Listing branches",
+        )
+
+    def git_add_commit_push(self, comment: str):
+        self.execute_shell_on_all_repos_with_table(
+            command_list=[
+                "git add .\n" +
+                "git commit -m '" + comment + "'\n" +
+                "git push"
             ],
             status_line="Listing branches",
         )
