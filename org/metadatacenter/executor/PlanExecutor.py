@@ -1,4 +1,6 @@
 import json
+from datetime import timedelta
+from timeit import default_timer as timer
 from typing import List
 
 from rich.console import Console
@@ -24,6 +26,7 @@ class PlanExecutor(Executor):
         super().__init__()
 
     def execute(self, plan: Plan, dry_run: bool):
+        start = timer()
         plan_json = json.dumps(plan, cls=CustomJSONEncoder, indent=4)
         plan_script = self.get_plan_script(plan)
         console.print(Panel(plan_json, style=Style(color="cyan"), title="Plan JSON"))
@@ -40,6 +43,10 @@ class PlanExecutor(Executor):
         else:
             console.print("EXECUTE PLAN")
             self.start_long_execution(plan)
+
+        end = timer()
+        console.print("Executed plan : " + plan.name)
+        console.print("Execution time: " + str(timedelta(seconds=end - start)))
 
     def get_plan_script(self, plan: Plan):
         lines = []

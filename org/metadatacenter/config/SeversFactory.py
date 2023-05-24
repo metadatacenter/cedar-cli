@@ -45,7 +45,7 @@ class ServersFactory:
         servers.add_dashboard('redis-commander', 8081)
         servers.add_dashboard('phpmyadmin', 8082)
 
-        servers.add_frontend_non_essential('cee-dev', 4240)
+        servers.add_frontend_non_essential('cee-dev', 4320)
         servers.add_frontend_non_essential('cee-demo', 4260)
         servers.add_frontend_non_essential('cee-docs', 4280)
 

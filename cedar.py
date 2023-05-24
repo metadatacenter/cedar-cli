@@ -1,6 +1,6 @@
 import typer
 
-from org.metadatacenter import git, server, build, deploy, clean, repo, env, release, start, version
+from org.metadatacenter import git, server, build, deploy, clean, repo, env, release, start, version, docker
 from org.metadatacenter.util.GlobalContext import GlobalContext
 
 GlobalContext()
@@ -16,6 +16,7 @@ app.add_typer(env.app, name="env")
 app.add_typer(release.app, name="release")
 app.add_typer(start.app, name="start")
 app.add_typer(version.app, name="version")
+app.add_typer(docker.app, name="docker")
 
 if __name__ == "__main__":
     app()

@@ -48,14 +48,14 @@ class ServerWorker(Worker):
             current_server_tag = server.tag
             if prev_server_tag is not None and prev_server_tag != current_server_tag:
                 table.add_section()
-                table.add_row("[bold magenta]" + server.server_type, '', '', '')
+                table.add_row("[bold magenta]" + server.tag.capitalize(), '', '', '')
 
             prev_server_tag = current_server_tag
-            if error != '':
-                table.add_section()
+            # if error != '':
+            #     table.add_section()
             table.add_row(display_name, status, str(server.port), error)
-            if error != '':
-                table.add_section()
+            # if error != '':
+            #     table.add_section()
         console.print(table)
 
     @staticmethod

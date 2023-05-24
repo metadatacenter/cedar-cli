@@ -39,7 +39,7 @@ class BuildOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_DIST:
                 shell_wrapper = PlanTask("Build angular dist project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
+                shell_wrapper.add_task_as_task(BuildShellTaskFactory.noop(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_JS:
                 shell_wrapper = PlanTask("Build angularJS project", TaskType.SHELL_WRAPPER, repo)
