@@ -1,9 +1,12 @@
+from org.metadatacenter.model.ArtifactType import ArtifactType
 from org.metadatacenter.model.PrePostType import PrePostType
+from org.metadatacenter.model.RepoType import RepoType
 
 
 class Repo:
 
-    def __init__(self, name, repo_type, is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
+    def __init__(self, name: str, repo_type: RepoType, artifact_type: ArtifactType,
+                 is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
                  is_frontend=False, expected_build_lines=100):
         self.name = name
         self.repo_type = repo_type
@@ -18,6 +21,7 @@ class Repo:
         self.sub_repos = []
         self.parent_repo = None
         self.pre_post_type: PrePostType = PrePostType.NONE
+        self.artifact_type = artifact_type
 
     def __eq__(self, obj):
         return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()

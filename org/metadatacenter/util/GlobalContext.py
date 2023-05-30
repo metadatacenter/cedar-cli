@@ -7,6 +7,8 @@ from org.metadatacenter.util.Util import Util
 
 console = Console()
 
+UTF_8 = 'utf-8'
+
 
 class GlobalContext(object):
     repos = ReposFactory.build_repos()
