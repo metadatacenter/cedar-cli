@@ -8,3 +8,5 @@ class VersionType:
     ENV_CEDAR_VERSION = 'CEDAR_VERSION'
     DOCKER_FROM_VERSION = 'FROM'
     IMAGE_VERSION = 'IMAGE_VERSION'
+    PACKAGE_LOCK_OWN = "package-lock-own"
+    PACKAGE_LOCK_PACKAGES_OWN = "package-lock-packages-own"
