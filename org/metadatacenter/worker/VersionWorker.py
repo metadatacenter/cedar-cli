@@ -115,21 +115,19 @@ class VersionWorker(Worker):
 
     @staticmethod
     def mark_unknown(repo, report):
-        root_dir = Util.get_wd(repo)
-        dir_suffix = root_dir[len(Util.cedar_home):]
+        dir_suffix = Util.get_repo_suffix(repo)
         report.add_dir(VersionDirReport(repo, dir_suffix, ''))
 
     @staticmethod
     def mark_empty(repo, report):
-        root_dir = Util.get_wd(repo)
-        dir_suffix = root_dir[len(Util.cedar_home):]
+        dir_suffix = Util.get_repo_suffix(repo)
         dir_report = VersionDirReport(repo, dir_suffix, '')
         dir_report.mark_ok()
         report.add_dir(dir_report)
 
     def analyze_angular_js(self, repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
-        dir_suffix = root_dir[len(Util.cedar_home):]
+        dir_suffix = Util.get_repo_suffix(repo)
 
         package_json_path = os.path.join(root_dir, Const.FILE_PACKAGE_JSON)
         with open(package_json_path, 'r') as json_file:
@@ -168,7 +166,7 @@ class VersionWorker(Worker):
     @staticmethod
     def analyze_docker_build(repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
-        root_dir_suffix = root_dir[len(Util.cedar_home):]
+        root_dir_suffix = Util.get_repo_suffix(repo)
 
         dir_list = os.listdir(root_dir)
         for entry in dir_list:
@@ -218,7 +216,7 @@ class VersionWorker(Worker):
     @staticmethod
     def analyze_development(repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
-        root_dir_suffix = root_dir[len(Util.cedar_home):]
+        root_dir_suffix = Util.get_repo_suffix(repo)
 
         docker_path = os.path.join(root_dir, Const.FILE_BIN_UTIL_SET_ENV_GENERIC)
         docker_content = Util.read_file(docker_path)

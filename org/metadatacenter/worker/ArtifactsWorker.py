@@ -59,8 +59,7 @@ class ArtifactsWorker(Worker):
 
     @staticmethod
     def mark_none(repo, report: ArtifactReport):
-        root_dir = Util.get_wd(repo)
-        dir_suffix = root_dir[len(Util.cedar_home):]
+        dir_suffix = Util.get_repo_suffix(repo)
         entry = ArtifactEntryReport(repo, dir_suffix, '')
         entry.set_status(ArtifactStatus.NOT_NEEDED)
         report.add_entry(entry)
