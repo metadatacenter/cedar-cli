@@ -68,7 +68,10 @@ class ReposFactory:
 
         artifacts_multi.add_sub_repo(artifacts_src)
         artifacts_multi.add_sub_repo(artifacts_dist)
-        artifacts_src_dist_relation = RepoRelation(artifacts_src, RepoRelationType.IS_SOURCE_OF, artifacts_dist)
+        artifacts_src_dist_relation = RepoRelation(artifacts_src, RepoRelationType.IS_SOURCE_OF, artifacts_dist,
+                                                   parameters={
+                                                       RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-artifacts"
+                                                   })
         repos.add_relation(artifacts_src_dist_relation)
         repos.add_repo(artifacts_multi)
 
@@ -79,7 +82,10 @@ class ReposFactory:
 
         monitoring_multi.add_sub_repo(monitoring_src)
         monitoring_multi.add_sub_repo(monitoring_dist)
-        monitoring_src_dist_relation = RepoRelation(monitoring_src, RepoRelationType.IS_SOURCE_OF, monitoring_dist)
+        monitoring_src_dist_relation = RepoRelation(monitoring_src, RepoRelationType.IS_SOURCE_OF, monitoring_dist,
+                                                    parameters={
+                                                        RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-monitoring"
+                                                    })
         repos.add_relation(monitoring_src_dist_relation)
         repos.add_repo(monitoring_multi)
 
@@ -90,7 +96,10 @@ class ReposFactory:
 
         openview_multi.add_sub_repo(openview_src)
         openview_multi.add_sub_repo(openview_dist)
-        openview_src_dist_relation = RepoRelation(openview_src, RepoRelationType.IS_SOURCE_OF, openview_dist)
+        openview_src_dist_relation = RepoRelation(openview_src, RepoRelationType.IS_SOURCE_OF, openview_dist,
+                                                  parameters={
+                                                      RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-openview"
+                                                  })
         repos.add_relation(openview_src_dist_relation)
         repos.add_repo(openview_multi)
 
