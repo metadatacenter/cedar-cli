@@ -49,7 +49,8 @@ class ArtifactsWorker(Worker):
         console.print(table)
         Util.write_rich_cedar_file('last_artifacts_check.rich.txt', table)
 
-    def get_artifact_report(self, repo: Repo, report: ArtifactReport):
+    @staticmethod
+    def get_artifact_report(repo: Repo, report: ArtifactReport):
         if repo.artifact_type == ArtifactType.NONE:
             ArtifactsWorker.mark_none(repo, report)
         elif repo.artifact_type == ArtifactType.NPM:

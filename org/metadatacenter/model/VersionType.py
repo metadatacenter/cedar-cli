@@ -10,3 +10,5 @@ class VersionType:
     IMAGE_VERSION = 'IMAGE_VERSION'
     PACKAGE_LOCK_OWN = "package-lock-own"
     PACKAGE_LOCK_PACKAGES_OWN = "package-lock-packages-own"
+    EMPTY = 'expected-empty'
+    UNKNOWN = 'unknown'
