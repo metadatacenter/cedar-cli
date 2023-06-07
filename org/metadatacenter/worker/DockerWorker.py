@@ -139,8 +139,9 @@ docker volume rm log_terminology
 docker volume rm log_user
 docker volume rm log_valuerecommender
 docker volume rm log_worker
-docker volume rm log_resource_state
 docker volume rm log_bridge
+
+docker volume rm resource_state
 
 docker volume rm log_frontend_main
 docker volume rm log_frontend_openview
