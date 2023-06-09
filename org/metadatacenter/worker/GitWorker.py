@@ -83,6 +83,7 @@ class GitWorker(Worker):
                 progress.print(rule)
                 out = ""
                 err = ""
+                exception = ""
                 try:
                     cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
                     # print(commands_to_execute)
@@ -90,16 +91,28 @@ class GitWorker(Worker):
                     stdout, stderr = process.communicate()
                     out = stdout.decode(UTF_8).strip()
                     err = stderr.decode(UTF_8).strip()
+                    return_code = process.returncode
                 except subprocess.CalledProcessError as e:
-                    err += str(e)
+                    exception = str(e)
                 except OSError as e:
-                    err += str(e)
+                    exception = str(e)
                 except:
-                    err += "Error in subprocess"
-                result.add_result(RepoResultTriple(repo, out, err))
-                progress.print(out)
-                if len(err) > 0:
-                    progress.print(err)
+                    exception = "Error in subprocess"
+
+                out_data = out
+                error_data = ""
+                if return_code == 0:
+                    out_data += "\n" + err
+                else:
+                    error_data += "\n" + err
+                if exception != "":
+                    error_data += "\n" + exception
+                out_data = out_data.strip()
+                error_data = error_data.strip()
+                result.add_result(RepoResultTriple(repo, out_data, error_data))
+                progress.print(out_data)
+                if len(error_data) > 0:
+                    progress.print(error_data)
                     progress.print(Panel(err, title="[bold yellow]Error", subtitle="[bold yellow]" + repo.name, style=Style(color="red")))
                 progress.update(task, advance=1)
         result.print_table()
