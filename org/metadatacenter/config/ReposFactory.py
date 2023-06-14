@@ -64,7 +64,8 @@ class ReposFactory:
         artifacts_multi = Repo("cedar-artifacts", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         artifacts_src = Repo("cedar-artifacts-src", RepoType.ANGULAR, ArtifactType.NONE,
                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        artifacts_dist = Repo("cedar-artifacts-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True)
+        artifacts_dist = Repo("cedar-artifacts-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         artifacts_multi.add_sub_repo(artifacts_src)
         artifacts_multi.add_sub_repo(artifacts_dist)
@@ -78,7 +79,8 @@ class ReposFactory:
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, ArtifactType.NONE,
                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True)
+        monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         monitoring_multi.add_sub_repo(monitoring_src)
         monitoring_multi.add_sub_repo(monitoring_dist)
@@ -89,10 +91,26 @@ class ReposFactory:
         repos.add_relation(monitoring_src_dist_relation)
         repos.add_repo(monitoring_multi)
 
+        bridging_multi = Repo("cedar-bridging", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
+        bridging_src = Repo("cedar-bridging-src", RepoType.ANGULAR, ArtifactType.NONE,
+                            [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+        bridging_dist = Repo("cedar-bridging-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+
+        bridging_multi.add_sub_repo(bridging_src)
+        bridging_multi.add_sub_repo(bridging_dist)
+        bridging_src_dist_relation = RepoRelation(bridging_src, RepoRelationType.IS_SOURCE_OF, bridging_dist,
+                                                  parameters={
+                                                      RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-bridging"
+                                                  })
+        repos.add_relation(bridging_src_dist_relation)
+        repos.add_repo(bridging_multi)
+
         openview_multi = Repo("cedar-openview", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         openview_src = Repo("cedar-openview-src", RepoType.ANGULAR, ArtifactType.NONE,
                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True)
+        openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         openview_multi.add_sub_repo(openview_src)
         openview_multi.add_sub_repo(openview_dist)

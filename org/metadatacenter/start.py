@@ -18,3 +18,4 @@ def all_all():
     StartFrontendWorker.openview()
     StartFrontendWorker.monitoring()
     StartFrontendWorker.artifacts()
+    StartFrontendWorker.bridging()

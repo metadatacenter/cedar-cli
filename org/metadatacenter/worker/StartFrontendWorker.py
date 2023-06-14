@@ -26,6 +26,13 @@ class StartFrontendWorker(Worker):
         )
 
     @staticmethod
+    def bridging():
+        Worker.execute_generic_shell_commands(
+            ["osascript " + Util.get_osa_script_path('start-frontend-bridging-new-tab.scpt')],
+            title="Launching Bridging Frontend in new tab",
+        )
+
+    @staticmethod
     def artifacts():
         Worker.execute_generic_shell_commands(
             ["osascript " + Util.get_osa_script_path('start-frontend-artifacts-new-tab.scpt')],

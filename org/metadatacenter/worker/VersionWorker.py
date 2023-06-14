@@ -147,6 +147,17 @@ class VersionWorker(Worker):
             version = self.get_json_path(json_data, '$.version')
             report.add(repo, dir_suffix, Const.FILE_PACKAGE_JSON, VersionType.PACKAGE_OWN, version)
 
+        package_json_lock_path = os.path.join(root_dir, Const.FILE_PACKAGE_LOCK_JSON)
+        with open(package_json_lock_path, 'r') as json_file:
+            json_data = json.load(json_file)
+
+            version = self.get_json_path(json_data, '$.version')
+            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_OWN, version)
+
+            version_pack = self.get_json_path(json_data, '$.packages[""].version')
+            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_PACKAGES_OWN, version_pack)
+
+
     @staticmethod
     def analyze_docker_build(repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
