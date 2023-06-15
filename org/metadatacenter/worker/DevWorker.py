@@ -15,44 +15,44 @@ class DevWorker(Worker):
         Worker.execute_generic_shell_commands([
             """
 echo "Creating CEDAR directories for local development"
+
 mkdir -p ${CEDAR_HOME}/cache/terminology/
+mkdir -p ${CEDAR_HOME}/CEDAR_CA/
+mkdir -p ${CEDAR_HOME}/export/
+mkdir -p ${CEDAR_HOME}/tmp/
 
-mkdir -p ${CEDAR_HOME}/log/cedar-frontend-artifacts/
-mkdir -p ${CEDAR_HOME}/log/cedar-frontend-bridging/
-mkdir -p ${CEDAR_HOME}/log/cedar-frontend-cedar/
-mkdir -p ${CEDAR_HOME}/log/cedar-frontend-component/
-mkdir -p ${CEDAR_HOME}/log/cedar-frontend-main/
-mkdir -p ${CEDAR_HOME}/log/cedar-frontend-monitoring/
-mkdir -p ${CEDAR_HOME}/log/cedar-frontend-openview/
+mkdir -p ${CEDAR_HOME}/log/frontend-artifacts/
+mkdir -p ${CEDAR_HOME}/log/frontend-bridging/
+mkdir -p ${CEDAR_HOME}/log/frontend-cedar/
+mkdir -p ${CEDAR_HOME}/log/frontend-component/
+mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular/
+mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular-dist/
+mkdir -p ${CEDAR_HOME}/log/frontend-cee-docs-angular/
+mkdir -p ${CEDAR_HOME}/log/frontend-cee-docs-angular-dist/
+mkdir -p ${CEDAR_HOME}/log/frontend-monitoring/
+mkdir -p ${CEDAR_HOME}/log/frontend-openview/
+mkdir -p ${CEDAR_HOME}/log/frontend-shared/
 
-mkdir -p ${CEDAR_HOME}/log/cedar-shared/
+mkdir -p ${CEDAR_HOME}/log/proxy-cee-demo-api-php/
 
-mkdir -p ${CEDAR_HOME}/log/cedar-auth-server/
+mkdir -p ${CEDAR_HOME}/log/server-artifact/
+mkdir -p ${CEDAR_HOME}/log/server-auth
+mkdir -p ${CEDAR_HOME}/log/server-bridge/
+mkdir -p ${CEDAR_HOME}/log/server-group
+mkdir -p ${CEDAR_HOME}/log/server-impex/
+mkdir -p ${CEDAR_HOME}/log/server-messaging
+mkdir -p ${CEDAR_HOME}/log/server-monitor
+mkdir -p ${CEDAR_HOME}/log/server-open
+mkdir -p ${CEDAR_HOME}/log/server-repo
+mkdir -p ${CEDAR_HOME}/log/server-resource
+mkdir -p ${CEDAR_HOME}/log/server-schema
+mkdir -p ${CEDAR_HOME}/log/server-submission
+mkdir -p ${CEDAR_HOME}/log/server-terminology
+mkdir -p ${CEDAR_HOME}/log/server-user
+mkdir -p ${CEDAR_HOME}/log/server-valuerecommender
+mkdir -p ${CEDAR_HOME}/log/server-worker
 
-mkdir -p ${CEDAR_HOME}/log/cedar-cadsr-tools/
-
-mkdir -p ${CEDAR_HOME}/log/cedar-artifact-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-bridge-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-group-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-monitor-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-messaging-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-openview-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-repo-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-resource-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-schema-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-submission-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-terminology-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-user-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-valuerecommender-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-worker-server/
-mkdir -p ${CEDAR_HOME}/log/cedar-impex-server
-mkdir -p ${CEDAR_HOME}/log/cedar-template-editor
-mkdir -p ${CEDAR_HOME}/log/cedar-component-distribution
-mkdir -p ${CEDAR_HOME}/log/cedar-cee-demo-angular-dist
-mkdir -p ${CEDAR_HOME}/log/cedar-cee-demo-angular
-mkdir -p ${CEDAR_HOME}/log/cedar-cee-docs-angular-dist
-mkdir -p ${CEDAR_HOME}/log/cedar-cee-docs-angular
-mkdir -p ${CEDAR_HOME}/log/cedar-openview
+mkdir -p ${CEDAR_HOME}/log/cadsr-tools/
 
 mkdir -p ${CEDAR_HOME}/log/nginx/
 """

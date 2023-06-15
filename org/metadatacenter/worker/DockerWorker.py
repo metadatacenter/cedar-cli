@@ -148,6 +148,7 @@ docker volume rm log_frontend_openview
 docker volume rm log_frontend_component
 docker volume rm log_frontend_artifacts
 docker volume rm log_frontend_monitoring
+docker volume rm log_frontend_bridging
 """
         ],
             title="Removing all CEDAR volumes",
