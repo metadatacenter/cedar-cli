@@ -40,8 +40,24 @@ class StartFrontendWorker(Worker):
         )
 
     @staticmethod
+    def component():
+        Worker.execute_generic_shell_commands(
+            ["osascript " + Util.get_osa_script_path('start-frontend-component-new-tab.scpt')],
+            title="Launching Component Frontend in new tab",
+        )
+
+    @staticmethod
     def main():
         Worker.execute_generic_shell_commands(
             ["osascript " + Util.get_osa_script_path('start-frontend-main-new-tab.scpt')],
             title="Launching Main Frontend in new tab",
         )
+
+    @staticmethod
+    def all():
+        StartFrontendWorker.main()
+        StartFrontendWorker.openview()
+        StartFrontendWorker.monitoring()
+        StartFrontendWorker.artifacts()
+        StartFrontendWorker.bridging()
+        StartFrontendWorker.component()
