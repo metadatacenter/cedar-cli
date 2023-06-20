@@ -62,3 +62,15 @@ class EnvWorker(Worker):
         table.caption = caption
         table.style = Style(color="green")
         console.print(table)
+
+    @staticmethod
+    def filter(filter_term: str):
+        cnt = 0
+        table = Table("Name", "Value", title="CEDAR environment variables")
+        for name, value in os.environ.items():
+            if name.startswith(CEDAR_ENV_PREFIX) and filter_term.lower() in name.lower():
+                table.add_row(name, value)
+                cnt += 1
+        table.caption = str(cnt) + " variables"
+        table.style = Style(color="green")
+        console.print(table)
