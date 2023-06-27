@@ -140,11 +140,13 @@ class Util(object):
         return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
 
     @classmethod
-    def write_cedar_file(cls, file_name, content):
+    def get_asset_file_path(cls, asset_path: List[str]):
+        return os.path.join(os.getcwd(), 'assets', *asset_path)
+
+    @classmethod
+    def write_cedar_file(cls, file_name: str, content):
         file_path = cls.get_cedar_file(file_name)
-        with open(file_path, "w") as file:
-            file.write(content)
-        return file_path
+        return cls.write_file(file_path, content)
 
     @classmethod
     def read_cedar_file(cls, file_name):
@@ -173,6 +175,12 @@ class Util(object):
             return None
         with open(file_path, 'r') as file:
             return file.read().rstrip()
+
+    @classmethod
+    def write_file(cls, file_path: str, content):
+        with open(file_path, "w") as file:
+            file.write(content)
+        return file_path
 
     @classmethod
     def match_cedar_docker_version(cls, value):

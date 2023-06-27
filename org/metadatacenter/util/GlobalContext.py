@@ -1,8 +1,12 @@
+import os
+
 from rich.console import Console
 
 from org.metadatacenter.config.ReposFactory import ReposFactory
-from org.metadatacenter.config.SeversFactory import ServersFactory
+from org.metadatacenter.config.ServersFactory import ServersFactory
+from org.metadatacenter.config.SubdomainsFactory import SubdomainsFactory
 from org.metadatacenter.model.TaskType import TaskType
+from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.Util import Util
 
 console = Console()
@@ -13,6 +17,7 @@ UTF_8 = 'utf-8'
 class GlobalContext(object):
     repos = ReposFactory.build_repos()
     servers = ServersFactory.build_servers()
+    subdomains = SubdomainsFactory.build_subdomains()
     task_type = None
     task_operators = {}
     task_executors = {}
@@ -88,3 +93,7 @@ class GlobalContext(object):
             return cls.task_executors[task_type]
         else:
             return None
+
+    @classmethod
+    def get_ca_common_name(cls):
+        return os.environ[Const.CEDAR_CA_COMMON_NAME]
