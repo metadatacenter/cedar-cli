@@ -16,7 +16,7 @@ def ca():
     CertificateWorker.generate_ca()
 
 
-@app.command("all", help="Generate self-signed certificates for all subdomains")
-def all():
-    CertificateWorker.generate_all()
+@app.command("domains", help="Generate self-signed certificates for all subdomains")
+def domains():
+    CertificateWorker.generate_domains()
 

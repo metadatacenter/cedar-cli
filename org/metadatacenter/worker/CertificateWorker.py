@@ -99,7 +99,7 @@ openssl req -new -x509 -days 3650 -passin pass:${CEDAR_CA_PASSWORD} -key ca.key 
         )
 
     @classmethod
-    def generate_all(cls):
+    def generate_domains(cls):
         cls.set_paths()
         for subdomain in GlobalContext.subdomains.map.values():
             subdomain_name = subdomain.get_fqdn()
