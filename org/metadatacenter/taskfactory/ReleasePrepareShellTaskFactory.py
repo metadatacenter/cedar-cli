@@ -17,7 +17,7 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         allow_snapshots = Util.get_allow_snapshots(branch_type)
-        allow_snapshots_flag = '-DallowSnapshots=' + 'true' if allow_snapshots else 'false'
+        allow_snapshots_flag = '-DallowSnapshots=' + ('true' if allow_snapshots else 'false')
 
         from org.metadatacenter.util.GlobalContext import GlobalContext
         replace_version_commands = []
