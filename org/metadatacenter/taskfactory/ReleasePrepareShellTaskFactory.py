@@ -257,9 +257,9 @@ class ReleasePrepareShellTaskFactory:
 
     @classmethod
     def macro_update_index_html_version_numbers(cls, version: str):
-        return ('echo "Update openview index.html"',
-                "      sed -i '' 's/\/cedar-form-.*\.js/\/cedar-form-'" + version + "'\.js/g' src/index.html",
-                "      sed -i '' 's/\/cedar-embeddable-editor-.*\.js/\/cedar-embeddable-editor-'" + version + "'\.js/g' src/index.html")
+        return ('echo "Update openview and bridging index.html"',
+                "      if [[ -e src/index.html ]] sed -i '' 's/\/cedar-form-.*\.js/\/cedar-form-'" + version + "'\.js/g' src/index.html",
+                "      if [[ -e src/index.html ]] sed -i '' 's/\/cedar-embeddable-editor-.*\.js/\/cedar-embeddable-editor-'" + version + "'\.js/g' src/index.html")
 
     @classmethod
     def macro_update_package_json_and_travis(cls, version: str):
@@ -267,7 +267,7 @@ class ReleasePrepareShellTaskFactory:
                 "      jq '.version=\"'" + version + "'\"' package.json | sponge package.json",
                 "      jq '.version=\"'" + version + "'\"' package-lock.json | sponge package-lock.json",
                 "      jq '.packages[\"\"].version=\"'" + version + "'\"' package-lock.json | sponge package-lock.json",
-                "      sed -i '' 's/- CEDAR_VERSION\s*=.*\".*\"/- CEDAR_VERSION=\"'" + version + "'\"/g' .travis.yml")
+                "      if [[ -e .travis.yml ]] sed -i '' 's/- CEDAR_VERSION\s*=.*\".*\"/- CEDAR_VERSION=\"'" + version + "'\"/g' .travis.yml")
 
     @classmethod
     def macro_update_development_cedar_version(cls, version: str):
