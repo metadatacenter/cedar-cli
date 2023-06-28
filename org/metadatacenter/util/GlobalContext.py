@@ -21,6 +21,7 @@ class GlobalContext(object):
     task_type = None
     task_operators = {}
     task_executors = {}
+    do_fail_on_error = True
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
@@ -97,3 +98,11 @@ class GlobalContext(object):
     @classmethod
     def get_ca_common_name(cls):
         return os.environ[Const.CEDAR_CA_COMMON_NAME]
+
+    @classmethod
+    def fail_on_error(cls):
+        return cls.do_fail_on_error
+
+    @classmethod
+    def mark_do_not_fail(cls):
+        cls.do_fail_on_error = False

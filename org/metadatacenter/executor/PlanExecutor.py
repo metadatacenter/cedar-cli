@@ -1,6 +1,5 @@
 import json
 import sys
-import time
 from datetime import timedelta
 from timeit import default_timer as timer
 from typing import List
@@ -109,7 +108,8 @@ class PlanExecutor(Executor):
             title_align="left"),
             style=Style(color="bright_green"))
 
-    def execute_recursively(self, plan: Plan, max_depth: int, current_depth: int, task_stack: List[Plan], live, overall_progress, overall_task,
+    def execute_recursively(self, plan: Plan, max_depth: int, current_depth: int, task_stack: List[Plan], live, overall_progress,
+                            overall_task,
                             job_progress, repo_progress, repo_task):
         task_stack.append(plan)
 
@@ -128,15 +128,24 @@ class PlanExecutor(Executor):
             task_executor = GlobalContext.get_task_executor(plan.task_type)
             return_code = task_executor.execute(plan, job_progress)
             if return_code is not None and return_code != 0:
-                live.stop()
-                for a in range(0, 10):
-                    console.print()
-                console.print(Panel(
-                    "[bright_magenta] Execution halted because of an error!",
-                    title="Execution halted",
-                    title_align="left"),
-                    style=Style(color="orange_red1"))
-                sys.exit(1)
+                if GlobalContext.fail_on_error():
+                    live.stop()
+                    for a in range(0, 10):
+                        console.print()
+                    console.print(Panel(
+                        "[bright_magenta] Execution halted because of an error!",
+                        title="Execution halted",
+                        title_align="left"),
+                        style=Style(color="orange_red1"))
+                    sys.exit(1)
+                else:
+                    for a in range(0, 10):
+                        console.print()
+                    console.print(Panel(
+                        "[bright_magenta] Execution continued, error disregarded!",
+                        title="Execution continued",
+                        title_align="left"),
+                        style=Style(color="orange_red1"))
 
         for task in plan.tasks:
             self.execute_recursively(task, max_depth, current_depth + 1, task_stack, live, overall_progress, overall_task, job_progress,

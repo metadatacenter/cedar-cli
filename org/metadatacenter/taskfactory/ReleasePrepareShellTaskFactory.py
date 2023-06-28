@@ -23,6 +23,11 @@ class ReleasePrepareShellTaskFactory:
         replace_version_commands = []
         build_command = ''
 
+        if repo in GlobalContext.repos.get_parent():
+            build_command = '      mvn clean install -DskipTests'
+        elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
+            build_command = '      mvn clean install -DskipTests'
+
         if release_prepare_phase == ReleasePreparePhase.SET_VERSIONS:
             if repo in GlobalContext.repos.get_parent():
                 replace_version_commands = [
@@ -39,14 +44,15 @@ class ReleasePrepareShellTaskFactory:
                 'echo "Update to next release version"',
                 *replace_version_commands,
             ])
+            # Special case for parent, needs to be built for the versions plugin to work correctly
+            if repo in GlobalContext.repos.get_parent():
+                task.command_list.extend([
+                    'echo "Build release version"',
+                    build_command,
+                ])
             return task
 
         elif release_prepare_phase == ReleasePreparePhase.BUILD:
-            if repo in GlobalContext.repos.get_parent():
-                build_command = '      mvn clean install -DskipTests'
-            elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
-                build_command = '      mvn clean install -DskipTests'
-
             task.command_list.extend([
                 'echo "Build release version"',
                 build_command,
