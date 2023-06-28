@@ -258,7 +258,7 @@ class ReleasePrepareShellTaskFactory:
     def macro_commit_changes(cls, branch_name: str):
         return ('echo "Commit changes after build"',
                 '      git add .',
-                '      git commit -a -m "Produce version of component"',
+                '      git commit -a -m "Produce version of component" --allow-empty',
                 '      git push origin ' + branch_name)
 
     @classmethod
