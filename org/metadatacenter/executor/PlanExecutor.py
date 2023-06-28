@@ -139,10 +139,10 @@ class PlanExecutor(Executor):
                         style=Style(color="orange_red1"))
                     sys.exit(1)
                 else:
-                    for a in range(0, 10):
-                        console.print()
-                    console.print(Panel(
-                        "[bright_magenta] Execution continued, error disregarded!",
+                    job_progress.print(Panel(
+                        "\n" * 5 +
+                        "[bright_magenta] Execution continued, error disregarded!" +
+                        "\n" * 5,
                         title="Execution continued",
                         title_align="left"),
                         style=Style(color="orange_red1"))
