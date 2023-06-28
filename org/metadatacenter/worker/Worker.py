@@ -8,6 +8,7 @@ from rich.panel import Panel
 from rich.style import Style
 
 from org.metadatacenter.model.WorkerType import WorkerType
+from org.metadatacenter.util.GlobalContext import GlobalContext
 
 console = Console()
 
@@ -34,7 +35,8 @@ class Worker:
             title=title,
             title_align="left")
         console.print(panel, style=Style(color="yellow"))
-        proc = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd)
+        proc = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
+                                executable=GlobalContext.get_shell())
 
         proc_stdout = proc.stdout
         fl = fcntl.fcntl(proc_stdout, fcntl.F_GETFL)

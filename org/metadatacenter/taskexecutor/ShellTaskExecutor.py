@@ -9,6 +9,7 @@ from rich.style import Style
 
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
+from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
 console = Console()
@@ -51,7 +52,8 @@ class ShellTaskExecutor(TaskExecutor):
             title="Shell subprocess",
             title_align="left"),
             style=Style(color="bright_cyan"))
-        proc = subprocess.Popen([command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd)
+        proc = subprocess.Popen([command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
+                                executable=GlobalContext.get_shell())
 
         proc_stdout = proc.stdout
         fl = fcntl.fcntl(proc_stdout, fcntl.F_GETFL)

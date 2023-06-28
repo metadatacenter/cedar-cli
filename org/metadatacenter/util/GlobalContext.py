@@ -22,6 +22,7 @@ class GlobalContext(object):
     task_operators = {}
     task_executors = {}
     do_fail_on_error = True
+    shell_path = '/bin/bash'
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
@@ -106,3 +107,7 @@ class GlobalContext(object):
     @classmethod
     def mark_do_not_fail(cls):
         cls.do_fail_on_error = False
+
+    @classmethod
+    def get_shell(cls):
+        return cls.shell_path

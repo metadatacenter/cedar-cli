@@ -27,5 +27,14 @@ def cheat():
     CheatWorker.cheat()
 
 
+# @app.command("test")
+# def test():
+#     Worker.execute_generic_shell_commands([
+#         'echo "$SHELL"'
+#     ],
+#         title="Test",
+#     )
+
+
 if __name__ == "__main__":
     app()
