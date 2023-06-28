@@ -1,5 +1,6 @@
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
+from org.metadatacenter.model.ReleasePreparePhase import ReleasePreparePhase
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.TaskType import TaskType
@@ -12,42 +13,53 @@ class ReleasePrepareShellTaskFactory:
         super().__init__()
 
     @classmethod
-    def prepare_java(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
-        task = PlanTask(cls.get_typed_name("java wrapper", branch_type), TaskType.SHELL, repo)
+    def prepare_java(cls, repo: Repo, branch_type: PreReleaseBranchType, release_prepare_phase: ReleasePreparePhase) -> PlanTask:
+        from org.metadatacenter.util.GlobalContext import GlobalContext
+        task = PlanTask(cls.get_typed_name("java wrapper/java", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         allow_snapshots = Util.get_allow_snapshots(branch_type)
         allow_snapshots_flag = '-DallowSnapshots=' + ('true' if allow_snapshots else 'false')
-
-        from org.metadatacenter.util.GlobalContext import GlobalContext
         replace_version_commands = []
         build_command = ''
-        if repo in GlobalContext.repos.get_parent():
-            replace_version_commands = [
-                "      xmlstarlet ed -L -u '_:project/_:version' -v '" + version + "' pom.xml",
-                "      xmlstarlet ed -L -u '_:project/_:properties/_:cedar.version' -v '" + version + "' pom.xml"]
-            build_command = '      mvn clean install -DskipTests'
-        elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
-            replace_version_commands = [
-                '      mvn versions:set -DnewVersion="' + version + '" -DupdateMatchingVersions=false',
-                '      mvn versions:update-parent versions:update-child-modules ' + allow_snapshots_flag,
-                '      mvn versions:update-properties ' + allow_snapshots_flag]
-            build_command = '      mvn clean install -DskipTests'
 
-        task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
-            'echo "Update to next release version"',
-            *replace_version_commands,
-            'echo "Build release version"',
-            build_command,
-            *cls.macro_commit_changes(branch_name),
-            *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
-        ])
+        if release_prepare_phase == ReleasePreparePhase.SET_VERSIONS:
+            if repo in GlobalContext.repos.get_parent():
+                replace_version_commands = [
+                    "      xmlstarlet ed -L -u '_:project/_:version' -v '" + version + "' pom.xml",
+                    "      xmlstarlet ed -L -u '_:project/_:properties/_:cedar.version' -v '" + version + "' pom.xml"]
+            elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
+                replace_version_commands = [
+                    '      mvn versions:set -DnewVersion="' + version + '" -DupdateMatchingVersions=false',
+                    '      mvn versions:update-parent versions:update-child-modules ' + allow_snapshots_flag,
+                    '      mvn versions:update-properties ' + allow_snapshots_flag]
 
-        return task
+            task.command_list.extend([
+                *cls.macro_create_pre_release_branch(branch_name),
+                'echo "Update to next release version"',
+                *replace_version_commands,
+            ])
+            return task
+
+        elif release_prepare_phase == ReleasePreparePhase.BUILD:
+            if repo in GlobalContext.repos.get_parent():
+                build_command = '      mvn clean install -DskipTests'
+            elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
+                build_command = '      mvn clean install -DskipTests'
+
+            task.command_list.extend([
+                'echo "Build release version"',
+                build_command,
+                *cls.macro_commit_changes(branch_name),
+                *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
+            ])
+            return task
 
     @classmethod
-    def prepare_angular_js(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+    def prepare_angular_js(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                           release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("angularJS project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -61,7 +73,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_angular_src(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+    def prepare_angular_src(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                            release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("angular standalone project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -76,7 +91,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_angular_dist(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+    def prepare_angular_dist(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                             release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("angular dist standalone project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -90,7 +108,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_angular_src_sub(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+    def prepare_angular_src_sub(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                                release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("angular sub-project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -102,7 +123,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_angular_dist_sub(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+    def prepare_angular_dist_sub(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                                 release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("angular dist sub-project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -112,14 +136,20 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_plain_sub(cls, repo: Repo, branch_type: PreReleaseBranchType):
+    def prepare_plain_sub(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                          release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("plain sub repo", branch_type), TaskType.SHELL, repo)
         task.command_list = [
         ]
         return task
 
     @classmethod
-    def prepare_multi_pre(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+    def prepare_multi_pre(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                          release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("PRE multi directory project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -129,7 +159,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_multi_post(cls, repo: Repo, branch_type: PreReleaseBranchType) -> PlanTask:
+    def prepare_multi_post(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                           release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("POST multi directory project", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -140,7 +173,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_plain(cls, repo: Repo, branch_type: PreReleaseBranchType):
+    def prepare_plain(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                      release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("plain repo", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -152,7 +188,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_development(cls, repo: Repo, branch_type: PreReleaseBranchType):
+    def prepare_development(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                            release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("development repo", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -165,7 +204,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_docker_deploy(cls, repo: Repo, branch_type: PreReleaseBranchType):
+    def prepare_docker_deploy(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                              release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("Docker deploy repo", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
@@ -178,7 +220,10 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
-    def prepare_docker_build(cls, repo: Repo, branch_type: PreReleaseBranchType):
+    def prepare_docker_build(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                             release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
         task = PlanTask(cls.get_typed_name("Docker build repo", branch_type), TaskType.SHELL, repo)
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)

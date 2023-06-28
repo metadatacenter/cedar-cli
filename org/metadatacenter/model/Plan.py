@@ -30,8 +30,9 @@ class Plan:
         Plan.expand_tasks(to_expand)
 
     def add_task_as_task(self, task):
-        self.tasks.append(task)
-        Plan.expand_tasks([task])
+        if task is not None:
+            self.tasks.append(task)
+            Plan.expand_tasks([task])
 
     def add_task_as_task_no_expand(self, task):
         self.tasks.append(task)
