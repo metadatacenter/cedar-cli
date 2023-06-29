@@ -39,7 +39,7 @@ class ShellTaskExecutor(TaskExecutor):
             style=Style(color="green"))
         for command in commands_to_execute:
             stdout_parts, return_code = self.execute_shell_command(repo, command, cwd, job_progress)
-            if return_code != 0:
+            if return_code != 0 and GlobalContext.fail_on_error():
                 return return_code
         return 0
 
