@@ -16,6 +16,15 @@ class ReleasePreparePlanner(Planner):
         for repo in GlobalContext.repos.get_release_all():
             plan.add_task(
                 "Prepare release of repo",
+                TaskType.RELEASE_PREPARE_CREATE_BRANCH,
+                [repo],
+                parameters={
+                    "branch_type": PreReleaseBranchType.RELEASE,
+                }
+            )
+        for repo in GlobalContext.repos.get_release_all():
+            plan.add_task(
+                "Prepare release of repo",
                 TaskType.RELEASE_PREPARE,
                 [repo],
                 parameters={
@@ -31,6 +40,15 @@ class ReleasePreparePlanner(Planner):
                 parameters={
                     "branch_type": PreReleaseBranchType.RELEASE,
                     "release_prepare_phase": ReleasePreparePhase.BUILD
+                }
+            )
+        for repo in GlobalContext.repos.get_release_all():
+            plan.add_task(
+                "Prepare release of repo",
+                TaskType.RELEASE_PREPARE_CREATE_BRANCH,
+                [repo],
+                parameters={
+                    "branch_type": PreReleaseBranchType.NEXT_DEV
                 }
             )
         for repo in GlobalContext.repos.get_release_all():

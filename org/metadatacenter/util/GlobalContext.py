@@ -43,6 +43,7 @@ class GlobalContext(object):
         from org.metadatacenter.operator.BuildOperator import BuildOperator
         from org.metadatacenter.operator.DeployOperator import DeployOperator
         from org.metadatacenter.operator.ReleasePrepareOperator import ReleasePrepareOperator
+        from org.metadatacenter.operator.ReleasePrepareCreateBranchOperator import ReleasePrepareCreateBranchOperator
         from org.metadatacenter.operator.ReleaseRollbackOperator import ReleaseRollbackOperator
         from org.metadatacenter.operator.ReleaseCleanupOperator import ReleaseCleanupOperator
         from org.metadatacenter.operator.ReleaseCommitOperator import ReleaseCommitOperator
@@ -51,6 +52,7 @@ class GlobalContext(object):
             TaskType.BUILD: BuildOperator(),
             TaskType.DEPLOY: DeployOperator(),
             TaskType.RELEASE_PREPARE: ReleasePrepareOperator(),
+            TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchOperator(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator(),
             TaskType.RELEASE_COMMIT: ReleaseCommitOperator(),
             TaskType.RELEASE_CLEANUP: ReleaseCleanupOperator(),
@@ -62,6 +64,7 @@ class GlobalContext(object):
         from org.metadatacenter.taskexecutor.BuildTaskExecutor import BuildTaskExecutor
         from org.metadatacenter.taskexecutor.DeployTaskExecutor import DeployTaskExecutor
         from org.metadatacenter.taskexecutor.ReleasePrepareTaskExecutor import ReleasePrepareTaskExecutor
+        from org.metadatacenter.taskexecutor.ReleasePrepareCreateBranchTaskExecutor import ReleasePrepareCreateBranchTaskExecutor
         from org.metadatacenter.taskexecutor.ShellWrapperTaskExecutor import ShellWrapperTaskExecutor
         from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
         from org.metadatacenter.taskexecutor.NoopTaskExecutor import NoopTaskExecutor
@@ -73,6 +76,7 @@ class GlobalContext(object):
             TaskType.BUILD: BuildTaskExecutor(),
             TaskType.DEPLOY: DeployTaskExecutor(),
             TaskType.RELEASE_PREPARE: ReleasePrepareTaskExecutor(),
+            TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchTaskExecutor(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackTaskExecutor(),
             TaskType.RELEASE_COMMIT: ReleaseCommitTaskExecutor(),
             TaskType.RELEASE_CLEANUP: ReleaseCleanupTaskExecutor(),

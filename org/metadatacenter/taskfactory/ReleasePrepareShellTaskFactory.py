@@ -40,7 +40,6 @@ class ReleasePrepareShellTaskFactory:
                     '      mvn versions:update-properties ' + allow_snapshots_flag]
 
             task.command_list.extend([
-                *cls.macro_create_pre_release_branch(branch_name),
                 'echo "Update to next release version"',
                 *replace_version_commands,
             ])
@@ -70,7 +69,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_package_json_and_travis(version),
             *cls.macro_build_angular_js(),
             *cls.macro_commit_changes(branch_name),
@@ -87,7 +85,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_package_json_and_travis(version),
             *cls.macro_update_index_html_version_numbers(version),
             *cls.macro_build_angular(),
@@ -105,7 +102,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_package_json_and_travis(version),
             *cls.macro_build_angular(),
             *cls.macro_commit_changes(branch_name),
@@ -160,7 +156,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
         ])
         return task
 
@@ -187,7 +182,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
         ])
@@ -202,7 +196,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_development_cedar_version(version),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
@@ -218,7 +211,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_env_cedar_docker_version(version),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
@@ -234,7 +226,6 @@ class ReleasePrepareShellTaskFactory:
         task.command_list = []
         version, branch_name, tag_name = Util.get_release_vars(branch_type)
         task.command_list.extend([
-            *cls.macro_create_pre_release_branch(branch_name),
             *cls.macro_update_docker_build_versions(version),
             *cls.macro_commit_changes(branch_name),
             *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
@@ -248,18 +239,10 @@ class ReleasePrepareShellTaskFactory:
                 '      git push origin "' + tag_name + '"')
 
     @classmethod
-    def macro_create_pre_release_branch(cls, branch_name: str):
-        return ('echo "Create branch"',
-                '      git checkout develop',
-                '      git pull origin develop',
-                '      git checkout -b ' + branch_name)
-
-    @classmethod
     def macro_commit_changes(cls, branch_name: str):
         return ('echo "Commit changes after build"',
                 '      git add .',
-                '      git commit -a -m "Produce version of component" --allow-empty',
-                '      git push origin ' + branch_name)
+                '      git commit -a -m "Produce version of component" --allow-empty')
 
     @classmethod
     def macro_update_index_html_version_numbers(cls, version: str):
