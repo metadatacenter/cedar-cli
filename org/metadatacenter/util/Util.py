@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List
 
 import rich
+from math import log2
 from rich.console import Console
 from rich.panel import Panel
 from rich.style import Style
@@ -139,11 +140,13 @@ class Util(object):
         return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
 
     @classmethod
-    def write_cedar_file(cls, file_name, content):
+    def get_asset_file_path(cls, asset_path: List[str]):
+        return os.path.join(os.getcwd(), 'assets', *asset_path)
+
+    @classmethod
+    def write_cedar_file(cls, file_name: str, content):
         file_path = cls.get_cedar_file(file_name)
-        with open(file_path, "w") as file:
-            file.write(content)
-        return file_path
+        return cls.write_file(file_path, content)
 
     @classmethod
     def read_cedar_file(cls, file_name):
@@ -172,6 +175,12 @@ class Util(object):
             return None
         with open(file_path, 'r') as file:
             return file.read().rstrip()
+
+    @classmethod
+    def write_file(cls, file_path: str, content):
+        with open(file_path, "w") as file:
+            file.write(content)
+        return file_path
 
     @classmethod
     def match_cedar_docker_version(cls, value):
@@ -263,3 +272,15 @@ class Util(object):
     def get_servers():
         from org.metadatacenter.util.GlobalContext import GlobalContext
         return GlobalContext.servers.map.values()
+
+    @staticmethod
+    def format_file_size(size: int):
+        units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB")
+        scaling = round(log2(size) * 4) // 40
+        scaling = min(len(units) - 1, scaling)
+        return str(round(size / (2 ** (10 * scaling)), 2)) + ' ' + units[scaling]
+
+    @staticmethod
+    def get_repo_suffix(repo: Repo):
+        root_dir = Util.get_wd(repo)
+        return root_dir[len(Util.cedar_home):]

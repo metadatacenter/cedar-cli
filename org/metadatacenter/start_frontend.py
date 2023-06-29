@@ -25,9 +25,16 @@ def artifacts():
     StartFrontendWorker.artifacts()
 
 
+@app.command("bridging")
+def bridging():
+    StartFrontendWorker.bridging()
+
+
+@app.command("component")
+def component():
+    StartFrontendWorker.component()
+
+
 @app.command("all")
 def frontend_all():
-    StartFrontendWorker.main()
-    StartFrontendWorker.openview()
-    StartFrontendWorker.monitoring()
-    StartFrontendWorker.artifacts()
+    StartFrontendWorker.all()

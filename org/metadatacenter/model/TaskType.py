@@ -10,3 +10,4 @@ class TaskType:
     RELEASE_COMMIT = "release/commit"
     RELEASE_CLEANUP = "release/cleanup"
     RELEASE_BRANCH_CHECKOUT = "release/branch-checkout"
+    RELEASE_PREPARE_CREATE_BRANCH = "release/prepare/create-branch"

@@ -53,7 +53,7 @@ class BuildPlanner(Planner):
     @staticmethod
     def this(plan: Plan, wd: str):
         for repo in GlobalContext.repos.get_list_all():
-            if Util.get_wd(repo) == wd:
+            if Util.get_wd(repo).lower() == wd.lower():
                 plan.add_task(
                     "Build current repo",
                     TaskType.BUILD,

@@ -3,18 +3,45 @@ import os
 from rich.console import Console
 from rich.table import Table, Column
 
+from org.metadatacenter.model.RepoCheckEntry import RepoCheckEntry
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
+FS_TYPE_DIR = '🗂️  dir'
+FS_TYPE_FILE = '📄 file'
+RECOGNIZED_AS_CEDAR_REPO = 'CEDAR repo'
+STATUS_ICON_OK = '✅'
+STATUS_ICON_UNKNOWN = '❓'
+STATUS_ICON_MISSING = '❌'
+STATUS_OK = 'ok'
+STATUS_MISSING = 'missing'
+STATUS_UNKNOWN = 'unknown'
+
+KNOWN_FS = {
+    'neo4j': 'Neo4j installation',
+    'keycloak': 'Keycloak installation',
+    'CEDAR_CA': 'CEDAR CA working dir',
+    'log': 'CEDAR log dir',
+    '.DS_Store': 'Known mac file',
+    'cache': 'Known CEDAR cache dir',
+    'cedar-auth.kdbx': 'CEDAR password stash',
+    'export': 'Known CEDAR export dir',
+    'tmp': 'Temporary dir',
+    'set-env-internal.sh': 'Known CEDAR shell script',
+    'set-env-external.sh': 'Known CEDAR shell script',
+    'cedar-profile-native-develop.sh': 'Known CEDAR shell script'
+}
+
 
 class RepoWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def repo_list(self):
+    @staticmethod
+    def repo_config():
         table = Table("Repo",
                       Column(header="Type", justify="center"),
                       Column(header="Library", justify="center"),
@@ -24,133 +51,100 @@ class RepoWorker(Worker):
                       Column(header="Private", justify="center"),
                       Column(header="Docker", justify="center"))
         for repo in GlobalContext.repos.get_list_all():
-            self.add_repo_list_row(repo, table)
+            RepoWorker.add_repo_list_row(repo, table)
         console.print(table)
 
     @staticmethod
     def add_repo_list_row(repo, table):
-        is_library = "✅" if repo.is_library else ""
-        is_client = "✅" if repo.is_client else ""
-        is_microservice = "✅" if repo.is_microservice else ""
-        is_private = "✅" if repo.is_private else ""
-        for_docker = "✅" if repo.for_docker else ""
-        is_frontend = "✅" if repo.is_frontend else ""
+        is_library = STATUS_ICON_OK if repo.is_library else ""
+        is_client = STATUS_ICON_OK if repo.is_client else ""
+        is_microservice = STATUS_ICON_OK if repo.is_microservice else ""
+        is_private = STATUS_ICON_OK if repo.is_private else ""
+        for_docker = STATUS_ICON_OK if repo.for_docker else ""
+        is_frontend = STATUS_ICON_OK if repo.is_frontend else ""
         name = repo.parent_repo.name + "️ ➡️  " + repo.name if repo.is_sub_repo else repo.name
         table.add_row(name, repo.repo_type, is_library, is_client, is_microservice, is_frontend, is_private, for_docker)
 
-    def repo_status(self):
-        table = Table("Repo",
-                      Column(header="Type", justify="center"),
-                      Column(header="Directory", justify="center"))
-        cnt_ok = 0
-        cnt_nok = 0
-        for repo in GlobalContext.repos.get_list_all():
-            ok, nok = self.add_repo_status_row(repo, table)
-            cnt_ok += ok
-            cnt_nok += nok
+    @staticmethod
+    def analyze_entry(fs_name, repo_map):
+        recognized_as = 'unknown'
+        status = STATUS_UNKNOWN
+        status_icon = STATUS_ICON_UNKNOWN
+        if fs_name in repo_map:
+            recognized_as = RECOGNIZED_AS_CEDAR_REPO
+            status = STATUS_OK
+            status_icon = STATUS_ICON_OK
+        if fs_name in KNOWN_FS:
+            status = STATUS_OK
+            status_icon = STATUS_ICON_OK
+            recognized_as = KNOWN_FS[fs_name]
 
-        caption = str(cnt_ok) + " repos present"
-        if cnt_nok > 0:
-            caption += ", [red]" + str(cnt_nok) + " missing"
-        table.caption = caption
-        console.print(table)
+        return recognized_as, status, status_icon
 
     @staticmethod
-    def add_repo_status_row(repo, table):
-        cnt_ok = 0
-        cnt_nok = 0
-        if os.path.isdir(Util.get_wd(repo)):
-            dir_status = "✅"
-            cnt_ok += 1
-        else:
-            dir_status = "❌"
-            cnt_nok += 1
-        name = repo.parent_repo.name + "️ ➡️  " + repo.name if repo.is_sub_repo else repo.name
-        table.add_row(name, repo.repo_type, dir_status)
-        return cnt_ok, cnt_nok
-
-    @staticmethod
-    def repo_report():
-        table = Table("File/Dir",
-                      Column(header="Type", justify="center"),
+    def check_repos():
+        table = Table("Repo/File/Dir",
+                      Column(header="File Type", justify="center"),
+                      Column(header="Repo Type", justify="center"),
                       Column(header="Recognized as", justify="center"),
                       Column(header="Status", justify="center")
                       )
 
         repo_map = {}
         for repo in GlobalContext.repos.get_list_all():
-            repo_map[repo.get_fqn()] = 1
+            display_name = repo.get_fqn()
+            is_present = RepoWorker.get_repo_dir_status(repo)
+            repo_map[display_name] = RepoCheckEntry(repo, display_name, is_present)
+
         dir_list = os.listdir(Util.cedar_home)
-        cnt_ok = 0
-        cnt_nok = 0
-        unknown_list = []
-        for entry in dir_list:
-            full_path = os.path.join(Util.cedar_home, entry)
-            entry_type = '🗂️  dir' if os.path.isdir(full_path) else '📄 file'
-            recognized_as, status, status_icon = RepoWorker.analyze_entry(entry, repo_map)
+        for fs_name in dir_list:
+            full_path = os.path.join(Util.cedar_home, fs_name)
+            file_type = FS_TYPE_DIR if os.path.isdir(full_path) else FS_TYPE_FILE
+            recognized_as, status, status_icon = RepoWorker.analyze_entry(fs_name, repo_map)
             if status == 'ok':
-                cnt_ok += 1
+                if fs_name in repo_map:
+                    entry = repo_map[fs_name]
+                else:
+                    entry = RepoCheckEntry(None, fs_name, True)
+                    repo_map[fs_name] = entry
+                entry.set_recognized_as(recognized_as)
             else:
-                cnt_nok += 1
-                unknown_list.append(entry)
-            table.add_row(entry, entry_type, recognized_as, status_icon)
+                entry = RepoCheckEntry(None, fs_name, True)
+                repo_map[fs_name] = entry
+            entry.file_type = file_type
+
+        cnt_ok = 0
+        cnt_unknown = 0
+        cnt_missing = 0
+        unknown_list = []
+        missing_list = []
+
+        repo_map = dict(sorted(repo_map.items()))
+        for entry in repo_map.values():
+            table.add_row(entry.display_name, entry.file_type, entry.repo_type, entry.recognized_as, entry.status_icon)
+            if entry.status == STATUS_OK:
+                cnt_ok += 1
+            elif entry.status == STATUS_UNKNOWN:
+                cnt_unknown +=1
+                unknown_list.append(entry.display_name)
+            elif entry.status == STATUS_MISSING:
+                cnt_missing +=1
+                missing_list.append(entry.display_name)
 
         caption = str(cnt_ok) + " object/files recognized"
-        if cnt_nok > 0:
-            caption += ", [red]" + str(cnt_nok) + " unknown:"
-            caption += "\n[bright_yellow]" + str(unknown_list)
+        if cnt_unknown > 0:
+            caption += "\n, [bright_red]" + str(cnt_unknown)
+            caption += " unknown: [bright_yellow]" + str(unknown_list)
+        if cnt_missing > 0:
+            caption += "\n, [bright_red]" + str(cnt_missing)
+            caption += " missing: [bright_yellow]" + str(missing_list)
         table.caption = caption
 
         console.print(table)
 
     @staticmethod
-    def analyze_entry(entry, repo_map):
-        recognized_as = 'unknown'
-        status = 'unknown'
-        status_icon = '❓'
-        if entry in repo_map:
-            recognized_as = 'CEDAR repo'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'neo4j':
-            recognized_as = 'Neo4j installation'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'keycloak':
-            recognized_as = 'Keycloak installation'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'set-env-internal.sh' or entry == 'set-env-external.sh' or entry == 'cedar-profile-native-develop.sh':
-            recognized_as = 'Known CEDAR shell script'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'CEDAR_CA':
-            recognized_as = 'CEDAR CA working dir'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'log':
-            recognized_as = 'CEDAR log dir'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == '.DS_Store':
-            recognized_as = 'Known mac file'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'cache':
-            recognized_as = 'Known CEDAR cache dir'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'cedar-auth.kdbx':
-            recognized_as = 'CEDAR password stash'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'export':
-            recognized_as = 'Known CEDAR export dir'
-            status = 'ok'
-            status_icon = "✅"
-        if entry == 'tmp':
-            recognized_as = 'Temporary dir'
-            status = 'ok'
-            status_icon = "✅"
-
-        return recognized_as, status, status_icon
+    def get_repo_dir_status(repo):
+        if os.path.isdir(Util.get_wd(repo)):
+            return True
+        else:
+            return False

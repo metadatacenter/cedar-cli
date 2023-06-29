@@ -1,19 +1,28 @@
+import os
+
 from rich.console import Console
 
 from org.metadatacenter.config.ReposFactory import ReposFactory
-from org.metadatacenter.config.SeversFactory import ServersFactory
+from org.metadatacenter.config.ServersFactory import ServersFactory
+from org.metadatacenter.config.SubdomainsFactory import SubdomainsFactory
 from org.metadatacenter.model.TaskType import TaskType
+from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.Util import Util
 
 console = Console()
+
+UTF_8 = 'utf-8'
 
 
 class GlobalContext(object):
     repos = ReposFactory.build_repos()
     servers = ServersFactory.build_servers()
+    subdomains = SubdomainsFactory.build_subdomains()
     task_type = None
     task_operators = {}
     task_executors = {}
+    do_fail_on_error = True
+    shell_path = '/bin/bash'
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
@@ -34,6 +43,7 @@ class GlobalContext(object):
         from org.metadatacenter.operator.BuildOperator import BuildOperator
         from org.metadatacenter.operator.DeployOperator import DeployOperator
         from org.metadatacenter.operator.ReleasePrepareOperator import ReleasePrepareOperator
+        from org.metadatacenter.operator.ReleasePrepareCreateBranchOperator import ReleasePrepareCreateBranchOperator
         from org.metadatacenter.operator.ReleaseRollbackOperator import ReleaseRollbackOperator
         from org.metadatacenter.operator.ReleaseCleanupOperator import ReleaseCleanupOperator
         from org.metadatacenter.operator.ReleaseCommitOperator import ReleaseCommitOperator
@@ -42,6 +52,7 @@ class GlobalContext(object):
             TaskType.BUILD: BuildOperator(),
             TaskType.DEPLOY: DeployOperator(),
             TaskType.RELEASE_PREPARE: ReleasePrepareOperator(),
+            TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchOperator(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator(),
             TaskType.RELEASE_COMMIT: ReleaseCommitOperator(),
             TaskType.RELEASE_CLEANUP: ReleaseCleanupOperator(),
@@ -53,6 +64,7 @@ class GlobalContext(object):
         from org.metadatacenter.taskexecutor.BuildTaskExecutor import BuildTaskExecutor
         from org.metadatacenter.taskexecutor.DeployTaskExecutor import DeployTaskExecutor
         from org.metadatacenter.taskexecutor.ReleasePrepareTaskExecutor import ReleasePrepareTaskExecutor
+        from org.metadatacenter.taskexecutor.ReleasePrepareCreateBranchTaskExecutor import ReleasePrepareCreateBranchTaskExecutor
         from org.metadatacenter.taskexecutor.ShellWrapperTaskExecutor import ShellWrapperTaskExecutor
         from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
         from org.metadatacenter.taskexecutor.NoopTaskExecutor import NoopTaskExecutor
@@ -64,6 +76,7 @@ class GlobalContext(object):
             TaskType.BUILD: BuildTaskExecutor(),
             TaskType.DEPLOY: DeployTaskExecutor(),
             TaskType.RELEASE_PREPARE: ReleasePrepareTaskExecutor(),
+            TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchTaskExecutor(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackTaskExecutor(),
             TaskType.RELEASE_COMMIT: ReleaseCommitTaskExecutor(),
             TaskType.RELEASE_CLEANUP: ReleaseCleanupTaskExecutor(),
@@ -86,3 +99,19 @@ class GlobalContext(object):
             return cls.task_executors[task_type]
         else:
             return None
+
+    @classmethod
+    def get_ca_common_name(cls):
+        return os.environ[Const.CEDAR_CA_COMMON_NAME]
+
+    @classmethod
+    def fail_on_error(cls):
+        return cls.do_fail_on_error
+
+    @classmethod
+    def mark_do_not_fail(cls):
+        cls.do_fail_on_error = False
+
+    @classmethod
+    def get_shell(cls):
+        return cls.shell_path

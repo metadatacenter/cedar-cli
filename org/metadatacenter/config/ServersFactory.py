@@ -40,13 +40,14 @@ class ServersFactory:
         servers.add_frontend('component', 4240)
         servers.add_frontend('monitoring', 4300)
         servers.add_frontend('artifacts', 4320)
+        servers.add_frontend('bridging', 4340)
 
         servers.add_dashboard('opensearch-dashboard', 5601)
         servers.add_dashboard('redis-commander', 8081)
         servers.add_dashboard('phpmyadmin', 8082)
 
-        servers.add_frontend_non_essential('cee-dev', 4320)
-        servers.add_frontend_non_essential('cee-demo', 4260)
-        servers.add_frontend_non_essential('cee-docs', 4280)
+        servers.add_frontend_non_essential('cee-dev', 4400)
+        servers.add_frontend_non_essential('demo.cee', 4260)
+        servers.add_frontend_non_essential('docs.cee', 4280)
 
         return servers

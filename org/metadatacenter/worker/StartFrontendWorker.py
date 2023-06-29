@@ -26,10 +26,24 @@ class StartFrontendWorker(Worker):
         )
 
     @staticmethod
+    def bridging():
+        Worker.execute_generic_shell_commands(
+            ["osascript " + Util.get_osa_script_path('start-frontend-bridging-new-tab.scpt')],
+            title="Launching Bridging Frontend in new tab",
+        )
+
+    @staticmethod
     def artifacts():
         Worker.execute_generic_shell_commands(
             ["osascript " + Util.get_osa_script_path('start-frontend-artifacts-new-tab.scpt')],
             title="Launching Artifacts Frontend in new tab",
+        )
+
+    @staticmethod
+    def component():
+        Worker.execute_generic_shell_commands(
+            ["osascript " + Util.get_osa_script_path('start-frontend-component-new-tab.scpt')],
+            title="Launching Component Frontend in new tab",
         )
 
     @staticmethod
@@ -38,3 +52,12 @@ class StartFrontendWorker(Worker):
             ["osascript " + Util.get_osa_script_path('start-frontend-main-new-tab.scpt')],
             title="Launching Main Frontend in new tab",
         )
+
+    @staticmethod
+    def all():
+        StartFrontendWorker.main()
+        StartFrontendWorker.openview()
+        StartFrontendWorker.monitoring()
+        StartFrontendWorker.artifacts()
+        StartFrontendWorker.bridging()
+        StartFrontendWorker.component()

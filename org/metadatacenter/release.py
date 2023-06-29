@@ -39,6 +39,7 @@ def rollback(branch: Annotated[str, typer.Option(help="Branch to delete")],
     Util.mark_rollback_branch(branch)
     Util.mark_rollback_tag(tag)
     GlobalContext.mark_global_task_type(TaskType.RELEASE_ROLLBACK)
+    GlobalContext.mark_do_not_fail()
     plan = Plan("Prepare rollback release all")
     ReleaseRollbackPlanner.rollback(plan)
     plan_executor.execute(plan, dry_run)
@@ -81,6 +82,7 @@ def cleanup(pre_branch: str = typer.Option(None, help="Pre-branch to delete"),
             post_branch: str = typer.Option(None, help="Post-branch to delete"),
             dry_run: bool = typer.Option(False, help="Dry run")):
     pre_branch_old, post_branch_old, _, _, _ = Util.check_release_commit_variables()
+    GlobalContext.mark_do_not_fail()
     if pre_branch is None or post_branch is None:
         command = 'cedarcli release cleanup'
         command += ' --pre-branch=' + pre_branch_old

@@ -1,12 +1,21 @@
+from typing import List
+
+from org.metadatacenter.model.ArtifactType import ArtifactType
 from org.metadatacenter.model.PrePostType import PrePostType
+from org.metadatacenter.model.RepoType import RepoType
+from org.metadatacenter.model.VersionType import VersionType
 
 
 class Repo:
 
-    def __init__(self, name, repo_type, is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
+    def __init__(self, name: str, repo_type: RepoType, artifact_type: ArtifactType,
+                 version_list: List[VersionType],
+                 is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
                  is_frontend=False, expected_build_lines=100):
         self.name = name
         self.repo_type = repo_type
+        self.artifact_type = artifact_type
+        self.version_list = version_list
         self.is_client = is_client
         self.is_library = is_library
         self.is_microservice = is_microservice

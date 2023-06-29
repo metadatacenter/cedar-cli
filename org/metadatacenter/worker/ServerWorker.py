@@ -31,6 +31,11 @@ class ServerWorker(Worker):
         table = Table("Server", "Status", "Port", 'Error', title="CEDAR Server status list")
         prev_server_tag = None
         for server in Util.get_servers():
+            current_server_tag = server.tag
+            if prev_server_tag is None or (prev_server_tag is not None and prev_server_tag != current_server_tag):
+                table.add_section()
+                table.add_row("[bold magenta]" + server.tag.capitalize(), '', '', '')
+
             status = "❓"
             display_name = server.name
             error = ''
@@ -45,10 +50,6 @@ class ServerWorker(Worker):
                     status = "❌ ❌"
                 if server_status_map[server.name].exception is not None:
                     error = server_status_map[server.name].exception
-            current_server_tag = server.tag
-            if prev_server_tag is not None and prev_server_tag != current_server_tag:
-                table.add_section()
-                table.add_row("[bold magenta]" + server.tag.capitalize(), '', '', '')
 
             prev_server_tag = current_server_tag
             # if error != '':

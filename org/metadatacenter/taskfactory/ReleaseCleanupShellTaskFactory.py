@@ -30,7 +30,7 @@ class ReleaseCleanupShellTaskFactory:
         else:
             task.command_list = [
                 *ReleaseRollbackShellTaskFactory.macro_checkout_develop(),
-                *(ReleaseRollbackShellTaskFactory.macro_delete_local_and_remote_branch(pre_branch) if is_delete_pre_branch else []),
-                *(ReleaseRollbackShellTaskFactory.macro_delete_local_and_remote_branch(post_branch) if is_delete_post_branch else [])
+                *(ReleaseRollbackShellTaskFactory.macro_delete_local_branch(pre_branch) if is_delete_pre_branch else []),
+                *(ReleaseRollbackShellTaskFactory.macro_delete_local_branch(post_branch) if is_delete_post_branch else [])
             ]
         return task

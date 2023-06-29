@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import timedelta
 from timeit import default_timer as timer
 from typing import List
@@ -96,10 +97,19 @@ class PlanExecutor(Executor):
             ),
         )
 
-        with Live(progress_table, refresh_per_second=10):
-            self.execute_recursively(plan, max_depth, 0, [], overall_progress, overall_task, job_progress, repo_progress, repo_task)
+        with Live(progress_table, refresh_per_second=10) as live:
+            self.execute_recursively(plan, max_depth, 0, [], live, overall_progress, overall_task, job_progress, repo_progress, repo_task)
 
-    def execute_recursively(self, plan: Plan, max_depth: int, current_depth: int, task_stack: List[Plan], overall_progress, overall_task,
+        for a in range(0, 5):
+            console.print()
+        console.print(Panel(
+            "[bright_green] Execution succeeded!",
+            title="Execution succeeded",
+            title_align="left"),
+            style=Style(color="bright_green"))
+
+    def execute_recursively(self, plan: Plan, max_depth: int, current_depth: int, task_stack: List[Plan], live, overall_progress,
+                            overall_task,
                             job_progress, repo_progress, repo_task):
         task_stack.append(plan)
 
@@ -116,8 +126,27 @@ class PlanExecutor(Executor):
 
         if isinstance(plan, PlanTask):
             task_executor = GlobalContext.get_task_executor(plan.task_type)
-            task_executor.execute(plan, job_progress)
+            return_code = task_executor.execute(plan, job_progress)
+            if return_code is not None and return_code != 0:
+                if GlobalContext.fail_on_error():
+                    live.stop()
+                    for a in range(0, 10):
+                        console.print()
+                    console.print(Panel(
+                        "[bright_magenta] Execution halted because of an error!",
+                        title="Execution halted",
+                        title_align="left"),
+                        style=Style(color="orange_red1"))
+                    sys.exit(1)
+                else:
+                    job_progress.print(Panel(
+                        "\n" * 5 +
+                        "[bright_magenta] Execution continued, error disregarded!" +
+                        "\n" * 5,
+                        title="Execution continued",
+                        title_align="left"),
+                        style=Style(color="orange_red1"))
 
         for task in plan.tasks:
-            self.execute_recursively(task, max_depth, current_depth + 1, task_stack, overall_progress, overall_task, job_progress,
+            self.execute_recursively(task, max_depth, current_depth + 1, task_stack, live, overall_progress, overall_task, job_progress,
                                      repo_progress, repo_task)

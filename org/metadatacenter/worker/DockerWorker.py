@@ -97,42 +97,58 @@ docker network rm cedarnet
             """
 docker volume rm cedar_ca
 docker volume rm cedar_cert
+
 docker volume rm opensearch_data
-docker volume rm opensearch_log
-docker volume rm keycloak_log
+docker volume rm log_opensearch
+
+docker volume rm keycloak_state
+docker volume rm log_keycloak
+
 docker volume rm mongo_data
-docker volume rm mongo_log
 docker volume rm mongo_state
+docker volume rm mongo_configdb
+docker volume rm log_mongo
+
 docker volume rm mysql_data
-docker volume rm mysql_log
+docker volume rm log_mysql
+
 docker volume rm neo4j_data
-docker volume rm neo4j_log
 docker volume rm neo4j_state
-docker volume rm nginx_log
+docker volume rm log_neo4j
+
+docker volume rm log_nginx
+
 docker volume rm redis_data
-docker volume rm redis_log
+docker volume rm log_redis
+
 
 docker volume rm terminology_data
 
-docker volume rm group_log
-docker volume rm impex_log
-docker volume rm monitor_log
-docker volume rm messaging_log
-docker volume rm openview_log
-docker volume rm repo_log
-docker volume rm resource_log
-docker volume rm schema_log
-docker volume rm submission_log
-docker volume rm artifact_log
-docker volume rm terminology_log
-docker volume rm user_log
-docker volume rm valuerecommender_log
-docker volume rm worker_log
+
+docker volume rm log_group
+docker volume rm log_impex
+docker volume rm log_monitor
+docker volume rm log_messaging
+docker volume rm log_openview
+docker volume rm log_repo
+docker volume rm log_resource
+docker volume rm log_schema
+docker volume rm log_submission
+docker volume rm log_artifact
+docker volume rm log_terminology
+docker volume rm log_user
+docker volume rm log_valuerecommender
+docker volume rm log_worker
+docker volume rm log_bridge
+
 docker volume rm resource_state
 
-docker volume rm frontend_editor_log
-docker volume rm frontend_openview_log
-docker volume rm frontend_component_log
+docker volume rm log_frontend_main
+docker volume rm log_frontend_openview
+docker volume rm log_frontend_component
+docker volume rm log_frontend_artifacts
+docker volume rm log_frontend_monitoring
+docker volume rm log_frontend_bridging
 """
         ],
             title="Removing all CEDAR volumes",
