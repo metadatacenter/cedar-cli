@@ -52,3 +52,8 @@ class ReleaseRollbackShellTaskFactory:
         return ('echo "Delete local and remote tag"',
                 '      git tag -d "' + tag + '"',
                 '      git push -d origin "' + tag + '"')
+
+    @classmethod
+    def macro_delete_local_branch(cls, branch: str):
+        return ('echo "Delete local and remote branch"',
+                '      git branch -D "' + branch + '"')
