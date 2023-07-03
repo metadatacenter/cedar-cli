@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 
 import fcntl
 from rich.console import Console
@@ -20,11 +21,11 @@ class ShellTaskExecutor(TaskExecutor):
     def __init__(self):
         super().__init__()
 
-    def execute(self, task: PlanTask, job_progress: Progress) -> int:
+    def execute(self, task: PlanTask, job_progress: Progress, dry_run: bool) -> int:
         super().display_header(task, job_progress, 'yellow', "Shell task executor")
-        return self.execute_shell_command_list(task, job_progress)
+        return self.execute_shell_command_list(task, job_progress, dry_run)
 
-    def execute_shell_command_list(self, task: PlanTask, job_progress: Progress) -> int:
+    def execute_shell_command_list(self, task: PlanTask, job_progress: Progress, dry_run: bool) -> int:
         repo = task.repo
         # commands_to_execute = [cmd.format(repo.name) for cmd in task.command_list]
         commands_to_execute = task.command_list
@@ -37,10 +38,13 @@ class ShellTaskExecutor(TaskExecutor):
             title="Execute shell command list",
             title_align="left"),
             style=Style(color="green"))
-        for command in commands_to_execute:
-            stdout_parts, return_code = self.execute_shell_command(repo, command, cwd, job_progress)
-            if return_code != 0 and GlobalContext.fail_on_error():
-                return return_code
+        if not dry_run:
+            for command in commands_to_execute:
+                stdout_parts, return_code = self.execute_shell_command(repo, command, cwd, job_progress)
+                if return_code != 0 and GlobalContext.fail_on_error():
+                    return return_code
+        else:
+            time.sleep(0.1)
         return 0
 
     def execute_shell_command(self, repo, command, cwd, job_progress: Progress):

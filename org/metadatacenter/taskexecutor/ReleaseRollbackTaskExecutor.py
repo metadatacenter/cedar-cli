@@ -12,5 +12,5 @@ class ReleaseRollbackTaskExecutor(TaskExecutor):
     def __init__(self):
         super().__init__()
 
-    def execute(self, task: PlanTask, job_progress: Progress):
+    def execute(self, task: PlanTask, job_progress: Progress, dry_run: bool):
         super().display_header(task, job_progress, 'cyan', "Release rollback task executor")

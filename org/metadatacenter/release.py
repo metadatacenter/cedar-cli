@@ -24,25 +24,27 @@ plan_executor = PlanExecutor()
 
 
 @app.command("prepare")
-def prepare(dry_run: bool = typer.Option(False, help="Dry run")):
+def prepare(dry_run: bool = typer.Option(False, help="Dry run"),
+            dump_plan: bool = typer.Option(False, help="Dump plan")):
     Util.check_release_variables()
     GlobalContext.mark_global_task_type(TaskType.RELEASE_PREPARE)
     plan = Plan("Prepare release all")
     ReleasePreparePlanner.prepare(plan)
-    plan_executor.execute(plan, dry_run)
+    plan_executor.execute(plan, dry_run, dump_plan)
 
 
 @app.command("rollback", no_args_is_help=True)
 def rollback(branch: Annotated[str, typer.Option(help="Branch to delete")],
              tag: Annotated[str, typer.Option(help="Tag to delete")],
-             dry_run: bool = typer.Option(False, help="Dry run")):
+             dry_run: bool = typer.Option(False, help="Dry run"),
+             dump_plan: bool = typer.Option(False, help="Dump plan")):
     Util.mark_rollback_branch(branch)
     Util.mark_rollback_tag(tag)
     GlobalContext.mark_global_task_type(TaskType.RELEASE_ROLLBACK)
     GlobalContext.mark_do_not_fail()
     plan = Plan("Prepare rollback release all")
     ReleaseRollbackPlanner.rollback(plan)
-    plan_executor.execute(plan, dry_run)
+    plan_executor.execute(plan, dry_run, dump_plan)
 
 
 @app.command("commit")
@@ -51,7 +53,8 @@ def commit(pre_branch: str = typer.Option(None, help="Branch to merge into main"
            tag: str = typer.Option(None, help="Tag to use"),
            release_version: str = typer.Option(None, help="Release version"),
            next_dev_version: str = typer.Option(None, help="Next dev version"),
-           dry_run: bool = typer.Option(False, help="Dry run")):
+           dry_run: bool = typer.Option(False, help="Dry run"),
+           dump_plan: bool = typer.Option(False, help="Dump plan")):
     pre_branch_old, post_branch_old, tag_old, release_version_old, next_dev_version_old = Util.check_release_commit_variables()
     if pre_branch is None or post_branch is None or tag is None or release_version is None or next_dev_version is None:
         command = 'cedarcli release commit'
@@ -74,13 +77,14 @@ def commit(pre_branch: str = typer.Option(None, help="Branch to merge into main"
             'next_dev_version': next_dev_version
         }
         ReleaseCommitPlanner.commit(plan, params)
-        plan_executor.execute(plan, dry_run)
+        plan_executor.execute(plan, dry_run, dump_plan)
 
 
 @app.command("cleanup")
 def cleanup(pre_branch: str = typer.Option(None, help="Pre-branch to delete"),
             post_branch: str = typer.Option(None, help="Post-branch to delete"),
-            dry_run: bool = typer.Option(False, help="Dry run")):
+            dry_run: bool = typer.Option(False, help="Dry run"),
+            dump_plan: bool = typer.Option(False, help="Dump plan")):
     pre_branch_old, post_branch_old, _, _, _ = Util.check_release_commit_variables()
     GlobalContext.mark_do_not_fail()
     if pre_branch is None or post_branch is None:
@@ -100,11 +104,12 @@ def cleanup(pre_branch: str = typer.Option(None, help="Pre-branch to delete"),
             'post_branch': post_branch,
         }
         ReleaseCleanupPlanner.cleanup(plan, params)
-        plan_executor.execute(plan, dry_run)
+        plan_executor.execute(plan, dry_run, dump_plan)
 
 
 @app.command("all-in-one")
-def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
+def all_in_one(dry_run: bool = typer.Option(False, help="Dry run"),
+               dump_plan: bool = typer.Option(False, help="Dump plan")):
     plan_wrapper = Plan("Prepare all-in-one all")
 
     Util.check_release_variables()
@@ -154,16 +159,24 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
     ReleaseBranchCheckoutPlanner.checkout(plan_checkout_main, params_checkout_main)
 
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
-    plan_deploy = Plan("Deploy all")
-    DeployPlanner.parent(plan_deploy)
-    DeployPlanner.libraries(plan_deploy)
-    DeployPlanner.project(plan_deploy)
-    DeployPlanner.clients(plan_deploy)
-    DeployPlanner.frontends(plan_deploy)
+    plan_deploy_develop = Plan("Deploy all develop")
+    DeployPlanner.parent(plan_deploy_develop)
+    DeployPlanner.libraries(plan_deploy_develop)
+    DeployPlanner.project(plan_deploy_develop)
+    DeployPlanner.clients(plan_deploy_develop)
+    DeployPlanner.frontends(plan_deploy_develop)
+
+    GlobalContext.mark_global_task_type(TaskType.DEPLOY)
+    plan_deploy_main = Plan("Deploy all main")
+    DeployPlanner.parent(plan_deploy_main)
+    DeployPlanner.libraries(plan_deploy_main)
+    DeployPlanner.project(plan_deploy_main)
+    DeployPlanner.clients(plan_deploy_main)
+    DeployPlanner.frontends(plan_deploy_main)
 
     for task in plan_checkout_develop.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
-    for task in plan_deploy.tasks:
+    for task in plan_deploy_develop.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
     for task in plan_prepare.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
@@ -173,7 +186,7 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run")):
         plan_wrapper.add_task_as_task_no_expand(task)
     for task in plan_checkout_main.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
-    for task in plan_deploy.tasks:
+    for task in plan_deploy_main.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
 
-    plan_executor.execute(plan_wrapper, dry_run)
+    plan_executor.execute(plan_wrapper, dry_run, dump_plan)

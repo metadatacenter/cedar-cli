@@ -11,6 +11,7 @@ class Plan:
     def __init__(self, name: str):
         self.name = name
         self.tasks = []
+        self.node_id = None
 
     def add_task(self, name: str, task_type: TaskType, repo_list: list[Repo], parameters=None):
         if parameters is None:
@@ -50,3 +51,6 @@ class Plan:
         for task in plan.tasks:
             max_depth = max(max_depth, self.get_max_depth_recursively(task, depth))
         return max_depth + 1
+
+    def set_node_id(self, node_id: int):
+        self.node_id = node_id
