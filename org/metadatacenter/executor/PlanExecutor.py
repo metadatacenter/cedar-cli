@@ -26,7 +26,8 @@ class PlanExecutor(Executor):
     def __init__(self):
         super().__init__()
 
-    def execute(self, plan: Plan, dry_run: bool):
+    def execute(self, plan: Plan, dry_run: bool, dump_plan: bool):
+        self.number_plan_nodes(plan)
         start = timer()
         plan_json = json.dumps(plan, cls=CustomJSONEncoder, indent=4)
         plan_script = self.get_plan_script(plan)
@@ -37,13 +38,13 @@ class PlanExecutor(Executor):
         json_path = Util.write_cedar_file(Util.LAST_PLAN_JSON_FILE, plan_json)
         script_path = Util.write_cedar_file(Util.LAST_PLAN_SCRIPT_FILE, plan_script)
 
-        if dry_run:
-            console.print("Dry run only, plan files saved:")
+        if dump_plan:
+            console.print("Dump plan only, plan files saved:")
             console.print("JSON plan:" + json_path)
             console.print("Script plan:" + script_path)
         else:
             console.print("EXECUTE PLAN")
-            self.start_long_execution(plan)
+            self.start_long_execution(plan, dry_run)
 
         end = timer()
         console.print("Executed plan : " + plan.name)
@@ -55,16 +56,27 @@ class PlanExecutor(Executor):
         return "\n".join(lines)
 
     def recurse_plan_script(self, plan: PlanTask or Plan, lines: [str]):
-        for task in plan.tasks:
-            self.recurse_plan_script(task, lines)
         if isinstance(plan, PlanTask):
             if plan.command_list is not None:
-                lines.append('echo "---- ' + plan.repo.get_fqn() + ' ----"')
+                lines.append('echo "---- repo:' + plan.repo.get_fqn() + ', plan node id:#' + str(plan.node_id) + ' ----"')
+                lines.append('echo "---- name:' + plan.name + ' ----"')
                 lines.append("      pushd " + Util.get_wd(plan.repo))
                 lines.extend(plan.command_list)
-                lines.append("popd\n")
+                lines.append("      popd\n")
+        for task in plan.tasks:
+            self.recurse_plan_script(task, lines)
 
-    def start_long_execution(self, plan: Plan):
+    def number_plan_nodes(self, plan: Plan):
+        self.recurse_plan_nodes_for_numbering(plan, 0)
+
+    def recurse_plan_nodes_for_numbering(self, plan: PlanTask or Plan, node_id: int) -> int:
+        plan.set_node_id(node_id)
+        for task in plan.tasks:
+            node_id += 1
+            node_id = self.recurse_plan_nodes_for_numbering(task, node_id)
+        return node_id
+
+    def start_long_execution(self, plan: Plan, dry_run: bool):
         max_depth = plan.get_max_depth()
 
         job_progress = Progress(
@@ -98,7 +110,8 @@ class PlanExecutor(Executor):
         )
 
         with Live(progress_table, refresh_per_second=10) as live:
-            self.execute_recursively(plan, max_depth, 0, [], live, overall_progress, overall_task, job_progress, repo_progress, repo_task)
+            self.execute_recursively(plan, max_depth, 0, [], live, overall_progress,
+                                     overall_task, job_progress, repo_progress, repo_task, dry_run)
 
         for a in range(0, 5):
             console.print()
@@ -109,8 +122,7 @@ class PlanExecutor(Executor):
             style=Style(color="bright_green"))
 
     def execute_recursively(self, plan: Plan, max_depth: int, current_depth: int, task_stack: List[Plan], live, overall_progress,
-                            overall_task,
-                            job_progress, repo_progress, repo_task):
+                            overall_task, job_progress, repo_progress, repo_task, dry_run: bool):
         task_stack.append(plan)
 
         repo_progress.tasks[repo_task].description = plan.repo.name if isinstance(plan, PlanTask) else ""
@@ -126,7 +138,7 @@ class PlanExecutor(Executor):
 
         if isinstance(plan, PlanTask):
             task_executor = GlobalContext.get_task_executor(plan.task_type)
-            return_code = task_executor.execute(plan, job_progress)
+            return_code = task_executor.execute(plan, job_progress, dry_run)
             if return_code is not None and return_code != 0:
                 if GlobalContext.fail_on_error():
                     live.stop()
@@ -148,5 +160,5 @@ class PlanExecutor(Executor):
                         style=Style(color="orange_red1"))
 
         for task in plan.tasks:
-            self.execute_recursively(task, max_depth, current_depth + 1, task_stack, live, overall_progress, overall_task, job_progress,
-                                     repo_progress, repo_task)
+            self.execute_recursively(task, max_depth, current_depth + 1, task_stack, live, overall_progress,
+                                     overall_task, job_progress, repo_progress, repo_task, dry_run)
