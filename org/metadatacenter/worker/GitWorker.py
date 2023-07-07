@@ -84,6 +84,7 @@ class GitWorker(Worker):
                 out = ""
                 err = ""
                 exception = ""
+                return_code = -1
                 try:
                     cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
                     # print(commands_to_execute)
