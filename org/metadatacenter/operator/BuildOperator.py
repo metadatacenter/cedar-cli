@@ -9,6 +9,7 @@ from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.operator.Operator import Operator
 from org.metadatacenter.taskfactory.BuildShellTaskFactory import BuildShellTaskFactory
+from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
@@ -24,6 +25,7 @@ class BuildOperator(Operator):
     def expand(task: PlanTask):
         repo_list = [task.repo]
         repo_list_flat = Util.get_flat_repo_list(repo_list)
+        build_frontends = Const.CEDAR_DEV_BUILD_FRONTENDS in os.environ and os.environ[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'
         for repo in repo_list_flat:
             if repo.repo_type == RepoType.JAVA_WRAPPER:
                 shell_wrapper = PlanTask("Build java wrapper project", TaskType.SHELL_WRAPPER, repo)
@@ -34,16 +36,24 @@ class BuildOperator(Operator):
                 shell_wrapper.add_task_as_task(BuildShellTaskFactory.maven_clean_install_skip_tests(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR:
-                shell_wrapper = PlanTask("Build angular project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
+                if build_frontends:
+                    shell_wrapper = PlanTask("Build angular project", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
+                else:
+                    shell_wrapper = PlanTask("Build angular project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.noop(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_DIST:
                 shell_wrapper = PlanTask("Build angular dist project", TaskType.SHELL_WRAPPER, repo)
                 shell_wrapper.add_task_as_task(BuildShellTaskFactory.noop(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_JS:
-                shell_wrapper = PlanTask("Build angularJS project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
+                if build_frontends:
+                    shell_wrapper = PlanTask("Build angularJS project", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
+                else:
+                    shell_wrapper = PlanTask("Build angularJS project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.noop(repo))
                 task.add_task_as_task(shell_wrapper)
             else:
                 not_handled = PlanTask("Skip repo", TaskType.NOOP, repo)
@@ -51,7 +61,7 @@ class BuildOperator(Operator):
                 task.add_task_as_task(not_handled)
 
             source_of_relation = GlobalContext.repos.get_relation(repo, RepoRelationType.IS_SOURCE_OF)
-            if source_of_relation is not None:
+            if source_of_relation is not None and build_frontends:
                 BuildOperator.handle_is_source_of(source_of_relation, task)
 
     @staticmethod
