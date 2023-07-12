@@ -2,6 +2,7 @@ import os
 
 from rich.console import Console
 
+from CedarCliSettings import CedarCliSettings
 from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.config.ServersFactory import ServersFactory
 from org.metadatacenter.config.SubdomainsFactory import SubdomainsFactory
@@ -21,8 +22,6 @@ class GlobalContext(object):
     task_type = None
     task_operators = {}
     task_executors = {}
-    do_fail_on_error = True
-    shell_path = '/bin/bash'
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
@@ -106,12 +105,16 @@ class GlobalContext(object):
 
     @classmethod
     def fail_on_error(cls):
-        return cls.do_fail_on_error
+        return CedarCliSettings.do_fail_on_error
 
     @classmethod
     def mark_do_not_fail(cls):
-        cls.do_fail_on_error = False
+        CedarCliSettings.do_fail_on_error = False
 
     @classmethod
     def get_shell(cls):
-        return cls.shell_path
+        return CedarCliSettings.shell_path
+
+    @classmethod
+    def get_sed_replace_in_place(cls):
+        return CedarCliSettings.sed_replace_in_place
