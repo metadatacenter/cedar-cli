@@ -20,7 +20,6 @@ class ProdWorker(Worker):
         domain = os.environ[Const.CEDAR_HOST]
         Worker.execute_generic_shell_commands([
             'echo "Updating frontend components to use proper domain"' + "\n" +
-            sed + " 's/metadatacenter.org\\//" + domain + "\\//g' ${CEDAR_HOME}/cedar-template-editor/app/keycloak.json" + "\n" +
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-openview/cedar-openview-dist/index.html" + "\n" +
             sed + " 's/component.metadatacenter.org\\//component." + domain + "\\//g' ${CEDAR_HOME}/cedar-openview/cedar-openview-dist/index.html" + "\n" +
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-bridging/cedar-bridging-dist/index.html" + "\n" +
@@ -38,9 +37,7 @@ class ProdWorker(Worker):
         sed = GlobalContext.get_sed_replace_in_place()
         domain = os.environ[Const.CEDAR_HOST]
         Worker.execute_generic_shell_commands([
-            'echo "Reseting frontend components to use original domain"' + "\n" +
-            "cd  ${CEDAR_HOME}/cedar-template-editor/" + "\n" +
-            "git checkout ${CEDAR_HOME}/cedar-template-editor/app/keycloak.json" + "\n" +
+            'echo "Resetting frontend components to use original domain"' + "\n" +
             "cd  ${CEDAR_HOME}/cedar-openview/" + "\n" +
             "git checkout ${CEDAR_HOME}/cedar-openview/cedar-openview-dist/index.html" + "\n" +
             "cd  ${CEDAR_HOME}/cedar-bridging/" + "\n" +
@@ -50,5 +47,5 @@ class ProdWorker(Worker):
             "cd  ${CEDAR_HOME}/cedar-artifacts/" + "\n" +
             "git checkout ${CEDAR_HOME}/cedar-artifacts/cedar-artifacts-dist/index.html" + "\n"
         ],
-            title="Reseting frontend components",
+            title="Resetting frontend components",
         )
