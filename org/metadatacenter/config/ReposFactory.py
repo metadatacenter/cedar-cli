@@ -1,5 +1,3 @@
-import os
-
 from org.metadatacenter.model.ArtifactType import ArtifactType
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoRelation import RepoRelation
@@ -7,7 +5,6 @@ from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.Repos import Repos
 from org.metadatacenter.model.VersionType import VersionType as V
-from org.metadatacenter.util.Const import Const
 
 
 class ReposFactory:
@@ -18,7 +15,6 @@ class ReposFactory:
 
     @staticmethod
     def build_repos():
-        use_private_repos = Const.CEDAR_DEV_USE_PRIVATE_REPOS in os.environ and os.environ[Const.CEDAR_DEV_USE_PRIVATE_REPOS] == 'true'
         repos = Repos()
         repos.add_repo(Repo("cedar-parent", RepoType.JAVA_WRAPPER, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PROPERTIES]))
         repos.add_repo(Repo("cedar-libraries", RepoType.JAVA_WRAPPER, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
@@ -177,8 +173,7 @@ class ReposFactory:
         repos.add_relation(metadata_form_dist_relation)
 
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, ArtifactType.NONE, []))
-        if use_private_repos:
-            repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, ArtifactType.NONE, [], is_private=True))
+        repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, ArtifactType.NONE, [], is_private=True))
 
         repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY, ArtifactType.NONE, []))
         repos.add_repo(Repo("cedar-swagger-ui", RepoType.CONTENT_DELIVERY, ArtifactType.NONE, []))

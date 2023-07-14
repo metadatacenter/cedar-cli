@@ -13,4 +13,4 @@ class NoopTaskExecutor(TaskExecutor):
         super().__init__()
 
     def execute(self, task: PlanTask, job_progress: Progress, dry_run: bool):
-        super().display_header(task, job_progress, 'bright_black', "Noop task executor")
+        super().display_header(task, job_progress, 'bright_black', "Noop task executor #" + str(task.node_id))

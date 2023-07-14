@@ -1,3 +1,4 @@
+import os
 from typing import List
 
 from rich.console import Console
@@ -6,6 +7,7 @@ from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoRelation import RepoRelation
 from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
+from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.Util import Util
 
 console = Console()
@@ -15,8 +17,11 @@ class Repos:
     def __init__(self):
         self.map = {}
         self.relations: List[RepoRelation] = []
+        self.use_private_repos = Const.CEDAR_DEV_USE_PRIVATE_REPOS in os.environ and os.environ[Const.CEDAR_DEV_USE_PRIVATE_REPOS] == 'true'
 
     def add_repo(self, repo):
+        if repo.is_private and not self.use_private_repos:
+            return
         name = repo.name
         if name in self.map:
             console.log("Repo already present in registry:" + name)

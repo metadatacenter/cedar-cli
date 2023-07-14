@@ -1,8 +1,9 @@
 import typer
 
-from org.metadatacenter import git, server, build, deploy, clean, repo, env, release, start, check, docker, dev, cert
+from org.metadatacenter import git, server, build, deploy, clean, repo, env, release, start, check, docker, dev, cert, prod
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.CheatWorker import CheatWorker
+from org.metadatacenter.worker.ServerWorker import ServerWorker
 
 GlobalContext()
 
@@ -19,12 +20,18 @@ app.add_typer(start.app, name="start")
 app.add_typer(check.app, name="check")
 app.add_typer(docker.app, name="docker")
 app.add_typer(dev.app, name="dev")
+app.add_typer(prod.app, name="prod")
 app.add_typer(cert.app, name="cert")
 
 
 @app.command("cheat")
 def cheat():
     CheatWorker.cheat()
+
+
+@app.command("status")
+def status():
+    ServerWorker.status()
 
 
 # @app.command("test")
