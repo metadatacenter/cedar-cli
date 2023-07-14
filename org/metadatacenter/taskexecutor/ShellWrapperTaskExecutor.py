@@ -13,4 +13,4 @@ class ShellWrapperTaskExecutor(TaskExecutor):
         super().__init__()
 
     def execute(self, task: PlanTask, job_progress: Progress, dry_run: bool):
-        super().display_header(task, job_progress, 'magenta', "Shell wrapper task executor")
+        super().display_header(task, job_progress, 'magenta', "Shell wrapper task executor #" + str(task.node_id))

@@ -22,7 +22,7 @@ class ShellTaskExecutor(TaskExecutor):
         super().__init__()
 
     def execute(self, task: PlanTask, job_progress: Progress, dry_run: bool) -> int:
-        super().display_header(task, job_progress, 'yellow', "Shell task executor")
+        super().display_header(task, job_progress, 'yellow', "Shell task executor #" + str(task.node_id))
         return self.execute_shell_command_list(task, job_progress, dry_run)
 
     def execute_shell_command_list(self, task: PlanTask, job_progress: Progress, dry_run: bool) -> int:
@@ -35,7 +35,7 @@ class ShellTaskExecutor(TaskExecutor):
             " 📂️ Location  : " + cwd + "\n" +
             " 🏷️️  Repo type : " + repo.repo_type + "\n" +
             " 🖥️  Commands  :\n" + "\n".join(commands_to_execute),
-            title="Execute shell command list",
+            title="Execute shell command list #" + str(task.node_id),
             title_align="left"),
             style=Style(color="green"))
         if not dry_run:
@@ -71,8 +71,8 @@ class ShellTaskExecutor(TaskExecutor):
 
         return_code = proc.returncode
         msg = "[green]Processing " + repo.name + ' done. Return code: ' + str(return_code) + '. '
-        if len(stdout_parts) != repo.expected_build_lines:
-            msg += "[yellow]" + str(len(stdout_parts)) + ' lines vs expected ' + str(repo.expected_build_lines)
+        # if len(stdout_parts) != repo.expected_build_lines:
+        #     msg += "[yellow]" + str(len(stdout_parts)) + ' lines vs expected ' + str(repo.expected_build_lines)
         job_progress.print(Panel(msg, style=Style(color="green"), subtitle="Shell subprocess"))
         return stdout_parts, return_code
 

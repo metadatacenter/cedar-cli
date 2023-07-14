@@ -15,7 +15,7 @@ class ReleasePrepareTaskExecutor(TaskExecutor):
         super().__init__()
 
     def execute(self, task: PlanTask, job_progress: Progress, dry_run: bool):
-        super().display_header(task, job_progress, 'cyan', "Release prepare task executor")
+        super().display_header(task, job_progress, 'cyan', "Release prepare task executor #" + str(task.node_id))
 
         release_version, pre_branch, tag_name = Util.get_release_vars(PreReleaseBranchType.RELEASE)
         next_dev_version, post_branch, _ = Util.get_release_vars(PreReleaseBranchType.NEXT_DEV)
