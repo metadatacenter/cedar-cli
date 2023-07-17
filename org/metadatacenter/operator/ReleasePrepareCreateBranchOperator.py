@@ -7,6 +7,7 @@ from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.operator.Operator import Operator
 from org.metadatacenter.taskfactory.BuildShellTaskFactory import BuildShellTaskFactory
 from org.metadatacenter.taskfactory.ReleasePrepareCreateBranchShellTaskFactory import ReleasePrepareCreateBranchShellTaskFactory
+from org.metadatacenter.util.Const import Const
 
 console = Console()
 
@@ -18,7 +19,7 @@ class ReleasePrepareCreateBranchOperator(Operator):
 
     @staticmethod
     def expand(task: PlanTask):
-        ReleasePrepareCreateBranchOperator.expand_for_release(task, task.parameters['branch_type'])
+        ReleasePrepareCreateBranchOperator.expand_for_release(task, task.get_parameter(Const.PARAM_BRANCH_TYPE))
 
     @classmethod
     def expand_for_release(cls, task, branch_type: PreReleaseBranchType):

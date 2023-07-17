@@ -40,7 +40,8 @@ class BuildOperator(Operator):
                     shell_wrapper = PlanTask("Build angular project", TaskType.SHELL_WRAPPER, repo)
                     shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
                 else:
-                    shell_wrapper = PlanTask("Build angular project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper = PlanTask("Build angular project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER,
+                                             repo)
                     shell_wrapper.add_task_as_task(BuildShellTaskFactory.noop(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_DIST:
@@ -52,7 +53,8 @@ class BuildOperator(Operator):
                     shell_wrapper = PlanTask("Build angularJS project", TaskType.SHELL_WRAPPER, repo)
                     shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
                 else:
-                    shell_wrapper = PlanTask("Build angularJS project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER, repo)
+                    shell_wrapper = PlanTask("Build angularJS project - skipped because of CEDAR_DEV_BUILD_FRONTENDS",
+                                             TaskType.SHELL_WRAPPER, repo)
                     shell_wrapper.add_task_as_task(BuildShellTaskFactory.noop(repo))
                 task.add_task_as_task(shell_wrapper)
             else:

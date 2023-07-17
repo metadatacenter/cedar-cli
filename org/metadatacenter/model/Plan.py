@@ -13,7 +13,7 @@ class Plan:
         self.tasks = []
         self.node_id = None
 
-    def add_task(self, name: str, task_type: TaskType, repo_list: list[Repo], parameters=None):
+    def add_task(self, name: str, task_type: TaskType, repo_list: list[Repo], parameters: dict = None):
         if parameters is None:
             parameters = dict()
         from org.metadatacenter.model.PlanTask import PlanTask

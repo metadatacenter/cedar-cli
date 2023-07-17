@@ -226,10 +226,15 @@ class Util(object):
 
     @classmethod
     def get_build_version(cls, task: PlanTask):
+        if 'version' in task.parameters:
+            return task.get_parameter('version')
         if task.task_type == TaskType.BUILD or task.task_type == TaskType.DEPLOY:
             return os.environ[Const.CEDAR_VERSION]
         elif task.task_type == TaskType.RELEASE_PREPARE:
-            return Util.cedar_release_version
+            if Const.PARAM_BRANCH_TYPE in task.parameters and task.get_parameter(Const.PARAM_BRANCH_TYPE) == PreReleaseBranchType.NEXT_DEV:
+                return Util.cedar_next_development_version
+            else:
+                return Util.cedar_release_version
         else:
             err = 'Build version not found for TaskType:' + str(task.task_type)
             console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))

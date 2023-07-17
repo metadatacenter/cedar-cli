@@ -40,20 +40,20 @@ class ShellTaskExecutor(TaskExecutor):
             style=Style(color="green"))
         if not dry_run:
             for command in commands_to_execute:
-                stdout_parts, return_code = self.execute_shell_command(repo, command, cwd, job_progress)
+                stdout_parts, return_code = self.execute_shell_command(task, repo, command, cwd, job_progress)
                 if return_code != 0 and GlobalContext.fail_on_error():
                     return return_code
         else:
             time.sleep(0.1)
         return 0
 
-    def execute_shell_command(self, repo, command, cwd, job_progress: Progress):
+    def execute_shell_command(self, task: PlanTask, repo, command, cwd, job_progress: Progress):
         job_progress.print(Panel(
             "[bright_cyan]" +
             " 📂️ Location  : " + cwd + "\n" +
             " 🏷️️  Repo type : " + repo.repo_type + "\n" +
             " 🖥️  Command   : " + command,
-            title="Shell subprocess",
+            title="Shell subprocess #" + str(task.node_id),
             title_align="left"),
             style=Style(color="bright_cyan"))
         proc = subprocess.Popen([command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,

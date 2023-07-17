@@ -13,6 +13,7 @@ from org.metadatacenter.planner.ReleaseCleanupPlanner import ReleaseCleanupPlann
 from org.metadatacenter.planner.ReleaseCommitPlanner import ReleaseCommitPlanner
 from org.metadatacenter.planner.ReleasePreparePlanner import ReleasePreparePlanner
 from org.metadatacenter.planner.ReleaseRollbackPlanner import ReleaseRollbackPlanner
+from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
@@ -168,11 +169,14 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run"),
 
     GlobalContext.mark_global_task_type(TaskType.DEPLOY)
     plan_deploy_main = Plan("Deploy all main")
-    DeployPlanner.parent(plan_deploy_main)
-    DeployPlanner.libraries(plan_deploy_main)
-    DeployPlanner.project(plan_deploy_main)
-    DeployPlanner.clients(plan_deploy_main)
-    DeployPlanner.frontends(plan_deploy_main)
+    params_deploy_main = {
+        'version': release_version
+    }
+    DeployPlanner.parent(plan_deploy_main, params_deploy_main)
+    DeployPlanner.libraries(plan_deploy_main, params_deploy_main)
+    DeployPlanner.project(plan_deploy_main, params_deploy_main)
+    DeployPlanner.clients(plan_deploy_main, params_deploy_main)
+    DeployPlanner.frontends(plan_deploy_main, params_deploy_main)
 
     for task in plan_checkout_develop.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)

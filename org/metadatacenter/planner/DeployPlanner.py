@@ -11,43 +11,48 @@ class DeployPlanner(Planner):
         super().__init__()
 
     @staticmethod
-    def parent(plan: Plan):
+    def parent(plan: Plan, parameters: dict = None):
         plan.add_task(
             "Deploy parent",
             TaskType.DEPLOY,
-            GlobalContext.repos.get_parent()
+            GlobalContext.repos.get_parent(),
+            parameters
         )
 
     @staticmethod
-    def libraries(plan: Plan):
+    def libraries(plan: Plan, parameters: dict = None):
         plan.add_task(
             "Deploy libraries",
             TaskType.DEPLOY,
-            GlobalContext.repos.get_libraries()
+            GlobalContext.repos.get_libraries(),
+            parameters
         )
 
     @staticmethod
-    def project(plan: Plan):
+    def project(plan: Plan, parameters: dict = None):
         plan.add_task(
             "Deploy project",
             TaskType.DEPLOY,
-            GlobalContext.repos.get_project()
+            GlobalContext.repos.get_project(),
+            parameters
         )
 
     @staticmethod
-    def clients(plan: Plan):
+    def clients(plan: Plan, parameters: dict = None):
         plan.add_task(
             "Deploy clients",
             TaskType.DEPLOY,
-            GlobalContext.repos.get_clients()
+            GlobalContext.repos.get_clients(),
+            parameters
         )
 
     @staticmethod
-    def frontends(plan: Plan):
+    def frontends(plan: Plan, parameters: dict = None):
         plan.add_task(
             "Deploy frontends",
             TaskType.DEPLOY,
-            GlobalContext.repos.get_frontends()
+            GlobalContext.repos.get_frontends(),
+            parameters
         )
 
     @staticmethod
