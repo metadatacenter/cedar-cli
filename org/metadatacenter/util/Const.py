@@ -18,3 +18,6 @@ class Const:
     FILE_DOCKER = "Dockerfile"
     FILE_BIN_IMAGE_BASE = "bin/cedar-images-base.sh"
     FILE_BIN_UTIL_SET_ENV_GENERIC = "bin/util/set-env-generic.sh"
+
+    PARAM_BRANCH_TYPE = 'branch_type'
+    PARAM_RELEASE_PREPARE_PHASE = 'release_prepare_phase'

@@ -42,20 +42,24 @@ class ReleasePrepareOperator(Operator):
             elif repo.repo_type == RepoType.ANGULAR:
                 if repo.pre_post_type == PrePostType.SUB:
                     shell_wrapper = PlanTask("Prepare release of angular sub-project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_src_sub(repo, branch_type, release_prepare_phase))
+                    shell_wrapper.add_task_as_task(
+                        ReleasePrepareShellTaskFactory.prepare_angular_src_sub(repo, branch_type, release_prepare_phase))
                     task.add_task_as_task(shell_wrapper)
                 elif repo.pre_post_type == PrePostType.NONE:
                     shell_wrapper = PlanTask("Prepare release of angular standalone project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_src(repo, branch_type, release_prepare_phase))
+                    shell_wrapper.add_task_as_task(
+                        ReleasePrepareShellTaskFactory.prepare_angular_src(repo, branch_type, release_prepare_phase))
                     task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_DIST:
                 if repo.pre_post_type == PrePostType.SUB:
                     shell_wrapper = PlanTask("Prepare release of angular dist sub-project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_dist_sub(repo, branch_type, release_prepare_phase))
+                    shell_wrapper.add_task_as_task(
+                        ReleasePrepareShellTaskFactory.prepare_angular_dist_sub(repo, branch_type, release_prepare_phase))
                     task.add_task_as_task(shell_wrapper)
                 elif repo.pre_post_type == PrePostType.NONE:
                     shell_wrapper = PlanTask("Prepare release of angular dist standalone project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_dist(repo, branch_type, release_prepare_phase))
+                    shell_wrapper.add_task_as_task(
+                        ReleasePrepareShellTaskFactory.prepare_angular_dist(repo, branch_type, release_prepare_phase))
                     task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_JS:
                 shell_wrapper = PlanTask("Prepare release of angularJS project", TaskType.SHELL_WRAPPER, repo)
@@ -64,11 +68,13 @@ class ReleasePrepareOperator(Operator):
             elif repo.repo_type == RepoType.MULTI:
                 if repo.pre_post_type == PrePostType.PRE:
                     shell_wrapper = PlanTask("Prepare release multi project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_multi_pre(repo, branch_type, release_prepare_phase))
+                    shell_wrapper.add_task_as_task(
+                        ReleasePrepareShellTaskFactory.prepare_multi_pre(repo, branch_type, release_prepare_phase))
                     task.add_task_as_task(shell_wrapper)
                 elif repo.pre_post_type == PrePostType.POST:
                     shell_wrapper = PlanTask("Wrap up release multi project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_multi_post(repo, branch_type, release_prepare_phase))
+                    shell_wrapper.add_task_as_task(
+                        ReleasePrepareShellTaskFactory.prepare_multi_post(repo, branch_type, release_prepare_phase))
                     task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.MKDOCS:
                 shell_wrapper = PlanTask("Prepare release of mkdocs repo", TaskType.SHELL_WRAPPER, repo)
@@ -89,7 +95,8 @@ class ReleasePrepareOperator(Operator):
             elif repo.repo_type == RepoType.PHP:
                 if repo.pre_post_type == PrePostType.SUB:
                     shell_wrapper = PlanTask("Prepare release of PHP sub-project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_plain_sub(repo, branch_type, release_prepare_phase))
+                    shell_wrapper.add_task_as_task(
+                        ReleasePrepareShellTaskFactory.prepare_plain_sub(repo, branch_type, release_prepare_phase))
                     task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.DEVELOPMENT:
                 shell_wrapper = PlanTask("Prepare release of development repo", TaskType.SHELL_WRAPPER, repo)
@@ -97,11 +104,13 @@ class ReleasePrepareOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.DOCKER_DEPLOY:
                 shell_wrapper = PlanTask("Prepare release of Docker deploy repo", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_docker_deploy(repo, branch_type, release_prepare_phase))
+                shell_wrapper.add_task_as_task(
+                    ReleasePrepareShellTaskFactory.prepare_docker_deploy(repo, branch_type, release_prepare_phase))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.DOCKER_BUILD:
                 shell_wrapper = PlanTask("Prepare release of Docker build repo", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_docker_build(repo, branch_type, release_prepare_phase))
+                shell_wrapper.add_task_as_task(
+                    ReleasePrepareShellTaskFactory.prepare_docker_build(repo, branch_type, release_prepare_phase))
                 task.add_task_as_task(shell_wrapper)
             else:
                 not_handled = PlanTask("Skip repo", TaskType.NOOP, repo)

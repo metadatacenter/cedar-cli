@@ -14,3 +14,9 @@ class PlanTask(Plan):
         self.command_list = None
         self.variables = None
         self.parameters = parameters
+
+    def get_parameter(self, parameter_name):
+        if parameter_name in self.parameters:
+            return self.parameters[parameter_name]
+        else:
+            return None
