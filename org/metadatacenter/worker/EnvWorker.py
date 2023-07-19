@@ -1,4 +1,5 @@
 import os
+from typing import List
 
 from rich.console import Console
 from rich.style import Style
@@ -11,13 +12,19 @@ console = Console()
 
 core_list = [
     Const.CEDAR_HOME,
-    'CEDAR_HOST',
+    Const.CEDAR_HOST,
+    Const.CEDAR_VERSION,
+    Const.CEDAR_FRONTEND_TARGET,
+    Const.CEDAR_NET_GATEWAY,
+    Const.CEDAR_NET_SUBNET
+]
+
+release_list = [
+    Const.CEDAR_HOME,
+    Const.CEDAR_HOST,
     Const.CEDAR_VERSION,
     Const.CEDAR_RELEASE_VERSION,
     Const.CEDAR_NEXT_DEVELOPMENT_VERSION,
-    'CEDAR_FRONTEND_TARGET',
-    'CEDAR_NET_GATEWAY',
-    'CEDAR_NET_SUBNET'
 ]
 
 CEDAR_ENV_PREFIX = 'CEDAR_'
@@ -42,15 +49,24 @@ class EnvWorker(Worker):
     @staticmethod
     def core():
         table = Table("Name", "Value", title="CEDAR core environment variables")
+        EnvWorker.list_specific_vars(table, core_list)
+
+    @staticmethod
+    def release():
+        table = Table("Name", "Value", title="CEDAR release environment variables")
+        EnvWorker.list_specific_vars(table, release_list)
+
+    @staticmethod
+    def list_specific_vars(table: Table, var_names: List[str]):
         present_cnt = 0
         missing_cnt = 0
-        core_map = {}
+        var_map = {}
         for name, value in os.environ.items():
             if name.startswith(CEDAR_ENV_PREFIX):
-                core_map[name] = value
-        for name in core_list:
-            if name in core_map:
-                table.add_row("[yellow]" + name, "✅ [green]" + core_map[name])
+                var_map[name] = value
+        for name in var_names:
+            if name in var_map:
+                table.add_row("[yellow]" + name, "✅ [green]" + var_map[name])
                 present_cnt += 1
             else:
                 table.add_row("[yellow]" + name, '❌ [red]MISSING')

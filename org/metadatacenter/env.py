@@ -15,6 +15,11 @@ def core():
     EnvWorker.core()
 
 
+@app.command("release", help="Lists CEDAR environment variables key to release process")
+def core():
+    EnvWorker.release()
+
+
 @app.command("filter", help="Lists CEDAR environment variables that contain the passed filter term")
 def filter(filter_term: str = typer.Argument('', help="Environment variable name to search for")):
     EnvWorker.filter(filter_term)
