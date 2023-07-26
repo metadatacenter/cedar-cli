@@ -141,7 +141,7 @@ localityName					= $ENV::CEDAR_CA_LOC
 
 organizationalUnitName			= $ENV::CEDAR_CA_ORG_UNIT
 
-commonName						= <CEDAR.COMMON_NAME>$ENV::CEDAR_CA_COMMON_NAME
+commonName						= <CEDAR.COMMON_NAME>.$ENV::CEDAR_CA_COMMON_NAME
 
 emailAddress					= $ENV::CEDAR_CA_EMAIL
 
@@ -212,7 +212,7 @@ keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 subjectAltName = @alt_names
 
 [alt_names]
-DNS.1 = <CEDAR.COMMON_NAME>
+DNS.1 = <CEDAR.COMMON_NAME>.$ENV::CEDAR_CA_COMMON_NAME
 
 [ v3_ca ]
 

@@ -49,12 +49,16 @@ docker volume create cedar_cert
             """
 echo "Copying self-signed certificates into the cedar_cert volume..."
 docker run -v cedar_cert:/data --name cedar-cert-helper busybox:1.36.0 true
-docker cp ${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/cert/live cedar-cert-helper:/data
+export CEDAR_CUSTOM_CERT=false
+if [[ -e ${CEDAR_HOME}/CEDAR_CA/certs/-${CEDAR_HOST}/${CEDAR_HOST}.crt ]]; then export CEDAR_CUSTOM_CERT=true; fi
+if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp ${CEDAR_HOME}/CEDAR_CA/certs cedar-cert-helper:/data; fi
+if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp ${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/cert/certs cedar-cert-helper:/data; fi
 docker rm cedar-cert-helper
 
 echo "Copying CA certificate into the cedar_ca volume..."
 docker run -v cedar_ca:/data --name cedar-ca-helper busybox:1.36.0 true
-docker cp ${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/ca/ca.crt cedar-ca-helper:/data
+if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp ${CEDAR_HOME}/CEDAR_CA/ca.crt cedar-ca-helper:/data; fi
+if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp ${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/ca/ca.crt cedar-ca-helper:/data; fi
 docker rm cedar-ca-helper
 """
         ],
