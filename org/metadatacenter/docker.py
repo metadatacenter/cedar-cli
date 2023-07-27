@@ -1,10 +1,12 @@
 import typer
 
-from org.metadatacenter import docker_remove
+from org.metadatacenter import docker_remove, docker_start, docker_stop
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(docker_remove.app, name="remove")
+app.add_typer(docker_start.app, name="start")
+app.add_typer(docker_stop.app, name="stop")
 
 
 @app.command("create-network")

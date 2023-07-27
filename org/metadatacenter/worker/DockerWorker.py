@@ -1,5 +1,8 @@
+import os
+
 from rich.console import Console
 
+from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -156,4 +159,52 @@ docker volume rm log_frontend_bridging
 """
         ],
             title="Removing all CEDAR volumes",
+        )
+
+    @staticmethod
+    def start_infrastructure():
+        Worker.execute_generic_shell_commands(
+            ['docker-compose up'],
+            title="Starting CEDAR infrastructure services",
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-infrastructure')
+        )
+
+    @staticmethod
+    def start_microservices():
+        Worker.execute_generic_shell_commands(
+            ['docker-compose up'],
+            title="Starting CEDAR microservices",
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-microservices')
+        )
+
+    @staticmethod
+    def start_frontends():
+        Worker.execute_generic_shell_commands(
+            ['docker-compose up'],
+            title="Starting CEDAR frontends",
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-frontend')
+        )
+
+    @staticmethod
+    def stop_infrastructure():
+        Worker.execute_generic_shell_commands(
+            ['docker-compose down'],
+            title="Stopping CEDAR infrastructure services",
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-infrastructure')
+        )
+
+    @staticmethod
+    def stop_microservices():
+        Worker.execute_generic_shell_commands(
+            ['docker-compose down'],
+            title="Stopping CEDAR microservices",
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-microservices')
+        )
+
+    @staticmethod
+    def stop_frontends():
+        Worker.execute_generic_shell_commands(
+            ['docker-compose down'],
+            title="Stopping CEDAR frontends",
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-frontend')
         )
