@@ -139,3 +139,15 @@ echo
         ],
             title="Adding CEDAR hostnames to /etc/hosts",
         )
+
+    @staticmethod
+    def copy_keycloak_listener():
+        Worker.execute_generic_shell_commands([
+            """
+cp $CEDAR_HOME/cedar-keycloak-event-listener/target/cedar-keycloak-event-listener.jar ${CEDAR_KEYCLOAK_HOME}/providers/.
+cd ${CEDAR_KEYCLOAK_HOME}/bin
+./kc.sh build
+"""
+        ],
+            title="Adding CEDAR hostnames to /etc/hosts",
+        )

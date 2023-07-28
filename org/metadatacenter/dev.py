@@ -13,3 +13,8 @@ def create_directories():
 @app.command("add-hosts")
 def add_hosts():
     DevWorker.add_hosts()
+
+
+@app.command("copy-keycloak-listener")
+def add_hosts():
+    DevWorker.copy_keycloak_listener()
