@@ -15,3 +15,8 @@ def all_all():
     StartInfrastructureWorker.all()
     StartMicroserviceWorker.all()
     StartFrontendWorker.all()
+
+
+@app.command("infra")
+def all_all():
+    StartInfrastructureWorker.all()
