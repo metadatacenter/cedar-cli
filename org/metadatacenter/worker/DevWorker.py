@@ -34,8 +34,6 @@ mkdir -p ${CEDAR_HOME}/log/frontend-monitoring/
 mkdir -p ${CEDAR_HOME}/log/frontend-openview/
 mkdir -p ${CEDAR_HOME}/log/frontend-shared/
 
-mkdir -p ${CEDAR_HOME}/log/proxy-cee-demo-api-php/
-
 mkdir -p ${CEDAR_HOME}/log/server-artifact/
 mkdir -p ${CEDAR_HOME}/log/server-auth
 mkdir -p ${CEDAR_HOME}/log/server-bridge/
@@ -94,7 +92,6 @@ CEDAR_HOSTS=(
     "demo-dist.cee"
     "docs.cee"
     "docs-dist.cee"
-    "api-php.cee"
 )
 
 counter=0

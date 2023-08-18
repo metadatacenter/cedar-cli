@@ -130,7 +130,6 @@ class ReposFactory:
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
                                      [V.PACKAGE_OWN], is_frontend=True)
-        cee_demo_api_php = Repo("cedar-cee-demo-api-php", RepoType.PHP, ArtifactType.NONE, [], is_frontend=True)
 
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_dist)
@@ -142,7 +141,6 @@ class ReposFactory:
         cee_docs_angular_src_dist_relation = RepoRelation(cee_docs_angular_src, RepoRelationType.IS_SOURCE_OF, cee_docs_angular_dist)
         repos.add_relation(cee_docs_angular_src_dist_relation)
 
-        cee_demo_angular_multi.add_sub_repo(cee_demo_api_php)
         repos.add_repo(cee_demo_angular_multi)
 
         embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,

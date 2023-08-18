@@ -1,6 +1,6 @@
 import typer
 
-from org.metadatacenter import git, server, build, deploy, clean, repo, env, release, start, check, docker, dev, cert, prod
+from org.metadatacenter import git, server, build, deploy, clean, repo, env, release, start, stop, check, docker, dev, cert, prod
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.CheatWorker import CheatWorker
 from org.metadatacenter.worker.ServerWorker import ServerWorker
@@ -17,6 +17,7 @@ app.add_typer(clean.app, name="clean")
 app.add_typer(env.app, name="env")
 app.add_typer(release.app, name="release")
 app.add_typer(start.app, name="start")
+app.add_typer(stop.app, name="stop")
 app.add_typer(check.app, name="check")
 app.add_typer(docker.app, name="docker")
 app.add_typer(dev.app, name="dev")
