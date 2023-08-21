@@ -164,7 +164,7 @@ class ReposFactory:
                                                        parameters={
                                                            RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-embeddable-editor",
                                                            RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
-                                                           RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor-${CEDAR_VERSION}.js'
+                                                           RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor.js'
                                                        })
         metadata_form_dist_relation = RepoRelation(metadata_form, RepoRelationType.IS_SOURCE_OF, component_distribution,
                                                    parameters={
