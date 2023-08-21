@@ -31,11 +31,12 @@ class Repos:
     def add_relation(self, relation: RepoRelation):
         self.relations.append(relation)
 
-    def get_relation(self, source_repo: Repo, relation_type: RepoRelationType):
+    def get_relations(self, source_repo: Repo, relation_type: RepoRelationType) -> list[RepoRelation]:
+        rels = []
         for rel in self.relations:
             if rel.source_repo.get_fqn() == source_repo.get_fqn() and rel.relation_type == relation_type:
-                return rel
-        return None
+                rels.append(rel)
+        return rels
 
     def get_list_top(self) -> [Repo]:
         return list(self.map.values())
