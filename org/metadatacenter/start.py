@@ -18,5 +18,5 @@ def all_all():
 
 
 @app.command("infra")
-def all_all():
+def infra_all():
     StartInfrastructureWorker.all()

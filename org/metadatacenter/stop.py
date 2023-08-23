@@ -12,11 +12,11 @@ app.add_typer(stop_microservice.app, name="microservice")
 
 @app.command("all")
 def all_all():
-    StopInfrastructureWorker.all()
-    StopMicroserviceWorker.all()
     StopFrontendWorker.all()
+    StopMicroserviceWorker.all()
+    StopInfrastructureWorker.all()
 
 
 @app.command("infra")
-def all_all():
+def infra_all():
     StopInfrastructureWorker.all()
