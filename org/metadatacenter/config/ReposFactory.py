@@ -154,12 +154,12 @@ class ReposFactory:
         component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST, ArtifactType.NPM,
                                       [V.PACKAGE_OWN], is_frontend=True)
         repos.add_repo(component_distribution)
-        embeddable_editor_dist_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, component_distribution,
-                                                       parameters={
-                                                           RepoRelation.TARGET_SUB_FOLDER: "cedar-embeddable-editor",
-                                                           RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
-                                                           RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor-${CEDAR_VERSION}.js'
-                                                       })
+        # embeddable_editor_dist_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, component_distribution,
+        #                                                parameters={
+        #                                                    RepoRelation.TARGET_SUB_FOLDER: "cedar-embeddable-editor",
+        #                                                    RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
+        #                                                    RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor-${CEDAR_VERSION}.js'
+        #                                                })
         embeddable_editor_dist_own_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, embeddable_editor,
                                                        parameters={
                                                            RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-embeddable-editor",
@@ -173,7 +173,7 @@ class ReposFactory:
                                                        RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
                                                        RepoRelation.DESTINATION_CONCAT: 'cedar-form-${CEDAR_VERSION}.js'
                                                    })
-        repos.add_relation(embeddable_editor_dist_relation)
+        # repos.add_relation(embeddable_editor_dist_relation)
         repos.add_relation(embeddable_editor_dist_own_relation)
         repos.add_relation(metadata_form_dist_relation)
 
