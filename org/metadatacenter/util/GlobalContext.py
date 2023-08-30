@@ -118,3 +118,7 @@ class GlobalContext(object):
     @classmethod
     def get_sed_replace_in_place(cls):
         return CedarCliSettings.sed_replace_in_place
+
+    @classmethod
+    def get_use_osa(cls):
+        return CedarCliSettings.use_osa
