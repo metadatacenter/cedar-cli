@@ -1,5 +1,12 @@
-from rich.console import Console
+import binascii
+import hashlib
+import os
 
+from rich.console import Console
+from rich.style import Style
+from rich.table import Table
+
+from org.metadatacenter.util.Const import Const
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -148,3 +155,34 @@ cd ${CEDAR_KEYCLOAK_HOME}/bin
         ],
             title="Adding CEDAR hostnames to /etc/hosts",
         )
+
+    @staticmethod
+    def generate_api_key(user_id: str):
+        if Const.CEDAR_SALT_API_KEY in os.environ:
+            salt = os.environ[Const.CEDAR_SALT_API_KEY]
+        else:
+            salt = 'saltme'
+
+        try:
+            digest = hashlib.sha256()
+        except Exception as e:
+            print(f"Error while building SHA-256 digest: {e}")
+            return None
+
+        digest.update(salt.encode('utf-8'))
+        digest.update(user_id.encode('utf-8'))
+        hash_bytes = digest.digest()
+
+        for _ in range(1000):
+            digest = hashlib.sha256()
+            digest.update(hash_bytes)
+            hash_bytes = digest.digest()
+
+        api_key = binascii.hexlify(hash_bytes).decode('utf-8')
+
+        table = Table("Name", "Value", title="Generated CEDAR apiKey")
+        table.add_row('salt', salt)
+        table.add_row('userId', user_id)
+        table.add_row('apiKey', api_key)
+        table.style = Style(color="green")
+        console.print(table)
