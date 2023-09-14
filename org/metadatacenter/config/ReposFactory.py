@@ -189,6 +189,8 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-development", RepoType.DEVELOPMENT, ArtifactType.NONE, [], for_docker=True))
         repos.add_repo(Repo("cedar-util", RepoType.MISC, ArtifactType.NONE, []))
 
+        repos.add_repo(Repo("cedar-howto", RepoType.PYTHON, ArtifactType.NONE, []))
+
         repos.add_repo(Repo("cedar-cli", RepoType.PYTHON, ArtifactType.NONE, []))
 
         return repos
