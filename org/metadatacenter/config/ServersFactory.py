@@ -16,7 +16,7 @@ class ServersFactory:
         servers.add_microservice('impex', 8)
         servers.add_microservice('messaging', 12)
         servers.add_microservice('monitor', 14)
-        servers.add_microservice('open', 13, display_name="OpenView")
+        servers.add_microservice('open', 13)
         servers.add_microservice('repo', 2)
         servers.add_microservice('resource', 7)
         servers.add_microservice('schema', 3)
@@ -36,15 +36,11 @@ class ServersFactory:
         servers.add_infra('MySQL', 3306, check_running=CheckRunning.OPEN_PORT)
 
         servers.add_frontend('main', 4200)
-        servers.add_frontend('openview', 4220, display_name="OpenView-Frontend")
+        servers.add_frontend('openview', 4220)
         servers.add_frontend('component', 4240)
         servers.add_frontend('monitoring', 4300)
         servers.add_frontend('artifacts', 4320)
         servers.add_frontend('bridging', 4340)
-
-        servers.add_dashboard('opensearch-dashboard', 5601)
-        servers.add_dashboard('redis-commander', 8081)
-        servers.add_dashboard('phpmyadmin', 8082)
 
         servers.add_frontend_non_essential('cee-dev', 4400)
         servers.add_frontend_non_essential('demo.cee', 4260)
