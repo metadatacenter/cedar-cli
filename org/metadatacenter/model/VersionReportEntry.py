@@ -15,6 +15,7 @@ class VersionReportEntry:
         self.cnt_ok = 0
         self.cnt_nok = 0
         self.cnt_unknown = 0
+        self.cnt_allowed_diff = 0
 
     def compute_status(self, reference_version):
         if self.version_type == VersionType.EMPTY:
@@ -25,7 +26,10 @@ class VersionReportEntry:
         if self.version == "" or self.version == reference_version:
             self.cnt_ok += 1
         else:
-            self.cnt_nok += 1
+            if self.repo.allow_different_version:
+                self.cnt_allowed_diff += 1
+            else:
+                self.cnt_nok += 1
 
         if self.version == '':
             self.cnt_unknown += 1
@@ -33,3 +37,5 @@ class VersionReportEntry:
             self.status = "❌"
         elif self.cnt_ok > 0:
             self.status = "✅"
+        elif self.cnt_allowed_diff > 0:
+            self.status = "👍"

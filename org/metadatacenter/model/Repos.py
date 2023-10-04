@@ -93,4 +93,5 @@ class Repos:
         repos = repos + Util.get_flat_repo_list_pre_post(self.get_frontends())
         remainder = list(set(self.get_list_all()) - set(repos))
         repos = repos + remainder
+        repos = [repo for repo in repos if not repo.skip_from_release]
         return repos
