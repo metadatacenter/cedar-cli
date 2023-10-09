@@ -41,6 +41,11 @@ class Repos:
     def get_list_top(self) -> [Repo]:
         return list(self.map.values())
 
+    def get_list_top_for_release(self) -> [Repo]:
+        repos = list(self.map.values())
+        repos = [repo for repo in repos if not repo.skip_from_release]
+        return repos
+
     def get_list_all(self) -> [Repo]:
         repos = []
         for name, repo in self.map.items():

@@ -11,7 +11,7 @@ class ReleaseCommitPlanner(Planner):
 
     @staticmethod
     def commit(plan: Plan, parameters: dict):
-        for repo in GlobalContext.repos.get_list_top():
+        for repo in GlobalContext.repos.get_list_top_for_release():
             plan.add_task(
                 "Commit release of repo",
                 TaskType.RELEASE_COMMIT,
