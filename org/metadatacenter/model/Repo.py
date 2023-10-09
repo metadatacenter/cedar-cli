@@ -11,7 +11,8 @@ class Repo:
     def __init__(self, name: str, repo_type: RepoType, artifact_type: ArtifactType,
                  version_list: List[VersionType],
                  is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
-                 is_frontend=False, expected_build_lines=100):
+                 is_frontend=False, expected_build_lines=100,
+                 allow_different_version=False, skip_from_release=False):
         self.name = name
         self.repo_type = repo_type
         self.artifact_type = artifact_type
@@ -27,6 +28,8 @@ class Repo:
         self.sub_repos = []
         self.parent_repo = None
         self.pre_post_type: PrePostType = PrePostType.NONE
+        self.allow_different_version = allow_different_version
+        self.skip_from_release = skip_from_release
 
     def __eq__(self, obj):
         return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()

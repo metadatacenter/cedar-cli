@@ -3,10 +3,10 @@ import os
 import re
 import sys
 from datetime import datetime
+from math import log2
 from typing import List
 
 import rich
-from math import log2
 from rich.console import Console
 from rich.panel import Panel
 from rich.style import Style
@@ -138,6 +138,10 @@ class Util(object):
     @classmethod
     def get_osa_script_path(cls, script_name):
         return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
+
+    @classmethod
+    def get_bash_script_path(cls, script_name):
+        return os.path.join(os.getcwd(), 'scripts', 'bash', script_name)
 
     @classmethod
     def get_asset_file_path(cls, asset_path: List[str]):

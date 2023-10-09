@@ -38,7 +38,7 @@ class EnvWorker(Worker):
     def list():
         cnt = 0
         table = Table("Name", "Value", title="CEDAR environment variables")
-        for name, value in os.environ.items():
+        for name, value in sorted(os.environ.items()):
             if name.startswith(CEDAR_ENV_PREFIX):
                 table.add_row(name, value)
                 cnt += 1
@@ -61,7 +61,7 @@ class EnvWorker(Worker):
         present_cnt = 0
         missing_cnt = 0
         var_map = {}
-        for name, value in os.environ.items():
+        for name, value in sorted(os.environ.items()):
             if name.startswith(CEDAR_ENV_PREFIX):
                 var_map[name] = value
         for name in var_names:
@@ -83,7 +83,7 @@ class EnvWorker(Worker):
     def filter(filter_term: str):
         cnt = 0
         table = Table("Name", "Value", title="CEDAR environment variables")
-        for name, value in os.environ.items():
+        for name, value in sorted(os.environ.items()):
             if name.startswith(CEDAR_ENV_PREFIX) and filter_term.lower() in name.lower():
                 table.add_row(name, value)
                 cnt += 1

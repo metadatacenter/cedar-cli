@@ -12,6 +12,7 @@ class VersionReport:
         self.cnt_ok = 0
         self.cnt_nok = 0
         self.cnt_unknown = 0
+        self.cnt_allowed_diff = 0
         self.version_candidate = ''
         pass
 
@@ -38,6 +39,7 @@ class VersionReport:
             self.cnt_ok += entry.cnt_ok
             self.cnt_nok += entry.cnt_nok
             self.cnt_unknown += entry.cnt_unknown
+            self.cnt_allowed_diff += entry.cnt_allowed_diff
 
     def get_caption(self):
         caption = 'Target version: ' + self.version_candidate + '; ' + str(self.cnt_ok) + " versions matching"
@@ -45,4 +47,6 @@ class VersionReport:
             caption += ", [red]" + str(self.cnt_nok) + " non-matching"
         if self.cnt_unknown > 0:
             caption += ", [yellow]" + str(self.cnt_unknown) + " unknown"
+        if self.cnt_allowed_diff > 0:
+            caption += ", [green]" + str(self.cnt_allowed_diff) + " allowed non-matching"
         return caption

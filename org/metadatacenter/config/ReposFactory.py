@@ -130,7 +130,6 @@ class ReposFactory:
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
                                      [V.PACKAGE_OWN], is_frontend=True)
-        cee_demo_api_php = Repo("cedar-cee-demo-api-php", RepoType.PHP, ArtifactType.NONE, [], is_frontend=True)
 
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_dist)
@@ -142,35 +141,47 @@ class ReposFactory:
         cee_docs_angular_src_dist_relation = RepoRelation(cee_docs_angular_src, RepoRelationType.IS_SOURCE_OF, cee_docs_angular_dist)
         repos.add_relation(cee_docs_angular_src_dist_relation)
 
-        cee_demo_angular_multi.add_sub_repo(cee_demo_api_php)
         repos.add_repo(cee_demo_angular_multi)
 
         embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,
-                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 allow_different_version=True, skip_from_release=True)
         repos.add_repo(embeddable_editor)
 
-        metadata_form = Repo("cedar-metadata-form", RepoType.ANGULAR, ArtifactType.NONE,
-                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        repos.add_repo(metadata_form)
+        # FKA cedar-metadata-form
+        artifact_viewer = Repo("cedar-artifact-viewer", RepoType.ANGULAR, ArtifactType.NONE,
+                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                               allow_different_version=True, skip_from_release=True)
+        repos.add_repo(artifact_viewer)
 
         component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST, ArtifactType.NPM,
                                       [V.PACKAGE_OWN], is_frontend=True)
         repos.add_repo(component_distribution)
-        embeddable_editor_dist_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, component_distribution,
-                                                       parameters={
-                                                           RepoRelation.TARGET_SUB_FOLDER: "cedar-embeddable-editor",
-                                                           RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
-                                                           RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor-${CEDAR_VERSION}.js'
-                                                       })
-        metadata_form_dist_relation = RepoRelation(metadata_form, RepoRelationType.IS_SOURCE_OF, component_distribution,
-                                                   parameters={
-                                                       RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-form",
-                                                       RepoRelation.TARGET_SUB_FOLDER: "cedar-form",
-                                                       RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
-                                                       RepoRelation.DESTINATION_CONCAT: 'cedar-form-${CEDAR_VERSION}.js'
-                                                   })
-        repos.add_relation(embeddable_editor_dist_relation)
-        repos.add_relation(metadata_form_dist_relation)
+
+        embeddable_editor_dist_own_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, embeddable_editor,
+                                                           parameters={
+                                                               RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-embeddable-editor",
+                                                               RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
+                                                               RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor.js'
+                                                           })
+        artifact_viewer_dist_relation = RepoRelation(artifact_viewer, RepoRelationType.IS_SOURCE_OF, component_distribution,
+                                                     parameters={
+                                                         RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-artifact-viewer",
+                                                         RepoRelation.TARGET_SUB_FOLDER: "cedar-artifact-viewer",
+                                                         RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
+                                                         RepoRelation.DESTINATION_CONCAT: 'cedar-artifact-viewer-${CEDAR_VERSION}.js'
+                                                     })
+
+        artifact_viewer_dist_own_relation = RepoRelation(artifact_viewer, RepoRelationType.IS_SOURCE_OF, artifact_viewer,
+                                                     parameters={
+                                                         RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-artifact-viewer",
+                                                         RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
+                                                         RepoRelation.DESTINATION_CONCAT: 'cedar-artifact-viewer.js'
+                                                     })
+
+        repos.add_relation(embeddable_editor_dist_own_relation)
+        repos.add_relation(artifact_viewer_dist_relation)
+        repos.add_relation(artifact_viewer_dist_own_relation)
 
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, ArtifactType.NONE, []))
         repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, ArtifactType.NONE, [], is_private=True))
@@ -183,6 +194,8 @@ class ReposFactory:
 
         repos.add_repo(Repo("cedar-development", RepoType.DEVELOPMENT, ArtifactType.NONE, [], for_docker=True))
         repos.add_repo(Repo("cedar-util", RepoType.MISC, ArtifactType.NONE, []))
+
+        repos.add_repo(Repo("cedar-howto", RepoType.PYTHON, ArtifactType.NONE, []))
 
         repos.add_repo(Repo("cedar-cli", RepoType.PYTHON, ArtifactType.NONE, []))
 

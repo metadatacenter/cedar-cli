@@ -1,5 +1,6 @@
 from rich.console import Console
 
+from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
@@ -13,45 +14,81 @@ class StartFrontendWorker(Worker):
 
     @staticmethod
     def openview():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('start-frontend-openview-new-tab.scpt')],
-            title="Launching OpenView Frontend in new tab",
-        )
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-frontend-openview-new-tab.scpt')],
+                title="Launching OpenView Frontend in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-frontend-openview.sh')],
+                title="Launching OpenView Frontend",
+            )
 
     @staticmethod
     def monitoring():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('start-frontend-monitoring-new-tab.scpt')],
-            title="Launching Monitoring Frontend in new tab",
-        )
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-frontend-monitoring-new-tab.scpt')],
+                title="Launching Monitoring Frontend in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-frontend-monitoring.sh')],
+                title="Launching Monitoring Frontend",
+            )
 
     @staticmethod
     def bridging():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('start-frontend-bridging-new-tab.scpt')],
-            title="Launching Bridging Frontend in new tab",
-        )
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-frontend-bridging-new-tab.scpt')],
+                title="Launching Bridging Frontend in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-frontend-bridging.sh')],
+                title="Launching Bridging Frontend",
+            )
 
     @staticmethod
     def artifacts():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('start-frontend-artifacts-new-tab.scpt')],
-            title="Launching Artifacts Frontend in new tab",
-        )
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-frontend-artifacts-new-tab.scpt')],
+                title="Launching Artifacts Frontend in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-frontend-artifacts.sh')],
+                title="Launching Artifacts Frontend",
+            )
 
     @staticmethod
     def component():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('start-frontend-component-new-tab.scpt')],
-            title="Launching Component Frontend in new tab",
-        )
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-frontend-component-new-tab.scpt')],
+                title="Launching Component Frontend in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-frontend-component.sh')],
+                title="Launching Component Frontend",
+            )
 
     @staticmethod
     def main():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('start-frontend-main-new-tab.scpt')],
-            title="Launching Main Frontend in new tab",
-        )
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-frontend-main-new-tab.scpt')],
+                title="Launching Main Frontend in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-frontend-main.sh')],
+                title="Launching Main Frontend",
+            )
 
     @staticmethod
     def all():

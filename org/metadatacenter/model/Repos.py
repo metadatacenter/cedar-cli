@@ -31,14 +31,20 @@ class Repos:
     def add_relation(self, relation: RepoRelation):
         self.relations.append(relation)
 
-    def get_relation(self, source_repo: Repo, relation_type: RepoRelationType):
+    def get_relations(self, source_repo: Repo, relation_type: RepoRelationType) -> list[RepoRelation]:
+        rels = []
         for rel in self.relations:
             if rel.source_repo.get_fqn() == source_repo.get_fqn() and rel.relation_type == relation_type:
-                return rel
-        return None
+                rels.append(rel)
+        return rels
 
     def get_list_top(self) -> [Repo]:
         return list(self.map.values())
+
+    def get_list_top_for_release(self) -> [Repo]:
+        repos = list(self.map.values())
+        repos = [repo for repo in repos if not repo.skip_from_release]
+        return repos
 
     def get_list_all(self) -> [Repo]:
         repos = []
@@ -92,4 +98,5 @@ class Repos:
         repos = repos + Util.get_flat_repo_list_pre_post(self.get_frontends())
         remainder = list(set(self.get_list_all()) - set(repos))
         repos = repos + remainder
+        repos = [repo for repo in repos if not repo.skip_from_release]
         return repos

@@ -62,9 +62,10 @@ class BuildOperator(Operator):
                 not_handled.add_task_as_task(BuildShellTaskFactory.noop(repo))
                 task.add_task_as_task(not_handled)
 
-            source_of_relation = GlobalContext.repos.get_relation(repo, RepoRelationType.IS_SOURCE_OF)
-            if source_of_relation is not None and build_frontends:
-                BuildOperator.handle_is_source_of(source_of_relation, task)
+            source_of_relations = GlobalContext.repos.get_relations(repo, RepoRelationType.IS_SOURCE_OF)
+            if build_frontends:
+                for source_of_relation in source_of_relations:
+                    BuildOperator.handle_is_source_of(source_of_relation, task)
 
     @staticmethod
     def handle_is_source_of(source_of_relation: RepoRelation, task: PlanTask):
