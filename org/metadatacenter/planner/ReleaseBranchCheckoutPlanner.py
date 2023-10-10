@@ -11,7 +11,7 @@ class ReleaseBranchCheckoutPlanner(Planner):
 
     @staticmethod
     def checkout(plan: Plan, parameters: dict):
-        for repo in GlobalContext.repos.get_list_top():
+        for repo in GlobalContext.repos.get_list_top_for_release():
             plan.add_task(
                 "Check out branch",
                 TaskType.RELEASE_BRANCH_CHECKOUT,
