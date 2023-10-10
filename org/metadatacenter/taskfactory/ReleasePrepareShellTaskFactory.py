@@ -248,7 +248,7 @@ class ReleasePrepareShellTaskFactory:
     @classmethod
     def macro_update_index_html_version_numbers(cls, version: str):
         return ('echo "Update openview and bridging index.html"',
-                "      if [[ -e src/index.html ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/\/cedar-form-.*\.js/\/cedar-form-'" + version + "'\.js/g' src/index.html; fi",
+                "      if [[ -e src/index.html ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/\/cedar-artifact-viewer-.*\.js/\/cedar-artifact-viewer-'" + version + "'\.js/g' src/index.html; fi",
                 "      if [[ -e src/index.html ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/\/cedar-embeddable-editor-.*\.js/\/cedar-embeddable-editor-'" + version + "'\.js/g' src/index.html; fi")
 
     @classmethod
