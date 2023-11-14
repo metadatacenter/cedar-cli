@@ -20,3 +20,13 @@ def all_all():
 @app.command("infra")
 def infra_all():
     StartInfrastructureWorker.all()
+
+
+@app.command("microservices")
+def microservice_all():
+    StartMicroserviceWorker.all()
+
+
+@app.command("frontends")
+def frontend_all():
+    StartFrontendWorker.all()
