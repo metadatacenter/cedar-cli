@@ -164,23 +164,15 @@ class ReposFactory:
                                                                RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
                                                                RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor.js'
                                                            })
-        artifact_viewer_dist_relation = RepoRelation(artifact_viewer, RepoRelationType.IS_SOURCE_OF, component_distribution,
-                                                     parameters={
-                                                         RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-artifact-viewer",
-                                                         RepoRelation.TARGET_SUB_FOLDER: "cedar-artifact-viewer",
-                                                         RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
-                                                         RepoRelation.DESTINATION_CONCAT: 'cedar-artifact-viewer-${CEDAR_VERSION}.js'
-                                                     })
 
         artifact_viewer_dist_own_relation = RepoRelation(artifact_viewer, RepoRelationType.IS_SOURCE_OF, artifact_viewer,
-                                                     parameters={
-                                                         RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-artifact-viewer",
-                                                         RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
-                                                         RepoRelation.DESTINATION_CONCAT: 'cedar-artifact-viewer.js'
-                                                     })
+                                                         parameters={
+                                                             RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-artifact-viewer",
+                                                             RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
+                                                             RepoRelation.DESTINATION_CONCAT: 'cedar-artifact-viewer.js'
+                                                         })
 
         repos.add_relation(embeddable_editor_dist_own_relation)
-        repos.add_relation(artifact_viewer_dist_relation)
         repos.add_relation(artifact_viewer_dist_own_relation)
 
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, ArtifactType.NONE, []))
