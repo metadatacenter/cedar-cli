@@ -35,7 +35,11 @@ class VersionReport:
         self.cnt_ok = 0
         self.cnt_nok = 0
         for entry in self.entries:
-            entry.compute_status(self.version_candidate)
+            if entry.repo.allow_different_version:
+                repo_version_candidate = self.compute_candidate_for_repo(entry.repo)
+                entry.compute_status(repo_version_candidate)
+            else:
+                entry.compute_status(self.version_candidate)
             self.cnt_ok += entry.cnt_ok
             self.cnt_nok += entry.cnt_nok
             self.cnt_unknown += entry.cnt_unknown
@@ -50,3 +54,15 @@ class VersionReport:
         if self.cnt_allowed_diff > 0:
             caption += ", [green]" + str(self.cnt_allowed_diff) + " allowed non-matching"
         return caption
+
+    def compute_candidate_for_repo(self, repo):
+        freq = {}
+        for entry in self.entries:
+            if entry.repo == repo:
+                version = entry.version
+                if version in freq:
+                    freq[version] += 1
+                else:
+                    freq[version] = 1
+        repo_version_candidate = max(freq, key=freq.get)
+        return repo_version_candidate

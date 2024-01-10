@@ -23,11 +23,14 @@ class VersionReportEntry:
             self.status = "✅"
             return
 
-        if self.version == "" or self.version == reference_version:
-            self.cnt_ok += 1
-        else:
-            if self.repo.allow_different_version:
+        if self.repo.allow_different_version:
+            if self.version == reference_version:
                 self.cnt_allowed_diff += 1
+            else:
+                self.cnt_nok += 1
+        else:
+            if self.version == "" or self.version == reference_version:
+                self.cnt_ok += 1
             else:
                 self.cnt_nok += 1
 
