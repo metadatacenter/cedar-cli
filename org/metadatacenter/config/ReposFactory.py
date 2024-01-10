@@ -144,13 +144,15 @@ class ReposFactory:
         repos.add_repo(cee_demo_angular_multi)
 
         embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,
-                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True)
         repos.add_repo(embeddable_editor)
 
         # FKA cedar-metadata-form
         artifact_viewer = Repo("cedar-artifact-viewer", RepoType.ANGULAR, ArtifactType.NONE,
-                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                allow_different_version=True, skip_from_release=True)
         repos.add_repo(artifact_viewer)
 

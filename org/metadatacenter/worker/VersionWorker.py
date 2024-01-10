@@ -6,6 +6,8 @@ from lxml import etree
 from rich.console import Console
 from rich.table import Table, Column
 
+from org.metadatacenter.model.RepoRelation import RepoRelation
+from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.VersionReport import VersionReport
 from org.metadatacenter.model.VersionType import VersionType
@@ -121,21 +123,51 @@ class VersionWorker(Worker):
         root_dir = Util.get_wd(repo)
         dir_suffix = Util.get_repo_suffix(repo)
 
-        package_json_path = os.path.join(root_dir, Const.FILE_PACKAGE_JSON)
-        with open(package_json_path, 'r') as json_file:
-            json_data = json.load(json_file)
-            version = self.get_json_path(json_data, '$.version')
-            report.add(repo, dir_suffix, Const.FILE_PACKAGE_JSON, VersionType.PACKAGE_OWN, version)
+        if VersionType.PACKAGE_OWN in repo.version_list:
+            package_json_path = os.path.join(root_dir, Const.FILE_PACKAGE_JSON)
+            with open(package_json_path, 'r') as json_file:
+                json_data = json.load(json_file)
+                version = self.get_json_path(json_data, '$.version')
+                report.add(repo, dir_suffix, Const.FILE_PACKAGE_JSON, VersionType.PACKAGE_OWN, version)
 
-        package_json_lock_path = os.path.join(root_dir, Const.FILE_PACKAGE_LOCK_JSON)
-        with open(package_json_lock_path, 'r') as json_file:
-            json_data = json.load(json_file)
+        if VersionType.PACKAGE_LOCK_OWN in repo.version_list or VersionType.PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
+            package_json_lock_path = os.path.join(root_dir, Const.FILE_PACKAGE_LOCK_JSON)
+            with open(package_json_lock_path, 'r') as json_file:
+                json_data = json.load(json_file)
 
-            version = self.get_json_path(json_data, '$.version')
-            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_OWN, version)
+                if VersionType.PACKAGE_LOCK_OWN in repo.version_list:
+                    version = self.get_json_path(json_data, '$.version')
+                    report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_OWN, version)
 
-            version_pack = self.get_json_path(json_data, '$.packages[""].version')
-            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_PACKAGES_OWN, version_pack)
+                if VersionType.PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
+                    version_pack = self.get_json_path(json_data, '$.packages[""].version')
+                    report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_PACKAGES_OWN, version_pack)
+
+        source_of_relations = GlobalContext.repos.get_relations(repo, RepoRelationType.IS_SOURCE_OF)
+        for source_of_relation in source_of_relations:
+            print(source_of_relation.source_repo.name + ' => ' + source_of_relation.target_repo.name)
+            if (RepoRelation.TARGET_SUB_FOLDER in source_of_relation.parameters):
+                dist_subfolder = source_of_relation.parameters[RepoRelation.TARGET_SUB_FOLDER]
+
+                if VersionType.DIST_NPM_PACKAGE_OWN in repo.version_list:
+                    package_json_path = os.path.join(root_dir, dist_subfolder, Const.FILE_PACKAGE_JSON)
+                    with open(package_json_path, 'r') as json_file:
+                        json_data = json.load(json_file)
+                        version = self.get_json_path(json_data, '$.version')
+                        report.add(repo, dir_suffix, Const.FILE_PACKAGE_JSON, VersionType.DIST_NPM_PACKAGE_OWN, version)
+
+                if VersionType.DIST_NPM_PACKAGE_LOCK_OWN in repo.version_list or VersionType.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
+                    package_json_lock_path = os.path.join(root_dir, dist_subfolder, Const.FILE_PACKAGE_LOCK_JSON)
+                    with open(package_json_lock_path, 'r') as json_file:
+                        json_data = json.load(json_file)
+
+                        if VersionType.PACKAGE_LOCK_OWN in repo.version_list:
+                            version = self.get_json_path(json_data, '$.version')
+                            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.DIST_NPM_PACKAGE_LOCK_OWN, version)
+
+                        if VersionType.PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
+                            version_pack = self.get_json_path(json_data, '$.packages[""].version')
+                            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN, version_pack)
 
     def analyze_angular_dist(self, repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
@@ -156,7 +188,6 @@ class VersionWorker(Worker):
 
             version_pack = self.get_json_path(json_data, '$.packages[""].version')
             report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_PACKAGES_OWN, version_pack)
-
 
     @staticmethod
     def analyze_docker_build(repo, report: VersionReport):
