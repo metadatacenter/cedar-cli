@@ -10,5 +10,8 @@ class VersionType:
     IMAGE_VERSION = 'IMAGE_VERSION'
     PACKAGE_LOCK_OWN = "package-lock-own"
     PACKAGE_LOCK_PACKAGES_OWN = "package-lock-packages-own"
+    DIST_NPM_PACKAGE_OWN = "dist-npm/package-own"
+    DIST_NPM_PACKAGE_LOCK_OWN = "dist-npm/package-lock-own"
+    DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN = "dist-npm/package-lock-packages-own"
     EMPTY = 'expected-empty'
     UNKNOWN = 'unknown'

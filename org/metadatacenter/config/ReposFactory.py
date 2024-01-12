@@ -125,11 +125,15 @@ class ReposFactory:
         cee_demo_angular_src = Repo("cedar-cee-demo-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                     [V.PACKAGE_OWN], is_frontend=True)
+                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_docs_angular_src = Repo("cedar-cee-docs-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                     [V.PACKAGE_OWN], is_frontend=True)
+                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+        cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER, ArtifactType.NONE,
+                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+        cav_demo_js_src = Repo("cedar-cav-demo-js-src", RepoType.ANGULAR, ArtifactType.NONE,
+                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_dist)
@@ -141,21 +145,26 @@ class ReposFactory:
         cee_docs_angular_src_dist_relation = RepoRelation(cee_docs_angular_src, RepoRelationType.IS_SOURCE_OF, cee_docs_angular_dist)
         repos.add_relation(cee_docs_angular_src_dist_relation)
 
+        cee_demo_angular_multi.add_sub_repo(cee_demo_ember_src)
+        cee_demo_angular_multi.add_sub_repo(cav_demo_js_src)
+
         repos.add_repo(cee_demo_angular_multi)
 
         embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,
-                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True)
         repos.add_repo(embeddable_editor)
 
         # FKA cedar-metadata-form
         artifact_viewer = Repo("cedar-artifact-viewer", RepoType.ANGULAR, ArtifactType.NONE,
-                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                allow_different_version=True, skip_from_release=True)
         repos.add_repo(artifact_viewer)
 
         component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                      [V.PACKAGE_OWN], is_frontend=True)
+                                      [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(component_distribution)
 
         embeddable_editor_dist_own_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, embeddable_editor,
