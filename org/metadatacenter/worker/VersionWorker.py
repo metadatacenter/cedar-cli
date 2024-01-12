@@ -56,6 +56,8 @@ class VersionWorker(Worker):
             self.analyze_java_wrapper(repo, report)
         elif repo.repo_type == RepoType.ANGULAR_JS or repo.repo_type == RepoType.ANGULAR:
             self.analyze_angular_js(repo, report)
+        elif repo.repo_type == RepoType.EMBER:
+            self.analyze_ember(repo, report)
         elif repo.repo_type == RepoType.ANGULAR_DIST:
             self.analyze_angular_dist(repo, report)
         elif repo.repo_type == RepoType.MULTI or repo.repo_type == RepoType.PYTHON or repo.repo_type == RepoType.MKDOCS \
@@ -123,29 +125,10 @@ class VersionWorker(Worker):
         root_dir = Util.get_wd(repo)
         dir_suffix = Util.get_repo_suffix(repo)
 
-        if VersionType.PACKAGE_OWN in repo.version_list:
-            package_json_path = os.path.join(root_dir, Const.FILE_PACKAGE_JSON)
-            with open(package_json_path, 'r') as json_file:
-                json_data = json.load(json_file)
-                version = self.get_json_path(json_data, '$.version')
-                report.add(repo, dir_suffix, Const.FILE_PACKAGE_JSON, VersionType.PACKAGE_OWN, version)
-
-        if VersionType.PACKAGE_LOCK_OWN in repo.version_list or VersionType.PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
-            package_json_lock_path = os.path.join(root_dir, Const.FILE_PACKAGE_LOCK_JSON)
-            with open(package_json_lock_path, 'r') as json_file:
-                json_data = json.load(json_file)
-
-                if VersionType.PACKAGE_LOCK_OWN in repo.version_list:
-                    version = self.get_json_path(json_data, '$.version')
-                    report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_OWN, version)
-
-                if VersionType.PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
-                    version_pack = self.get_json_path(json_data, '$.packages[""].version')
-                    report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_PACKAGES_OWN, version_pack)
+        self.analyze_package_and_lock(repo, report, root_dir, dir_suffix)
 
         source_of_relations = GlobalContext.repos.get_relations(repo, RepoRelationType.IS_SOURCE_OF)
         for source_of_relation in source_of_relations:
-            print(source_of_relation.source_repo.name + ' => ' + source_of_relation.target_repo.name)
             if (RepoRelation.TARGET_SUB_FOLDER in source_of_relation.parameters):
                 dist_subfolder = source_of_relation.parameters[RepoRelation.TARGET_SUB_FOLDER]
 
@@ -173,21 +156,13 @@ class VersionWorker(Worker):
         root_dir = Util.get_wd(repo)
         dir_suffix = root_dir[len(Util.cedar_home):]
 
-        package_json_path = os.path.join(root_dir, Const.FILE_PACKAGE_JSON)
-        with open(package_json_path, 'r') as json_file:
-            json_data = json.load(json_file)
-            version = self.get_json_path(json_data, '$.version')
-            report.add(repo, dir_suffix, Const.FILE_PACKAGE_JSON, VersionType.PACKAGE_OWN, version)
+        self.analyze_package_and_lock(repo, report, root_dir, dir_suffix)
 
-        package_json_lock_path = os.path.join(root_dir, Const.FILE_PACKAGE_LOCK_JSON)
-        with open(package_json_lock_path, 'r') as json_file:
-            json_data = json.load(json_file)
+    def analyze_ember(self, repo, report: VersionReport):
+        root_dir = Util.get_wd(repo)
+        dir_suffix = Util.get_repo_suffix(repo)
 
-            version = self.get_json_path(json_data, '$.version')
-            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_OWN, version)
-
-            version_pack = self.get_json_path(json_data, '$.packages[""].version')
-            report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_PACKAGES_OWN, version_pack)
+        self.analyze_package_and_lock(repo, report, root_dir, dir_suffix)
 
     @staticmethod
     def analyze_docker_build(repo, report: VersionReport):
@@ -241,3 +216,24 @@ class VersionWorker(Worker):
         docker_version = Util.match_export_cedar_version(docker_content)
         if docker_version is not None:
             report.add(repo, root_dir_suffix, Const.FILE_BIN_UTIL_SET_ENV_GENERIC, VersionType.ENV_CEDAR_VERSION, docker_version)
+
+    def analyze_package_and_lock(self, repo, report: VersionReport, root_dir: str, dir_suffix: str):
+        if VersionType.PACKAGE_OWN in repo.version_list:
+            package_json_path = os.path.join(root_dir, Const.FILE_PACKAGE_JSON)
+            with open(package_json_path, 'r') as json_file:
+                json_data = json.load(json_file)
+                version = self.get_json_path(json_data, '$.version')
+                report.add(repo, dir_suffix, Const.FILE_PACKAGE_JSON, VersionType.PACKAGE_OWN, version)
+
+        if VersionType.PACKAGE_LOCK_OWN in repo.version_list or VersionType.PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
+            package_json_lock_path = os.path.join(root_dir, Const.FILE_PACKAGE_LOCK_JSON)
+            with open(package_json_lock_path, 'r') as json_file:
+                json_data = json.load(json_file)
+
+                if VersionType.PACKAGE_LOCK_OWN in repo.version_list:
+                    version = self.get_json_path(json_data, '$.version')
+                    report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_OWN, version)
+
+                if VersionType.PACKAGE_LOCK_PACKAGES_OWN in repo.version_list:
+                    version_pack = self.get_json_path(json_data, '$.packages[""].version')
+                    report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.PACKAGE_LOCK_PACKAGES_OWN, version_pack)

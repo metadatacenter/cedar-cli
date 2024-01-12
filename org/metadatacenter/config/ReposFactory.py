@@ -125,12 +125,14 @@ class ReposFactory:
         cee_demo_angular_src = Repo("cedar-cee-demo-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                     [V.PACKAGE_OWN], is_frontend=True)
+                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_docs_angular_src = Repo("cedar-cee-docs-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                     [V.PACKAGE_OWN], is_frontend=True)
-        cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.ANGULAR, ArtifactType.NONE,
+                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+        cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER, ArtifactType.NONE,
+                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+        cav_demo_js_src = Repo("cedar-cav-demo-js-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
@@ -144,6 +146,7 @@ class ReposFactory:
         repos.add_relation(cee_docs_angular_src_dist_relation)
 
         cee_demo_angular_multi.add_sub_repo(cee_demo_ember_src)
+        cee_demo_angular_multi.add_sub_repo(cav_demo_js_src)
 
         repos.add_repo(cee_demo_angular_multi)
 
@@ -161,7 +164,7 @@ class ReposFactory:
         repos.add_repo(artifact_viewer)
 
         component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                      [V.PACKAGE_OWN], is_frontend=True)
+                                      [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(component_distribution)
 
         embeddable_editor_dist_own_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, embeddable_editor,
