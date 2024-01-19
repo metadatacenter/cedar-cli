@@ -32,7 +32,7 @@ mkdir -p ${CEDAR_HOME}/tmp/
 mkdir -p ${CEDAR_HOME}/log/frontend-artifacts/
 mkdir -p ${CEDAR_HOME}/log/frontend-bridging/
 mkdir -p ${CEDAR_HOME}/log/frontend-cedar/
-mkdir -p ${CEDAR_HOME}/log/frontend-component/
+mkdir -p ${CEDAR_HOME}/log/frontend-content/
 mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular/
 mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular-dist/
 mkdir -p ${CEDAR_HOME}/log/frontend-cee-docs-angular/
@@ -79,7 +79,7 @@ CEDAR_HOSTS=(
     "bridging"
     "auth"
     "cedar"
-    "component"
+    "content"
     "group"
     "impex"
     "monitor"

@@ -40,10 +40,10 @@ class StopFrontendWorker(Worker):
         )
 
     @staticmethod
-    def component():
+    def content():
         Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-component.scpt')],
-            title="Stopping Component Frontend",
+            ["osascript " + Util.get_osa_script_path('stop-frontend-content.scpt')],
+            title="Stopping Content Frontend",
         )
 
     @staticmethod
@@ -60,4 +60,4 @@ class StopFrontendWorker(Worker):
         StopFrontendWorker.monitoring()
         StopFrontendWorker.artifacts()
         StopFrontendWorker.bridging()
-        StopFrontendWorker.component()
+        StopFrontendWorker.content()

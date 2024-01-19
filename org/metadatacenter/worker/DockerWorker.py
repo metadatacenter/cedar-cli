@@ -152,7 +152,7 @@ docker volume rm resource_state
 
 docker volume rm log_frontend_main
 docker volume rm log_frontend_openview
-docker volume rm log_frontend_component
+docker volume rm log_frontend_content
 docker volume rm log_frontend_artifacts
 docker volume rm log_frontend_monitoring
 docker volume rm log_frontend_bridging

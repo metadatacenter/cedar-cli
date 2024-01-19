@@ -65,16 +65,16 @@ class StartFrontendWorker(Worker):
             )
 
     @staticmethod
-    def component():
+    def content():
         if GlobalContext.get_use_osa():
             Worker.execute_generic_shell_commands(
-                ["osascript " + Util.get_osa_script_path('start-frontend-component-new-tab.scpt')],
-                title="Launching Component Frontend in new tab",
+                ["osascript " + Util.get_osa_script_path('start-frontend-content-new-tab.scpt')],
+                title="Launching Content Frontend in new tab",
             )
         else:
             Worker.execute_generic_shell_commands(
-                ["source " + Util.get_bash_script_path('start-frontend-component.sh')],
-                title="Launching Component Frontend",
+                ["source " + Util.get_bash_script_path('start-frontend-content.sh')],
+                title="Launching Content Frontend",
             )
 
     @staticmethod
@@ -97,4 +97,4 @@ class StartFrontendWorker(Worker):
         StartFrontendWorker.monitoring()
         StartFrontendWorker.artifacts()
         StartFrontendWorker.bridging()
-        StartFrontendWorker.component()
+        StartFrontendWorker.content()
