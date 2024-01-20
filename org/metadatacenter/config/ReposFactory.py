@@ -121,7 +121,7 @@ class ReposFactory:
         repos.add_relation(openview_src_dist_relation)
         repos.add_repo(openview_multi)
 
-        cee_demo_angular_multi = Repo("cedar-cee-demo", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
+        cee_component_demo_multi = Repo("cedar-component-demo", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         cee_demo_angular_src = Repo("cedar-cee-demo-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
@@ -135,20 +135,20 @@ class ReposFactory:
         cav_demo_js_src = Repo("cedar-cav-demo-js-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
-        cee_demo_angular_multi.add_sub_repo(cee_demo_angular_src)
-        cee_demo_angular_multi.add_sub_repo(cee_demo_angular_dist)
+        cee_component_demo_multi.add_sub_repo(cee_demo_angular_src)
+        cee_component_demo_multi.add_sub_repo(cee_demo_angular_dist)
         cee_demo_angular_src_dist_relation = RepoRelation(cee_demo_angular_src, RepoRelationType.IS_SOURCE_OF, cee_demo_angular_dist)
         repos.add_relation(cee_demo_angular_src_dist_relation)
 
-        cee_demo_angular_multi.add_sub_repo(cee_docs_angular_src)
-        cee_demo_angular_multi.add_sub_repo(cee_docs_angular_dist)
+        cee_component_demo_multi.add_sub_repo(cee_docs_angular_src)
+        cee_component_demo_multi.add_sub_repo(cee_docs_angular_dist)
         cee_docs_angular_src_dist_relation = RepoRelation(cee_docs_angular_src, RepoRelationType.IS_SOURCE_OF, cee_docs_angular_dist)
         repos.add_relation(cee_docs_angular_src_dist_relation)
 
-        cee_demo_angular_multi.add_sub_repo(cee_demo_ember_src)
-        cee_demo_angular_multi.add_sub_repo(cav_demo_js_src)
+        cee_component_demo_multi.add_sub_repo(cee_demo_ember_src)
+        cee_component_demo_multi.add_sub_repo(cav_demo_js_src)
 
-        repos.add_repo(cee_demo_angular_multi)
+        repos.add_repo(cee_component_demo_multi)
 
         embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
@@ -163,9 +163,9 @@ class ReposFactory:
                                allow_different_version=True, skip_from_release=True)
         repos.add_repo(artifact_viewer)
 
-        component_distribution = Repo("cedar-component-distribution", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+        content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR_DIST, ArtifactType.NPM,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        repos.add_repo(component_distribution)
+        repos.add_repo(content_distribution)
 
         embeddable_editor_dist_own_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, embeddable_editor,
                                                            parameters={

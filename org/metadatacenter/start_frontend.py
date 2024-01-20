@@ -30,9 +30,9 @@ def bridging():
     StartFrontendWorker.bridging()
 
 
-@app.command("component")
-def component():
-    StartFrontendWorker.component()
+@app.command("content")
+def content():
+    StartFrontendWorker.content()
 
 
 @app.command("all")

@@ -21,13 +21,13 @@ class ProdWorker(Worker):
         Worker.execute_generic_shell_commands([
             'echo "Updating frontend components to use proper domain"' + "\n" +
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-openview/cedar-openview-dist/index.html" + "\n" +
-            sed + " 's/component.metadatacenter.org\\//component." + domain + "\\//g' ${CEDAR_HOME}/cedar-openview/cedar-openview-dist/index.html" + "\n" +
+            sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-openview/cedar-openview-dist/index.html" + "\n" +
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-bridging/cedar-bridging-dist/index.html" + "\n" +
-            sed + " 's/component.metadatacenter.org\\//component." + domain + "\\//g' ${CEDAR_HOME}/cedar-bridging/cedar-bridging-dist/index.html" + "\n" +
+            sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-bridging/cedar-bridging-dist/index.html" + "\n" +
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n" +
-            sed + " 's/component.metadatacenter.org\\//component." + domain + "\\//g' ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n" +
+            sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n" +
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-artifacts/cedar-artifacts-dist/index.html" + "\n" +
-            sed + " 's/component.metadatacenter.org\\//component." + domain + "\\//g' ${CEDAR_HOME}/cedar-artifacts/cedar-artifacts-dist/index.html" + "\n"
+            sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-artifacts/cedar-artifacts-dist/index.html" + "\n"
         ],
             title="Updating frontend components",
         )
