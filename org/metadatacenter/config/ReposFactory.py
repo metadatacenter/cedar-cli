@@ -163,7 +163,7 @@ class ReposFactory:
                                allow_different_version=True, skip_from_release=True)
         repos.add_repo(artifact_viewer)
 
-        content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+        content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR, ArtifactType.NPM,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(content_distribution)
 
