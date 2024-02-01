@@ -27,6 +27,11 @@ def microservice_all():
     StartMicroserviceWorker.all()
 
 
+@app.command("java")
+def java_all():
+    StartMicroserviceWorker.all()
+
+
 @app.command("frontends")
 def frontend_all():
     StartFrontendWorker.all()
