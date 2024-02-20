@@ -35,3 +35,7 @@ def java_all():
 @app.command("frontends")
 def frontend_all():
     StopFrontendWorker.all()
+
+@app.command("uis")
+def ui_all():
+    StopFrontendWorker.all()
