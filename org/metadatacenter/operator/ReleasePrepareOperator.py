@@ -65,6 +65,10 @@ class ReleasePrepareOperator(Operator):
                 shell_wrapper = PlanTask("Prepare release of angularJS project", TaskType.SHELL_WRAPPER, repo)
                 shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_angular_js(repo, branch_type, release_prepare_phase))
                 task.add_task_as_task(shell_wrapper)
+            elif repo.repo_type == RepoType.TYPESCRIPT:
+                shell_wrapper = PlanTask("Prepare release of TypeScript project", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(ReleasePrepareShellTaskFactory.prepare_typescript(repo, branch_type, release_prepare_phase))
+                task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.EMBER:
                 if repo.pre_post_type == PrePostType.SUB:
                     shell_wrapper = PlanTask("Prepare release of ember sub-project", TaskType.SHELL_WRAPPER, repo)

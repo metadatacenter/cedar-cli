@@ -60,6 +60,8 @@ class VersionWorker(Worker):
             self.analyze_ember(repo, report)
         elif repo.repo_type == RepoType.ANGULAR_DIST:
             self.analyze_angular_dist(repo, report)
+        elif repo.repo_type == RepoType.TYPESCRIPT:
+            self.analyze_typescript(repo, report)
         elif repo.repo_type == RepoType.MULTI or repo.repo_type == RepoType.PYTHON or repo.repo_type == RepoType.MKDOCS \
                 or repo.repo_type == RepoType.CONTENT_DELIVERY or repo.repo_type == RepoType.PHP or repo.repo_type == RepoType.MISC:
             VersionWorker.mark_empty(repo, report)
@@ -153,6 +155,12 @@ class VersionWorker(Worker):
                             report.add(repo, dir_suffix, Const.FILE_PACKAGE_LOCK_JSON, VersionType.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN, version_pack)
 
     def analyze_angular_dist(self, repo, report: VersionReport):
+        root_dir = Util.get_wd(repo)
+        dir_suffix = root_dir[len(Util.cedar_home):]
+
+        self.analyze_package_and_lock(repo, report, root_dir, dir_suffix)
+
+    def analyze_typescript(self, repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
         dir_suffix = root_dir[len(Util.cedar_home):]
 

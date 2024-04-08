@@ -184,6 +184,27 @@ class ReposFactory:
         repos.add_relation(embeddable_editor_dist_own_relation)
         repos.add_relation(artifact_viewer_dist_own_relation)
 
+        model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT, ArtifactType.NPM,
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 allow_different_version=True, skip_from_release=True)
+        repos.add_repo(model_typescript_library)
+
+        model_typescript_library_demo = Repo("cedar-model-typescript-library-demo", RepoType.TYPESCRIPT, ArtifactType.NPM,
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 allow_different_version=True, skip_from_release=True)
+        repos.add_repo(model_typescript_library_demo)
+
+        repos.add_repo(Repo("cedar-model-typescript-library-python", RepoType.PYTHON, ArtifactType.NONE, []))
+
+        model_typescript_library_roundtrip = Repo("cedar-model-typescript-library-roundtrip", RepoType.TYPESCRIPT, ArtifactType.NPM,
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 allow_different_version=True, skip_from_release=True)
+        repos.add_repo(model_typescript_library_roundtrip)
+
+
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, ArtifactType.NONE, []))
         repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, ArtifactType.NONE, [], is_private=True))
 

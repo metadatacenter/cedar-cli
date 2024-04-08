@@ -27,6 +27,12 @@ class BuildShellTaskFactory:
         return task
 
     @classmethod
+    def npm_run_build(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("NPM run build", TaskType.SHELL, repo)
+        task.command_list = ['npm run build']
+        return task
+
+    @classmethod
     def copy_src_content_to_dest(cls, source_path: str, target_path: str, repo: Repo) -> PlanTask:
         task = PlanTask("Copy source directory content into destination directory", TaskType.SHELL, repo)
         command = "cp -a " + source_path + " " + target_path
