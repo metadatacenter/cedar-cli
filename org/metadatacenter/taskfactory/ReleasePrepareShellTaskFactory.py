@@ -139,6 +139,22 @@ class ReleasePrepareShellTaskFactory:
         return task
 
     @classmethod
+    def prepare_typescript(cls, repo: Repo, branch_type: PreReleaseBranchType,
+                           release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
+        if release_prepare_phase == ReleasePreparePhase.BUILD:
+            return
+        task = PlanTask(cls.get_typed_name("TypeScript project", branch_type), TaskType.SHELL, repo)
+        task.command_list = []
+        version, branch_name, tag_name = Util.get_release_vars(branch_type)
+        task.command_list.extend([
+            *cls.macro_update_package_json_and_travis(version),
+            *cls.macro_build_typescript(),
+            *cls.macro_commit_changes(branch_name),
+            *(cls.macro_tag_repo(tag_name) if tag_name is not None else [])
+        ])
+        return task
+
+    @classmethod
     def prepare_plain_sub(cls, repo: Repo, branch_type: PreReleaseBranchType,
                           release_prepare_phase: ReleasePreparePhase) -> PlanTask or None:
         if release_prepare_phase == ReleasePreparePhase.BUILD:
@@ -318,6 +334,12 @@ class ReleasePrepareShellTaskFactory:
     def macro_build_angular_js(cls):
         return ('echo "Build release version"',
                 '      npm install')
+
+    @classmethod
+    def macro_build_typescript(cls):
+        return ('echo "Build release version"',
+                '      npm install',
+                '      npm run build')
 
     @classmethod
     def macro_build_ember(cls):

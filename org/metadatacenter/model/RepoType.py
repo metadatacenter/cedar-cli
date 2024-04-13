@@ -4,6 +4,7 @@ class RepoType:
     ANGULAR_JS = "angularJS"
     ANGULAR = "angular"
     ANGULAR_DIST = "angular-dist"
+    TYPESCRIPT = "typescript"
     EMBER = "ember"
     MULTI = "multi"
     CONTENT_DELIVERY = "content-delivery"
