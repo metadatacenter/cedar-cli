@@ -16,11 +16,25 @@ class StartInfrastructureWorker(Worker):
     def all():
         if GlobalContext.get_use_osa():
             Worker.execute_generic_shell_commands(
-                ["osascript " + Util.get_osa_script_path('start-infrastructure-new-tab.scpt')],
+                ["osascript " + Util.get_osa_script_path('start-infrastructure-all-new-tab.scpt')],
                 title="Launching Infrastructure services in new tab",
             )
         else:
             Worker.execute_generic_shell_commands(
-                ["source " + Util.get_bash_script_path('start-infrastructure.sh')],
+                ["source " + Util.get_bash_script_path('start-infrastructure-all.sh')],
                 title="Launching Infrastructure services",
+            )
+
+
+    @staticmethod
+    def keycloak():
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-infrastructure-keycloak-new-tab.scpt')],
+                title="Launching Keycloak services in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-infrastructure-keycloak.sh')],
+                title="Launching Keycloak services",
             )
