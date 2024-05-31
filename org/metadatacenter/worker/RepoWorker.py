@@ -10,7 +10,7 @@ from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
-FS_TYPE_DIR = '🗂️  dir'
+FS_TYPE_DIR = '📁 dir'
 FS_TYPE_FILE = '📄 file'
 RECOGNIZED_AS_CEDAR_REPO = 'CEDAR repo'
 STATUS_ICON_OK = '✅'
@@ -62,7 +62,7 @@ class RepoWorker(Worker):
         is_private = STATUS_ICON_OK if repo.is_private else ""
         for_docker = STATUS_ICON_OK if repo.for_docker else ""
         is_frontend = STATUS_ICON_OK if repo.is_frontend else ""
-        name = repo.parent_repo.name + "️ ➡️  " + repo.name if repo.is_sub_repo else repo.name
+        name = repo.parent_repo.name + ' ⮕ ' + repo.name if repo.is_sub_repo else repo.name
         table.add_row(name, repo.repo_type, is_library, is_client, is_microservice, is_frontend, is_private, for_docker)
 
     @staticmethod
