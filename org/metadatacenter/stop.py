@@ -36,6 +36,17 @@ def java_all():
 def frontend_all():
     StopFrontendWorker.all()
 
+
 @app.command("uis")
 def ui_all():
     StopFrontendWorker.all()
+
+
+@app.command("kk")
+def infra_kk():
+    StopInfrastructureWorker.keycloak()
+
+
+@app.command("keycloak")
+def infra_keycloak():
+    infra_kk()

@@ -16,11 +16,23 @@ class StopInfrastructureWorker(Worker):
     def all():
         if GlobalContext.get_use_osa():
             Worker.execute_generic_shell_commands(
-                ["osascript " + Util.get_osa_script_path('stop-infrastructure.scpt')],
+                ["osascript " + Util.get_osa_script_path('stop-infrastructure-all.scpt')],
                 title="Stopping Infrastructure services",
             )
         else:
             Worker.execute_generic_shell_commands(
-                ["source " + Util.get_bash_script_path('stop-infrastructure.sh')],
+                ["source " + Util.get_bash_script_path('stop-infrastructure-all.sh')],
                 title="Stopping Infrastructure services",
+            )
+
+    def keycloak():
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('stop-infrastructure-keycloak.scpt')],
+                title="Stopping keycloak service",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('stop-infrastructure-keycloak.sh')],
+                title="Stopping keycloak service",
             )

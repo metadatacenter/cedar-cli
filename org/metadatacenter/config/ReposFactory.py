@@ -29,13 +29,6 @@ class ReposFactory:
                             [V.POM_OWN, V.POM_PARENT], is_library=True))
         repos.add_repo(Repo("cedar-rest-library", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_library=True))
 
-        repos.add_repo(Repo("cedar-archetype-exporter", RepoType.JAVA, ArtifactType.MAVEN,
-                            [V.POM_OWN, V.POM_PARENT], is_client=True))
-        repos.add_repo(Repo("cedar-archetype-instance-reader", RepoType.JAVA, ArtifactType.MAVEN,
-                            [V.POM_OWN, V.POM_PARENT], is_client=True))
-        repos.add_repo(Repo("cedar-archetype-instance-writer", RepoType.JAVA, ArtifactType.MAVEN,
-                            [V.POM_OWN, V.POM_PARENT], is_client=True))
-
         repos.add_repo(Repo("cedar-artifact-server",
                             RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-messaging-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
