@@ -21,6 +21,7 @@ STATUS_MISSING = 'missing'
 STATUS_UNKNOWN = 'unknown'
 
 KNOWN_FS = {
+    'archive': 'Known CEDAR archive folder',
     'neo4j': 'Neo4j installation',
     'keycloak': 'Keycloak installation',
     'CEDAR_CA': 'CEDAR CA working dir',
@@ -32,9 +33,11 @@ KNOWN_FS = {
     'tmp': 'Temporary dir',
     'set-env-internal.sh': 'Known CEDAR shell script',
     'set-env-external.sh': 'Known CEDAR shell script',
-    'cedar-profile-native-develop.sh': 'Known CEDAR shell script'
+    'cedar-profile-native-develop.sh': 'Known CEDAR shell script',
+    'cedar-profile-pre-production-centos.sh': 'Known CEDAR shell script',
+    'cedar-profile-production-centos.sh': 'Known CEDAR shell script',
+    'cedar-profile-staging-centos.sh': 'Known CEDAR shell script'
 }
-
 
 class RepoWorker(Worker):
     def __init__(self):
@@ -125,10 +128,10 @@ class RepoWorker(Worker):
             if entry.status == STATUS_OK:
                 cnt_ok += 1
             elif entry.status == STATUS_UNKNOWN:
-                cnt_unknown +=1
+                cnt_unknown += 1
                 unknown_list.append(entry.display_name)
             elif entry.status == STATUS_MISSING:
-                cnt_missing +=1
+                cnt_missing += 1
                 missing_list.append(entry.display_name)
 
         caption = str(cnt_ok) + " object/files recognized"
