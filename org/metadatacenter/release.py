@@ -26,6 +26,7 @@ plan_executor = PlanExecutor()
 @app.command("prepare")
 def prepare(dry_run: bool = typer.Option(False, help="Dry run"),
             dump_plan: bool = typer.Option(False, help="Dump plan")):
+    Util.check_release_tools()
     Util.check_release_variables()
     GlobalContext.mark_global_task_type(TaskType.RELEASE_PREPARE)
     plan = Plan("Prepare release all")
