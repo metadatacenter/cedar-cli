@@ -1,6 +1,7 @@
 import copy
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from math import log2
@@ -115,6 +116,21 @@ class Util(object):
             sys.exit(1)
         current_datetime = datetime.now()
         cls.release_tag_time = current_datetime.strftime("%Y%m%d-%H%M%S")
+
+    @classmethod
+    def check_release_tools(cls):
+        tools = ['git', 'mvn', 'node', 'npm', 'ng', 'jq', 'sed', 'sponge', 'find', 'tsc', 'xmlstarlet', 'ember']
+        tools.sort()
+        missing_tools = []
+        for tool in tools:
+            if shutil.which(tool) is None:
+                missing_tools.append(tool)
+        if missing_tools:
+            err = f"The following tools are missing: {', '.join(missing_tools)}. Please install them before proceeding."
+            console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
+            sys.exit(1)
+        else:
+            console.print(Panel("All tools are present:" + ', '.join(tools), style=Style(color="green")))
 
     @classmethod
     def get_release_vars(cls, branch_type: PreReleaseBranchType):

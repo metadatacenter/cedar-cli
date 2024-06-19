@@ -13,7 +13,6 @@ from org.metadatacenter.planner.ReleaseCleanupPlanner import ReleaseCleanupPlann
 from org.metadatacenter.planner.ReleaseCommitPlanner import ReleaseCommitPlanner
 from org.metadatacenter.planner.ReleasePreparePlanner import ReleasePreparePlanner
 from org.metadatacenter.planner.ReleaseRollbackPlanner import ReleaseRollbackPlanner
-from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
@@ -27,6 +26,7 @@ plan_executor = PlanExecutor()
 @app.command("prepare")
 def prepare(dry_run: bool = typer.Option(False, help="Dry run"),
             dump_plan: bool = typer.Option(False, help="Dump plan")):
+    Util.check_release_tools()
     Util.check_release_variables()
     GlobalContext.mark_global_task_type(TaskType.RELEASE_PREPARE)
     plan = Plan("Prepare release all")
@@ -111,6 +111,7 @@ def cleanup(pre_branch: str = typer.Option(None, help="Pre-branch to delete"),
 @app.command("all-in-one")
 def all_in_one(dry_run: bool = typer.Option(False, help="Dry run"),
                dump_plan: bool = typer.Option(False, help="Dump plan")):
+    Util.check_release_tools()
     plan_wrapper = Plan("Prepare all-in-one all")
 
     Util.check_release_variables()
@@ -194,3 +195,9 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run"),
         plan_wrapper.add_task_as_task_no_expand(task)
 
     plan_executor.execute(plan_wrapper, dry_run, dump_plan)
+
+
+@app.command("check-tools")
+def prepare(dry_run: bool = typer.Option(False, help="Dry run"),
+            dump_plan: bool = typer.Option(False, help="Dump plan")):
+    Util.check_release_tools()
