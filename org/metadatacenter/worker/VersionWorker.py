@@ -6,6 +6,8 @@ from lxml import etree
 from rich.console import Console
 from rich.table import Table, Column
 
+from org.metadatacenter.model.ArtifactEntryReport import ArtifactEntryReport
+from org.metadatacenter.model.ArtifactStatus import ArtifactStatus
 from org.metadatacenter.model.RepoRelation import RepoRelation
 from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
@@ -80,7 +82,15 @@ class VersionWorker(Worker):
 
     def analyze_pom_recursively(self, repo, root_dir, depth, report: VersionReport):
         pom_path = os.path.join(root_dir, Const.FILE_POM_XML)
-        tree = etree.parse(pom_path)
+        url = ''
+        try:
+            tree = etree.parse(pom_path)
+        except Exception as e:
+            dir_suffix = Util.get_repo_suffix(repo)
+            entry = ArtifactEntryReport(repo, dir_suffix, url)
+            entry.set_status(ArtifactStatus.ERROR)
+            report.add(repo, dir_suffix, Const.FILE_POM_XML, VersionType.POM_OWN, 'MISSING')
+            return
 
         dir_suffix = root_dir[len(Util.cedar_home):]
 

@@ -51,6 +51,7 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-microservice-libraries", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
         repos.add_repo(Repo("cedar-admin-tool", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
         repos.add_repo(Repo("cedar-cadsr-tools", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-model-library-roundtrip", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
 
         repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True))
 
