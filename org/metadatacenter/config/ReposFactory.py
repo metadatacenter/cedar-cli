@@ -195,7 +195,7 @@ class ReposFactory:
         model_typescript_library_roundtrip = Repo("cedar-model-typescript-library-roundtrip", RepoType.TYPESCRIPT, ArtifactType.NPM,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                                 allow_different_version=True, skip_from_release=True)
+                                 allow_different_version=True, skip_from_release=True, skip_npm_install=True)
         repos.add_repo(model_typescript_library_roundtrip)
 
 
