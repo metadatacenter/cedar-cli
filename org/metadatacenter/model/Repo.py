@@ -12,7 +12,7 @@ class Repo:
                  version_list: List[VersionType],
                  is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
                  is_frontend=False, expected_build_lines=100,
-                 allow_different_version=False, skip_from_release=False):
+                 allow_different_version=False, skip_from_release=False, skip_npm_install=False):
         self.name = name
         self.repo_type = repo_type
         self.artifact_type = artifact_type
@@ -30,6 +30,7 @@ class Repo:
         self.pre_post_type: PrePostType = PrePostType.NONE
         self.allow_different_version = allow_different_version
         self.skip_from_release = skip_from_release
+        self.skip_npm_install = skip_npm_install
 
     def __eq__(self, obj):
         return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()

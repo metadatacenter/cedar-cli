@@ -59,7 +59,8 @@ class BuildOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.TYPESCRIPT:
                 shell_wrapper = PlanTask("Build TypeScript project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
+                if not repo.skip_npm_install:
+                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
                 shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_run_build(repo))
                 task.add_task_as_task(shell_wrapper)
             else:
