@@ -24,3 +24,16 @@ class StopMicroserviceWorker(Worker):
                 ["source " + Util.get_bash_script_path('stop-microservices.sh')],
                 title="Stopping Microservices",
             )
+
+    @staticmethod
+    def bridge():
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('stop-microservice-bridge.scpt')],
+                title="Stopping Bridge Server",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('stop-microservice-bridge.sh')],
+                title="Stopping Bridge Server",
+            )
