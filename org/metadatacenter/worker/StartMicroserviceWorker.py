@@ -24,3 +24,17 @@ class StartMicroserviceWorker(Worker):
                 ["source " + Util.get_bash_script_path('start-microservices.sh')],
                 title="Launching Microservices",
             )
+
+
+    @staticmethod
+    def bridge():
+        if GlobalContext.get_use_osa():
+            Worker.execute_generic_shell_commands(
+                ["osascript " + Util.get_osa_script_path('start-microservice-bridge-new-tab.scpt')],
+                title="Launching Bridge Server in new tab",
+            )
+        else:
+            Worker.execute_generic_shell_commands(
+                ["source " + Util.get_bash_script_path('start-microservice-bridge.sh')],
+                title="Launching Bridge Server",
+            )
