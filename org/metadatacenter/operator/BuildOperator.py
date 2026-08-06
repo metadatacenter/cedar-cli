@@ -29,11 +29,11 @@ class BuildOperator(Operator):
         for repo in repo_list_flat:
             if repo.repo_type == RepoType.JAVA_WRAPPER:
                 shell_wrapper = PlanTask("Build java wrapper project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.maven_clean_install(repo))
+                shell_wrapper.add_task_as_task(BuildShellTaskFactory.maven_clean_install_skip_tests(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.JAVA:
                 shell_wrapper = PlanTask("Build java project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.maven_clean_install(repo))
+                shell_wrapper.add_task_as_task(BuildShellTaskFactory.maven_clean_install_skip_tests(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR:
                 if build_frontends:

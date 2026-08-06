@@ -9,9 +9,9 @@ class BuildShellTaskFactory:
         super().__init__()
 
     @classmethod
-    def maven_clean_install(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Maven clean install", TaskType.SHELL, repo)
-        task.command_list = ['mvn clean install']
+    def maven_clean_install_skip_tests(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Maven clean install skip tests", TaskType.SHELL, repo)
+        task.command_list = ['mvn clean install -DskipTests']
         return task
 
     @classmethod
