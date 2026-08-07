@@ -193,50 +193,54 @@ docker volume rm log_frontend_bridging
             title="Removing all CEDAR volumes",
         )
 
+    # Stack name in cedar-docker-deploy, and what to call it when talking to the user.
+    STACKS = {
+        'infrastructure': ('cedar-infrastructure', 'infrastructure services'),
+        'microservices': ('cedar-microservices', 'microservices'),
+        'frontends': ('cedar-frontend', 'frontends'),
+        'admin': ('cedar-admin', 'admin tools'),
+    }
+
     @staticmethod
-    def start_infrastructure():
+    def compose(stack, action, detach=False):
+        directory, label = DockerWorker.STACKS[stack]
+        command = 'docker compose ' + action
+        if action == 'up' and detach:
+            command += ' -d'
         Worker.execute_generic_shell_commands(
-            ['docker-compose up'],
-            title="Starting CEDAR infrastructure services",
-            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-infrastructure')
+            [command],
+            title=("Starting" if action == 'up' else "Stopping") + " CEDAR " + label,
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory)
         )
 
     @staticmethod
-    def start_microservices():
-        Worker.execute_generic_shell_commands(
-            ['docker-compose up'],
-            title="Starting CEDAR microservices",
-            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-microservices')
-        )
+    def start_infrastructure(detach=False):
+        DockerWorker.compose('infrastructure', 'up', detach)
 
     @staticmethod
-    def start_frontends():
-        Worker.execute_generic_shell_commands(
-            ['docker-compose up'],
-            title="Starting CEDAR frontends",
-            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-frontend')
-        )
+    def start_microservices(detach=False):
+        DockerWorker.compose('microservices', 'up', detach)
+
+    @staticmethod
+    def start_frontends(detach=False):
+        DockerWorker.compose('frontends', 'up', detach)
+
+    @staticmethod
+    def start_admin(detach=False):
+        DockerWorker.compose('admin', 'up', detach)
 
     @staticmethod
     def stop_infrastructure():
-        Worker.execute_generic_shell_commands(
-            ['docker-compose down'],
-            title="Stopping CEDAR infrastructure services",
-            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-infrastructure')
-        )
+        DockerWorker.compose('infrastructure', 'down')
 
     @staticmethod
     def stop_microservices():
-        Worker.execute_generic_shell_commands(
-            ['docker-compose down'],
-            title="Stopping CEDAR microservices",
-            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-microservices')
-        )
+        DockerWorker.compose('microservices', 'down')
 
     @staticmethod
     def stop_frontends():
-        Worker.execute_generic_shell_commands(
-            ['docker-compose down'],
-            title="Stopping CEDAR frontends",
-            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', 'cedar-frontend')
-        )
+        DockerWorker.compose('frontends', 'down')
+
+    @staticmethod
+    def stop_admin():
+        DockerWorker.compose('admin', 'down')

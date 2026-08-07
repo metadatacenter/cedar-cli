@@ -18,3 +18,8 @@ def stop_microservices():
 @app.command("frontends")
 def stop_frontends():
     DockerWorker.stop_frontends()
+
+
+@app.command("admin")
+def stop_admin():
+    DockerWorker.stop_admin()
