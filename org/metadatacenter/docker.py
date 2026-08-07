@@ -9,6 +9,12 @@ app.add_typer(docker_start.app, name="start")
 app.add_typer(docker_stop.app, name="stop")
 
 
+@app.command("validate")
+def validate():
+    """Check every compose stack parses and every variable it references is defined. Needs no daemon."""
+    DockerWorker.validate()
+
+
 @app.command("create-network")
 def create_network():
     DockerWorker.create_network()

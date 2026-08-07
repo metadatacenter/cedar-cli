@@ -16,6 +16,38 @@ class DockerWorker(Worker):
         super().__init__()
 
     @staticmethod
+    def validate():
+        Worker.execute_generic_shell_commands([
+            """
+failed=0
+for stack in cedar-infrastructure cedar-microservices cedar-frontend cedar-admin; do
+    out=$(cd "${CEDAR_HOME}/cedar-docker-deploy/${stack}" && docker compose config --quiet 2>&1)
+    rc=$?
+    undefined=$(echo "${out}" | grep 'variable is not set' | grep -oE 'CEDAR_[A-Z0-9_]+' | sort -u)
+    if [ ${rc} -ne 0 ]; then
+        echo "FAIL ${stack}: compose file is not valid"
+        echo "${out}"
+        failed=1
+    elif [ -n "${undefined}" ]; then
+        echo "FAIL ${stack}: referenced but not defined by the profile:"
+        echo "${undefined}" | sed 's/^/         /'
+        failed=1
+    else
+        echo "OK   ${stack}"
+    fi
+done
+if [ ${failed} -ne 0 ]; then
+    echo
+    echo "Validation failed. Source a Docker profile before running this,"
+    echo "for example cedar-development/bin/templates/cedar-profile-docker-eval.sh."
+fi
+exit ${failed}
+"""
+        ],
+            title="Validating CEDAR compose stacks",
+        )
+
+    @staticmethod
     def create_network():
         Worker.execute_generic_shell_commands([
             """
