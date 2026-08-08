@@ -48,6 +48,41 @@ exit ${failed}
         )
 
     @staticmethod
+    def build_images(images, local=False):
+        """Build the given images in order. Returns a process exit code.
+
+        With local=True the jar is staged from the checkout before each image that carries one, and
+        cleared afterwards: a staged jar is an input to one build, not a mode the tree stays in.
+        Staging is strict, so a target whose jar has not been built fails rather than quietly
+        falling back to the published one.
+        """
+        from org.metadatacenter.util.DockerImages import DockerImages
+
+        _, version, prefix = DockerImages.manifest()
+        build_home = DockerImages.build_home()
+
+        steps = []
+        for image in images:
+            stage = local and DockerImages.stageable(image)
+            steps.append(f"""
+echo "==> {image}"
+{f'"{build_home}/bin/stage-local-jar.sh" {image} || exit 1' if stage else ''}
+docker build -t "{prefix}/{image}:{version}" "{build_home}/{image}"
+rc=$?
+{f'rm -f "{build_home}/{image}/local/"*.jar' if stage else ''}
+if [ $rc -ne 0 ]; then
+    echo "Build failed: {image}"
+    exit $rc
+fi
+""")
+
+        out = Worker.execute_generic_shell_commands(
+            ["set -o pipefail\n" + "\n".join(steps) + "\necho 'All requested images built.'"],
+            title=f"Building {len(images)} CEDAR image(s) at {version}",
+        )
+        return 0 if any("All requested images built." in line for line in out) else 1
+
+    @staticmethod
     def create_network():
         Worker.execute_generic_shell_commands([
             """
