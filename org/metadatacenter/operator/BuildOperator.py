@@ -26,14 +26,21 @@ class BuildOperator(Operator):
         repo_list = [task.repo]
         repo_list_flat = Util.get_flat_repo_list(repo_list)
         build_frontends = Const.CEDAR_DEV_BUILD_FRONTENDS in os.environ and os.environ[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'
+        # The Java build runs its tests. Every suite is backend-free - in-memory auth and embedded
+        # Neo4j, Mongo, MariaDB and Redis - so a build needs nothing running, and a green build now
+        # means the same thing CI means by it. Set CEDAR_DEV_SKIP_TESTS=true for a fast build when
+        # the tests have already been run.
+        skip_tests = Const.CEDAR_DEV_SKIP_TESTS in os.environ and os.environ[Const.CEDAR_DEV_SKIP_TESTS] == 'true'
+        java_build = BuildShellTaskFactory.maven_clean_install_skip_tests if skip_tests \
+            else BuildShellTaskFactory.maven_clean_install
         for repo in repo_list_flat:
             if repo.repo_type == RepoType.JAVA_WRAPPER:
                 shell_wrapper = PlanTask("Build java wrapper project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.maven_clean_install_skip_tests(repo))
+                shell_wrapper.add_task_as_task(java_build(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.JAVA:
                 shell_wrapper = PlanTask("Build java project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.maven_clean_install_skip_tests(repo))
+                shell_wrapper.add_task_as_task(java_build(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR:
                 if build_frontends:
