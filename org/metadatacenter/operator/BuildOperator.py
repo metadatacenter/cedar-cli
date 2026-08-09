@@ -26,13 +26,10 @@ class BuildOperator(Operator):
         repo_list = [task.repo]
         repo_list_flat = Util.get_flat_repo_list(repo_list)
         build_frontends = Const.CEDAR_DEV_BUILD_FRONTENDS in os.environ and os.environ[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'
-        # The Java build runs its tests. Every suite is backend-free - in-memory auth and embedded
-        # Neo4j, Mongo, MariaDB and Redis - so a build needs nothing running, and a green build now
-        # means the same thing CI means by it. Set CEDAR_DEV_SKIP_TESTS=true for a fast build when
-        # the tests have already been run.
-        skip_tests = Const.CEDAR_DEV_SKIP_TESTS in os.environ and os.environ[Const.CEDAR_DEV_SKIP_TESTS] == 'true'
-        java_build = BuildShellTaskFactory.maven_clean_install_skip_tests if skip_tests \
-            else BuildShellTaskFactory.maven_clean_install
+        # The Java build skips its tests. Run them separately, or with mvn directly in the repo.
+        # Making the build run them, and offering --tests / --skip-tests to choose, is an open
+        # roadmap item rather than a settled default.
+        java_build = BuildShellTaskFactory.maven_clean_install_skip_tests
         for repo in repo_list_flat:
             if repo.repo_type == RepoType.JAVA_WRAPPER:
                 shell_wrapper = PlanTask("Build java wrapper project", TaskType.SHELL_WRAPPER, repo)
