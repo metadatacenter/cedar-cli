@@ -11,7 +11,7 @@ class DeployShellTaskFactory:
     @classmethod
     def maven_deploy_skip_tests(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Maven deploy skip tests", TaskType.SHELL, repo)
-        task.command_list = ['mvn deploy -DskipTests']
+        task.command_list = ['./mvnw deploy -DskipTests']
         return task
 
     @classmethod

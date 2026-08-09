@@ -25,9 +25,9 @@ class ReleasePrepareShellTaskFactory:
         build_command = ''
 
         if repo in GlobalContext.repos.get_parent():
-            build_command = '      mvn clean install -DskipTests'
+            build_command = '      ./mvnw clean install -DskipTests'
         elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
-            build_command = '      mvn clean install -DskipTests'
+            build_command = '      ./mvnw clean install -DskipTests'
 
         if release_prepare_phase == ReleasePreparePhase.SET_VERSIONS:
             if repo in GlobalContext.repos.get_parent():
