@@ -48,7 +48,7 @@ class DockerImages:
         fails the build rather than being silently substituted.
         """
         text = open(cls._manifest_path()).read()
-        found = re.findall(r'^export ([A-Z0-9_]+_VERSION)=(\S+)', text, re.M)
+        found = re.findall(r'^export ([A-Z0-9_]+(?:_VERSION|_SHA256))=(\S+)', text, re.M)
         return {name: value for name, value in found if name != 'IMAGE_VERSION'}
 
     @staticmethod
