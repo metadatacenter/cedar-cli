@@ -61,13 +61,21 @@ exit ${failed}
         _, version, prefix = DockerImages.manifest()
         build_home = DockerImages.build_home()
 
+        # The locked server versions travel from the manifest into every build as build arguments.
+        # Passing them to all images rather than working out which image wants which is deliberate:
+        # Docker ignores a build argument a Dockerfile does not declare, and the alternative is a
+        # second place recording which image installs which server.
+        build_args = ' '.join(
+            f'--build-arg {name}="{value}"' for name, value in sorted(DockerImages.server_versions().items())
+        )
+
         steps = []
         for image in images:
             stage = local and DockerImages.stageable(image)
             steps.append(f"""
 echo "==> {image}"
 {f'"{build_home}/bin/stage-local-jar.sh" {image} || exit 1' if stage else ''}
-docker build -t "{prefix}/{image}:{version}" "{build_home}/{image}"
+docker build {build_args} -t "{prefix}/{image}:{version}" "{build_home}/{image}"
 rc=$?
 {f'rm -f "{build_home}/{image}/local/"*.jar' if stage else ''}
 if [ $rc -ne 0 ]; then

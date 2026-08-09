@@ -38,6 +38,19 @@ class DockerImages:
         images = re.findall(r'"([^"]+)"', array.group(1)) if array else []
         return images, (version.group(1) if version else None), (prefix.group(1) if prefix else 'metadatacenter')
 
+    @classmethod
+    def server_versions(cls):
+        """The locked infrastructure server versions the images are built against.
+
+        Every `export <NAME>_VERSION=` in the manifest other than the CEDAR image version itself,
+        so adding a server here is a one-line change to the manifest and nothing else. The
+        Dockerfiles declare these as build arguments with no default, so a version missing here
+        fails the build rather than being silently substituted.
+        """
+        text = open(cls._manifest_path()).read()
+        found = re.findall(r'^export ([A-Z0-9_]+_VERSION)=(\S+)', text, re.M)
+        return {name: value for name, value in found if name != 'IMAGE_VERSION'}
+
     @staticmethod
     def short_name(image):
         if image == 'cedar-admin-tool':
