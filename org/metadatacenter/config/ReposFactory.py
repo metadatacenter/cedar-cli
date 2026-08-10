@@ -126,8 +126,6 @@ class ReposFactory:
                                      [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cav_demo_js_src = Repo("cedar-cav-demo-js-src", RepoType.ANGULAR, ArtifactType.NONE,
-                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         cee_component_demo_multi.add_sub_repo(cee_demo_angular_src)
         cee_component_demo_multi.add_sub_repo(cee_demo_angular_dist)
@@ -140,7 +138,6 @@ class ReposFactory:
         repos.add_relation(cee_docs_angular_src_dist_relation)
 
         cee_component_demo_multi.add_sub_repo(cee_demo_ember_src)
-        cee_component_demo_multi.add_sub_repo(cav_demo_js_src)
 
         repos.add_repo(cee_component_demo_multi)
 
@@ -149,13 +146,6 @@ class ReposFactory:
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True)
         repos.add_repo(embeddable_editor)
-
-        # FKA cedar-metadata-form
-        artifact_viewer = Repo("cedar-artifact-viewer", RepoType.ANGULAR, ArtifactType.NONE,
-                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
-                                V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                               allow_different_version=True, skip_from_release=True)
-        repos.add_repo(artifact_viewer)
 
         content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR, ArtifactType.NPM,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
@@ -168,15 +158,7 @@ class ReposFactory:
                                                                RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor.js'
                                                            })
 
-        artifact_viewer_dist_own_relation = RepoRelation(artifact_viewer, RepoRelationType.IS_SOURCE_OF, artifact_viewer,
-                                                         parameters={
-                                                             RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-artifact-viewer",
-                                                             RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
-                                                             RepoRelation.DESTINATION_CONCAT: 'cedar-artifact-viewer.js'
-                                                         })
-
         repos.add_relation(embeddable_editor_dist_own_relation)
-        repos.add_relation(artifact_viewer_dist_own_relation)
 
         model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT, ArtifactType.NPM,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
