@@ -141,24 +141,27 @@ class ReposFactory:
 
         repos.add_repo(cee_component_demo_multi)
 
+        # CEE assembles and stages its own npm package, and the CLI drives that pipeline rather
+        # than reassembling the build output itself. Angular's esbuild builder emits an ES module
+        # graph under dist/cedar-embeddable-editor/browser/, which cannot be joined by
+        # concatenation the way the old webpack chunks could; visual/resolve-build-output.mjs is
+        # the single place that knows what the builder emitted and how to turn it into one script.
         embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                                 allow_different_version=True, skip_from_release=True)
+                                 allow_different_version=True, skip_from_release=True,
+                                 build_command_list=[
+                                     'npm install',
+                                     'npm --prefix visual install',
+                                     'npm run build:production',
+                                     'npm --prefix visual run bundle',
+                                     'npm run package:npm:prebuilt',
+                                 ])
         repos.add_repo(embeddable_editor)
 
         content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR, ArtifactType.NPM,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(content_distribution)
-
-        embeddable_editor_dist_own_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, embeddable_editor,
-                                                           parameters={
-                                                               RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-embeddable-editor",
-                                                               RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
-                                                               RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor.js'
-                                                           })
-
-        repos.add_relation(embeddable_editor_dist_own_relation)
 
         model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT, ArtifactType.NPM,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,

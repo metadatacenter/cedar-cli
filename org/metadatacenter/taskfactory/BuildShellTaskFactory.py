@@ -27,6 +27,12 @@ class BuildShellTaskFactory:
         return task
 
     @classmethod
+    def repo_build_commands(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Repo-specific build", TaskType.SHELL, repo)
+        task.command_list = list(repo.build_command_list)
+        return task
+
+    @classmethod
     def npm_install(cls, repo: Repo) -> PlanTask:
         task = PlanTask("NPM install", TaskType.SHELL, repo)
         task.command_list = ['npm install']

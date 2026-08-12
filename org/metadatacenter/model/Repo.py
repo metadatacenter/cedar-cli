@@ -12,7 +12,8 @@ class Repo:
                  version_list: List[VersionType],
                  is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
                  is_frontend=False, expected_build_lines=100,
-                 allow_different_version=False, skip_from_release=False, skip_npm_install=False):
+                 allow_different_version=False, skip_from_release=False, skip_npm_install=False,
+                 build_command_list: List[str] = None):
         self.name = name
         self.repo_type = repo_type
         self.artifact_type = artifact_type
@@ -31,6 +32,10 @@ class Repo:
         self.allow_different_version = allow_different_version
         self.skip_from_release = skip_from_release
         self.skip_npm_install = skip_npm_install
+        # Shell commands that build this repo, replacing the ones its repo type implies.
+        # A repo that owns its own packaging pipeline sets this so the CLI drives that
+        # pipeline instead of reproducing it from outside.
+        self.build_command_list = build_command_list
 
     def __eq__(self, obj):
         return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()

@@ -42,7 +42,10 @@ class BuildOperator(Operator):
             elif repo.repo_type == RepoType.ANGULAR:
                 if build_frontends:
                     shell_wrapper = PlanTask("Build angular project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
+                    if repo.build_command_list:
+                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.repo_build_commands(repo))
+                    else:
+                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
                 else:
                     shell_wrapper = PlanTask("Build angular project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER,
                                              repo)
