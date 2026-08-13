@@ -35,8 +35,6 @@ mkdir -p ${CEDAR_HOME}/log/frontend-cedar/
 mkdir -p ${CEDAR_HOME}/log/frontend-content/
 mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular/
 mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular-dist/
-mkdir -p ${CEDAR_HOME}/log/frontend-cee-docs-angular/
-mkdir -p ${CEDAR_HOME}/log/frontend-cee-docs-angular-dist/
 mkdir -p ${CEDAR_HOME}/log/frontend-monitoring/
 mkdir -p ${CEDAR_HOME}/log/frontend-openview/
 mkdir -p ${CEDAR_HOME}/log/frontend-shared/
@@ -97,8 +95,6 @@ CEDAR_HOSTS=(
     "worker"
     "demo.cee"
     "demo-dist.cee"
-    "docs.cee"
-    "docs-dist.cee"
 )
 
 counter=0

@@ -38,9 +38,7 @@ class SubdomainsFactory:
         subdomains.add_frontend('bridging')
 
         subdomains.add_frontend('demo.cee')
-        subdomains.add_frontend('docs.cee')
         subdomains.add_frontend('demo-dist.cee')
-        subdomains.add_frontend('docs-dist.cee')
 
         subdomains.add_static('shared', static_location='cedar-shared-data')
 

@@ -120,10 +120,6 @@ class ReposFactory:
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
                                      [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cee_docs_angular_src = Repo("cedar-cee-docs-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
-                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
@@ -131,11 +127,6 @@ class ReposFactory:
         cee_component_demo_multi.add_sub_repo(cee_demo_angular_dist)
         cee_demo_angular_src_dist_relation = RepoRelation(cee_demo_angular_src, RepoRelationType.IS_SOURCE_OF, cee_demo_angular_dist)
         repos.add_relation(cee_demo_angular_src_dist_relation)
-
-        cee_component_demo_multi.add_sub_repo(cee_docs_angular_src)
-        cee_component_demo_multi.add_sub_repo(cee_docs_angular_dist)
-        cee_docs_angular_src_dist_relation = RepoRelation(cee_docs_angular_src, RepoRelationType.IS_SOURCE_OF, cee_docs_angular_dist)
-        repos.add_relation(cee_docs_angular_src_dist_relation)
 
         cee_component_demo_multi.add_sub_repo(cee_demo_ember_src)
 
