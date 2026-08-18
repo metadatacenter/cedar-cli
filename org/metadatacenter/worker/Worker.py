@@ -1,8 +1,6 @@
-import os
 import subprocess
 from typing import List
 
-import fcntl
 from rich.console import Console
 from rich.panel import Panel
 from rich.style import Style
@@ -38,29 +36,20 @@ class Worker:
         proc = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
                                 executable=GlobalContext.get_shell())
 
-        proc_stdout = proc.stdout
-        fl = fcntl.fcntl(proc_stdout, fcntl.F_GETFL)
-        fcntl.fcntl(proc_stdout, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-
         stdout_parts = []
-        while proc.poll() is None:
-            Worker.handle_shell_stdout(proc_stdout, stdout_parts)
-
-        Worker.handle_shell_stdout(proc_stdout, stdout_parts)
+        Worker.handle_shell_stdout(proc.stdout, stdout_parts)
+        proc.wait()
 
         return stdout_parts
 
     @staticmethod
     def handle_shell_stdout(proc_stream, my_buffer, echo_streams=True):
-        try:
-            for s in iter(proc_stream.readline, b''):
-                out = s.decode('utf-8').strip()
-                if len(out) > 0:
-                    my_buffer.append(out)
-                    if echo_streams:
-                        console.print(out, markup=False)
-        except IOError:
-            pass
+        for s in iter(proc_stream.readline, b''):
+            out = s.decode('utf-8').strip()
+            if len(out) > 0:
+                my_buffer.append(out)
+                if echo_streams:
+                    console.print(out, markup=False)
 
     @staticmethod
     def command_list_as_string(command_list):

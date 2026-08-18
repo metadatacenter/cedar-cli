@@ -1,8 +1,6 @@
-import os
 import subprocess
 import time
 
-import fcntl
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress
@@ -59,17 +57,10 @@ class ShellTaskExecutor(TaskExecutor):
         proc = subprocess.Popen([command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
                                 executable=GlobalContext.get_shell())
 
-        proc_stdout = proc.stdout
-        fl = fcntl.fcntl(proc_stdout, fcntl.F_GETFL)
-        fcntl.fcntl(proc_stdout, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-
         stdout_parts = []
-        while proc.poll() is None:
-            self.handle_shell_stdout(proc_stdout, stdout_parts, job_progress)
+        self.handle_shell_stdout(proc.stdout, stdout_parts, job_progress)
 
-        self.handle_shell_stdout(proc_stdout, stdout_parts, job_progress)
-
-        return_code = proc.returncode
+        return_code = proc.wait()
         msg = "[green]Processing " + repo.name + ' done. Return code: ' + str(return_code) + '. '
         # if len(stdout_parts) != repo.expected_build_lines:
         #     msg += "[yellow]" + str(len(stdout_parts)) + ' lines vs expected ' + str(repo.expected_build_lines)
@@ -78,13 +69,10 @@ class ShellTaskExecutor(TaskExecutor):
 
     @staticmethod
     def handle_shell_stdout(proc_stream, my_buffer, job_progress: Progress, echo_streams=True):
-        try:
-            for s in iter(proc_stream.readline, b''):
-                out = s.decode('utf-8').strip()
-                if len(out) > 0:
-                    my_buffer.append(out)
-                    if echo_streams:
-                        job_progress.print(out, markup=False)
-                    job_progress.update(1, advance=1)
-        except IOError:
-            pass
+        for s in iter(proc_stream.readline, b''):
+            out = s.decode('utf-8').strip()
+            if len(out) > 0:
+                my_buffer.append(out)
+                if echo_streams:
+                    job_progress.print(out, markup=False)
+                job_progress.update(1, advance=1)
