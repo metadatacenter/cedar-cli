@@ -33,13 +33,6 @@ class StopFrontendWorker(Worker):
         )
 
     @staticmethod
-    def artifacts():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-artifacts.scpt')],
-            title="Stopping Artifacts Frontend",
-        )
-
-    @staticmethod
     def content():
         Worker.execute_generic_shell_commands(
             ["osascript " + Util.get_osa_script_path('stop-frontend-content.scpt')],
@@ -58,6 +51,5 @@ class StopFrontendWorker(Worker):
         StopFrontendWorker.main()
         StopFrontendWorker.openview()
         StopFrontendWorker.monitoring()
-        StopFrontendWorker.artifacts()
         StopFrontendWorker.bridging()
         StopFrontendWorker.content()

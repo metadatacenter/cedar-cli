@@ -25,9 +25,7 @@ class ProdWorker(Worker):
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-bridging/cedar-bridging-dist/index.html" + "\n" +
             sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-bridging/cedar-bridging-dist/index.html" + "\n" +
             sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n" +
-            sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n" +
-            sed + " 's/window.cedarDomain = \".*\"/window.cedarDomain = \"" + domain + "\"/g' ${CEDAR_HOME}/cedar-artifacts/cedar-artifacts-dist/index.html" + "\n" +
-            sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-artifacts/cedar-artifacts-dist/index.html" + "\n"
+            sed + " 's/content.metadatacenter.org\\//content." + domain + "\\//g' ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n"
         ],
             title="Updating frontend components",
         )
@@ -43,9 +41,7 @@ class ProdWorker(Worker):
             "cd  ${CEDAR_HOME}/cedar-bridging/" + "\n" +
             "git checkout ${CEDAR_HOME}/cedar-bridging/cedar-bridging-dist/index.html" + "\n" +
             "cd  ${CEDAR_HOME}/cedar-monitoring/" + "\n" +
-            "git checkout ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n" +
-            "cd  ${CEDAR_HOME}/cedar-artifacts/" + "\n" +
-            "git checkout ${CEDAR_HOME}/cedar-artifacts/cedar-artifacts-dist/index.html" + "\n"
+            "git checkout ${CEDAR_HOME}/cedar-monitoring/cedar-monitoring-dist/index.html" + "\n"
         ],
             title="Resetting frontend components",
         )

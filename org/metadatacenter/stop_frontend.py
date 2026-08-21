@@ -20,11 +20,6 @@ def monitoring():
     StopFrontendWorker.monitoring()
 
 
-@app.command("artifacts")
-def artifacts():
-    StopFrontendWorker.artifacts()
-
-
 @app.command("bridging")
 def bridging():
     StopFrontendWorker.bridging()

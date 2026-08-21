@@ -29,7 +29,6 @@ mkdir -p ${CEDAR_HOME}/CEDAR_CA/
 mkdir -p ${CEDAR_HOME}/export/
 mkdir -p ${CEDAR_HOME}/tmp/
 
-mkdir -p ${CEDAR_HOME}/log/frontend-artifacts/
 mkdir -p ${CEDAR_HOME}/log/frontend-bridging/
 mkdir -p ${CEDAR_HOME}/log/frontend-cedar/
 mkdir -p ${CEDAR_HOME}/log/frontend-content/
@@ -72,7 +71,6 @@ mkdir -p ${CEDAR_HOME}/log/nginx/
             """
 CEDAR_HOSTS=(
     "artifact"
-    "artifacts"
     "bridge"
     "bridging"
     "auth"

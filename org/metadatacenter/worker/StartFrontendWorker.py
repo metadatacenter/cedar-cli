@@ -52,19 +52,6 @@ class StartFrontendWorker(Worker):
             )
 
     @staticmethod
-    def artifacts():
-        if GlobalContext.get_use_osa():
-            Worker.execute_generic_shell_commands(
-                ["osascript " + Util.get_osa_script_path('start-frontend-artifacts-new-tab.scpt')],
-                title="Launching Artifacts Frontend in new tab",
-            )
-        else:
-            Worker.execute_generic_shell_commands(
-                ["source " + Util.get_bash_script_path('start-frontend-artifacts.sh')],
-                title="Launching Artifacts Frontend",
-            )
-
-    @staticmethod
     def content():
         if GlobalContext.get_use_osa():
             Worker.execute_generic_shell_commands(
@@ -95,6 +82,5 @@ class StartFrontendWorker(Worker):
         StartFrontendWorker.main()
         StartFrontendWorker.openview()
         StartFrontendWorker.monitoring()
-        StartFrontendWorker.artifacts()
         StartFrontendWorker.bridging()
         StartFrontendWorker.content()

@@ -55,21 +55,6 @@ class ReposFactory:
 
         repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True))
 
-        artifacts_multi = Repo("cedar-artifacts", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
-        artifacts_src = Repo("cedar-artifacts-src", RepoType.ANGULAR, ArtifactType.NONE,
-                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        artifacts_dist = Repo("cedar-artifacts-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-
-        artifacts_multi.add_sub_repo(artifacts_src)
-        artifacts_multi.add_sub_repo(artifacts_dist)
-        artifacts_src_dist_relation = RepoRelation(artifacts_src, RepoRelationType.IS_SOURCE_OF, artifacts_dist,
-                                                   parameters={
-                                                       RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-artifacts"
-                                                   })
-        repos.add_relation(artifacts_src_dist_relation)
-        repos.add_repo(artifacts_multi)
-
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, ArtifactType.NONE,
                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)

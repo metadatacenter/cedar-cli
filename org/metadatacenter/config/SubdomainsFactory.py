@@ -34,7 +34,6 @@ class SubdomainsFactory:
         subdomains.add_frontend('openview')
         subdomains.add_frontend('content')
         subdomains.add_frontend('monitoring')
-        subdomains.add_frontend('artifacts')
         subdomains.add_frontend('bridging')
 
         subdomains.add_frontend('demo.cee')

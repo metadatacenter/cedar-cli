@@ -39,7 +39,6 @@ class ServersFactory:
         servers.add_frontend('openview', 4220)
         servers.add_frontend('content', 4240)
         servers.add_frontend('monitoring', 4300)
-        servers.add_frontend('artifacts', 4320)
         servers.add_frontend('bridging', 4340)
 
         servers.add_frontend_non_essential('cee-dev', 4400)
