@@ -92,6 +92,11 @@ class StartFrontendWorker(Worker):
         )
 
     @staticmethod
+    def split_frontends():
+        StartFrontendWorker.workspace()
+        StartFrontendWorker.designer()
+
+    @staticmethod
     def all():
         # Split previews remain opt-in until staging acceptance. `start frontends` therefore
         # preserves the production-era frontend set while explicit preview commands are available.

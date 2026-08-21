@@ -40,6 +40,11 @@ def designer():
     StartFrontendWorker.designer()
 
 
+@app.command("split-frontends")
+def split_frontends():
+    StartFrontendWorker.split_frontends()
+
+
 @app.command("all")
 def frontend_all():
     StartFrontendWorker.all()

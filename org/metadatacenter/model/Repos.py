@@ -89,6 +89,12 @@ class Repos:
                 repos.append(repo)
         return repos
 
+    def get_frontends_for_default_deploy(self) -> [Repo]:
+        return [repo for repo in self.get_frontends() if not repo.skip_from_default_deploy]
+
+    def get_split_frontends(self) -> [Repo]:
+        return [self.map[name] for name in ("cedar-workspace", "cedar-template-designer")]
+
     def get_release_all(self) -> [Repo]:
         repos = []
         repos = repos + Util.get_flat_repo_list_pre_post(self.get_parent())

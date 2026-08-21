@@ -25,3 +25,9 @@ class DeployShellTaskFactory:
         task = PlanTask("NPM install, NPM publish", TaskType.SHELL, repo)
         task.command_list = ['npm install', 'npm publish']
         return task
+
+    @classmethod
+    def repo_deploy_commands(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Repo-specific deploy", TaskType.SHELL, repo)
+        task.command_list = list(repo.deploy_command_list)
+        return task

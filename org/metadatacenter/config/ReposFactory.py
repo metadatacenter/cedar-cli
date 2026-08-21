@@ -55,13 +55,23 @@ class ReposFactory:
 
         repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True))
 
-        # The split frontends participate in development builds and repository checks, but they
-        # remain preview-only until the migration acceptance gate is complete. In particular,
-        # registering them here must not silently add them to production release operations.
+        # The split frontends have explicit native build and Nexus publication commands, but remain
+        # outside the ordinary release/deploy selectors until migration acceptance. Registering them
+        # here must not make a legacy deployment publish or activate them accidentally.
         repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
-                            is_frontend=True, allow_different_version=True, skip_from_release=True))
+                            is_frontend=True, allow_different_version=True, skip_from_release=True,
+                            build_command_list=['npm ci'],
+                            server_build_command_list=[
+                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace'],
+                            deploy_command_list=['npm ci', 'npm publish'],
+                            skip_from_default_deploy=True))
         repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
-                            is_frontend=True, allow_different_version=True, skip_from_release=True))
+                            is_frontend=True, allow_different_version=True, skip_from_release=True,
+                            build_command_list=['npm ci'],
+                            server_build_command_list=[
+                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" designer'],
+                            deploy_command_list=['npm ci', 'npm publish'],
+                            skip_from_default_deploy=True))
 
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, ArtifactType.NONE,

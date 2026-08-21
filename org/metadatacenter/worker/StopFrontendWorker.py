@@ -61,6 +61,11 @@ class StopFrontendWorker(Worker):
         )
 
     @staticmethod
+    def split_frontends():
+        StopFrontendWorker.workspace()
+        StopFrontendWorker.designer()
+
+    @staticmethod
     def all():
         # Preview processes are deliberately not part of production-era bulk stop operations.
         StopFrontendWorker.main()

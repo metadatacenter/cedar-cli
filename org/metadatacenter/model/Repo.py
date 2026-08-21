@@ -13,7 +13,9 @@ class Repo:
                  is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
                  is_frontend=False, expected_build_lines=100,
                  allow_different_version=False, skip_from_release=False, skip_npm_install=False,
-                 build_command_list: List[str] = None):
+                 build_command_list: List[str] = None, server_build_command_list: List[str] = None,
+                 deploy_command_list: List[str] = None,
+                 skip_from_default_deploy=False):
         self.name = name
         self.repo_type = repo_type
         self.artifact_type = artifact_type
@@ -32,10 +34,17 @@ class Repo:
         self.allow_different_version = allow_different_version
         self.skip_from_release = skip_from_release
         self.skip_npm_install = skip_npm_install
+        self.skip_from_default_deploy = skip_from_default_deploy
         # Shell commands that build this repo, replacing the ones its repo type implies.
         # A repo that owns its own packaging pipeline sets this so the CLI drives that
         # pipeline instead of reproducing it from outside.
         self.build_command_list = build_command_list
+        # Environment-configured static payload generation for a native nginx host. This is
+        # deliberately separate from the local development build, whose Gulp task stays running.
+        self.server_build_command_list = server_build_command_list
+        # Shell commands that publish this repo. A repo with an explicit publication pipeline uses
+        # this instead of the generic commands implied by its repository type.
+        self.deploy_command_list = deploy_command_list
 
     def __eq__(self, obj):
         return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()

@@ -78,6 +78,19 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     plan_executor.execute(plan, dry_run, dump_plan)
 
 
+@app.command("split-frontends")
+def split_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
+                    dump_plan: bool = typer.Option(False, help="Dump plan"),
+                    server_payload: bool = typer.Option(
+                        False, "--server-payload",
+                        help="Generate environment-configured static payloads for native nginx")):
+    """Build Workspace and Template Designer from their native Git checkouts."""
+    GlobalContext.mark_global_task_type(TaskType.BUILD)
+    plan = Plan("Build split frontends")
+    BuildPlanner.split_frontends(plan, server_payload=server_payload)
+    plan_executor.execute(plan, dry_run, dump_plan)
+
+
 @app.command("all")
 def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
               dump_plan: bool = typer.Option(False, help="Dump plan")):

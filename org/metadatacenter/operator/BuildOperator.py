@@ -25,7 +25,9 @@ class BuildOperator(Operator):
     def expand(task: PlanTask):
         repo_list = [task.repo]
         repo_list_flat = Util.get_flat_repo_list(repo_list)
-        build_frontends = Const.CEDAR_DEV_BUILD_FRONTENDS in os.environ and os.environ[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'
+        build_frontends = (task.get_parameter("force_frontend_build") is True or
+                           (Const.CEDAR_DEV_BUILD_FRONTENDS in os.environ and
+                            os.environ[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'))
         # The Java build skips its tests. Run them separately, or with mvn directly in the repo.
         # Making the build run them, and offering --tests / --skip-tests to choose, is an open
         # roadmap item rather than a settled default.
@@ -58,7 +60,13 @@ class BuildOperator(Operator):
             elif repo.repo_type == RepoType.ANGULAR_JS:
                 if build_frontends:
                     shell_wrapper = PlanTask("Build angularJS project", TaskType.SHELL_WRAPPER, repo)
-                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
+                    if task.get_parameter("server_frontend_payload") is True and repo.server_build_command_list:
+                        shell_wrapper.add_task_as_task(
+                            BuildShellTaskFactory.repo_server_build_commands(repo))
+                    elif repo.build_command_list:
+                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.repo_build_commands(repo))
+                    else:
+                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
                 else:
                     shell_wrapper = PlanTask("Build angularJS project - skipped because of CEDAR_DEV_BUILD_FRONTENDS",
                                              TaskType.SHELL_WRAPPER, repo)

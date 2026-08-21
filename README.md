@@ -44,3 +44,37 @@ cedarcli cheat
 ```
 
 ![CEDAR CLI commands](assets/docs/cedar-cli.png?raw=true "CEDAR CLI commands")
+
+## Split frontend publication and native deployment
+
+Workspace and Template Designer remain outside `release all-in-one` until migration acceptance.
+They are also excluded from the generic `deploy frontends` and `deploy all` commands, so an ordinary
+legacy deployment cannot publish or activate them accidentally.
+
+Use the explicit commands when preparing a split-frontend build:
+
+```bash
+# Reproducibly install the exact locked dependencies in both Git checkouts.
+cedarcli build split-frontends
+
+# On a native staging/production host, configure both static trees and write build identity.
+# This requires CEDAR_FRONTEND_BEHAVIOR=server and the exact environment frontend URLs.
+cedarcli build split-frontends --server-payload
+
+# Publish both current package versions to the Nexus registries declared by their package.json files.
+cedarcli deploy split-frontends --dry-run
+cedarcli deploy split-frontends
+
+# Run or stop both development Gulp servers locally on ports 4201 and 4202.
+cedarcli start frontend split-frontends
+cedarcli stop frontend split-frontends
+```
+
+`deploy` retains cedarcli's historical meaning of publishing build artifacts: it runs `npm ci` and
+`npm publish` in each repository. It does not change DNS, certificates, nginx, Keycloak, CORS, or
+public routing. Those environment operations remain separate acceptance and cutover gates.
+
+Staging and production need no Docker. Their nginx virtual hosts serve
+`cedar-workspace/app` and `cedar-template-designer/app` directly after `--server-payload` exits, just
+as the existing native deployment serves the monolith's `app` tree. The start/stop commands are for
+the local `CEDAR_FRONTEND_BEHAVIOR=develop` profile, not for a static nginx host.
