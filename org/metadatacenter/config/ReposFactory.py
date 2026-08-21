@@ -55,6 +55,14 @@ class ReposFactory:
 
         repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True))
 
+        # The split frontends participate in development builds and repository checks, but they
+        # remain preview-only until the migration acceptance gate is complete. In particular,
+        # registering them here must not silently add them to production release operations.
+        repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
+                            is_frontend=True, allow_different_version=True, skip_from_release=True))
+        repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
+                            is_frontend=True, allow_different_version=True, skip_from_release=True))
+
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, ArtifactType.NONE,
                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)

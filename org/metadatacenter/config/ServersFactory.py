@@ -43,5 +43,7 @@ class ServersFactory:
 
         servers.add_frontend_non_essential('cee-dev', 4400)
         servers.add_frontend_non_essential('demo.cee', 4260)
+        servers.add_frontend_non_essential('workspace', 4201)
+        servers.add_frontend_non_essential('designer', 4202)
 
         return servers

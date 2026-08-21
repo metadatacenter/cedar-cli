@@ -47,7 +47,22 @@ class StopFrontendWorker(Worker):
         )
 
     @staticmethod
+    def workspace():
+        Worker.execute_generic_shell_commands(
+            ["source " + Util.get_bash_script_path('stop-frontend-workspace.sh')],
+            title="Stopping Workspace Preview",
+        )
+
+    @staticmethod
+    def designer():
+        Worker.execute_generic_shell_commands(
+            ["source " + Util.get_bash_script_path('stop-frontend-designer.sh')],
+            title="Stopping Template Designer Preview",
+        )
+
+    @staticmethod
     def all():
+        # Preview processes are deliberately not part of production-era bulk stop operations.
         StopFrontendWorker.main()
         StopFrontendWorker.openview()
         StopFrontendWorker.monitoring()

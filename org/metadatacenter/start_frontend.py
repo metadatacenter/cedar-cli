@@ -30,6 +30,16 @@ def content():
     StartFrontendWorker.content()
 
 
+@app.command("workspace")
+def workspace():
+    StartFrontendWorker.workspace()
+
+
+@app.command("designer")
+def designer():
+    StartFrontendWorker.designer()
+
+
 @app.command("all")
 def frontend_all():
     StartFrontendWorker.all()
