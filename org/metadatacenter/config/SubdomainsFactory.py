@@ -31,6 +31,8 @@ class SubdomainsFactory:
         subdomains.add_microservice('worker')
 
         subdomains.add_frontend('cedar')
+        subdomains.add_frontend('workspace')
+        subdomains.add_frontend('designer')
         subdomains.add_frontend('openview')
         subdomains.add_frontend('content')
         subdomains.add_frontend('monitoring')

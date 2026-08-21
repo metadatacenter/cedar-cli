@@ -23,10 +23,30 @@ class CertificateWorker(Worker):
         cls.cedar_ca_home = os.environ[Const.CEDAR_CA_HOME]
 
     @classmethod
-    def generate_domain_configs(cls):
+    def select_subdomains(cls, names=None):
+        if not names:
+            return list(GlobalContext.subdomains.map.values())
+
+        selected = []
+        unknown = []
+        for name in dict.fromkeys(names):
+            subdomain = GlobalContext.subdomains.map.get(name)
+            if subdomain is None:
+                unknown.append(name)
+            else:
+                selected.append(subdomain)
+        if unknown:
+            available = ", ".join(sorted(GlobalContext.subdomains.map))
+            raise ValueError(
+                f"Unknown certificate subdomain(s): {', '.join(unknown)}. Available: {available}"
+            )
+        return selected
+
+    @classmethod
+    def generate_domain_configs(cls, names=None):
         source_file = Util.read_file(Util.get_asset_file_path(['certs', 'openssl-domain.cnf']))
         command_all = ''
-        for subdomain in GlobalContext.subdomains.map.values():
+        for subdomain in cls.select_subdomains(names):
             subdomain_name = subdomain.name
             subdomain_file_name = subdomain.get_config_file_name()
             subdomain_directory = subdomain.get_cert_directory_name()
@@ -99,9 +119,10 @@ openssl req -new -x509 -days 3650 -passin pass:${CEDAR_CA_PASSWORD} -key ca.key 
         )
 
     @classmethod
-    def generate_domains(cls):
+    def generate_domains(cls, names=None):
         cls.set_paths()
-        for subdomain in GlobalContext.subdomains.map.values():
+        cls.generate_domain_configs(names)
+        for subdomain in cls.select_subdomains(names):
             subdomain_name = subdomain.get_fqdn()
             config_file_name = subdomain.get_config_file_name()
             subdomain_directory = subdomain.get_cert_directory_name()
