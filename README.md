@@ -53,6 +53,16 @@ assess a Docker deployment. Docker status instead compares each Compose project'
 inventory with its containers and health checks, and exits nonzero if anything is missing,
 stopped, unhealthy, or still starting.
 
+Docker starts default to `--pull never`, matching the current locally-built `2.9.2-SNAPSHOT`
+workflow. Use `--pull missing` or `--pull always` explicitly after configuring a registry-backed
+deployment:
+
+```bash
+cedarcli docker start infrastructure -d
+cedarcli docker start microservices -d
+cedarcli docker start frontends -d
+```
+
 ## Cheat sheet
 The full set of commands and subcommands will be shown as a `pdf` file after executing:
 ```bash

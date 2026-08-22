@@ -11,6 +11,14 @@ from org.metadatacenter.util.GlobalContext import GlobalContext
 console = Console()
 
 
+class CommandOutput(list):
+    """List-compatible streamed output that also preserves the process exit code."""
+
+    def __init__(self, lines, returncode):
+        super().__init__(lines)
+        self.returncode = returncode
+
+
 class Worker:
     worker_type: WorkerType
 
@@ -38,9 +46,9 @@ class Worker:
 
         stdout_parts = []
         Worker.handle_shell_stdout(proc.stdout, stdout_parts)
-        proc.wait()
+        returncode = proc.wait()
 
-        return stdout_parts
+        return CommandOutput(stdout_parts, returncode)
 
     @staticmethod
     def handle_shell_stdout(proc_stream, my_buffer, echo_streams=True):

@@ -20,7 +20,7 @@ class DockerWorker(Worker):
 
     @staticmethod
     def validate():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
 failed=0
 for stack in cedar-infrastructure cedar-microservices cedar-frontend cedar-admin; do
@@ -49,6 +49,7 @@ exit ${failed}
         ],
             title="Validating CEDAR compose stacks",
         )
+        return output.returncode
 
     @staticmethod
     def _docker_command(arguments, cwd=None):
@@ -249,14 +250,17 @@ fi
             ["set -o pipefail\n" + "\n".join(steps) + "\necho 'All requested images built.'"],
             title=f"Building {len(images)} CEDAR image(s) at {version}",
         )
+        if out.returncode != 0:
+            return out.returncode
         return 0 if any("All requested images built." in line for line in out) else 1
 
     @staticmethod
     def create_network():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
+set -e
 echo 'Checking previous Docker network ...'
-if docker network ls | grep 'cedarnet' > /dev/null 2>&1
+if docker network inspect cedarnet > /dev/null 2>&1
 then
     echo 'Removing previous Docker network ...'
     docker network remove cedarnet
@@ -270,131 +274,127 @@ docker network create --subnet=${CEDAR_NET_SUBNET}/24 --gateway ${CEDAR_NET_GATE
         ],
             title="Creating CEDAR Docker network",
         )
+        return output.returncode
 
     @staticmethod
     def create_certificates_volume():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
-echo 'Creating volume for SSL certificates...'
+set -e
+echo 'Creating volumes for TLS certificates and the CEDAR CA...'
 docker volume create cedar_cert
+docker volume create cedar_ca
 """
         ],
-            title="Creating CEDAR volume for certificates",
+            title="Creating CEDAR certificate volumes",
         )
+        return output.returncode
 
     @staticmethod
     def copy_certificates():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
+set -e
+docker rm -f cedar-cert-helper cedar-ca-helper > /dev/null 2>&1 || true
 echo "Copying self-signed certificates into the cedar_cert volume..."
 docker run -v cedar_cert:/data --name cedar-cert-helper busybox:1.36.0 true
 export CEDAR_CUSTOM_CERT=false
-if [[ -e ${CEDAR_HOME}/CEDAR_CA/certs/-${CEDAR_HOST}/${CEDAR_HOST}.crt ]]; then export CEDAR_CUSTOM_CERT=true; fi
-if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp ${CEDAR_HOME}/CEDAR_CA/certs cedar-cert-helper:/data; fi
-if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp ${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/cert/certs cedar-cert-helper:/data; fi
+if [[ -e "${CEDAR_HOME}/CEDAR_CA/certs/-${CEDAR_HOST}/${CEDAR_HOST}.crt" ]]; then export CEDAR_CUSTOM_CERT=true; fi
+if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp "${CEDAR_HOME}/CEDAR_CA/certs" cedar-cert-helper:/data; fi
+if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp "${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/cert/certs" cedar-cert-helper:/data; fi
 docker rm cedar-cert-helper
 
 echo "Copying CA certificate into the cedar_ca volume..."
 docker run -v cedar_ca:/data --name cedar-ca-helper busybox:1.36.0 true
-if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp ${CEDAR_HOME}/CEDAR_CA/ca.crt cedar-ca-helper:/data; fi
-if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp ${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/ca/ca.crt cedar-ca-helper:/data; fi
+if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp "${CEDAR_HOME}/CEDAR_CA/ca.crt" cedar-ca-helper:/data; fi
+if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp "${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/ca/ca.crt" cedar-ca-helper:/data; fi
 docker rm cedar-ca-helper
 """
         ],
             title="Copy CEDAR self-signed certificates",
         )
+        return output.returncode
 
     @staticmethod
     def remove_containers():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
-docker ps -a | grep "metadatacenter/cedar-.*" | awk '{print $1}' | xargs docker rm
+ids=$(docker ps -a --format '{{.ID}} {{.Image}}' | awk '$2 ~ /^metadatacenter\\/cedar-/ {print $1}')
+if [ -z "${ids}" ]; then
+    echo 'No CEDAR containers found.'
+    exit 0
+fi
+docker rm -f ${ids}
 """
         ],
             title="Removing all CEDAR containers",
         )
+        return output.returncode
 
     @staticmethod
     def remove_images():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
-docker images | grep "metadatacenter/cedar-.*" | awk '{print $3}' | xargs docker rmi
+ids=$(docker images --format '{{.Repository}} {{.ID}}' | awk '$1 ~ /^metadatacenter\\/cedar-/ {print $2}' | sort -u)
+if [ -z "${ids}" ]; then
+    echo 'No CEDAR images found.'
+    exit 0
+fi
+docker rmi ${ids}
 """
         ],
             title="Removing all CEDAR images",
         )
+        return output.returncode
 
     @staticmethod
     def remove_network():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
-docker network rm cedarnet
+if docker network inspect cedarnet > /dev/null 2>&1; then
+    docker network rm cedarnet
+else
+    echo 'CEDAR network is already absent.'
+fi
 """
         ],
             title="Removing CEDAR network",
         )
+        return output.returncode
 
     @staticmethod
     def remove_volumes():
-        Worker.execute_generic_shell_commands([
+        output = Worker.execute_generic_shell_commands([
             """
-docker volume rm cedar_ca
-docker volume rm cedar_cert
-
-docker volume rm opensearch_data
-docker volume rm log_opensearch
-
-docker volume rm keycloak_state
-docker volume rm log_keycloak
-
-docker volume rm mongo_data
-docker volume rm mongo_state
-docker volume rm mongo_configdb
-docker volume rm log_mongo
-
-docker volume rm mysql_data
-docker volume rm log_mysql
-
-docker volume rm neo4j_data
-docker volume rm neo4j_state
-docker volume rm log_neo4j
-
-docker volume rm log_nginx
-
-docker volume rm redis_data
-docker volume rm log_redis
-
-
-docker volume rm terminology_data
-
-
-docker volume rm log_group
-docker volume rm log_impex
-docker volume rm log_monitor
-docker volume rm log_messaging
-docker volume rm log_openview
-docker volume rm log_repo
-docker volume rm log_resource
-docker volume rm log_schema
-docker volume rm log_submission
-docker volume rm log_artifact
-docker volume rm log_terminology
-docker volume rm log_user
-docker volume rm log_valuerecommender
-docker volume rm log_worker
-docker volume rm log_bridge
-
-docker volume rm resource_state
-
-docker volume rm log_frontend_main
-docker volume rm log_frontend_openview
-docker volume rm log_frontend_content
-docker volume rm log_frontend_monitoring
-docker volume rm log_frontend_bridging
+failed=0
+for volume in \
+    cedar_ca cedar_cert \
+    opensearch_data log_opensearch \
+    keycloak_state log_keycloak \
+    mongo_data mongo_state mongo_configdb log_mongo \
+    mysql_data log_mysql \
+    neo4j_data neo4j_state log_neo4j \
+    log_nginx redis_data log_redis \
+    terminology_data resource_state \
+    log_group log_impex log_monitor log_messaging log_openview log_repo log_resource \
+    log_schema log_submission log_artifact log_terminology log_user \
+    log_valuerecommender log_worker log_bridge \
+    log_frontend_main log_frontend_openview log_frontend_content \
+    log_frontend_monitoring log_frontend_bridging log_frontend_workspace \
+    log_frontend_template_designer
+do
+    if docker volume inspect "${volume}" > /dev/null 2>&1; then
+        docker volume rm "${volume}" || failed=1
+    else
+        echo "Already absent: ${volume}"
+    fi
+done
+exit ${failed}
 """
         ],
             title="Removing all CEDAR volumes",
         )
+        return output.returncode
 
     # Stack name in cedar-docker-deploy, and what to call it when talking to the user.
     STACKS = {
@@ -405,45 +405,48 @@ docker volume rm log_frontend_bridging
     }
 
     @staticmethod
-    def compose(stack, action, detach=False):
+    def compose(stack, action, detach=False, pull=None):
         directory, label = DockerWorker.STACKS[stack]
         command = 'docker compose ' + action
         if action == 'up' and detach:
             command += ' -d'
-        Worker.execute_generic_shell_commands(
+        if action == 'up' and pull:
+            command += f' --pull {pull}'
+        output = Worker.execute_generic_shell_commands(
             [command],
             title=("Starting" if action == 'up' else "Stopping") + " CEDAR " + label,
             cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory)
         )
+        return output.returncode
 
     @staticmethod
-    def start_infrastructure(detach=False):
-        DockerWorker.compose('infrastructure', 'up', detach)
+    def start_infrastructure(detach=False, pull='never'):
+        return DockerWorker.compose('infrastructure', 'up', detach, pull)
 
     @staticmethod
-    def start_microservices(detach=False):
-        DockerWorker.compose('microservices', 'up', detach)
+    def start_microservices(detach=False, pull='never'):
+        return DockerWorker.compose('microservices', 'up', detach, pull)
 
     @staticmethod
-    def start_frontends(detach=False):
-        DockerWorker.compose('frontends', 'up', detach)
+    def start_frontends(detach=False, pull='never'):
+        return DockerWorker.compose('frontends', 'up', detach, pull)
 
     @staticmethod
-    def start_admin(detach=False):
-        DockerWorker.compose('admin', 'up', detach)
+    def start_admin(detach=False, pull='never'):
+        return DockerWorker.compose('admin', 'up', detach, pull)
 
     @staticmethod
     def stop_infrastructure():
-        DockerWorker.compose('infrastructure', 'down')
+        return DockerWorker.compose('infrastructure', 'down')
 
     @staticmethod
     def stop_microservices():
-        DockerWorker.compose('microservices', 'down')
+        return DockerWorker.compose('microservices', 'down')
 
     @staticmethod
     def stop_frontends():
-        DockerWorker.compose('frontends', 'down')
+        return DockerWorker.compose('frontends', 'down')
 
     @staticmethod
     def stop_admin():
-        DockerWorker.compose('admin', 'down')
+        return DockerWorker.compose('admin', 'down')

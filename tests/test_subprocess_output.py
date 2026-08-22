@@ -55,6 +55,7 @@ class SubprocessOutputTest(unittest.TestCase):
         output = Worker.execute_generic_shell_commands(["example command"], "Example")
 
         self.assertEqual(["first line", "second line"], output)
+        self.assertEqual(0, output.returncode)
         process.poll.assert_not_called()
         process.wait.assert_called_once_with()
         worker_console.print.assert_any_call("first line", markup=False)
