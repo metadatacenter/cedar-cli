@@ -1,4 +1,5 @@
 import typer
+from typing import List
 
 from org.metadatacenter import clean_maven
 from org.metadatacenter.worker.CertificateWorker import CertificateWorker
@@ -16,7 +17,6 @@ def ca():
     CertificateWorker.generate_ca()
 
 
-@app.command("domains", help="Generate self-signed certificates for all subdomains")
-def domains():
-    CertificateWorker.generate_domains()
-
+@app.command("domains", help="Generate self-signed certificates for all or selected subdomains")
+def domains(names: List[str] = typer.Argument(None, help="Subdomain names; omit to generate all")):
+    CertificateWorker.generate_domains(names)

@@ -51,7 +51,16 @@ class DeployPlanner(Planner):
         plan.add_task(
             "Deploy frontends",
             TaskType.DEPLOY,
-            GlobalContext.repos.get_frontends(),
+            GlobalContext.repos.get_frontends_for_default_deploy(),
+            parameters
+        )
+
+    @staticmethod
+    def split_frontends(plan: Plan, parameters: dict = None):
+        plan.add_task(
+            "Publish split frontends",
+            TaskType.DEPLOY,
+            GlobalContext.repos.get_split_frontends(),
             parameters
         )
 

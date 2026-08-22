@@ -52,19 +52,6 @@ class StartFrontendWorker(Worker):
             )
 
     @staticmethod
-    def artifacts():
-        if GlobalContext.get_use_osa():
-            Worker.execute_generic_shell_commands(
-                ["osascript " + Util.get_osa_script_path('start-frontend-artifacts-new-tab.scpt')],
-                title="Launching Artifacts Frontend in new tab",
-            )
-        else:
-            Worker.execute_generic_shell_commands(
-                ["source " + Util.get_bash_script_path('start-frontend-artifacts.sh')],
-                title="Launching Artifacts Frontend",
-            )
-
-    @staticmethod
     def content():
         if GlobalContext.get_use_osa():
             Worker.execute_generic_shell_commands(
@@ -91,10 +78,30 @@ class StartFrontendWorker(Worker):
             )
 
     @staticmethod
+    def workspace():
+        Worker.execute_generic_shell_commands(
+            ["source " + Util.get_bash_script_path('start-frontend-workspace.sh')],
+            title="Launching Workspace Preview",
+        )
+
+    @staticmethod
+    def designer():
+        Worker.execute_generic_shell_commands(
+            ["source " + Util.get_bash_script_path('start-frontend-designer.sh')],
+            title="Launching Template Designer Preview",
+        )
+
+    @staticmethod
+    def split_frontends():
+        StartFrontendWorker.workspace()
+        StartFrontendWorker.designer()
+
+    @staticmethod
     def all():
+        # Split previews remain opt-in until staging acceptance. `start frontends` therefore
+        # preserves the production-era frontend set while explicit preview commands are available.
         StartFrontendWorker.main()
         StartFrontendWorker.openview()
         StartFrontendWorker.monitoring()
-        StartFrontendWorker.artifacts()
         StartFrontendWorker.bridging()
         StartFrontendWorker.content()

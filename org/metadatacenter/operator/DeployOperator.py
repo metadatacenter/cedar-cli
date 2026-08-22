@@ -42,7 +42,10 @@ class DeployOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_JS:
                 shell_wrapper = PlanTask("Deploy angularJS project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(DeployShellTaskFactory.npm_install_publish(repo))
+                if repo.deploy_command_list:
+                    shell_wrapper.add_task_as_task(DeployShellTaskFactory.repo_deploy_commands(repo))
+                else:
+                    shell_wrapper.add_task_as_task(DeployShellTaskFactory.npm_install_publish(repo))
                 task.add_task_as_task(shell_wrapper)
             else:
                 not_handled = PlanTask("Skip repo", TaskType.NOOP, repo)

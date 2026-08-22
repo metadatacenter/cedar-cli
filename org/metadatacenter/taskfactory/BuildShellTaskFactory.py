@@ -9,15 +9,33 @@ class BuildShellTaskFactory:
         super().__init__()
 
     @classmethod
+    def maven_clean_install(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Maven clean install", TaskType.SHELL, repo)
+        task.command_list = ['./mvnw clean install']
+        return task
+
+    @classmethod
     def maven_clean_install_skip_tests(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Maven clean install skip tests", TaskType.SHELL, repo)
-        task.command_list = ['mvn clean install -DskipTests']
+        task.command_list = ['./mvnw clean install -DskipTests']
         return task
 
     @classmethod
     def npm_install_legacy_ng_build(cls, repo: Repo) -> PlanTask:
         task = PlanTask("NPM install, NG build", TaskType.SHELL, repo)
         task.command_list = ['npm install --legacy-peer-deps', 'ng build --configuration=production']
+        return task
+
+    @classmethod
+    def repo_build_commands(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Repo-specific build", TaskType.SHELL, repo)
+        task.command_list = list(repo.build_command_list)
+        return task
+
+    @classmethod
+    def repo_server_build_commands(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Repo-specific server payload build", TaskType.SHELL, repo)
+        task.command_list = list(repo.server_build_command_list)
         return task
 
     @classmethod

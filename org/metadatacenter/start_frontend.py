@@ -20,11 +20,6 @@ def monitoring():
     StartFrontendWorker.monitoring()
 
 
-@app.command("artifacts")
-def artifacts():
-    StartFrontendWorker.artifacts()
-
-
 @app.command("bridging")
 def bridging():
     StartFrontendWorker.bridging()
@@ -33,6 +28,21 @@ def bridging():
 @app.command("content")
 def content():
     StartFrontendWorker.content()
+
+
+@app.command("workspace")
+def workspace():
+    StartFrontendWorker.workspace()
+
+
+@app.command("designer")
+def designer():
+    StartFrontendWorker.designer()
+
+
+@app.command("split-frontends")
+def split_frontends():
+    StartFrontendWorker.split_frontends()
 
 
 @app.command("all")

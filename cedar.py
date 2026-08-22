@@ -30,7 +30,7 @@ def cheat():
     CheatWorker.cheat()
 
 
-@app.command("status", help="Shortcut for 'server status'")
+@app.command("status", help="Native process/host-port status; use 'docker status' for Docker")
 def status():
     ServerWorker.status()
 

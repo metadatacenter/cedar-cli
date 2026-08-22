@@ -33,13 +33,6 @@ class StopFrontendWorker(Worker):
         )
 
     @staticmethod
-    def artifacts():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-artifacts.scpt')],
-            title="Stopping Artifacts Frontend",
-        )
-
-    @staticmethod
     def content():
         Worker.execute_generic_shell_commands(
             ["osascript " + Util.get_osa_script_path('stop-frontend-content.scpt')],
@@ -54,10 +47,29 @@ class StopFrontendWorker(Worker):
         )
 
     @staticmethod
+    def workspace():
+        Worker.execute_generic_shell_commands(
+            ["source " + Util.get_bash_script_path('stop-frontend-workspace.sh')],
+            title="Stopping Workspace Preview",
+        )
+
+    @staticmethod
+    def designer():
+        Worker.execute_generic_shell_commands(
+            ["source " + Util.get_bash_script_path('stop-frontend-designer.sh')],
+            title="Stopping Template Designer Preview",
+        )
+
+    @staticmethod
+    def split_frontends():
+        StopFrontendWorker.workspace()
+        StopFrontendWorker.designer()
+
+    @staticmethod
     def all():
+        # Preview processes are deliberately not part of production-era bulk stop operations.
         StopFrontendWorker.main()
         StopFrontendWorker.openview()
         StopFrontendWorker.monitoring()
-        StopFrontendWorker.artifacts()
         StopFrontendWorker.bridging()
         StopFrontendWorker.content()

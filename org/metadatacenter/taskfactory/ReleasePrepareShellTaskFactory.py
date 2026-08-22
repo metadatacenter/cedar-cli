@@ -25,9 +25,9 @@ class ReleasePrepareShellTaskFactory:
         build_command = ''
 
         if repo in GlobalContext.repos.get_parent():
-            build_command = '      mvn clean install -DskipTests'
+            build_command = '      ./mvnw clean install -DskipTests'
         elif repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
-            build_command = '      mvn clean install -DskipTests'
+            build_command = '      ./mvnw clean install -DskipTests'
 
         if release_prepare_phase == ReleasePreparePhase.SET_VERSIONS:
             if repo in GlobalContext.repos.get_parent():
@@ -294,7 +294,6 @@ class ReleasePrepareShellTaskFactory:
     @classmethod
     def macro_update_index_html_version_numbers(cls, version: str):
         return ('echo "Update openview and bridging index.html"',
-                "      if [[ -e src/index.html ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/\/cedar-artifact-viewer-.*\.js/\/cedar-artifact-viewer-'" + version + "'\.js/g' src/index.html; fi",
                 "      if [[ -e src/index.html ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/\/cedar-embeddable-editor-.*\.js/\/cedar-embeddable-editor-'" + version + "'\.js/g' src/index.html; fi")
 
     @classmethod

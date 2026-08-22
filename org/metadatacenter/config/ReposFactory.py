@@ -55,20 +55,29 @@ class ReposFactory:
 
         repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True))
 
-        artifacts_multi = Repo("cedar-artifacts", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
-        artifacts_src = Repo("cedar-artifacts-src", RepoType.ANGULAR, ArtifactType.NONE,
-                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        artifacts_dist = Repo("cedar-artifacts-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-
-        artifacts_multi.add_sub_repo(artifacts_src)
-        artifacts_multi.add_sub_repo(artifacts_dist)
-        artifacts_src_dist_relation = RepoRelation(artifacts_src, RepoRelationType.IS_SOURCE_OF, artifacts_dist,
-                                                   parameters={
-                                                       RepoRelation.SOURCE_SUB_FOLDER: "dist/cedar-artifacts"
-                                                   })
-        repos.add_relation(artifacts_src_dist_relation)
-        repos.add_repo(artifacts_multi)
+        # The split frontends have explicit native build and Nexus publication commands, but remain
+        # outside the ordinary release/deploy selectors until migration acceptance. Registering them
+        # here must not make a legacy deployment publish or activate them accidentally.
+        repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
+                            is_frontend=True, allow_different_version=True, skip_from_release=True,
+                            build_command_list=['npm ci'],
+                            server_build_command_list=[
+                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace'],
+                            deploy_command_list=[
+                                'npm ci',
+                                'bash "$CEDAR_HOME/cedar-development/ops/'
+                                'publish-frontend-package.sh" workspace'],
+                            skip_from_default_deploy=True))
+        repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
+                            is_frontend=True, allow_different_version=True, skip_from_release=True,
+                            build_command_list=['npm ci'],
+                            server_build_command_list=[
+                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" designer'],
+                            deploy_command_list=[
+                                'npm ci',
+                                'bash "$CEDAR_HOME/cedar-development/ops/'
+                                'publish-frontend-package.sh" designer'],
+                            skip_from_default_deploy=True))
 
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
         monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, ArtifactType.NONE,
@@ -120,13 +129,7 @@ class ReposFactory:
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
                                      [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cee_docs_angular_src = Repo("cedar-cee-docs-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
-                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cee_docs_angular_dist = Repo("cedar-cee-docs-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
-                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER, ArtifactType.NONE,
-                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cav_demo_js_src = Repo("cedar-cav-demo-js-src", RepoType.ANGULAR, ArtifactType.NONE,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         cee_component_demo_multi.add_sub_repo(cee_demo_angular_src)
@@ -134,49 +137,31 @@ class ReposFactory:
         cee_demo_angular_src_dist_relation = RepoRelation(cee_demo_angular_src, RepoRelationType.IS_SOURCE_OF, cee_demo_angular_dist)
         repos.add_relation(cee_demo_angular_src_dist_relation)
 
-        cee_component_demo_multi.add_sub_repo(cee_docs_angular_src)
-        cee_component_demo_multi.add_sub_repo(cee_docs_angular_dist)
-        cee_docs_angular_src_dist_relation = RepoRelation(cee_docs_angular_src, RepoRelationType.IS_SOURCE_OF, cee_docs_angular_dist)
-        repos.add_relation(cee_docs_angular_src_dist_relation)
-
         cee_component_demo_multi.add_sub_repo(cee_demo_ember_src)
-        cee_component_demo_multi.add_sub_repo(cav_demo_js_src)
 
         repos.add_repo(cee_component_demo_multi)
 
+        # CEE assembles and stages its own npm package, and the CLI drives that pipeline rather
+        # than reassembling the build output itself. Angular's esbuild builder emits an ES module
+        # graph under dist/cedar-embeddable-editor/browser/, which cannot be joined by
+        # concatenation the way the old webpack chunks could; visual/resolve-build-output.mjs is
+        # the single place that knows what the builder emitted and how to turn it into one script.
         embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                                 allow_different_version=True, skip_from_release=True)
+                                 allow_different_version=True, skip_from_release=True,
+                                 build_command_list=[
+                                     'npm install',
+                                     'npm --prefix visual install',
+                                     'npm run build:production',
+                                     'npm --prefix visual run bundle',
+                                     'npm run package:npm:prebuilt',
+                                 ])
         repos.add_repo(embeddable_editor)
-
-        # FKA cedar-metadata-form
-        artifact_viewer = Repo("cedar-artifact-viewer", RepoType.ANGULAR, ArtifactType.NONE,
-                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
-                                V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                               allow_different_version=True, skip_from_release=True)
-        repos.add_repo(artifact_viewer)
 
         content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR, ArtifactType.NPM,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(content_distribution)
-
-        embeddable_editor_dist_own_relation = RepoRelation(embeddable_editor, RepoRelationType.IS_SOURCE_OF, embeddable_editor,
-                                                           parameters={
-                                                               RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-embeddable-editor",
-                                                               RepoRelation.SOURCE_SELECTOR: "{runtime,polyfills,main}.js",
-                                                               RepoRelation.DESTINATION_CONCAT: 'cedar-embeddable-editor.js'
-                                                           })
-
-        artifact_viewer_dist_own_relation = RepoRelation(artifact_viewer, RepoRelationType.IS_SOURCE_OF, artifact_viewer,
-                                                         parameters={
-                                                             RepoRelation.TARGET_SUB_FOLDER: "dist-npm/cedar-artifact-viewer",
-                                                             RepoRelation.SOURCE_SELECTOR: '{runtime,polyfills,main}.js',
-                                                             RepoRelation.DESTINATION_CONCAT: 'cedar-artifact-viewer.js'
-                                                         })
-
-        repos.add_relation(embeddable_editor_dist_own_relation)
-        repos.add_relation(artifact_viewer_dist_own_relation)
 
         model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT, ArtifactType.NPM,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,

@@ -37,6 +37,32 @@ The available commands will be listed by executing:
 cedarcli
 ```
 
+## Native and Docker status
+
+The two deployment modes deliberately have separate status commands:
+
+```bash
+cedarcli status                       # Native processes and host-port health checks
+cedarcli docker status                # Required Docker infrastructure, services, and frontends
+cedarcli docker status --no-frontends # 22-container backend for a native-frontend hybrid
+cedarcli docker status --include-admin # Also require the optional admin tools
+```
+
+Docker keeps some ports private to `cedarnet`, so the native status command cannot accurately
+assess a Docker deployment. Docker status instead compares each Compose project's expected service
+inventory with its containers and health checks, and exits nonzero if anything is missing,
+stopped, unhealthy, or still starting.
+
+Docker starts default to `--pull never`, matching the current locally-built `2.9.2-SNAPSHOT`
+workflow. Use `--pull missing` or `--pull always` explicitly after configuring a registry-backed
+deployment:
+
+```bash
+cedarcli docker start infrastructure -d
+cedarcli docker start microservices -d
+cedarcli docker start frontends -d
+```
+
 ## Cheat sheet
 The full set of commands and subcommands will be shown as a `pdf` file after executing:
 ```bash
@@ -44,3 +70,37 @@ cedarcli cheat
 ```
 
 ![CEDAR CLI commands](assets/docs/cedar-cli.png?raw=true "CEDAR CLI commands")
+
+## Split frontend publication and native deployment
+
+Workspace and Template Designer remain outside `release all-in-one` until migration acceptance.
+They are also excluded from the generic `deploy frontends` and `deploy all` commands, so an ordinary
+legacy deployment cannot publish or activate them accidentally.
+
+Use the explicit commands when preparing a split-frontend build:
+
+```bash
+# Reproducibly install the exact locked dependencies in both Git checkouts.
+cedarcli build split-frontends
+
+# On a native staging/production host, configure both static trees and write build identity.
+# This requires CEDAR_FRONTEND_BEHAVIOR=server and the exact environment frontend URLs.
+cedarcli build split-frontends --server-payload
+
+# Publish both current package versions to the Nexus registries declared by their package.json files.
+cedarcli deploy split-frontends --dry-run
+cedarcli deploy split-frontends
+
+# Run or stop both development Gulp servers locally on ports 4201 and 4202.
+cedarcli start frontend split-frontends
+cedarcli stop frontend split-frontends
+```
+
+`deploy` retains cedarcli's historical meaning of publishing build artifacts: it runs `npm ci` and
+`npm publish` in each repository. It does not change DNS, certificates, nginx, Keycloak, CORS, or
+public routing. Those environment operations remain separate acceptance and cutover gates.
+
+Staging and production need no Docker. Their nginx virtual hosts serve
+`cedar-workspace/app` and `cedar-template-designer/app` directly after `--server-payload` exits, just
+as the existing native deployment serves the monolith's `app` tree. The start/stop commands are for
+the local `CEDAR_FRONTEND_BEHAVIOR=develop` profile, not for a static nginx host.

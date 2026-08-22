@@ -79,6 +79,16 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     plan_executor.execute(plan, dry_run, dump_plan)
 
 
+@app.command("split-frontends")
+def split_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
+                    dump_plan: bool = typer.Option(False, help="Dump plan")):
+    """Publish Workspace and Template Designer npm packages to their configured Nexus registry."""
+    GlobalContext.mark_global_task_type(TaskType.DEPLOY)
+    plan = Plan("Publish split frontends")
+    DeployPlanner.split_frontends(plan)
+    plan_executor.execute(plan, dry_run, dump_plan)
+
+
 @app.command("all")
 def deploy_all(dry_run: bool = typer.Option(False, help="Dry run"),
                dump_plan: bool = typer.Option(False, help="Dump plan")):
