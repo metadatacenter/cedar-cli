@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.style import Style
 from rich.table import Table
 
+from org.metadatacenter.config.SubdomainsFactory import SubdomainsFactory
 from org.metadatacenter.util.Const import Const
 from org.metadatacenter.worker.Worker import Worker
 
@@ -63,36 +64,16 @@ mkdir -p ${CEDAR_HOME}/log/nginx/
             title="Creating all CEDAR log and working directories",
         )
 
-    # TODO think about recreating this functionality in Python, or at least generate the list of hosts
-    # from the known configuration
     @staticmethod
     def add_hosts():
-        Worker.execute_generic_shell_commands([
-            """
+        host_lines = "\n".join(
+            f'    "{name}"'
+            for name in SubdomainsFactory.build_subdomains().map
+            if name
+        )
+        command = """
 CEDAR_HOSTS=(
-    "artifact"
-    "bridge"
-    "bridging"
-    "auth"
-    "cedar"
-    "content"
-    "group"
-    "impex"
-    "monitor"
-    "monitoring"
-    "messaging"
-    "open"
-    "openview"
-    "repo"
-    "resource"
-    "schema"
-    "submission"
-    "terminology"
-    "user"
-    "valuerecommender"
-    "worker"
-    "demo.cee"
-    "demo-dist.cee"
+__CEDAR_HOST_LINES__
 )
 
 counter=0
@@ -134,6 +115,8 @@ fi
 
 echo
 """
+        Worker.execute_generic_shell_commands([
+            command.replace("__CEDAR_HOST_LINES__", host_lines)
         ],
             title="Adding CEDAR hostnames to /etc/hosts",
         )
