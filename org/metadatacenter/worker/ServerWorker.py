@@ -28,7 +28,7 @@ class ServerWorker(Worker):
         ServerWorker.check_status_of(ServerTag.FRONTEND, server_status_map)
         ServerWorker.check_status_of(ServerTag.DASHBOARD, server_status_map)
         ServerWorker.check_status_of(ServerTag.FRONTEND_NON_ESSENTIAL, server_status_map)
-        table = Table("Server", "Status", "Port", 'Error', title="CEDAR Server status list")
+        table = Table("Server", "Status", "Port", 'Error', title="CEDAR native server status list")
         prev_server_tag = None
         for server in Util.get_servers():
             current_server_tag = server.tag
@@ -58,6 +58,7 @@ class ServerWorker(Worker):
             # if error != '':
             #     table.add_section()
         console.print(table)
+        console.print("[dim]This command checks native host ports. For containers, run: cedarcli docker status[/dim]")
 
     @staticmethod
     def check_status_of(tag: ServerTag, server_status_map: dict):

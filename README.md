@@ -37,6 +37,22 @@ The available commands will be listed by executing:
 cedarcli
 ```
 
+## Native and Docker status
+
+The two deployment modes deliberately have separate status commands:
+
+```bash
+cedarcli status                       # Native processes and host-port health checks
+cedarcli docker status                # Required Docker infrastructure, services, and frontends
+cedarcli docker status --no-frontends # 22-container backend for a native-frontend hybrid
+cedarcli docker status --include-admin # Also require the optional admin tools
+```
+
+Docker keeps some ports private to `cedarnet`, so the native status command cannot accurately
+assess a Docker deployment. Docker status instead compares each Compose project's expected service
+inventory with its containers and health checks, and exits nonzero if anything is missing,
+stopped, unhealthy, or still starting.
+
 ## Cheat sheet
 The full set of commands and subcommands will be shown as a `pdf` file after executing:
 ```bash

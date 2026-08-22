@@ -1,6 +1,9 @@
+import json
 import os
+import subprocess
 
 from rich.console import Console
+from rich.table import Table
 
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
@@ -46,6 +49,164 @@ exit ${failed}
         ],
             title="Validating CEDAR compose stacks",
         )
+
+    @staticmethod
+    def _docker_command(arguments, cwd=None):
+        try:
+            return subprocess.run(
+                ['docker', *arguments],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            return subprocess.CompletedProcess(
+                ['docker', *arguments],
+                127,
+                stdout='',
+                stderr=str(error),
+            )
+
+    @staticmethod
+    def _docker_server_version():
+        result = DockerWorker._docker_command(['info', '--format', '{{.ServerVersion}}'])
+        if result.returncode != 0:
+            return None, result.stderr.strip() or 'Docker daemon is unavailable'
+        return result.stdout.strip(), None
+
+    @staticmethod
+    def _expected_compose_services(stack_directory):
+        result = DockerWorker._docker_command(
+            ['compose', 'config', '--no-interpolate', '--services'],
+            cwd=stack_directory,
+        )
+        if result.returncode != 0:
+            return [], result.stderr.strip() or 'Unable to read the Compose project'
+        return [line for line in result.stdout.splitlines() if line], None
+
+    @staticmethod
+    def _compose_containers(project_name):
+        result = DockerWorker._docker_command([
+            'ps', '-aq',
+            '--filter', f'label=com.docker.compose.project={project_name}',
+        ])
+        if result.returncode != 0:
+            return {}, result.stderr.strip() or 'Unable to list Docker containers'
+
+        container_ids = result.stdout.split()
+        if not container_ids:
+            return {}, None
+
+        result = DockerWorker._docker_command(['inspect', *container_ids])
+        if result.returncode != 0:
+            return {}, result.stderr.strip() or 'Unable to inspect Docker containers'
+
+        try:
+            inspected = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            return {}, f'Unable to parse docker inspect output: {error}'
+
+        containers = {}
+        for container in inspected:
+            labels = container.get('Config', {}).get('Labels') or {}
+            service = labels.get('com.docker.compose.service')
+            if service is None:
+                continue
+            # A replacement can briefly coexist with its predecessor. The ISO timestamp sorts
+            # chronologically, so report the newest container for that Compose service.
+            previous = containers.get(service)
+            if previous is None or container.get('Created', '') > previous.get('Created', ''):
+                containers[service] = container
+        return containers, None
+
+    @staticmethod
+    def _container_report(container):
+        if container is None:
+            return '❌', '', 'missing'
+
+        state = container.get('State') or {}
+        runtime_state = state.get('Status', 'unknown')
+        health = (state.get('Health') or {}).get('Status')
+        name = container.get('Name', '').lstrip('/')
+
+        if runtime_state == 'running' and health in (None, 'healthy'):
+            return '✅', name, health or 'running (no healthcheck)'
+        if runtime_state == 'running' and health == 'starting':
+            return '⏳', name, 'healthcheck starting'
+        if runtime_state == 'running':
+            return '❌', name, health or runtime_state
+
+        detail = runtime_state
+        state_error = state.get('Error')
+        if state_error:
+            detail += f': {state_error}'
+        return '❌', name, detail
+
+    @staticmethod
+    def status(include_frontends=True, include_admin=False):
+        """Report the Compose inventory and container health for a Docker deployment.
+
+        The native ``cedarcli status`` intentionally continues to probe host ports. Docker keeps
+        several service and admin ports private to cedarnet, so it needs a separate source of truth:
+        the expected Compose services plus Docker's runtime and health state.
+        """
+        server_version, daemon_error = DockerWorker._docker_server_version()
+        if daemon_error:
+            console.print(f'[red]❌ Docker status unavailable:[/red] {daemon_error}')
+            return False
+
+        stack_names = ['infrastructure', 'microservices']
+        if include_frontends:
+            stack_names.append('frontends')
+        if include_admin:
+            stack_names.append('admin')
+
+        table = Table(
+            'Stack', 'Service', 'Status', 'Container', 'Detail',
+            title=f'CEDAR Docker status (Engine {server_version})',
+        )
+        expected_count = 0
+        healthy_count = 0
+
+        for stack_name in stack_names:
+            directory, _ = DockerWorker.STACKS[stack_name]
+            stack_directory = os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory)
+            services, compose_error = DockerWorker._expected_compose_services(stack_directory)
+
+            if compose_error:
+                expected_count += 1
+                table.add_row(stack_name, 'Compose project', '❌', '', compose_error)
+                continue
+            if not services:
+                expected_count += 1
+                table.add_row(stack_name, 'Compose project', '❌', '', 'no services defined')
+                continue
+
+            containers, container_error = DockerWorker._compose_containers(directory)
+            if container_error:
+                expected_count += len(services)
+                for service in services:
+                    table.add_row(stack_name, service, '❌', '', container_error)
+                continue
+
+            for service in services:
+                expected_count += 1
+                indicator, container_name, detail = DockerWorker._container_report(containers.get(service))
+                if indicator == '✅':
+                    healthy_count += 1
+                table.add_row(stack_name, service, indicator, container_name, detail)
+
+        console.print(table)
+        if healthy_count == expected_count:
+            console.print(f'[green]✅ {healthy_count}/{expected_count} required Docker services are ready.[/green]')
+            return True
+
+        console.print(
+            f'[red]❌ {healthy_count}/{expected_count} required Docker services are ready.[/red] '
+            'Use docker compose logs for the failing service.'
+        )
+        return False
 
     @staticmethod
     def build_images(images, local=False):

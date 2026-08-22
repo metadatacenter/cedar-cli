@@ -10,6 +10,23 @@ app.add_typer(docker_start.app, name="start")
 app.add_typer(docker_stop.app, name="stop")
 
 
+@app.command("status")
+def status(
+        include_frontends: bool = typer.Option(
+            True,
+            "--frontends/--no-frontends",
+            help="Require the frontend containers; disable for a Docker-backend/native-frontend hybrid.",
+        ),
+        include_admin: bool = typer.Option(
+            False,
+            "--include-admin",
+            help="Also require the optional admin-tool containers.",
+        )):
+    """Check expected Compose services against Docker runtime health."""
+    if not DockerWorker.status(include_frontends=include_frontends, include_admin=include_admin):
+        raise typer.Exit(code=1)
+
+
 @app.command("validate")
 def validate():
     """Check every compose stack parses and every variable it references is defined. Needs no daemon."""
