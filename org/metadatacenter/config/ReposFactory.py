@@ -63,14 +63,20 @@ class ReposFactory:
                             build_command_list=['npm ci'],
                             server_build_command_list=[
                                 'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace'],
-                            deploy_command_list=['npm ci', 'npm publish'],
+                            deploy_command_list=[
+                                'npm ci',
+                                'bash "$CEDAR_HOME/cedar-development/ops/'
+                                'publish-frontend-package.sh" workspace'],
                             skip_from_default_deploy=True))
         repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
                             is_frontend=True, allow_different_version=True, skip_from_release=True,
                             build_command_list=['npm ci'],
                             server_build_command_list=[
                                 'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" designer'],
-                            deploy_command_list=['npm ci', 'npm publish'],
+                            deploy_command_list=[
+                                'npm ci',
+                                'bash "$CEDAR_HOME/cedar-development/ops/'
+                                'publish-frontend-package.sh" designer'],
                             skip_from_default_deploy=True))
 
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)

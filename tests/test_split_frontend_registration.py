@@ -26,7 +26,8 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
             self.assertEqual(['npm ci'], repo.build_command_list)
             self.assertEqual(1, len(repo.server_build_command_list))
             self.assertIn('build-native-split-frontend.sh', repo.server_build_command_list[0])
-            self.assertEqual(['npm ci', 'npm publish'], repo.deploy_command_list)
+            self.assertEqual('npm ci', repo.deploy_command_list[0])
+            self.assertIn('publish-frontend-package.sh', repo.deploy_command_list[1])
             self.assertNotIn(repo, repos.get_release_all())
             self.assertNotIn(repo, repos.get_frontends_for_default_deploy())
 
