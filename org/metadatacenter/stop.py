@@ -4,6 +4,7 @@ from org.metadatacenter import stop_frontend, stop_microservice
 from org.metadatacenter.worker.StopFrontendWorker import StopFrontendWorker
 from org.metadatacenter.worker.StopInfrastructureWorker import StopInfrastructureWorker
 from org.metadatacenter.worker.StopMicroserviceWorker import StopMicroserviceWorker
+from org.metadatacenter.worker.NativeWorker import NativeWorker
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(stop_frontend.app, name="frontend")
@@ -12,8 +13,7 @@ app.add_typer(stop_microservice.app, name="microservice")
 
 @app.command("all")
 def all_all():
-    StopFrontendWorker.all()
-    StopMicroserviceWorker.all()
+    NativeWorker.stop()
     StopInfrastructureWorker.all()
 
 

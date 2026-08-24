@@ -44,8 +44,25 @@ private to `cedarnet`, so native host-port probes cannot assess a container depl
 
 ```bash
 cedarcli status
+cedarcli native status
 cedarcli docker status
 ```
+
+Native starts are headless. `cedarcli start all`, `start microservices`, and `start frontends` use
+the shared process controller; they do not open iTerm or Terminal. The fifteen Java services and
+seven frontends write separate logs under `$CEDAR_HOME/log/` and PID files under
+`$CEDAR_HOME/log/run/`.
+
+```bash
+cedarcli start all
+cedarcli native health
+cedarcli native logs resource
+cedarcli native restart resource
+cedarcli stop all
+```
+
+Use `cedarcli native watch` for a continuously refreshing application view. The existing
+`cedarcli status` remains the broader native host/port inventory, including infrastructure.
 
 The aggregate Docker start command selects one explicit topology and waits for it to become ready:
 

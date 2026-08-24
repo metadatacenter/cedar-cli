@@ -1,5 +1,4 @@
 import os
-import platform
 import subprocess
 from rich.console import Console
 
@@ -9,7 +8,6 @@ class CedarCliSettings(object):
     do_fail_on_error = True
     shell_path = '/bin/bash'
     _sed_replace_in_place = None
-    _use_osa = None
 
     @staticmethod
     def _test_sed_in_place_command():
@@ -38,9 +36,3 @@ class CedarCliSettings(object):
         if cls._sed_replace_in_place is None:
             cls._sed_replace_in_place = cls._test_sed_in_place_command()
         return cls._sed_replace_in_place
-
-    @classmethod
-    def get_use_osa(cls):
-        if cls._use_osa is None:
-            cls._use_osa = platform.system() == 'Darwin'  # True if macOS, False otherwise
-        return cls._use_osa

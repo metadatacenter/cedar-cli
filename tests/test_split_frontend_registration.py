@@ -12,6 +12,7 @@ from org.metadatacenter.worker.StartFrontendWorker import StartFrontendWorker
 from org.metadatacenter.worker.StopFrontendWorker import StopFrontendWorker
 
 
+@patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
 class SplitFrontendRegistrationTest(unittest.TestCase):
 
     def test_split_repositories_are_independently_published(self):
@@ -68,32 +69,30 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
         StartFrontendWorker.workspace()
         StartFrontendWorker.designer()
 
-        self.assertIn("start-frontend-workspace.sh", execute.call_args_list[0].args[0][0])
-        self.assertIn("start-frontend-designer.sh", execute.call_args_list[1].args[0][0])
+        self.assertIn("cedar-services.sh start workspace", execute.call_args_list[0].args[0][0])
+        self.assertIn("cedar-services.sh start designer", execute.call_args_list[1].args[0][0])
 
     @patch("org.metadatacenter.worker.StopFrontendWorker.Worker.execute_generic_shell_commands")
     def test_preview_stop_commands_delegate_to_shared_service_controller(self, execute):
         StopFrontendWorker.workspace()
         StopFrontendWorker.designer()
 
-        self.assertIn("stop-frontend-workspace.sh", execute.call_args_list[0].args[0][0])
-        self.assertIn("stop-frontend-designer.sh", execute.call_args_list[1].args[0][0])
+        self.assertIn("cedar-services.sh stop workspace", execute.call_args_list[0].args[0][0])
+        self.assertIn("cedar-services.sh stop designer", execute.call_args_list[1].args[0][0])
 
     @patch("org.metadatacenter.worker.StartFrontendWorker.Worker.execute_generic_shell_commands")
     def test_split_start_command_starts_both_native_services(self, execute):
         StartFrontendWorker.split_frontends()
 
-        self.assertEqual(2, execute.call_count)
-        self.assertIn("start-frontend-workspace.sh", execute.call_args_list[0].args[0][0])
-        self.assertIn("start-frontend-designer.sh", execute.call_args_list[1].args[0][0])
+        self.assertEqual(1, execute.call_count)
+        self.assertIn("cedar-services.sh start workspace designer", execute.call_args.args[0][0])
 
     @patch("org.metadatacenter.worker.StopFrontendWorker.Worker.execute_generic_shell_commands")
     def test_split_stop_command_stops_both_native_services(self, execute):
         StopFrontendWorker.split_frontends()
 
-        self.assertEqual(2, execute.call_count)
-        self.assertIn("stop-frontend-workspace.sh", execute.call_args_list[0].args[0][0])
-        self.assertIn("stop-frontend-designer.sh", execute.call_args_list[1].args[0][0])
+        self.assertEqual(1, execute.call_count)
+        self.assertIn("cedar-services.sh stop workspace designer", execute.call_args.args[0][0])
 
 
 if __name__ == "__main__":

@@ -152,10 +152,6 @@ class Util(object):
             return True
 
     @classmethod
-    def get_osa_script_path(cls, script_name):
-        return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
-
-    @classmethod
     def get_bash_script_path(cls, script_name):
         return os.path.join(os.getcwd(), 'scripts', 'bash', script_name)
 

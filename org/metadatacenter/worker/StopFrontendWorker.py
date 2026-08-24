@@ -1,75 +1,54 @@
-from rich.console import Console
-
-from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.worker.Worker import Worker
-
-console = Console()
 
 
 class StopFrontendWorker(Worker):
+    TARGETS = {
+        "main": "frontend",
+        "openview": "ui-openview",
+        "monitoring": "ui-monitoring",
+        "bridging": "ui-bridging",
+        "content": "ui-content",
+        "workspace": "workspace",
+        "designer": "designer",
+    }
 
-    def __init__(self):
-        super().__init__()
+    @staticmethod
+    def _stop(name: str):
+        return NativeWorker.stop((StopFrontendWorker.TARGETS[name],))
 
     @staticmethod
     def openview():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-openview.scpt')],
-            title="Stopping OpenView Frontend",
-        )
+        return StopFrontendWorker._stop("openview")
 
     @staticmethod
     def monitoring():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-monitoring.scpt')],
-            title="Stopping Monitoring Frontend",
-        )
+        return StopFrontendWorker._stop("monitoring")
 
     @staticmethod
     def bridging():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-bridging.scpt')],
-            title="Stopping Bridging Frontend",
-        )
+        return StopFrontendWorker._stop("bridging")
 
     @staticmethod
     def content():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-content.scpt')],
-            title="Stopping Content Frontend",
-        )
+        return StopFrontendWorker._stop("content")
 
     @staticmethod
     def main():
-        Worker.execute_generic_shell_commands(
-            ["osascript " + Util.get_osa_script_path('stop-frontend-main.scpt')],
-            title="Stopping Main Frontend",
-        )
+        return StopFrontendWorker._stop("main")
 
     @staticmethod
     def workspace():
-        Worker.execute_generic_shell_commands(
-            ["source " + Util.get_bash_script_path('stop-frontend-workspace.sh')],
-            title="Stopping Workspace Preview",
-        )
+        return StopFrontendWorker._stop("workspace")
 
     @staticmethod
     def designer():
-        Worker.execute_generic_shell_commands(
-            ["source " + Util.get_bash_script_path('stop-frontend-designer.sh')],
-            title="Stopping Template Designer Preview",
-        )
+        return StopFrontendWorker._stop("designer")
 
     @staticmethod
     def split_frontends():
-        StopFrontendWorker.workspace()
-        StopFrontendWorker.designer()
+        return NativeWorker.stop(("workspace", "designer"))
 
     @staticmethod
     def all():
-        # Preview processes are deliberately not part of production-era bulk stop operations.
-        StopFrontendWorker.main()
-        StopFrontendWorker.openview()
-        StopFrontendWorker.monitoring()
-        StopFrontendWorker.bridging()
-        StopFrontendWorker.content()
+        return NativeWorker.stop(NativeWorker.FRONTENDS)
