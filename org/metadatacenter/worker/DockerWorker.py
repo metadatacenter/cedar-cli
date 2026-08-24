@@ -91,7 +91,7 @@ done
 if [ ${failed} -ne 0 ]; then
     echo
     echo "Validation failed. Source a Docker profile before running this,"
-    echo "for example cedar-development/bin/templates/cedar-profile-docker-eval.sh."
+    echo "for example cedar-development/bin/templates/cedar-profile-docker.sh."
 fi
 exit ${failed}
 """
