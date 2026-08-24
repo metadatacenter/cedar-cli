@@ -2,6 +2,7 @@ from enum import Enum
 
 import typer
 
+from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
 app = typer.Typer(no_args_is_help=True)
@@ -21,10 +22,41 @@ PULL = typer.Option(
     help="Image pull policy. Local snapshot deployments default to never.",
 )
 
+MODE = typer.Option(
+    ...,
+    "--mode",
+    help="Deployment topology: full, hybrid, or backend.",
+)
+
+TIMEOUT = typer.Option(
+    600,
+    "--timeout",
+    min=1,
+    help="Maximum seconds to wait for the selected deployment to become ready.",
+)
+
 
 def exit_on_failure(returncode):
     if returncode:
         raise typer.Exit(code=returncode)
+
+
+@app.command("all", help="Start the selected CEDAR deployment in dependency order and wait for readiness.")
+def start_all(
+        mode: DockerDeploymentMode = MODE,
+        pull: PullPolicy = PULL,
+        timeout: int = TIMEOUT,
+        include_admin: bool = typer.Option(
+            False,
+            "--include-admin",
+            help="Also start and require the four optional administration containers.",
+        )):
+    exit_on_failure(DockerWorker.start_all(
+        mode=mode,
+        pull=pull.value,
+        timeout=timeout,
+        include_admin=include_admin,
+    ))
 
 
 @app.command("infrastructure", help="Start the seven infrastructure containers.")

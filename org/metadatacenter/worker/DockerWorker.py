@@ -1,16 +1,42 @@
 import json
 import os
+import socket
+import ssl
 import subprocess
+import time
+import urllib.error
+import urllib.request
 
 from rich.console import Console
 from rich.table import Table
 
+from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
 GIT_STATUS_CHAR_LIMIT = 300
+
+FRONTEND_NAMES = (
+    'EDITOR',
+    'CONTENT',
+    'OPENVIEW',
+    'MONITORING',
+    'BRIDGING',
+    'WORKSPACE',
+    'DESIGNER',
+)
+
+FRONTEND_PUBLIC_HOSTS = (
+    'cedar',
+    'workspace',
+    'designer',
+    'openview',
+    'content',
+    'monitoring',
+    'bridging',
+)
 
 
 class DockerWorker(Worker):
@@ -19,7 +45,7 @@ class DockerWorker(Worker):
         super().__init__()
 
     @staticmethod
-    def validate():
+    def validate(environment=None):
         output = Worker.execute_generic_shell_commands([
             """
 failed=0
@@ -48,11 +74,12 @@ exit ${failed}
 """
         ],
             title="Validating CEDAR compose stacks",
+            env=environment,
         )
         return output.returncode
 
     @staticmethod
-    def _docker_command(arguments, cwd=None):
+    def _docker_command(arguments, cwd=None, environment=None):
         try:
             return subprocess.run(
                 ['docker', *arguments],
@@ -60,6 +87,7 @@ exit ${failed}
                 capture_output=True,
                 text=True,
                 check=False,
+                env=environment,
             )
         except OSError as error:
             return subprocess.CompletedProcess(
@@ -77,10 +105,11 @@ exit ${failed}
         return result.stdout.strip(), None
 
     @staticmethod
-    def _expected_compose_services(stack_directory):
+    def _expected_compose_services(stack_directory, environment=None):
         result = DockerWorker._docker_command(
             ['compose', 'config', '--no-interpolate', '--services'],
             cwd=stack_directory,
+            environment=environment,
         )
         if result.returncode != 0:
             return [], result.stderr.strip() or 'Unable to read the Compose project'
@@ -145,69 +174,234 @@ exit ${failed}
         return '❌', name, detail
 
     @staticmethod
-    def status(include_frontends=True, include_admin=False):
-        """Report the Compose inventory and container health for a Docker deployment.
-
-        The native ``cedarcli status`` intentionally continues to probe host ports. Docker keeps
-        several service and admin ports private to cedarnet, so it needs a separate source of truth:
-        the expected Compose services plus Docker's runtime and health state.
-        """
-        server_version, daemon_error = DockerWorker._docker_server_version()
-        if daemon_error:
-            console.print(f'[red]❌ Docker status unavailable:[/red] {daemon_error}')
-            return False
-
-        stack_names = ['infrastructure', 'microservices']
-        if include_frontends:
-            stack_names.append('frontends')
+    def _stack_names(mode, include_admin=False):
+        names = ['infrastructure', 'microservices']
+        if mode.includes_frontend_containers:
+            names.append('frontends')
         if include_admin:
-            stack_names.append('admin')
+            names.append('admin')
+        return names
 
-        table = Table(
-            'Stack', 'Service', 'Status', 'Container', 'Detail',
-            title=f'CEDAR Docker status (Engine {server_version})',
-        )
-        expected_count = 0
-        healthy_count = 0
+    @staticmethod
+    def _deployment_state_path():
+        return os.path.join(Util.cedar_home, '.cedar', 'docker-deployment.json')
+
+    @staticmethod
+    def active_deployment():
+        """Return the last aggregate deployment mode and admin selection, if recorded."""
+        try:
+            with open(DockerWorker._deployment_state_path(), 'r', encoding='utf-8') as state_file:
+                state = json.load(state_file)
+            return DockerDeploymentMode(state['mode']), bool(state.get('include_admin', False))
+        except (FileNotFoundError, KeyError, ValueError, TypeError, json.JSONDecodeError):
+            return None, False
+
+    @staticmethod
+    def _record_active_deployment(mode, include_admin):
+        state_path = DockerWorker._deployment_state_path()
+        state_directory = os.path.dirname(state_path)
+        os.makedirs(state_directory, exist_ok=True)
+        temporary_path = state_path + '.tmp'
+        with open(temporary_path, 'w', encoding='utf-8') as state_file:
+            json.dump({'mode': mode.value, 'include_admin': include_admin}, state_file, indent=2)
+            state_file.write('\n')
+        os.replace(temporary_path, state_path)
+
+    @staticmethod
+    def _clear_active_deployment():
+        try:
+            os.remove(DockerWorker._deployment_state_path())
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def mode_environment(mode):
+        """Build a child environment for one Docker deployment mode without changing the shell."""
+        environment = os.environ.copy()
+        errors = []
+        nginx_host = environment.get('CEDAR_NGINX_HOST')
+        cedar_host = environment.get('CEDAR_HOST')
+        if not nginx_host:
+            errors.append('CEDAR_NGINX_HOST is not defined')
+        if not cedar_host:
+            errors.append('CEDAR_HOST is not defined')
+
+        for frontend in FRONTEND_NAMES:
+            container_variable = f'CEDAR_FRONTEND_{frontend}_CONTAINER_HOST'
+            upstream_variable = f'CEDAR_FRONTEND_{frontend}_HOST'
+            container_host = environment.get(container_variable)
+            if not container_host:
+                errors.append(f'{container_variable} is not defined')
+                continue
+            environment[upstream_variable] = (
+                'host.docker.internal'
+                if mode is DockerDeploymentMode.HYBRID
+                else container_host
+            )
+
+        if nginx_host:
+            environment['CEDAR_AUTH_HOST_TARGET'] = nginx_host
+        environment['CEDAR_DOCKER_MODE'] = mode.value
+        return environment, errors
+
+    @staticmethod
+    def _container_snapshot(stack_names, environment=None):
+        server_version, daemon_error = DockerWorker._docker_server_version()
+        snapshot = {
+            'server_version': server_version,
+            'daemon_error': daemon_error,
+            'rows': [],
+            'expected': 0,
+            'healthy': 0,
+        }
+        if daemon_error:
+            return snapshot
 
         for stack_name in stack_names:
             directory, _ = DockerWorker.STACKS[stack_name]
             stack_directory = os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory)
-            services, compose_error = DockerWorker._expected_compose_services(stack_directory)
+            services, compose_error = DockerWorker._expected_compose_services(
+                stack_directory,
+                environment=environment,
+            )
 
             if compose_error:
-                expected_count += 1
-                table.add_row(stack_name, 'Compose project', '❌', '', compose_error)
+                snapshot['expected'] += 1
+                snapshot['rows'].append((stack_name, 'Compose project', '❌', '', compose_error))
                 continue
             if not services:
-                expected_count += 1
-                table.add_row(stack_name, 'Compose project', '❌', '', 'no services defined')
+                snapshot['expected'] += 1
+                snapshot['rows'].append((stack_name, 'Compose project', '❌', '', 'no services defined'))
                 continue
 
             containers, container_error = DockerWorker._compose_containers(directory)
             if container_error:
-                expected_count += len(services)
+                snapshot['expected'] += len(services)
                 for service in services:
-                    table.add_row(stack_name, service, '❌', '', container_error)
+                    snapshot['rows'].append((stack_name, service, '❌', '', container_error))
                 continue
 
             for service in services:
-                expected_count += 1
+                snapshot['expected'] += 1
                 indicator, container_name, detail = DockerWorker._container_report(containers.get(service))
                 if indicator == '✅':
-                    healthy_count += 1
-                table.add_row(stack_name, service, indicator, container_name, detail)
+                    snapshot['healthy'] += 1
+                snapshot['rows'].append((stack_name, service, indicator, container_name, detail))
 
+        return snapshot
+
+    @staticmethod
+    def _snapshot_ready(snapshot):
+        return (
+            snapshot['daemon_error'] is None
+            and snapshot['expected'] > 0
+            and snapshot['healthy'] == snapshot['expected']
+        )
+
+    @staticmethod
+    def _render_snapshot(snapshot, mode):
+        if snapshot['daemon_error']:
+            console.print(f"[red]❌ Docker status unavailable:[/red] {snapshot['daemon_error']}")
+            return
+
+        table = Table(
+            'Stack', 'Service', 'Status', 'Container', 'Detail',
+            title=f"CEDAR Docker status: {mode.value} (Engine {snapshot['server_version']})",
+        )
+        for row in snapshot['rows']:
+            table.add_row(*row)
         console.print(table)
-        if healthy_count == expected_count:
-            console.print(f'[green]✅ {healthy_count}/{expected_count} required Docker services are ready.[/green]')
-            return True
+
+    @staticmethod
+    def _backend_auth_error(timeout=10):
+        cedar_host = os.environ.get('CEDAR_HOST')
+        if not cedar_host:
+            return 'CEDAR_HOST is not defined; cannot check backend authentication routing'
+        url = f'https://auth.{cedar_host}/realms/CEDAR/.well-known/openid-configuration'
+        result = DockerWorker._docker_command([
+            'exec', 'server-resource', 'curl', '-fsS', '--max-time', str(max(1, int(timeout))), url,
+        ])
+        if result.returncode == 0:
+            return None
+        return result.stderr.strip() or result.stdout.strip() or f'could not fetch {url} from server-resource'
+
+    @staticmethod
+    def _url_error(url, timeout=10):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=context),
+        )
+        try:
+            with opener.open(url, timeout=timeout) as response:
+                if response.status == 200:
+                    return None
+                return f'{url} returned HTTP {response.status}'
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            return f'{url} is not ready: {error}'
+
+    @staticmethod
+    def _frontend_route_errors(timeout=10):
+        cedar_host = os.environ.get('CEDAR_HOST')
+        if not cedar_host:
+            return ['CEDAR_HOST is not defined; cannot check frontend routes']
+        errors = []
+        for host in FRONTEND_PUBLIC_HOSTS:
+            url = f'https://{host}.{cedar_host}/'
+            error = DockerWorker._url_error(url, timeout=timeout)
+            if error:
+                errors.append(error)
+        return errors
+
+    @staticmethod
+    def _acceptance_errors(mode, timeout=10):
+        errors = []
+        auth_error = DockerWorker._backend_auth_error(timeout=timeout)
+        if auth_error:
+            errors.append(f'backend authentication route: {auth_error}')
+        if mode.checks_frontend_routes:
+            errors.extend(DockerWorker._frontend_route_errors(timeout=timeout))
+        return errors
+
+    @staticmethod
+    def status(mode=DockerDeploymentMode.FULL, include_admin=False, include_frontends=None):
+        """Report container health and the acceptance checks selected by the deployment mode."""
+        if include_frontends is not None:
+            mode = DockerDeploymentMode.FULL if include_frontends else DockerDeploymentMode.BACKEND
+        if isinstance(mode, str):
+            mode = DockerDeploymentMode(mode)
+
+        environment, environment_errors = DockerWorker.mode_environment(mode)
+        if environment_errors:
+            for error in environment_errors:
+                console.print(f'[red]❌ {error}[/red]')
+            return False
+
+        snapshot = DockerWorker._container_snapshot(
+            DockerWorker._stack_names(mode, include_admin),
+            environment=environment,
+        )
+        DockerWorker._render_snapshot(snapshot, mode)
+        if not DockerWorker._snapshot_ready(snapshot):
+            console.print(
+                f"[red]❌ {snapshot['healthy']}/{snapshot['expected']} selected Docker services are ready.[/red] "
+                'Use docker compose logs for the failing service.'
+            )
+            return False
+
+        acceptance_errors = DockerWorker._acceptance_errors(mode)
+        if acceptance_errors:
+            for error in acceptance_errors:
+                console.print(f'[red]❌ {error}[/red]')
+            return False
 
         console.print(
-            f'[red]❌ {healthy_count}/{expected_count} required Docker services are ready.[/red] '
-            'Use docker compose logs for the failing service.'
+            f"[green]✅ {snapshot['healthy']}/{snapshot['expected']} selected Docker services and "
+            f'{mode.value} acceptance checks are ready.[/green]'
         )
-        return False
+        return True
 
     @staticmethod
     def build_images(images, local=False):
@@ -405,7 +599,223 @@ exit ${failed}
     }
 
     @staticmethod
-    def compose(stack, action, detach=False, pull=None):
+    def _stack_directory(stack):
+        directory, _ = DockerWorker.STACKS[stack]
+        return os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory)
+
+    @staticmethod
+    def _published_ports(stack_names, environment):
+        ports = []
+        errors = []
+        for stack in stack_names:
+            result = DockerWorker._docker_command(
+                ['compose', 'config', '--format', 'json'],
+                cwd=DockerWorker._stack_directory(stack),
+                environment=environment,
+            )
+            if result.returncode != 0:
+                errors.append(result.stderr.strip() or f'could not resolve the {stack} Compose project')
+                continue
+            try:
+                model = json.loads(result.stdout)
+            except json.JSONDecodeError as error:
+                errors.append(f'could not read published ports for {stack}: {error}')
+                continue
+            for service in (model.get('services') or {}).values():
+                for port in service.get('ports') or []:
+                    published = port.get('published') if isinstance(port, dict) else None
+                    if published is not None:
+                        try:
+                            ports.append(int(published))
+                        except (TypeError, ValueError):
+                            errors.append(f'{stack} has an invalid published port: {published}')
+        return sorted(set(ports)), errors
+
+    @staticmethod
+    def _port_has_listener(port):
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=0.15):
+                return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _port_owned_by_selected_compose_project(port, stack_names):
+        result = DockerWorker._docker_command([
+            'ps', '--filter', f'publish={port}',
+            '--format', '{{.Label "com.docker.compose.project"}}',
+        ])
+        if result.returncode != 0:
+            return False
+        allowed_projects = {DockerWorker.STACKS[stack][0] for stack in stack_names}
+        projects = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        return bool(projects) and projects.issubset(allowed_projects)
+
+    @staticmethod
+    def preflight(mode, include_admin, environment):
+        """Fail before creating containers when the selected deployment cannot start safely."""
+        errors = []
+        if DockerWorker.validate(environment=environment) != 0:
+            return False
+
+        _, daemon_error = DockerWorker._docker_server_version()
+        if daemon_error:
+            errors.append(daemon_error)
+
+        for resource_type, resource_names in (
+                ('network', ('cedarnet',)),
+                ('volume', ('cedar_cert', 'cedar_ca'))):
+            for resource_name in resource_names:
+                result = DockerWorker._docker_command([resource_type, 'inspect', resource_name])
+                if result.returncode != 0:
+                    errors.append(
+                        f'Docker {resource_type} {resource_name} is missing; '
+                        'run cedarcli docker one-time-setup'
+                    )
+
+        stack_names = DockerWorker._stack_names(mode, include_admin)
+        ports, port_errors = DockerWorker._published_ports(stack_names, environment)
+        errors.extend(port_errors)
+        for port in ports:
+            if (
+                    DockerWorker._port_has_listener(port)
+                    and not DockerWorker._port_owned_by_selected_compose_project(port, stack_names)):
+                errors.append(f'host port {port} is already used outside the selected Docker deployment')
+
+        if errors:
+            console.print('[red]Docker deployment preflight failed:[/red]')
+            for error in errors:
+                console.print(f'  ❌ {error}')
+            return False
+        console.print(f'[green]✅ Docker preflight passed for {mode.value} mode.[/green]')
+        return True
+
+    @staticmethod
+    def _print_failure_logs(snapshot, environment):
+        failures_by_stack = {}
+        for stack, service, indicator, _container, _detail in snapshot['rows']:
+            if indicator != '✅' and service != 'Compose project':
+                failures_by_stack.setdefault(stack, []).append(service)
+        for stack, services in failures_by_stack.items():
+            result = DockerWorker._docker_command(
+                ['compose', 'logs', '--tail', '100', *services],
+                cwd=DockerWorker._stack_directory(stack),
+                environment=environment,
+            )
+            console.print(f'[yellow]Recent {stack} logs ({", ".join(services)}):[/yellow]')
+            output = (result.stdout + result.stderr).strip()
+            console.print(output or '(no logs returned)', markup=False)
+
+    @staticmethod
+    def _wait_for_stacks(stack_names, deadline, mode, environment):
+        last_progress = None
+        snapshot = None
+        while True:
+            snapshot = DockerWorker._container_snapshot(stack_names, environment=environment)
+            progress = (snapshot['healthy'], snapshot['expected'])
+            if progress != last_progress:
+                console.print(f'Waiting for {mode.value}: {progress[0]}/{progress[1]} containers ready')
+                last_progress = progress
+            if DockerWorker._snapshot_ready(snapshot):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                DockerWorker._render_snapshot(snapshot, mode)
+                DockerWorker._print_failure_logs(snapshot, environment)
+                return False
+            time.sleep(min(2, remaining))
+
+    @staticmethod
+    def _wait_for_acceptance(mode, deadline):
+        errors = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            check_count = 1 + (len(FRONTEND_PUBLIC_HOSTS) if mode.checks_frontend_routes else 0)
+            probe_timeout = max(1, min(5, remaining / check_count))
+            errors = DockerWorker._acceptance_errors(mode, timeout=probe_timeout)
+            if not errors:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(2, remaining))
+        console.print(f'[red]{mode.value} acceptance checks did not become ready:[/red]')
+        for error in errors:
+            console.print(f'  ❌ {error}')
+        return False
+
+    @staticmethod
+    def start_all(mode, pull='never', timeout=600, include_admin=False):
+        if isinstance(mode, str):
+            mode = DockerDeploymentMode(mode)
+        environment, environment_errors = DockerWorker.mode_environment(mode)
+        if environment_errors:
+            for error in environment_errors:
+                console.print(f'[red]❌ {error}[/red]')
+            return 1
+        if not DockerWorker.preflight(mode, include_admin, environment):
+            return 1
+
+        deadline = time.monotonic() + timeout
+        if not mode.includes_frontend_containers:
+            if DockerWorker.compose('frontends', 'down', environment=environment) != 0:
+                return 1
+
+        started_stacks = []
+        requested_stacks = DockerWorker._stack_names(mode, include_admin)
+        for stack in requested_stacks:
+            if DockerWorker.compose(stack, 'up', detach=True, pull=pull, environment=environment) != 0:
+                return 1
+            started_stacks.append(stack)
+            if not DockerWorker._wait_for_stacks(list(started_stacks), deadline, mode, environment):
+                return 1
+
+        if not DockerWorker._wait_for_acceptance(mode, deadline):
+            return 1
+
+        try:
+            DockerWorker._record_active_deployment(mode, include_admin)
+        except OSError as error:
+            console.print(
+                '[red]Containers are ready, but the active deployment mode could not be '
+                f'recorded: {error}[/red]'
+            )
+            return 1
+        console.print(f'[green]✅ CEDAR Docker {mode.value} deployment is ready.[/green]')
+        return 0
+
+    @staticmethod
+    def stop_all(include_admin=False):
+        active_mode, active_admin = DockerWorker.active_deployment()
+        include_admin = include_admin or active_admin
+        mode = active_mode or DockerDeploymentMode.FULL
+        environment, errors = DockerWorker.mode_environment(mode)
+        if errors:
+            environment = os.environ.copy()
+
+        stacks = []
+        if include_admin:
+            stacks.append('admin')
+        stacks.extend(['frontends', 'microservices', 'infrastructure'])
+        first_failure = 0
+        for stack in stacks:
+            returncode = DockerWorker.compose(stack, 'down', environment=environment)
+            if returncode and not first_failure:
+                first_failure = returncode
+        if first_failure == 0:
+            DockerWorker._clear_active_deployment()
+        return first_failure
+
+    @staticmethod
+    def compose(stack, action, detach=False, pull=None, environment=None):
+        if environment is None:
+            active_mode, _ = DockerWorker.active_deployment()
+            if active_mode is not None:
+                active_environment, errors = DockerWorker.mode_environment(active_mode)
+                if not errors:
+                    environment = active_environment
         directory, label = DockerWorker.STACKS[stack]
         command = 'docker compose ' + action
         if action == 'up' and detach:
@@ -415,7 +825,8 @@ exit ${failed}
         output = Worker.execute_generic_shell_commands(
             [command],
             title=("Starting" if action == 'up' else "Stopping") + " CEDAR " + label,
-            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory)
+            cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory),
+            env=environment,
         )
         return output.returncode
 
@@ -429,6 +840,13 @@ exit ${failed}
 
     @staticmethod
     def start_frontends(detach=False, pull='never'):
+        active_mode, _ = DockerWorker.active_deployment()
+        if active_mode is not None and not active_mode.includes_frontend_containers:
+            console.print(
+                f'[red]The active Docker mode is {active_mode.value}; switch with '
+                'cedarcli docker start all --mode full instead.[/red]'
+            )
+            return 1
         return DockerWorker.compose('frontends', 'up', detach, pull)
 
     @staticmethod

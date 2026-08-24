@@ -33,7 +33,7 @@ class Worker:
         return repos
 
     @staticmethod
-    def execute_generic_shell_commands(command_list: List[str], title: str, cwd: str = None):
+    def execute_generic_shell_commands(command_list: List[str], title: str, cwd: str = None, env=None):
         panel = Panel(
             "[yellow]" +
             ((" 📂️ Location  : " + cwd + "\n") if cwd else '') +
@@ -42,7 +42,7 @@ class Worker:
             title_align="left")
         console.print(panel, style=Style(color="yellow"))
         proc = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
-                                executable=GlobalContext.get_shell())
+                                executable=GlobalContext.get_shell(), env=env)
 
         stdout_parts = []
         Worker.handle_shell_stdout(proc.stdout, stdout_parts)

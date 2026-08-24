@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from rich.console import Console
 
+from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
@@ -29,8 +30,18 @@ class DockerStatusTest(unittest.TestCase):
             Console(file=StringIO(), force_terminal=False),
         )
         self.console_patch.start()
+        self.mode_environment_patch = patch.object(
+            DockerWorker,
+            'mode_environment',
+            return_value=({}, []),
+        )
+        self.mode_environment_patch.start()
+        self.acceptance_patch = patch.object(DockerWorker, '_acceptance_errors', return_value=[])
+        self.acceptance = self.acceptance_patch.start()
 
     def tearDown(self):
+        self.acceptance_patch.stop()
+        self.mode_environment_patch.stop()
         self.console_patch.stop()
 
     @patch.object(DockerWorker, '_compose_containers')
@@ -63,13 +74,26 @@ class DockerStatusTest(unittest.TestCase):
     @patch.object(DockerWorker, '_expected_compose_services')
     @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
-    def test_frontends_can_be_excluded_for_hybrid_mode(self, _version, expected, actual):
+    def test_frontends_can_be_excluded_for_legacy_backend_switch(self, _version, expected, actual):
         expected.return_value = (['one'], None)
         actual.return_value = ({'one': container('one')}, None)
 
         self.assertTrue(DockerWorker.status(include_frontends=False))
         self.assertEqual(2, expected.call_count)
         self.assertNotIn('cedar-frontend', [call.args[0] for call in actual.call_args_list])
+
+    @patch.object(DockerWorker, '_compose_containers')
+    @patch.object(DockerWorker, '_expected_compose_services')
+    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
+    def test_hybrid_checks_backend_containers_and_frontend_routes(self, _version, expected, actual):
+        expected.return_value = (['one'], None)
+        actual.return_value = ({'one': container('one')}, None)
+
+        self.assertTrue(DockerWorker.status(mode=DockerDeploymentMode.HYBRID))
+        self.assertEqual(2, expected.call_count)
+        self.assertNotIn('cedar-frontend', [call.args[0] for call in actual.call_args_list])
+        self.acceptance.assert_called_once_with(DockerDeploymentMode.HYBRID)
 
     @patch.object(DockerWorker, '_compose_containers', return_value=({}, None))
     @patch.object(DockerWorker, '_expected_compose_services', return_value=(['missing'], None))

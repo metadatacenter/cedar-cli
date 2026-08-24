@@ -10,6 +10,16 @@ def exit_on_failure(returncode):
         raise typer.Exit(code=returncode)
 
 
+@app.command("all", help="Stop all core Docker stacks without removing named data volumes.")
+def stop_all(
+        include_admin: bool = typer.Option(
+            False,
+            "--include-admin",
+            help="Also stop the optional administration containers.",
+        )):
+    exit_on_failure(DockerWorker.stop_all(include_admin=include_admin))
+
+
 @app.command("infrastructure", help="Stop the infrastructure Compose project.")
 def stop_infrastructure():
     exit_on_failure(DockerWorker.stop_infrastructure())

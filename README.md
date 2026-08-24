@@ -37,31 +37,46 @@ The available commands will be listed by executing:
 cedarcli
 ```
 
-## Native and Docker status
+## Native and Docker deployments
 
-The two deployment modes deliberately have separate status commands:
-
-```bash
-cedarcli status                       # Native processes and host-port health checks
-cedarcli docker status                # Required Docker infrastructure, services, and frontends
-cedarcli docker status --no-frontends # 22-container backend for a native-frontend hybrid
-cedarcli docker status --include-admin # Also require the optional admin tools
-```
-
-Docker keeps some ports private to `cedarnet`, so the native status command cannot accurately
-assess a Docker deployment. Docker status instead compares each Compose project's expected service
-inventory with its containers and health checks, and exits nonzero if anything is missing,
-stopped, unhealthy, or still starting.
-
-Docker starts default to `--pull never`, matching the current locally-built `2.9.2-SNAPSHOT`
-workflow. Use `--pull missing` or `--pull always` explicitly after configuring a registry-backed
-deployment:
+Native and Docker deployments deliberately have separate status commands. Docker keeps some ports
+private to `cedarnet`, so native host-port probes cannot assess a container deployment accurately.
 
 ```bash
-cedarcli docker start infrastructure -d
-cedarcli docker start microservices -d
-cedarcli docker start frontends -d
+cedarcli status
+cedarcli docker status
 ```
+
+The aggregate Docker start command selects one explicit topology and waits for it to become ready:
+
+```bash
+cedarcli docker start all --mode full
+cedarcli docker start all --mode hybrid
+cedarcli docker start all --mode backend
+```
+
+- `full` starts and checks all 29 core containers.
+- `hybrid` starts the 22-container backend and routes Docker nginx to seven native frontend servers.
+- `backend` starts the same 22 containers without requiring frontend routes.
+
+The active mode is recorded after a successful start, so `cedarcli docker status` applies the same
+container and route expectations without another option. Add `--include-admin` when starting the
+four optional administration containers; status remembers that selection too.
+
+Starts default to `--pull never`, which uses local images and fails if one is absent. Use
+`--pull missing` to fetch only absent images or `--pull always` to refresh every image from its
+configured registry. After preflight passes, `--timeout` bounds the ordered startup, health wait,
+authentication-route probe, and frontend-route checks.
+
+```bash
+cedarcli docker start all --mode full --pull never --timeout 600
+cedarcli docker stop all
+```
+
+Individual `start` and `stop` commands remain available for troubleshooting. When an aggregate mode
+is active, recreating infrastructure through those commands preserves its nginx routing. Starting
+the Docker frontend project while `hybrid` or `backend` is active is refused; switch modes through
+`start all --mode full` instead.
 
 ## Cheat sheet
 The full set of commands and subcommands will be shown as a `pdf` file after executing:
