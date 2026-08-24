@@ -102,7 +102,35 @@ class DockerDeploymentTest(unittest.TestCase):
 
         self.assertIn('CEDAR_HOST is not defined', errors)
         self.assertIn('CEDAR_NGINX_HOST is not defined', errors)
-        self.assertIn('CEDAR_FRONTEND_EDITOR_CONTAINER_HOST is not defined', errors)
+        self.assertIn(
+            'CEDAR Docker profile is not loaded; source '
+            '$CEDAR_HOME/cedar-development/bin/templates/cedar-profile-docker.sh',
+            errors,
+        )
+
+    def test_mode_environment_reports_a_partial_profile_exactly(self):
+        environment = deployment_environment()
+        del environment['CEDAR_FRONTEND_DESIGNER_CONTAINER_HOST']
+        with patch.dict(os.environ, environment, clear=True):
+            _environment, errors = DockerWorker.mode_environment(DockerDeploymentMode.FULL)
+
+        self.assertEqual(
+            ['CEDAR_FRONTEND_DESIGNER_CONTAINER_HOST is not defined'],
+            errors,
+        )
+
+    @patch.object(DockerWorker, '_docker_command')
+    def test_backend_authentication_probe_accepts_the_local_certificate(self, command):
+        command.return_value = type(
+            'Result', (), {'returncode': 0, 'stdout': '', 'stderr': ''},
+        )()
+        with patch.dict(os.environ, {'CEDAR_HOST': 'metadatacenter.orgx'}, clear=True):
+            self.assertIsNone(DockerWorker._backend_auth_error(timeout=7))
+
+        command.assert_called_once_with([
+            'exec', 'server-resource', 'curl', '-kfsS', '--max-time', '7',
+            'https://auth.metadatacenter.orgx/realms/CEDAR/.well-known/openid-configuration',
+        ])
 
     @patch.object(DockerWorker, '_record_active_deployment')
     @patch.object(DockerWorker, '_wait_for_acceptance', return_value=True)

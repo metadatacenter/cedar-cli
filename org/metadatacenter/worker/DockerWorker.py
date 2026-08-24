@@ -263,18 +263,27 @@ exit ${failed}
         if not cedar_host:
             errors.append('CEDAR_HOST is not defined')
 
+        missing_container_hosts = []
         for frontend in FRONTEND_NAMES:
             container_variable = f'CEDAR_FRONTEND_{frontend}_CONTAINER_HOST'
             upstream_variable = f'CEDAR_FRONTEND_{frontend}_HOST'
             container_host = environment.get(container_variable)
             if not container_host:
-                errors.append(f'{container_variable} is not defined')
+                missing_container_hosts.append(container_variable)
                 continue
             environment[upstream_variable] = (
                 'host.docker.internal'
                 if mode is DockerDeploymentMode.HYBRID
                 else container_host
             )
+
+        if len(missing_container_hosts) == len(FRONTEND_NAMES):
+            errors.append(
+                'CEDAR Docker profile is not loaded; source '
+                '$CEDAR_HOME/cedar-development/bin/templates/cedar-profile-docker.sh'
+            )
+        else:
+            errors.extend(f'{variable} is not defined' for variable in missing_container_hosts)
 
         if nginx_host:
             environment['CEDAR_AUTH_HOST_TARGET'] = nginx_host
@@ -356,7 +365,7 @@ exit ${failed}
             return 'CEDAR_HOST is not defined; cannot check backend authentication routing'
         url = f'https://auth.{cedar_host}/realms/CEDAR/.well-known/openid-configuration'
         result = DockerWorker._docker_command([
-            'exec', 'server-resource', 'curl', '-fsS', '--max-time', str(max(1, int(timeout))), url,
+            'exec', 'server-resource', 'curl', '-kfsS', '--max-time', str(max(1, int(timeout))), url,
         ])
         if result.returncode == 0:
             return None
