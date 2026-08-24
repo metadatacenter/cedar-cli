@@ -78,6 +78,22 @@ is active, recreating infrastructure through those commands preserves its nginx 
 the Docker frontend project while `hybrid` or `backend` is active is refused; switch modes through
 `start all --mode full` instead.
 
+## Immutable development build trains
+
+`cedarcli build train` dispatches the central Java publication workflow in `cedar-development`.
+It derives the development base version from `cedar-parent` and allocates a UTC train ID. Resume
+is the only selector exposed to the operator:
+
+```bash
+cedarcli build train
+cedarcli build train --resume <TRAIN>
+```
+
+Resume uses the source manifest recorded before publication; it does not rebuild the current heads
+of `develop`. Docker builds and starts automatically resolve the current completed train, or accept
+`--train <TRAIN>`. Use `--local` on both build and start for checked-out Java artifacts and the
+legacy development image tag.
+
 ## Cheat sheet
 The full set of commands and subcommands will be shown as a `pdf` file after executing:
 ```bash

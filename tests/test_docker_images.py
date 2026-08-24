@@ -1,10 +1,21 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from org.metadatacenter.util.DockerImages import DockerImages
 
 
 class DockerImagesTest(unittest.TestCase):
+
+    @patch.object(DockerImages, 'image_prefix', return_value='metadatacenter')
+    @patch.object(DockerImages, '_manifest_path', return_value=str(
+        Path(__file__).resolve().parents[2] / 'cedar-docker-build' / 'bin' / 'cedar-images-base.sh'
+    ))
+    def test_manifest_uses_train_version_override(self, _path, _prefix):
+        _images, version, _prefix = DockerImages.manifest({
+            'CEDAR_TRAIN_VERSION': '2.9.3-dev.20260824.1847',
+        })
+        self.assertEqual('2.9.3-dev.20260824.1847', version)
 
     @patch.object(DockerImages, 'default_image_prefix', return_value='metadatacenter')
     def test_image_prefix_uses_environment_override(self, _default):

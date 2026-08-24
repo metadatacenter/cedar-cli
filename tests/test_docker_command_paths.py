@@ -10,6 +10,29 @@ from org.metadatacenter.worker.Worker import CommandOutput
 class DockerCommandPathsTest(unittest.TestCase):
 
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
+    @patch.object(DockerImages, 'server_versions', return_value={
+        'CEDAR_MAVEN_VERSION': '2.9.3-SNAPSHOT',
+        'NGINX_VERSION': '1.2.3',
+    })
+    @patch.object(DockerImages, 'build_home', return_value='/tmp/CEDAR/cedar-docker-build')
+    @patch.object(DockerImages, 'manifest', return_value=(
+        ['cedar-infra-nginx'], '2.9.3-dev.20260824.1847', 'example/cedar',
+    ))
+    def test_train_build_tags_image_and_downloads_same_maven_version(
+            self, _manifest, _home, _versions, execute):
+        execute.return_value = CommandOutput(['All requested images built.'], 0)
+
+        self.assertEqual(0, DockerWorker.build_images(
+            ['cedar-infra-nginx'],
+            train='2.9.3-dev.20260824.1847',
+        ))
+
+        command = execute.call_args.args[0][0]
+        self.assertIn('CEDAR_DOCKER_VERSION="2.9.3-dev.20260824.1847"', command)
+        self.assertIn('CEDAR_MAVEN_VERSION="2.9.3-dev.20260824.1847"', command)
+        self.assertIn('-t "example/cedar/cedar-infra-nginx:2.9.3-dev.20260824.1847"', command)
+
+    @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_start_uses_local_snapshot_pull_policy_and_current_stack(self, execute):
         execute.return_value = CommandOutput([], 0)

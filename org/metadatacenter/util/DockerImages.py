@@ -38,7 +38,8 @@ class DockerImages:
             manifest_path = cls._manifest_path()
         except ValueError:
             return cls.DEFAULT_IMAGE_PREFIX
-        text = open(manifest_path).read()
+        with open(manifest_path, encoding='utf-8') as manifest:
+            text = manifest.read()
         parameterized = re.search(
             r'^export CEDAR_IMAGE_PREFIX="\$\{CEDAR_IMAGE_PREFIX:-([^}]+)\}"',
             text,
@@ -92,11 +93,16 @@ class DockerImages:
     @classmethod
     def manifest(cls, environment=None):
         """Image names and version, read from the shell manifest that stays the source of truth."""
-        text = open(cls._manifest_path()).read()
+        environment = os.environ if environment is None else environment
+        with open(cls._manifest_path(), encoding='utf-8') as manifest:
+            text = manifest.read()
         version = re.search(r'^export IMAGE_VERSION=(\S+)', text, re.M)
         array = re.search(r'CEDAR_DOCKER_IMAGES=\((.*?)\)', text, re.S)
         images = re.findall(r'"([^"]+)"', array.group(1)) if array else []
-        return images, (version.group(1) if version else None), cls.image_prefix(environment)
+        selected_version = environment.get('CEDAR_TRAIN_VERSION')
+        if selected_version is None:
+            selected_version = version.group(1) if version else None
+        return images, selected_version, cls.image_prefix(environment)
 
     @classmethod
     def server_versions(cls):
@@ -107,7 +113,8 @@ class DockerImages:
         Dockerfiles declare these as build arguments with no default, so a version missing here
         fails the build rather than being silently substituted.
         """
-        text = open(cls._manifest_path()).read()
+        with open(cls._manifest_path(), encoding='utf-8') as manifest:
+            text = manifest.read()
         found = re.findall(r'^export ([A-Z0-9_]+(?:_VERSION|_SHA256))=(\S+)', text, re.M)
         return {name: value for name, value in found if name != 'IMAGE_VERSION'}
 
@@ -141,7 +148,9 @@ class DockerImages:
         if not os.path.exists(path):
             return []
         bases = []
-        for line in open(path).read().splitlines():
+        with open(path, encoding='utf-8') as dockerfile:
+            lines = dockerfile.read().splitlines()
+        for line in lines:
             m = re.match(r'\s*FROM\s+\$\{CEDAR_IMAGE_PREFIX\}/(\S+?):', line)
             if m:
                 bases.append(m.group(1))

@@ -220,13 +220,16 @@ exit ${failed}
             return None, False
 
     @staticmethod
-    def _record_active_deployment(mode, include_admin):
+    def _record_active_deployment(mode, include_admin, train=None):
         state_path = DockerWorker._deployment_state_path()
         state_directory = os.path.dirname(state_path)
         os.makedirs(state_directory, exist_ok=True)
         temporary_path = state_path + '.tmp'
         with open(temporary_path, 'w', encoding='utf-8') as state_file:
-            json.dump({'mode': mode.value, 'include_admin': include_admin}, state_file, indent=2)
+            state = {'mode': mode.value, 'include_admin': include_admin}
+            if train:
+                state['train'] = train
+            json.dump(state, state_file, indent=2)
             state_file.write('\n')
         os.replace(temporary_path, state_path)
 
@@ -236,6 +239,14 @@ exit ${failed}
             os.remove(DockerWorker._deployment_state_path())
         except FileNotFoundError:
             pass
+
+    @staticmethod
+    def active_train():
+        try:
+            with open(DockerWorker._deployment_state_path(), 'r', encoding='utf-8') as state_file:
+                return json.load(state_file).get('train')
+        except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+            return None
 
     @staticmethod
     def mode_environment(mode):
@@ -397,10 +408,18 @@ exit ${failed}
             mode = DockerDeploymentMode(mode)
 
         environment, environment_errors = DockerWorker.mode_environment(mode)
+        active_train = DockerWorker.active_train()
+        if active_train:
+            environment['CEDAR_DOCKER_VERSION'] = active_train
         if environment_errors:
             for error in environment_errors:
                 console.print(f'[red]❌ {error}[/red]')
             return False
+
+        console.print(
+            f'Docker image set: {active_train}' if active_train
+            else 'Docker image set: local development tag'
+        )
 
         snapshot = DockerWorker._container_snapshot(
             DockerWorker._stack_names(mode, include_admin),
@@ -427,7 +446,7 @@ exit ${failed}
         return True
 
     @staticmethod
-    def build_images(images, local=False):
+    def build_images(images, local=False, train=None):
         """Build the given images in order. Returns a process exit code.
 
         With local=True the jar is staged from the checkout before each image that carries one, and
@@ -438,7 +457,10 @@ exit ${failed}
         from org.metadatacenter.util.DockerImages import DockerImages
 
         try:
-            _, version, prefix = DockerImages.manifest()
+            environment = os.environ.copy()
+            if train:
+                environment['CEDAR_TRAIN_VERSION'] = train
+            _, version, prefix = DockerImages.manifest(environment)
         except ValueError as error:
             console.print(f'[red]Build configuration is invalid: {error}[/red]')
             return 1
@@ -448,11 +470,14 @@ exit ${failed}
         # Passing them to all images rather than working out which image wants which is deliberate:
         # Docker ignores a build argument a Dockerfile does not declare, and the alternative is a
         # second place recording which image installs which server.
+        server_versions = DockerImages.server_versions()
+        if train:
+            server_versions['CEDAR_MAVEN_VERSION'] = train
         build_args = ' '.join([
             f'--build-arg CEDAR_IMAGE_PREFIX="{prefix}"',
             f'--build-arg CEDAR_DOCKER_VERSION="{version}"',
         ] + [
-            f'--build-arg {name}="{value}"' for name, value in sorted(DockerImages.server_versions().items())
+            f'--build-arg {name}="{value}"' for name, value in sorted(server_versions.items())
         ])
 
         steps = []
@@ -798,10 +823,12 @@ exit ${failed}
         return False
 
     @staticmethod
-    def start_all(mode, pull='never', timeout=600, include_admin=False):
+    def start_all(mode, pull='never', timeout=600, include_admin=False, train=None):
         if isinstance(mode, str):
             mode = DockerDeploymentMode(mode)
         environment, environment_errors = DockerWorker.mode_environment(mode)
+        if train:
+            environment['CEDAR_DOCKER_VERSION'] = train
         if environment_errors:
             for error in environment_errors:
                 console.print(f'[red]❌ {error}[/red]')
@@ -827,7 +854,10 @@ exit ${failed}
             return 1
 
         try:
-            DockerWorker._record_active_deployment(mode, include_admin)
+            if train:
+                DockerWorker._record_active_deployment(mode, include_admin, train=train)
+            else:
+                DockerWorker._record_active_deployment(mode, include_admin)
         except OSError as error:
             console.print(
                 '[red]Containers are ready, but the active deployment mode could not be '
@@ -867,6 +897,9 @@ exit ${failed}
                 active_environment, errors = DockerWorker.mode_environment(active_mode)
                 if not errors:
                     environment = active_environment
+                    active_train = DockerWorker.active_train()
+                    if active_train:
+                        environment['CEDAR_DOCKER_VERSION'] = active_train
         directory, label = DockerWorker.STACKS[stack]
         command = 'docker compose ' + action
         if action == 'up' and detach:
@@ -882,15 +915,22 @@ exit ${failed}
         return output.returncode
 
     @staticmethod
-    def start_infrastructure(detach=False, pull='never'):
-        return DockerWorker.compose('infrastructure', 'up', detach, pull)
+    def _individual_start(stack, detach=False, pull='never', train=None):
+        environment = os.environ.copy()
+        if train:
+            environment['CEDAR_DOCKER_VERSION'] = train
+        return DockerWorker.compose(stack, 'up', detach, pull, environment=environment)
 
     @staticmethod
-    def start_microservices(detach=False, pull='never'):
-        return DockerWorker.compose('microservices', 'up', detach, pull)
+    def start_infrastructure(detach=False, pull='never', train=None):
+        return DockerWorker._individual_start('infrastructure', detach, pull, train)
 
     @staticmethod
-    def start_frontends(detach=False, pull='never'):
+    def start_microservices(detach=False, pull='never', train=None):
+        return DockerWorker._individual_start('microservices', detach, pull, train)
+
+    @staticmethod
+    def start_frontends(detach=False, pull='never', train=None):
         active_mode, _ = DockerWorker.active_deployment()
         if active_mode is not None and not active_mode.includes_frontend_containers:
             console.print(
@@ -898,11 +938,11 @@ exit ${failed}
                 'cedarcli docker start all --mode full instead.[/red]'
             )
             return 1
-        return DockerWorker.compose('frontends', 'up', detach, pull)
+        return DockerWorker._individual_start('frontends', detach, pull, train)
 
     @staticmethod
-    def start_admin(detach=False, pull='never'):
-        return DockerWorker.compose('admin', 'up', detach, pull)
+    def start_admin(detach=False, pull='never', train=None):
+        return DockerWorker._individual_start('admin', detach, pull, train)
 
     @staticmethod
     def stop_infrastructure():

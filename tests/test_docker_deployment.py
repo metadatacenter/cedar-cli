@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from org.metadatacenter import docker, docker_start, docker_stop
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
+from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
@@ -29,8 +30,9 @@ class DockerDeploymentTest(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
 
+    @patch.object(BuildTrain, 'resolve', return_value='2.9.3-dev.20260824.1847')
     @patch.object(DockerWorker, 'start_all', return_value=0)
-    def test_start_all_cli_passes_mode_pull_timeout_and_admin(self, start_all):
+    def test_start_all_cli_passes_mode_pull_timeout_and_admin(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
             'all', '--mode', 'hybrid', '--pull', 'missing', '--timeout', '42', '--include-admin',
         ])
@@ -41,7 +43,32 @@ class DockerDeploymentTest(unittest.TestCase):
             pull='missing',
             timeout=42,
             include_admin=True,
+            train='2.9.3-dev.20260824.1847',
         )
+        resolve.assert_called_once_with(None)
+
+    @patch.object(BuildTrain, 'resolve')
+    @patch.object(DockerWorker, 'start_all', return_value=0)
+    def test_start_all_local_does_not_resolve_a_published_train(self, start_all, resolve):
+        result = self.runner.invoke(docker_start.app, [
+            'all', '--mode', 'backend', '--local',
+        ])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        resolve.assert_not_called()
+        self.assertIsNone(start_all.call_args.kwargs['train'])
+
+    @patch.object(BuildTrain, 'resolve')
+    @patch.object(DockerWorker, 'start_infrastructure', return_value=0)
+    @patch.object(DockerWorker, 'active_train', return_value='2.9.3-dev.20260824.1847')
+    @patch.object(DockerWorker, 'active_deployment', return_value=(DockerDeploymentMode.FULL, False))
+    def test_individual_start_preserves_the_active_train(
+            self, _active, _active_train, start, resolve):
+        result = self.runner.invoke(docker_start.app, ['infrastructure'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        resolve.assert_not_called()
+        start.assert_called_once_with(False, 'never', '2.9.3-dev.20260824.1847')
 
     @patch.object(DockerWorker, 'stop_all', return_value=0)
     def test_stop_all_cli_passes_admin_selection(self, stop_all):
@@ -188,6 +215,7 @@ class DockerDeploymentTest(unittest.TestCase):
                 (DockerDeploymentMode.BACKEND, True),
                 DockerWorker.active_deployment(),
             )
+            self.assertIsNone(DockerWorker.active_train())
             DockerWorker._clear_active_deployment()
             self.assertEqual((None, False), DockerWorker.active_deployment())
 

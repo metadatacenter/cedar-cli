@@ -4,6 +4,7 @@ import typer
 from rich.console import Console
 
 from org.metadatacenter.util.DockerImages import DockerImages
+from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
 console = Console()
@@ -19,7 +20,12 @@ def build(
         no_deps: bool = typer.Option(False, "--no-deps",
                                      help="Do not build the CEDAR base images this target is built FROM."),
         local: bool = typer.Option(False, "--local",
-                                   help="Build against the jar in the checkout instead of the one published to Nexus."),
+                                   help="Use the development tag and checked-out JARs where the image carries one."),
+        train: str = typer.Option(
+            None,
+            "--train",
+            help="Use this completed immutable train instead of the current completed train.",
+        ),
 ):
     """Build Docker images. Bases are built first, so a build cannot use a stale one."""
     try:
@@ -37,10 +43,18 @@ def build(
     if added:
         console.print(f"Building {len(added)} base image(s) first: {', '.join(added)}")
 
-    if local:
-        missing = [i for i in images if not DockerImages.stageable(i)]
-        if len(missing) == len(images):
-            console.print("[red]--local: none of these images carry a jar, so there is nothing to stage[/red]")
-            raise typer.Exit(code=1)
+    if local and train:
+        console.print("[red]Use --local or --train, not both.[/red]")
+        raise typer.Exit(code=1)
 
-    sys.exit(DockerWorker.build_images(images, local=local))
+    if local:
+        selected_train = None
+    else:
+        try:
+            selected_train = BuildTrain.resolve(train)
+        except ValueError as error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(code=1)
+        console.print(f"Using completed build train {selected_train}")
+
+    sys.exit(DockerWorker.build_images(images, local=local, train=selected_train))
