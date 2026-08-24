@@ -26,6 +26,33 @@ class DockerImagesTest(unittest.TestCase):
             DockerImages.image_prefix(environment),
         )
 
+    @patch.object(DockerImages, 'default_image_prefix', return_value='metadatacenter')
+    def test_internal_bases_can_use_a_separate_registry(self, _default):
+        environment = {
+            'CEDAR_IMAGE_PREFIX': 'nexus.example.org/docker-cedar',
+            'CEDAR_BASE_IMAGE_PREFIX': 'nexus.example.org/docker-cedar-internal',
+        }
+
+        self.assertEqual(
+            'nexus.example.org/docker-cedar-internal/cedar-java:2.9.3-dev.20260824.1847',
+            DockerImages.reference('cedar-java', '2.9.3-dev.20260824.1847', environment),
+        )
+        self.assertEqual(
+            'nexus.example.org/docker-cedar/cedar-server-user:2.9.3-dev.20260824.1847',
+            DockerImages.reference('cedar-server-user', '2.9.3-dev.20260824.1847', environment),
+        )
+
+    @patch.object(DockerImages, 'manifest', return_value=(
+        ['cedar-admin-tool', 'cedar-java', 'cedar-server-user', 'cedar-frontend-main'],
+        '2.9.3-SNAPSHOT',
+        'metadatacenter',
+    ))
+    def test_core_group_excludes_optional_admin_images(self, _manifest):
+        self.assertEqual(
+            ['cedar-java', 'cedar-server-user', 'cedar-frontend-main'],
+            DockerImages.resolve('core'),
+        )
+
     def test_valid_image_prefixes(self):
         for prefix in (
                 'metadatacenter',

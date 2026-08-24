@@ -9,7 +9,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from org.metadatacenter import build
-from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain
 from org.metadatacenter.util.Util import Util
 
 
@@ -49,6 +49,17 @@ class BuildTrainTest(unittest.TestCase):
             BuildTrain.current(environment={}, opener=opener),
         )
 
+    def test_docker_current_reads_only_the_verified_image_pointer(self):
+        def opener(url, timeout):
+            self.assertTrue(url.endswith('/docker/current.json'))
+            self.assertEqual(15, timeout)
+            return Response(json.dumps({'version': '2.9.3-dev.20260824.1847'}).encode())
+
+        self.assertEqual(
+            '2.9.3-dev.20260824.1847',
+            DockerTrain.current(environment={}, opener=opener),
+        )
+
     @patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847')
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_allocates_and_dispatches_a_new_train(self, run, allocate):
@@ -58,6 +69,7 @@ class BuildTrainTest(unittest.TestCase):
         allocate.assert_called_once_with()
         self.assertIn('version=2.9.3-dev.20260824.1847', run.call_args.args[0])
         self.assertIn('resume=false', run.call_args.args[0])
+        self.assertIn('main', run.call_args.args[0])
 
     def test_cli_does_not_expose_a_version_option(self):
         result = self.runner.invoke(build.app, [

@@ -1,6 +1,7 @@
 import difflib
 import os
 import re
+import subprocess
 
 from org.metadatacenter.util.Util import Util
 
@@ -13,7 +14,8 @@ from org.metadatacenter.util.Util import Util
 
 
 class DockerImages:
-    GROUPS = ['infrastructure', 'microservices', 'frontends', 'admin']
+    GROUPS = ['core', 'infrastructure', 'microservices', 'frontends', 'admin']
+    INTERNAL_IMAGES = {'cedar-java', 'cedar-microservice'}
     DEFAULT_IMAGE_PREFIX = 'metadatacenter'
     _REPOSITORY_COMPONENT = re.compile(r'^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$')
     _REGISTRY_HOST = re.compile(r'^[a-z0-9]+(?:[.-][a-z0-9]+)*$')
@@ -26,6 +28,21 @@ class DockerImages:
         if not home:
             raise ValueError('CEDAR_HOME is not set')
         return os.path.join(home, 'cedar-docker-build')
+
+    @classmethod
+    def source_revision(cls):
+        """Exact cedar-docker-build commit used for OCI provenance labels, when available."""
+        try:
+            result = subprocess.run(
+                ['git', '-C', cls.build_home(), 'rev-parse', 'HEAD'],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except (OSError, ValueError):
+            return None
+        revision = result.stdout.strip()
+        return revision if result.returncode == 0 and re.fullmatch(r'[0-9a-f]{40}', revision) else None
 
     @classmethod
     def _manifest_path(cls):
@@ -89,6 +106,30 @@ class DockerImages:
         if prefix is None:
             prefix = cls.default_image_prefix()
         return cls.validate_image_prefix(prefix)
+
+    @classmethod
+    def base_image_prefix(cls, environment=None):
+        """Registry prefix for the two non-runtime Java base images.
+
+        It defaults to the runtime prefix so existing Docker Hub and local builds keep using one
+        namespace. Registry publication can put the bases in a private/internal repository without
+        leaking that repository into Compose.
+        """
+        environment = os.environ if environment is None else environment
+        prefix = environment.get('CEDAR_BASE_IMAGE_PREFIX')
+        if prefix is None:
+            prefix = cls.image_prefix(environment)
+        return cls.validate_image_prefix(prefix)
+
+    @classmethod
+    def prefix_for(cls, image, environment=None):
+        if image in cls.INTERNAL_IMAGES:
+            return cls.base_image_prefix(environment)
+        return cls.image_prefix(environment)
+
+    @classmethod
+    def reference(cls, image, version, environment=None):
+        return f'{cls.prefix_for(image, environment)}/{image}:{version}'
 
     @classmethod
     def manifest(cls, environment=None):
@@ -180,6 +221,8 @@ class DockerImages:
 
         if target == 'all':
             return list(images)
+        if target == 'core':
+            return [image for image in images if cls.group_of(image) != 'admin']
         if target in cls.GROUPS:
             selected = [i for i in images if cls.group_of(i) == target]
             if not selected:

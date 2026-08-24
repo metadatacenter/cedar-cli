@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import socket
 import ssl
 import subprocess
@@ -50,12 +51,14 @@ class DockerWorker(Worker):
 
         try:
             prefix = DockerImages.image_prefix(environment)
+            base_prefix = DockerImages.base_image_prefix(environment)
         except ValueError as error:
             console.print(f'[red]FAIL Docker image configuration: {error}[/red]')
             return 1
 
         validation_environment = (os.environ if environment is None else environment).copy()
         validation_environment['CEDAR_IMAGE_PREFIX'] = prefix
+        validation_environment['CEDAR_BASE_IMAGE_PREFIX'] = base_prefix
 
         output = Worker.execute_generic_shell_commands([
             """
@@ -461,6 +464,7 @@ exit ${failed}
             if train:
                 environment['CEDAR_TRAIN_VERSION'] = train
             _, version, prefix = DockerImages.manifest(environment)
+            base_prefix = DockerImages.base_image_prefix(environment)
         except ValueError as error:
             console.print(f'[red]Build configuration is invalid: {error}[/red]')
             return 1
@@ -474,19 +478,39 @@ exit ${failed}
         if train:
             server_versions['CEDAR_MAVEN_VERSION'] = train
         build_args = ' '.join([
-            f'--build-arg CEDAR_IMAGE_PREFIX="{prefix}"',
+            f'--build-arg CEDAR_IMAGE_PREFIX="{base_prefix}"',
             f'--build-arg CEDAR_DOCKER_VERSION="{version}"',
         ] + [
             f'--build-arg {name}="{value}"' for name, value in sorted(server_versions.items())
         ])
 
+        source_revision = DockerImages.source_revision()
+        source_manifest = environment.get('CEDAR_TRAIN_MANIFEST_SHA256')
+        if source_manifest and not re.fullmatch(r'[0-9a-f]{64}', source_manifest):
+            console.print('[red]CEDAR_TRAIN_MANIFEST_SHA256 must be a lowercase SHA-256 digest.[/red]')
+            return 1
         steps = []
         for image in images:
             stage = local and DockerImages.stageable(image)
+            reference = DockerImages.reference(image, version, environment)
+            labels = [
+                f'--label org.opencontainers.image.source="https://github.com/metadatacenter/cedar-docker-build"',
+                f'--label org.opencontainers.image.version="{version}"',
+                f'--label org.metadatacenter.cedar.image="{image}"',
+            ]
+            if train:
+                labels.append(f'--label org.metadatacenter.cedar.train="{train}"')
+            if source_revision:
+                labels.append(f'--label org.opencontainers.image.revision="{source_revision}"')
+            if source_manifest:
+                labels.append(
+                    '--label org.metadatacenter.cedar.source-manifest-sha256='
+                    f'"{source_manifest}"'
+                )
             steps.append(f"""
 echo "==> {image}"
 {f'"{build_home}/bin/stage-local-jar.sh" {image} || exit 1' if stage else ''}
-docker build {build_args} -t "{prefix}/{image}:{version}" "{build_home}/{image}"
+docker build {build_args} {' '.join(labels)} -t "{reference}" "{build_home}/{image}"
 rc=$?
 {f'rm -f "{build_home}/{image}/local/"*.jar' if stage else ''}
 if [ $rc -ne 0 ]; then
@@ -596,6 +620,7 @@ docker rm -f ${{ids}}
 
         try:
             prefix = DockerImages.image_prefix()
+            base_prefix = DockerImages.base_image_prefix()
         except ValueError as error:
             console.print(f'[red]Removal configuration is invalid: {error}[/red]')
             return 1
@@ -603,7 +628,8 @@ docker rm -f ${{ids}}
             f"""
 ids=$(
     docker images --format '{{{{.Repository}}}} {{{{.ID}}}}' |
-        awk -v prefix="{prefix}/cedar-" 'index($1, prefix) == 1 {{print $2}}' |
+        awk -v prefix="{prefix}/cedar-" -v base="{base_prefix}/cedar-" \
+            'index($1, prefix) == 1 || index($1, base) == 1 {{print $2}}' |
         sort -u
 )
 if [ -z "${{ids}}" ]; then

@@ -81,3 +81,24 @@ class BuildTrain:
         if requested:
             return cls.completed(requested, opener=opener)
         return cls.current(environment=environment, opener=opener)
+
+
+class DockerTrain(BuildTrain):
+    """Resolves only image trains whose complete registry inventory has been verified."""
+
+    @classmethod
+    def current(cls, environment=None, opener=None):
+        environment = os.environ if environment is None else environment
+        override = environment.get('CEDAR_DOCKER_TRAIN_VERSION')
+        if override:
+            return cls.validate(override)
+        payload = cls._read('docker/current.json', opener=opener)
+        return cls.validate(payload.get('version'))
+
+    @classmethod
+    def completed(cls, version, opener=None):
+        version = cls.validate(version)
+        payload = cls._read(f'docker/completed/{version}.json', opener=opener)
+        if payload.get('version') != version:
+            raise ValueError(f'Docker completion record does not describe {version}')
+        return version

@@ -15,11 +15,16 @@ class DockerCommandPathsTest(unittest.TestCase):
         'NGINX_VERSION': '1.2.3',
     })
     @patch.object(DockerImages, 'build_home', return_value='/tmp/CEDAR/cedar-docker-build')
+    @patch.object(DockerImages, 'source_revision', return_value='a' * 40)
+    @patch.object(DockerImages, 'base_image_prefix', return_value='example/internal')
+    @patch.object(DockerImages, 'reference', return_value=(
+        'example/cedar/cedar-infra-nginx:2.9.3-dev.20260824.1847'
+    ))
     @patch.object(DockerImages, 'manifest', return_value=(
         ['cedar-infra-nginx'], '2.9.3-dev.20260824.1847', 'example/cedar',
     ))
     def test_train_build_tags_image_and_downloads_same_maven_version(
-            self, _manifest, _home, _versions, execute):
+            self, _manifest, _reference, _base_prefix, _revision, _home, _versions, execute):
         execute.return_value = CommandOutput(['All requested images built.'], 0)
 
         self.assertEqual(0, DockerWorker.build_images(
@@ -30,6 +35,9 @@ class DockerCommandPathsTest(unittest.TestCase):
         command = execute.call_args.args[0][0]
         self.assertIn('CEDAR_DOCKER_VERSION="2.9.3-dev.20260824.1847"', command)
         self.assertIn('CEDAR_MAVEN_VERSION="2.9.3-dev.20260824.1847"', command)
+        self.assertIn('CEDAR_IMAGE_PREFIX="example/internal"', command)
+        self.assertIn('org.metadatacenter.cedar.train="2.9.3-dev.20260824.1847"', command)
+        self.assertIn('org.opencontainers.image.revision="' + 'a' * 40 + '"', command)
         self.assertIn('-t "example/cedar/cedar-infra-nginx:2.9.3-dev.20260824.1847"', command)
 
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')

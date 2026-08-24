@@ -4,7 +4,7 @@ import typer
 from rich.console import Console
 
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
-from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.BuildTrain import DockerTrain
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
 app = typer.Typer(no_args_is_help=True)
@@ -66,7 +66,7 @@ def resolve_train(train, local, prefer_active=False):
         if active_mode is not None:
             return DockerWorker.active_train()
     try:
-        return BuildTrain.resolve(train)
+        return DockerTrain.resolve(train)
     except ValueError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1)

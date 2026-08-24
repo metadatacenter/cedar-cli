@@ -23,7 +23,9 @@ class BuildTrainWorker:
         command = [
             'gh', 'workflow', 'run', cls.WORKFLOW,
             '--repo', cls.REPOSITORY,
-            '--ref', 'develop',
+            # workflow_dispatch definitions are resolved from the default branch. The workflow
+            # itself still captures the exact heads of every develop branch as train inputs.
+            '--ref', 'main',
             '--field', f'version={selected}',
             '--field', f'resume={"true" if resume else "false"}',
         ]

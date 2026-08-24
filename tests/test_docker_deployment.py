@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from org.metadatacenter import docker, docker_start, docker_stop
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
-from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
@@ -30,7 +30,7 @@ class DockerDeploymentTest(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
 
-    @patch.object(BuildTrain, 'resolve', return_value='2.9.3-dev.20260824.1847')
+    @patch.object(DockerTrain, 'resolve', return_value='2.9.3-dev.20260824.1847')
     @patch.object(DockerWorker, 'start_all', return_value=0)
     def test_start_all_cli_passes_mode_pull_timeout_and_admin(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
@@ -47,7 +47,7 @@ class DockerDeploymentTest(unittest.TestCase):
         )
         resolve.assert_called_once_with(None)
 
-    @patch.object(BuildTrain, 'resolve')
+    @patch.object(DockerTrain, 'resolve')
     @patch.object(DockerWorker, 'start_all', return_value=0)
     def test_start_all_local_does_not_resolve_a_published_train(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
@@ -58,7 +58,7 @@ class DockerDeploymentTest(unittest.TestCase):
         resolve.assert_not_called()
         self.assertIsNone(start_all.call_args.kwargs['train'])
 
-    @patch.object(BuildTrain, 'resolve')
+    @patch.object(DockerTrain, 'resolve')
     @patch.object(DockerWorker, 'start_infrastructure', return_value=0)
     @patch.object(DockerWorker, 'active_train', return_value='2.9.3-dev.20260824.1847')
     @patch.object(DockerWorker, 'active_deployment', return_value=(DockerDeploymentMode.FULL, False))

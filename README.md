@@ -80,9 +80,10 @@ the Docker frontend project while `hybrid` or `backend` is active is refused; sw
 
 ## Immutable development build trains
 
-`cedarcli build train` dispatches the central Java publication workflow in `cedar-development`.
-It derives the development base version from `cedar-parent` and allocates a UTC train ID. Resume
-is the only selector exposed to the operator:
+`cedarcli build train` dispatches the central publication workflow in `cedar-development`. It
+derives the development base version from `cedar-parent`, allocates a UTC train ID, publishes the
+ordered Java artifact set, then builds and publishes the complete 31-image Docker estate. Resume is
+the only selector exposed to the operator:
 
 ```bash
 cedarcli build train
@@ -90,9 +91,11 @@ cedarcli build train --resume <TRAIN>
 ```
 
 Resume uses the source manifest recorded before publication; it does not rebuild the current heads
-of `develop`. Docker builds and starts automatically resolve the current completed train, or accept
-`--train <TRAIN>`. Use `--local` on both build and start for checked-out Java artifacts and the
-legacy development image tag.
+of `develop`. A Maven completion pointer advances after all Java artifacts exist. A separate Docker
+pointer advances only after all 31 registry images have been pulled back and their provenance and
+digests verified. Docker builds resolve the Maven pointer; Docker starts resolve the deployable
+Docker pointer. Either accepts `--train <TRAIN>`. Use `--local` on both build and start for
+checked-out Java artifacts and the legacy development image tag.
 
 ## Cheat sheet
 The full set of commands and subcommands will be shown as a `pdf` file after executing:
