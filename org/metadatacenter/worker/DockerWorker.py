@@ -46,6 +46,17 @@ class DockerWorker(Worker):
 
     @staticmethod
     def validate(environment=None):
+        from org.metadatacenter.util.DockerImages import DockerImages
+
+        try:
+            prefix = DockerImages.image_prefix(environment)
+        except ValueError as error:
+            console.print(f'[red]FAIL Docker image configuration: {error}[/red]')
+            return 1
+
+        validation_environment = (os.environ if environment is None else environment).copy()
+        validation_environment['CEDAR_IMAGE_PREFIX'] = prefix
+
         output = Worker.execute_generic_shell_commands([
             """
 failed=0
@@ -53,6 +64,10 @@ for stack in cedar-infrastructure cedar-microservices cedar-frontend cedar-admin
     out=$(cd "${CEDAR_HOME}/cedar-docker-deploy/${stack}" && docker compose config --quiet 2>&1)
     rc=$?
     undefined=$(echo "${out}" | grep 'variable is not set' | grep -oE 'CEDAR_[A-Z0-9_]+' | sort -u)
+    images=$(cd "${CEDAR_HOME}/cedar-docker-deploy/${stack}" && docker compose config --images 2>&1)
+    images_rc=$?
+    inconsistent=$(echo "${images}" | awk -v expected="${CEDAR_IMAGE_PREFIX}/cedar-" \
+        'index($0, "/cedar-") && index($0, expected) != 1')
     if [ ${rc} -ne 0 ]; then
         echo "FAIL ${stack}: compose file is not valid"
         echo "${out}"
@@ -60,6 +75,14 @@ for stack in cedar-infrastructure cedar-microservices cedar-frontend cedar-admin
     elif [ -n "${undefined}" ]; then
         echo "FAIL ${stack}: referenced but not defined by the profile:"
         echo "${undefined}" | sed 's/^/         /'
+        failed=1
+    elif [ ${images_rc} -ne 0 ]; then
+        echo "FAIL ${stack}: compose image references could not be resolved"
+        echo "${images}"
+        failed=1
+    elif [ -n "${inconsistent}" ]; then
+        echo "FAIL ${stack}: CEDAR images do not use CEDAR_IMAGE_PREFIX=${CEDAR_IMAGE_PREFIX}:"
+        echo "${inconsistent}" | sed 's/^/         /'
         failed=1
     else
         echo "OK   ${stack}"
@@ -74,7 +97,7 @@ exit ${failed}
 """
         ],
             title="Validating CEDAR compose stacks",
-            env=environment,
+            env=validation_environment,
         )
         return output.returncode
 
@@ -414,16 +437,23 @@ exit ${failed}
         """
         from org.metadatacenter.util.DockerImages import DockerImages
 
-        _, version, prefix = DockerImages.manifest()
+        try:
+            _, version, prefix = DockerImages.manifest()
+        except ValueError as error:
+            console.print(f'[red]Build configuration is invalid: {error}[/red]')
+            return 1
         build_home = DockerImages.build_home()
 
         # The locked server versions travel from the manifest into every build as build arguments.
         # Passing them to all images rather than working out which image wants which is deliberate:
         # Docker ignores a build argument a Dockerfile does not declare, and the alternative is a
         # second place recording which image installs which server.
-        build_args = ' '.join(
+        build_args = ' '.join([
+            f'--build-arg CEDAR_IMAGE_PREFIX="{prefix}"',
+            f'--build-arg CEDAR_DOCKER_VERSION="{version}"',
+        ] + [
             f'--build-arg {name}="{value}"' for name, value in sorted(DockerImages.server_versions().items())
-        )
+        ])
 
         steps = []
         for image in images:
@@ -511,14 +541,24 @@ docker rm cedar-ca-helper
 
     @staticmethod
     def remove_containers():
+        from org.metadatacenter.util.DockerImages import DockerImages
+
+        try:
+            prefix = DockerImages.image_prefix()
+        except ValueError as error:
+            console.print(f'[red]Removal configuration is invalid: {error}[/red]')
+            return 1
         output = Worker.execute_generic_shell_commands([
-            """
-ids=$(docker ps -a --format '{{.ID}} {{.Image}}' | awk '$2 ~ /^metadatacenter\\/cedar-/ {print $1}')
-if [ -z "${ids}" ]; then
+            f"""
+ids=$(
+    docker ps -a --format '{{{{.ID}}}} {{{{.Image}}}}' |
+        awk -v prefix="{prefix}/cedar-" 'index($2, prefix) == 1 {{print $1}}'
+)
+if [ -z "${{ids}}" ]; then
     echo 'No CEDAR containers found.'
     exit 0
 fi
-docker rm -f ${ids}
+docker rm -f ${{ids}}
 """
         ],
             title="Removing all CEDAR containers",
@@ -527,14 +567,25 @@ docker rm -f ${ids}
 
     @staticmethod
     def remove_images():
+        from org.metadatacenter.util.DockerImages import DockerImages
+
+        try:
+            prefix = DockerImages.image_prefix()
+        except ValueError as error:
+            console.print(f'[red]Removal configuration is invalid: {error}[/red]')
+            return 1
         output = Worker.execute_generic_shell_commands([
-            """
-ids=$(docker images --format '{{.Repository}} {{.ID}}' | awk '$1 ~ /^metadatacenter\\/cedar-/ {print $2}' | sort -u)
-if [ -z "${ids}" ]; then
+            f"""
+ids=$(
+    docker images --format '{{{{.Repository}}}} {{{{.ID}}}}' |
+        awk -v prefix="{prefix}/cedar-" 'index($1, prefix) == 1 {{print $2}}' |
+        sort -u
+)
+if [ -z "${{ids}}" ]; then
     echo 'No CEDAR images found.'
     exit 0
 fi
-docker rmi ${ids}
+docker rmi ${{ids}}
 """
         ],
             title="Removing all CEDAR images",

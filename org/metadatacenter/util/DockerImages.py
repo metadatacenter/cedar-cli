@@ -14,6 +14,9 @@ from org.metadatacenter.util.Util import Util
 
 class DockerImages:
     GROUPS = ['infrastructure', 'microservices', 'frontends', 'admin']
+    DEFAULT_IMAGE_PREFIX = 'metadatacenter'
+    _REPOSITORY_COMPONENT = re.compile(r'^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$')
+    _REGISTRY_HOST = re.compile(r'^[a-z0-9]+(?:[.-][a-z0-9]+)*$')
 
     @staticmethod
     def build_home():
@@ -29,14 +32,71 @@ class DockerImages:
         return os.path.join(cls.build_home(), 'bin', 'cedar-images-base.sh')
 
     @classmethod
-    def manifest(cls):
+    def default_image_prefix(cls):
+        """Return the compatibility default declared by the shell build manifest."""
+        try:
+            manifest_path = cls._manifest_path()
+        except ValueError:
+            return cls.DEFAULT_IMAGE_PREFIX
+        text = open(manifest_path).read()
+        parameterized = re.search(
+            r'^export CEDAR_IMAGE_PREFIX="\$\{CEDAR_IMAGE_PREFIX:-([^}]+)\}"',
+            text,
+            re.M,
+        )
+        if parameterized:
+            return parameterized.group(1)
+        legacy = re.search(r'^export CEDAR_IMAGE_PREFIX="([^"]+)"', text, re.M)
+        return legacy.group(1) if legacy else cls.DEFAULT_IMAGE_PREFIX
+
+    @classmethod
+    def validate_image_prefix(cls, prefix):
+        """Validate a Docker repository prefix such as registry.example.org:5000/cedar."""
+        if not prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX is empty')
+        if len(prefix) > 255:
+            raise ValueError('CEDAR_IMAGE_PREFIX is longer than 255 characters')
+        if prefix != prefix.lower():
+            raise ValueError('CEDAR_IMAGE_PREFIX must be lowercase')
+        if '://' in prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX must not include a URL scheme')
+        if prefix.startswith('/') or prefix.endswith('/') or '//' in prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX must not start or end with / or contain //')
+        if any(character.isspace() for character in prefix) or '@' in prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX must not contain whitespace or a digest')
+
+        components = prefix.split('/')
+        first = components[0]
+        if ':' in first:
+            host, separator, port = first.rpartition(':')
+            if not separator or not cls._REGISTRY_HOST.fullmatch(host):
+                raise ValueError('CEDAR_IMAGE_PREFIX has an invalid registry host')
+            if not port.isdigit() or not 1 <= int(port) <= 65535:
+                raise ValueError('CEDAR_IMAGE_PREFIX has an invalid registry port')
+            components = components[1:]
+
+        if not components and ':' in first:
+            return prefix
+        if any(not cls._REPOSITORY_COMPONENT.fullmatch(component) for component in components):
+            raise ValueError('CEDAR_IMAGE_PREFIX has an invalid repository component')
+        return prefix
+
+    @classmethod
+    def image_prefix(cls, environment=None):
+        environment = os.environ if environment is None else environment
+        prefix = environment.get('CEDAR_IMAGE_PREFIX')
+        if prefix is None:
+            prefix = cls.default_image_prefix()
+        return cls.validate_image_prefix(prefix)
+
+    @classmethod
+    def manifest(cls, environment=None):
         """Image names and version, read from the shell manifest that stays the source of truth."""
         text = open(cls._manifest_path()).read()
         version = re.search(r'^export IMAGE_VERSION=(\S+)', text, re.M)
-        prefix = re.search(r'^export CEDAR_IMAGE_PREFIX="([^"]+)"', text, re.M)
         array = re.search(r'CEDAR_DOCKER_IMAGES=\((.*?)\)', text, re.S)
         images = re.findall(r'"([^"]+)"', array.group(1)) if array else []
-        return images, (version.group(1) if version else None), (prefix.group(1) if prefix else 'metadatacenter')
+        return images, (version.group(1) if version else None), cls.image_prefix(environment)
 
     @classmethod
     def server_versions(cls):
@@ -82,7 +142,7 @@ class DockerImages:
             return []
         bases = []
         for line in open(path).read().splitlines():
-            m = re.match(r'\s*FROM\s+metadatacenter/(\S+?):', line)
+            m = re.match(r'\s*FROM\s+\$\{CEDAR_IMAGE_PREFIX\}/(\S+?):', line)
             if m:
                 bases.append(m.group(1))
         return bases

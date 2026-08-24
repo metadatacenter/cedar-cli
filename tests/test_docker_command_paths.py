@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.util.DockerImages import DockerImages
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 from org.metadatacenter.worker.Worker import CommandOutput
 
@@ -31,6 +32,22 @@ class DockerCommandPathsTest(unittest.TestCase):
         execute.return_value = CommandOutput([], 9)
 
         self.assertEqual(9, DockerWorker.validate())
+        self.assertIn('CEDAR_IMAGE_PREFIX', execute.call_args.args[0][0])
+
+    @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
+    def test_validate_rejects_malformed_image_prefix_before_compose(self, execute):
+        self.assertEqual(1, DockerWorker.validate({'CEDAR_IMAGE_PREFIX': 'https://registry/cedar'}))
+        execute.assert_not_called()
+
+    @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
+    @patch.object(DockerImages, 'image_prefix', return_value='nexus.example.org:5000/cedar')
+    def test_image_removal_uses_configured_prefix(self, _prefix, execute):
+        execute.return_value = CommandOutput([], 0)
+
+        self.assertEqual(0, DockerWorker.remove_images())
+
+        command = execute.call_args.args[0][0]
+        self.assertIn('nexus.example.org:5000/cedar/cedar-', command)
 
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     def test_certificate_setup_creates_both_external_volumes(self, execute):
