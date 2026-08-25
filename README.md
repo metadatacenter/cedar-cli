@@ -1,4 +1,6 @@
 # cedar-cli
+
+[![CI](https://github.com/metadatacenter/cedar-cli/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/metadatacenter/cedar-cli/actions/workflows/ci.yml)
 ## About
 CEDAR CLI is CEDAR's command line interface used to facilitate:
 * Development
