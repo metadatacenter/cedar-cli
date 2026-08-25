@@ -6,7 +6,9 @@ from typer.testing import CliRunner
 
 from org.metadatacenter import docker
 from org.metadatacenter.docker_build import normalize_target
+from org.metadatacenter.model.CedarMode import CedarMode
 from org.metadatacenter.util.DockerImages import DockerImages
+from org.metadatacenter.util.ModeManager import ModeManager
 
 
 class DockerImagesTest(unittest.TestCase):
@@ -28,7 +30,9 @@ class DockerImagesTest(unittest.TestCase):
     @patch('org.metadatacenter.docker_build.DockerWorker.build_images', return_value=0)
     @patch.object(DockerImages, 'with_dependencies', side_effect=lambda images: images)
     @patch.object(DockerImages, 'resolve', side_effect=lambda target: [target])
-    def test_cli_build_accepts_shared_targets_and_images(self, resolve, _dependencies, _build):
+    @patch.object(ModeManager, 'require_surface', return_value=CedarMode.DOCKER)
+    def test_cli_build_accepts_shared_targets_and_images(
+            self, _surface, resolve, _dependencies, _build):
         runner = CliRunner()
 
         for arguments, expected in (

@@ -7,14 +7,14 @@ from org.metadatacenter.model.DockerComponentTarget import (
     DockerFrontendTarget,
     DockerMicroserviceTarget,
 )
-from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.BuildTrain import DockerTrain
+from org.metadatacenter.util.ModeManager import ModeError, ModeManager
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
 
-DETACH = typer.Option(False, "--detach", "-d", help="Run in the background and return.")
+DETACH = typer.Option(False, "--detach", help="Run in the background and return.")
 
 
 class PullPolicy(str, Enum):
@@ -27,12 +27,6 @@ PULL = typer.Option(
     PullPolicy.never,
     "--pull",
     help="Image pull policy. Local snapshot deployments default to never.",
-)
-
-MODE = typer.Option(
-    ...,
-    "--mode",
-    help="Deployment topology: full or hybrid.",
 )
 
 TIMEOUT = typer.Option(
@@ -60,6 +54,16 @@ def exit_on_failure(returncode):
         raise typer.Exit(code=returncode)
 
 
+@app.callback()
+def require_docker_mode():
+    try:
+        mode = ModeManager.require_surface("docker")
+        ModeManager.require_docker_start_compatible(mode)
+    except ModeError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
+
+
 def resolve_train(train, local, prefer_active=False):
     if train and local:
         raise typer.BadParameter("use --local or --train, not both")
@@ -78,11 +82,11 @@ def resolve_train(train, local, prefer_active=False):
 
 @app.command("all", help="Start the selected CEDAR deployment in dependency order and wait for readiness.")
 def start_all(
-        mode: DockerDeploymentMode = MODE,
         pull: PullPolicy = PULL,
         timeout: int = TIMEOUT,
         train: str = TRAIN,
         local: bool = LOCAL):
+    mode = ModeManager.docker_topology()
     exit_on_failure(DockerWorker.start_all(
         mode=mode,
         pull=pull.value,
@@ -131,6 +135,11 @@ def start_microservice(
 @app.command("frontends", help="Start all seven frontend containers.")
 def start_frontends(detach: bool = DETACH, pull: PullPolicy = PULL,
                     train: str = TRAIN, local: bool = LOCAL):
+    try:
+        ModeManager.require_docker_frontends("start")
+    except ModeError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
     exit_on_failure(DockerWorker.start_frontends(
         detach, pull.value, resolve_train(train, local, prefer_active=True)))
 
@@ -142,6 +151,11 @@ def start_frontend(
         pull: PullPolicy = PULL,
         train: str = TRAIN,
         local: bool = LOCAL):
+    try:
+        ModeManager.require_docker_frontends("start")
+    except ModeError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
     exit_on_failure(DockerWorker.start_frontend(
         frontend.value,
         detach,

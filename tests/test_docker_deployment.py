@@ -7,8 +7,10 @@ from unittest.mock import call, patch
 from typer.testing import CliRunner
 
 from org.metadatacenter import docker, docker_start, docker_stop
+from org.metadatacenter.model.CedarMode import CedarMode
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain
+from org.metadatacenter.util.ModeManager import ModeManager
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
@@ -29,17 +31,33 @@ class DockerDeploymentTest(unittest.TestCase):
 
     def setUp(self):
         self.runner = CliRunner()
+        self.surface_patch = patch.object(
+            ModeManager, 'require_surface', return_value=CedarMode.DOCKER)
+        self.surface_patch.start()
+        self.start_safety_patch = patch.object(
+            ModeManager, 'require_docker_start_compatible',
+            side_effect=lambda mode: mode,
+        )
+        self.start_safety_patch.start()
+        self.topology_patch = patch.object(
+            ModeManager, 'docker_topology', return_value=DockerDeploymentMode.FULL)
+        self.topology = self.topology_patch.start()
+
+    def tearDown(self):
+        self.topology_patch.stop()
+        self.start_safety_patch.stop()
+        self.surface_patch.stop()
 
     @patch.object(DockerTrain, 'resolve', return_value='2.9.3-dev.20260824.1847')
     @patch.object(DockerWorker, 'start_all', return_value=0)
-    def test_start_all_cli_passes_mode_pull_and_timeout(self, start_all, resolve):
+    def test_start_all_cli_uses_configured_mode_pull_and_timeout(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
-            'all', '--mode', 'hybrid', '--pull', 'missing', '--timeout', '42',
+            'all', '--pull', 'missing', '--timeout', '42',
         ])
 
         self.assertEqual(0, result.exit_code, result.output)
         start_all.assert_called_once_with(
-            mode=DockerDeploymentMode.HYBRID,
+            mode=DockerDeploymentMode.FULL,
             pull='missing',
             timeout=42,
             train='2.9.3-dev.20260824.1847',
@@ -50,7 +68,7 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerWorker, 'start_all', return_value=0)
     def test_start_all_local_does_not_resolve_a_published_train(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
-            'all', '--mode', 'full', '--local',
+            'all', '--local',
         ])
 
         self.assertEqual(0, result.exit_code, result.output)
@@ -86,6 +104,14 @@ class DockerDeploymentTest(unittest.TestCase):
         resolve.assert_not_called()
         start.assert_called_once_with('designer', True, 'never', None)
 
+    def test_detach_only_accepts_the_long_option(self):
+        help_result = self.runner.invoke(docker_start.app, ['infra', '--help'])
+        short_result = self.runner.invoke(docker_start.app, ['infra', '-d'])
+
+        self.assertEqual(0, help_result.exit_code, help_result.output)
+        self.assertIn('--detach', help_result.output)
+        self.assertEqual(2, short_result.exit_code, short_result.output)
+
     @patch.object(DockerWorker, 'stop_microservice', return_value=0)
     def test_individual_microservice_cli_uses_validated_target(self, stop):
         result = self.runner.invoke(docker_stop.app, ['microservice', 'open'])
@@ -112,25 +138,26 @@ class DockerDeploymentTest(unittest.TestCase):
         self.assertEqual(2, stop.call_count)
 
     @patch.object(DockerWorker, 'status', return_value=True)
-    def test_status_cli_accepts_an_explicit_mode(self, status):
-        result = self.runner.invoke(docker.app, ['status', '--mode', 'hybrid'])
+    def test_status_cli_uses_the_configured_mode(self, status):
+        self.topology.return_value = DockerDeploymentMode.HYBRID
+        result = self.runner.invoke(docker.app, ['status'])
 
         self.assertEqual(0, result.exit_code, result.output)
         status.assert_called_once_with(mode=DockerDeploymentMode.HYBRID)
 
     def test_include_admin_option_is_not_exposed(self):
         for command_group, arguments in (
-                (docker_start.app, ['all', '--mode', 'full', '--include-admin']),
+                (docker_start.app, ['all', '--include-admin']),
                 (docker_stop.app, ['all', '--include-admin']),
                 (docker.app, ['status', '--include-admin'])):
             result = self.runner.invoke(command_group, arguments)
             self.assertEqual(2, result.exit_code, result.output)
 
-    def test_backend_mode_is_not_exposed(self):
+    def test_mode_option_is_not_exposed_on_docker_commands(self):
         start_result = self.runner.invoke(docker_start.app, [
-            'all', '--mode', 'backend', '--local',
+            'all', '--mode', 'hybrid', '--local',
         ])
-        status_result = self.runner.invoke(docker.app, ['status', '--mode', 'backend'])
+        status_result = self.runner.invoke(docker.app, ['status', '--mode', 'hybrid'])
 
         self.assertEqual(2, start_result.exit_code, start_result.output)
         self.assertEqual(2, status_result.exit_code, status_result.output)
@@ -154,8 +181,8 @@ class DockerDeploymentTest(unittest.TestCase):
         self.assertIn('CEDAR_HOST is not defined', errors)
         self.assertIn('CEDAR_NGINX_HOST is not defined', errors)
         self.assertIn(
-            'CEDAR Docker profile is not loaded; source '
-            '$CEDAR_HOME/cedar-development/bin/templates/cedar-profile-docker.sh',
+            'CEDAR Docker environment is incomplete; run '
+            'cedarcli mode docker or cedarcli mode hybrid',
             errors,
         )
 
@@ -254,7 +281,7 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.HYBRID)
     def test_stop_all_uses_reverse_dependency_order(
             self, _active, _environment, compose, clear):
-        self.assertEqual(0, DockerWorker.stop_all())
+        self.assertEqual(0, DockerWorker.stop_all(DockerDeploymentMode.HYBRID))
         self.assertEqual([
             call('frontends', 'down', environment={}),
             call('microservices', 'down', environment={}),
@@ -284,6 +311,19 @@ class DockerDeploymentTest(unittest.TestCase):
             self.assertIsNone(DockerWorker.active_train())
             DockerWorker._clear_active_deployment()
             self.assertIsNone(DockerWorker.active_deployment())
+
+    @patch.object(DockerWorker, '_docker_command')
+    def test_running_compose_projects_returns_only_known_running_projects(self, command):
+        command.return_value = type('Result', (), {
+            'returncode': 0,
+            'stdout': 'cedar-infrastructure\nunrelated\ncedar-microservices\n',
+            'stderr': '',
+        })()
+
+        self.assertEqual(
+            {'cedar-infrastructure', 'cedar-microservices'},
+            DockerWorker.running_compose_projects(),
+        )
 
 
 if __name__ == '__main__':

@@ -122,8 +122,7 @@ for stack in cedar-infrastructure cedar-microservices cedar-frontend cedar-admin
 done
 if [ ${failed} -ne 0 ]; then
     echo
-    echo "Validation failed. Source a Docker profile before running this,"
-    echo "for example cedar-development/bin/templates/cedar-profile-docker.sh."
+    echo "Validation failed. Check the configured CEDAR mode and its Docker inputs."
 fi
 exit ${failed}
 """
@@ -236,6 +235,10 @@ exit ${failed}
         return names
 
     @staticmethod
+    def _mode_label(mode):
+        return 'docker' if mode is DockerDeploymentMode.FULL else mode.value
+
+    @staticmethod
     def _deployment_state_path():
         return os.path.join(Util.cedar_home, '.cedar', 'docker-deployment.json')
 
@@ -248,6 +251,21 @@ exit ${failed}
             return DockerDeploymentMode(state['mode'])
         except (FileNotFoundError, KeyError, ValueError, TypeError, json.JSONDecodeError):
             return None
+
+    @staticmethod
+    def running_compose_projects():
+        """Return running CEDAR Compose projects; daemon absence means none are running."""
+        result = DockerWorker._docker_command([
+            'ps', '--format', '{{.Label "com.docker.compose.project"}}',
+        ])
+        if result.returncode != 0:
+            return set()
+        known = {directory for directory, _label in DockerWorker.STACKS.values()}
+        return {
+            line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip() in known
+        }
 
     @staticmethod
     def _record_active_deployment(mode, train=None):
@@ -306,8 +324,8 @@ exit ${failed}
 
         if len(missing_container_hosts) == len(FRONTEND_NAMES):
             errors.append(
-                'CEDAR Docker profile is not loaded; source '
-                '$CEDAR_HOME/cedar-development/bin/templates/cedar-profile-docker.sh'
+                'CEDAR Docker environment is incomplete; run '
+                'cedarcli mode docker or cedarcli mode hybrid'
             )
         else:
             errors.extend(f'{variable} is not defined' for variable in missing_container_hosts)
@@ -379,7 +397,8 @@ exit ${failed}
 
         table = Table(
             'Stack', 'Service', 'Status', 'Container', 'Detail',
-            title=f"CEDAR Docker status: {mode.value} (Engine {snapshot['server_version']})",
+            title=(f"CEDAR Docker status: {DockerWorker._mode_label(mode)} "
+                   f"(Engine {snapshot['server_version']})"),
         )
         for row in snapshot['rows']:
             table.add_row(*row)
@@ -478,7 +497,7 @@ exit ${failed}
 
         console.print(
             f"[green]✅ {snapshot['healthy']}/{snapshot['expected']} selected Docker services and "
-            f'{mode.value} acceptance checks are ready.[/green]'
+            f'{DockerWorker._mode_label(mode)} acceptance checks are ready.[/green]'
         )
         return True
 
@@ -646,6 +665,8 @@ docker rm -f ${{ids}}
         ],
             title="Removing all CEDAR containers",
         )
+        if output.returncode == 0:
+            DockerWorker._clear_active_deployment()
         return output.returncode
 
     @staticmethod
@@ -823,7 +844,9 @@ exit ${failed}
             for error in errors:
                 console.print(f'  ❌ {error}')
             return False
-        console.print(f'[green]✅ Docker preflight passed for {mode.value} mode.[/green]')
+        console.print(
+            f'[green]✅ Docker preflight passed for {DockerWorker._mode_label(mode)} mode.[/green]'
+        )
         return True
 
     @staticmethod
@@ -850,7 +873,10 @@ exit ${failed}
             snapshot = DockerWorker._container_snapshot(stack_names, environment=environment)
             progress = (snapshot['healthy'], snapshot['expected'])
             if progress != last_progress:
-                console.print(f'Waiting for {mode.value}: {progress[0]}/{progress[1]} containers ready')
+                console.print(
+                    f'Waiting for {DockerWorker._mode_label(mode)}: '
+                    f'{progress[0]}/{progress[1]} containers ready'
+                )
                 last_progress = progress
             if DockerWorker._snapshot_ready(snapshot):
                 return True
@@ -877,7 +903,9 @@ exit ${failed}
             if remaining <= 0:
                 break
             time.sleep(min(2, remaining))
-        console.print(f'[red]{mode.value} acceptance checks did not become ready:[/red]')
+        console.print(
+            f'[red]{DockerWorker._mode_label(mode)} acceptance checks did not become ready:[/red]'
+        )
         for error in errors:
             console.print(f'  ❌ {error}')
         return False
@@ -924,12 +952,15 @@ exit ${failed}
                 f'recorded: {error}[/red]'
             )
             return 1
-        console.print(f'[green]✅ CEDAR Docker {mode.value} deployment is ready.[/green]')
+        qualifier = '' if mode is DockerDeploymentMode.FULL else ' hybrid'
+        console.print(f'[green]✅ CEDAR Docker{qualifier} deployment is ready.[/green]')
         return 0
 
     @staticmethod
-    def stop_all():
-        mode = DockerWorker.active_deployment() or DockerDeploymentMode.FULL
+    def stop_all(mode=None):
+        mode = mode or DockerWorker.active_deployment() or DockerDeploymentMode.FULL
+        if isinstance(mode, str):
+            mode = DockerDeploymentMode(mode)
         environment, errors = DockerWorker.mode_environment(mode)
         if errors:
             environment = os.environ.copy()
@@ -958,7 +989,7 @@ exit ${failed}
         directory, label = DockerWorker.STACKS[stack]
         command = 'docker compose ' + action
         if action == 'up' and detach:
-            command += ' -d'
+            command += ' --detach'
         if action == 'up' and pull:
             command += f' --pull {pull}'
         if services:
@@ -1022,8 +1053,8 @@ exit ${failed}
         active_mode = DockerWorker.active_deployment()
         if active_mode is not None and not active_mode.includes_frontend_containers:
             console.print(
-                f'[red]The active Docker mode is {active_mode.value}; switch with '
-                'cedarcli docker start all --mode full instead.[/red]'
+                f'[red]The active Docker deployment is {active_mode.value}; stop it, clear '
+                'the configured CEDAR mode, and select docker before starting Docker frontends.[/red]'
             )
             return 1
         return DockerWorker._individual_start('frontends', detach, pull, train)
@@ -1035,8 +1066,8 @@ exit ${failed}
         active_mode = DockerWorker.active_deployment()
         if active_mode is not None and not active_mode.includes_frontend_containers:
             console.print(
-                f'[red]The active Docker mode is {active_mode.value}; switch with '
-                'cedarcli docker start all --mode full instead.[/red]'
+                f'[red]The active Docker deployment is {active_mode.value}; stop it, clear '
+                'the configured CEDAR mode, and select docker before starting Docker frontends.[/red]'
             )
             return 1
         return DockerWorker._individual_service_start(

@@ -1,6 +1,16 @@
+import sys
+
 import typer
 
-from org.metadatacenter import git, build, publish, maven, repo, env, release, check, docker, dev, cert, prod, native
+from org.metadatacenter.util.ModeManager import ModeError, ModeManager
+
+try:
+    ModeManager.bootstrap(sys.argv[1:])
+except ModeError as error:
+    typer.echo(str(error), err=True)
+    raise SystemExit(1)
+
+from org.metadatacenter import git, build, publish, maven, repo, env, release, check, docker, dev, cert, prod, native, mode
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.CheatWorker import CheatWorker
 
@@ -20,6 +30,7 @@ app.add_typer(native.app, name="native", help="Inspect and manage headless nativ
 app.add_typer(dev.app, name="dev", help="Development related operations...")
 app.add_typer(prod.app, name="prod", help="Production server related operations...")
 app.add_typer(cert.app, name="cert", help="Self-signed certificates...")
+app.command("mode")(mode.mode)
 
 
 @app.command("cheat", help="Open cheatsheet")

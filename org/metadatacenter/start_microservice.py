@@ -1,85 +1,86 @@
 import typer
 
 from org.metadatacenter.worker.StartMicroserviceWorker import StartMicroserviceWorker
+from org.metadatacenter.util.CliResult import exit_on_failure
 
 app = typer.Typer(no_args_is_help=True)
 
 
 @app.command("all")
 def microservice_all():
-    StartMicroserviceWorker.all()
+    exit_on_failure(StartMicroserviceWorker.all())
 
 
 @app.command("artifact")
 def microservice_artifact():
-    StartMicroserviceWorker.artifact()
+    exit_on_failure(StartMicroserviceWorker.artifact())
 
 
 @app.command("bridge")
 def microservice_bridge():
-    StartMicroserviceWorker.bridge()
+    exit_on_failure(StartMicroserviceWorker.bridge())
 
 
 @app.command("group")
 def microservice_group():
-    StartMicroserviceWorker.group()
+    exit_on_failure(StartMicroserviceWorker.group())
 
 
 @app.command("impex")
 def microservice_impex():
-    StartMicroserviceWorker.impex()
+    exit_on_failure(StartMicroserviceWorker.impex())
 
 
 @app.command("messaging")
 def microservice_messaging():
-    StartMicroserviceWorker.messaging()
+    exit_on_failure(StartMicroserviceWorker.messaging())
 
 
 @app.command("monitor")
 def microservice_monitor():
-    StartMicroserviceWorker.monitor()
+    exit_on_failure(StartMicroserviceWorker.monitor())
 
 
 @app.command("open")
 def microservice_open():
-    StartMicroserviceWorker.open()
+    exit_on_failure(StartMicroserviceWorker.open())
 
 
 @app.command("repo")
 def microservice_repo():
-    StartMicroserviceWorker.repo()
+    exit_on_failure(StartMicroserviceWorker.repo())
 
 
 @app.command("resource")
 def microservice_resource():
-    StartMicroserviceWorker.resource()
+    exit_on_failure(StartMicroserviceWorker.resource())
 
 
 @app.command("schema")
 def microservice_schema():
-    StartMicroserviceWorker.schema()
+    exit_on_failure(StartMicroserviceWorker.schema())
 
 
 @app.command("submission")
 def microservice_submission():
-    StartMicroserviceWorker.submission()
+    exit_on_failure(StartMicroserviceWorker.submission())
 
 
 @app.command("terminology")
 def microservice_terminology():
-    StartMicroserviceWorker.terminology()
+    exit_on_failure(StartMicroserviceWorker.terminology())
 
 
 @app.command("user")
 def microservice_user():
-    StartMicroserviceWorker.user()
+    exit_on_failure(StartMicroserviceWorker.user())
 
 
 @app.command("valuerecommender")
 def microservice_valuerecommender():
-    StartMicroserviceWorker.valuerecommender()
+    exit_on_failure(StartMicroserviceWorker.valuerecommender())
 
 
 @app.command("worker")
 def microservice_worker():
-    StartMicroserviceWorker.worker()
+    exit_on_failure(StartMicroserviceWorker.worker())

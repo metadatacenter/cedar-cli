@@ -1,12 +1,23 @@
-from typing import Optional
-
 import typer
+from rich.console import Console
 
 from org.metadatacenter import docker_build, docker_remove, docker_start, docker_stop
-from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
+from org.metadatacenter.util.ModeManager import ModeError, ModeManager
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
 app = typer.Typer(no_args_is_help=True)
+console = Console()
+
+
+@app.callback()
+def require_docker_mode():
+    try:
+        ModeManager.require_surface("docker")
+    except ModeError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
+
+
 app.command("build")(docker_build.build)
 app.add_typer(docker_remove.app, name="remove", help="Remove Docker containers, images, volumes, or network.")
 app.add_typer(
@@ -27,15 +38,9 @@ def exit_on_failure(returncode):
 
 
 @app.command("status")
-def status(
-        mode: Optional[DockerDeploymentMode] = typer.Option(
-            None,
-            "--mode",
-            help="Expected topology. Defaults to the last successful aggregate deployment, then full.",
-        )):
-    """Check container health and the acceptance checks for the active Docker mode."""
-    if mode is None:
-        mode = DockerWorker.active_deployment() or DockerDeploymentMode.FULL
+def status():
+    """Check container health and acceptance for the configured CEDAR mode."""
+    mode = ModeManager.docker_topology()
     if not DockerWorker.status(mode=mode):
         raise typer.Exit(code=1)
 

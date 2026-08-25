@@ -42,6 +42,19 @@ cedarcli
 
 ## Native and Docker deployments
 
+Select one persistent deployment mode before using either command surface. Selection validates the
+required profiles and starts nothing. It is deliberately a one-time operation: stop the current
+deployment and run `cedarcli mode --clear` before selecting a different mode.
+The CLI checks the actual runtime as well as the saved choice: native operations stop before touching
+a recorded or running Compose deployment, Docker starts reject verified native services, and hybrid
+Docker starts permit native frontends but reject native backend processes.
+
+```bash
+cedarcli mode native        # complete host-based stack
+cedarcli mode hybrid        # native frontends with Docker backend
+cedarcli mode docker        # complete container stack
+```
+
 Native and Docker deployments deliberately have separate status commands. Docker keeps some ports
 private to `cedarnet`, so native host-port probes cannot assess a container deployment accurately.
 
@@ -53,7 +66,9 @@ cedarcli docker status
 Native starts are headless. `cedarcli native start all`, `native start microservices`, and
 `native start frontends` use the shared process controller; they do not open iTerm or Terminal. The
 fifteen Java services and seven frontends write separate logs under `$CEDAR_HOME/log/` and PID files under
-`$CEDAR_HOME/log/run/`.
+`$CEDAR_HOME/log/run/`. A PID file or occupied port is never enough to authorize a signal: the
+controller first verifies the expected CEDAR jar or frontend source directory and refuses foreign
+owners.
 
 ```bash
 cedarcli native start all
@@ -67,19 +82,21 @@ cedarcli native stop all
 host/port inventory, including infrastructure. Use `cedarcli native watch` for a continuously
 refreshing application view.
 
-The aggregate Docker start command selects one explicit topology and waits for it to become ready:
+The aggregate Docker start command uses the configured topology and waits for it to become ready:
 
 ```bash
-cedarcli docker start all --mode full
-cedarcli docker start all --mode hybrid
+cedarcli mode docker
+cedarcli docker start all
 ```
 
-- `full` starts and checks all 29 core containers.
-- `hybrid` starts the 22-container backend and routes Docker nginx to seven native frontend servers.
+- `docker` starts and checks all 29 core containers.
+- `hybrid` starts the 22-container backend and routes Docker nginx to seven native frontend servers;
+  run `cedarcli native start frontends` before the Docker aggregate.
 
-The active mode is recorded after a successful start, so `cedarcli docker status` applies the same
-container and route expectations without another option. Administration containers are managed
-separately with the `admin` target.
+`cedarcli docker status` applies the configured container and route expectations without another
+option. Administration containers are managed separately with the `admin` target. Native mode
+rejects every Docker command, Docker mode rejects every native command, and hybrid rejects native
+backend and Docker-frontend lifecycle operations.
 
 Starts default to `--pull never`, which uses local images and fails if one is absent. Use
 `--pull missing` to fetch only absent images or `--pull always` to refresh every image from its
@@ -87,14 +104,14 @@ configured registry. After preflight passes, `--timeout` bounds the ordered star
 authentication-route probe, and frontend-route checks.
 
 ```bash
-cedarcli docker start all --mode full --pull never --timeout 600
+cedarcli docker start all --pull never --timeout 600
 cedarcli docker stop all
 ```
 
 Individual `start` and `stop` commands remain available for troubleshooting. When an aggregate mode
 is active, recreating infrastructure through those commands preserves its nginx routing. Starting
-the Docker frontend project while `hybrid` is active is refused; switch modes through
-`start all --mode full` instead.
+the Docker frontend project while `hybrid` is active is refused; stop both tiers, clear the mode,
+and select `docker` instead.
 
 ## Immutable development build trains
 

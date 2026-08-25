@@ -48,7 +48,7 @@ class DockerCommandPathsTest(unittest.TestCase):
         self.assertEqual(0, DockerWorker.start_frontends(detach=True))
 
         command = execute.call_args.args[0][0]
-        self.assertEqual('docker compose up -d --pull never', command)
+        self.assertEqual('docker compose up --detach --pull never', command)
         self.assertTrue(execute.call_args.kwargs['cwd'].endswith('cedar-docker-deploy/cedar-frontend'))
 
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
@@ -58,7 +58,7 @@ class DockerCommandPathsTest(unittest.TestCase):
 
         self.assertEqual(0, DockerWorker.start_frontend('designer', detach=True))
         self.assertEqual(
-            'docker compose up -d --pull never frontend-template-designer',
+            'docker compose up --detach --pull never frontend-template-designer',
             execute.call_args.args[0][0],
         )
 
@@ -70,7 +70,7 @@ class DockerCommandPathsTest(unittest.TestCase):
 
         self.assertEqual(0, DockerWorker.start_keycloak(detach=True))
         self.assertEqual(
-            'docker compose up -d --pull never keycloak',
+            'docker compose up --detach --pull never keycloak',
             execute.call_args.args[0][0],
         )
 
@@ -102,6 +102,20 @@ class DockerCommandPathsTest(unittest.TestCase):
 
         command = execute.call_args.args[0][0]
         self.assertIn('nexus.example.org:5000/cedar/cedar-', command)
+
+    @patch.object(DockerWorker, '_clear_active_deployment')
+    @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
+    @patch.object(DockerImages, 'image_prefix', return_value='nexus.example.org:5000/cedar')
+    def test_container_removal_clears_deployment_state_only_after_success(
+            self, _prefix, execute, clear):
+        execute.return_value = CommandOutput([], 0)
+        self.assertEqual(0, DockerWorker.remove_containers())
+        clear.assert_called_once_with()
+
+        clear.reset_mock()
+        execute.return_value = CommandOutput([], 19)
+        self.assertEqual(19, DockerWorker.remove_containers())
+        clear.assert_not_called()
 
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     def test_certificate_setup_creates_both_external_volumes(self, execute):

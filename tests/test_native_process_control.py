@@ -4,6 +4,8 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from org.metadatacenter import native, start, stop
+from org.metadatacenter.model.CedarMode import CedarMode
+from org.metadatacenter.util.ModeManager import ModeManager
 from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.worker.StartFrontendWorker import StartFrontendWorker
 from org.metadatacenter.worker.StartInfrastructureWorker import StartInfrastructureWorker
@@ -16,7 +18,16 @@ from org.metadatacenter.worker.StopMicroserviceWorker import StopMicroserviceWor
 @patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
 class NativeProcessControlTest(unittest.TestCase):
 
-    def test_native_namespace_exposes_start_and_stop(self):
+    def setUp(self):
+        self.runtime_patch = patch.object(
+            ModeManager, "require_runtime_compatible", side_effect=lambda mode: mode)
+        self.runtime_patch.start()
+
+    def tearDown(self):
+        self.runtime_patch.stop()
+
+    @patch.object(ModeManager, "current", return_value=CedarMode.NATIVE)
+    def test_native_namespace_exposes_start_and_stop(self, _mode):
         runner = CliRunner()
 
         for action in ("start", "stop"):
@@ -107,6 +118,22 @@ class NativeProcessControlTest(unittest.TestCase):
         commands = [call.args[0][0] for call in execute.call_args_list]
         self.assertTrue(all("cedar-services.sh stop" in command for command in commands))
         self.assertTrue(all("osascript" not in command for command in commands))
+
+    @patch.object(NativeWorker, "start")
+    def test_native_start_propagates_controller_failure(self, start_native):
+        start_native.return_value = type("Result", (), {"returncode": 23})()
+        with patch.object(ModeManager, "current", return_value=CedarMode.NATIVE):
+            result = CliRunner().invoke(start.app, ["microservices"])
+
+        self.assertEqual(23, result.exit_code, result.output)
+
+    @patch.object(NativeWorker, "stop")
+    def test_native_stop_propagates_controller_failure(self, stop_native):
+        stop_native.return_value = type("Result", (), {"returncode": 24})()
+        with patch.object(ModeManager, "current", return_value=CedarMode.NATIVE):
+            result = CliRunner().invoke(stop.app, ["microservices"])
+
+        self.assertEqual(24, result.exit_code, result.output)
 
     @patch("org.metadatacenter.worker.StartInfrastructureWorker.Worker.execute_generic_shell_commands")
     def test_infrastructure_start_is_headless(self, execute):
