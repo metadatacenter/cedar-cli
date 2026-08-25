@@ -14,7 +14,7 @@ from org.metadatacenter.util.Util import Util
 
 
 class DockerImages:
-    GROUPS = ['core', 'infrastructure', 'microservices', 'frontends', 'admin']
+    GROUPS = ['infra', 'microservices', 'frontends', 'admin']
     INTERNAL_IMAGES = {'cedar-java', 'cedar-microservice'}
     DEFAULT_IMAGE_PREFIX = 'metadatacenter'
     _REPOSITORY_COMPONENT = re.compile(r'^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$')
@@ -221,10 +221,9 @@ class DockerImages:
 
         if target == 'all':
             return list(images)
-        if target == 'core':
-            return [image for image in images if cls.group_of(image) != 'admin']
         if target in cls.GROUPS:
-            selected = [i for i in images if cls.group_of(i) == target]
+            internal_group = 'infrastructure' if target == 'infra' else target
+            selected = [i for i in images if cls.group_of(i) == internal_group]
             if not selected:
                 raise ValueError(f'no images in group "{target}"')
             return selected

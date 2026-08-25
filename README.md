@@ -1,6 +1,7 @@
 # cedar-cli
 
 [![CI](https://github.com/metadatacenter/cedar-cli/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/metadatacenter/cedar-cli/actions/workflows/ci.yml)
+
 ## About
 CEDAR CLI is CEDAR's command line interface used to facilitate:
 * Development
@@ -45,42 +46,40 @@ Native and Docker deployments deliberately have separate status commands. Docker
 private to `cedarnet`, so native host-port probes cannot assess a container deployment accurately.
 
 ```bash
-cedarcli status
 cedarcli native status
 cedarcli docker status
 ```
 
-Native starts are headless. `cedarcli start all`, `start microservices`, and `start frontends` use
-the shared process controller; they do not open iTerm or Terminal. The fifteen Java services and
-seven frontends write separate logs under `$CEDAR_HOME/log/` and PID files under
+Native starts are headless. `cedarcli native start all`, `native start microservices`, and
+`native start frontends` use the shared process controller; they do not open iTerm or Terminal. The
+fifteen Java services and seven frontends write separate logs under `$CEDAR_HOME/log/` and PID files under
 `$CEDAR_HOME/log/run/`.
 
 ```bash
-cedarcli start all
+cedarcli native start all
 cedarcli native health
 cedarcli native logs resource
 cedarcli native restart resource
-cedarcli stop all
+cedarcli native stop all
 ```
 
-Use `cedarcli native watch` for a continuously refreshing application view. The existing
-`cedarcli status` remains the broader native host/port inventory, including infrastructure.
+`cedarcli native status` reports both managed application processes and the broader native
+host/port inventory, including infrastructure. Use `cedarcli native watch` for a continuously
+refreshing application view.
 
 The aggregate Docker start command selects one explicit topology and waits for it to become ready:
 
 ```bash
 cedarcli docker start all --mode full
 cedarcli docker start all --mode hybrid
-cedarcli docker start all --mode backend
 ```
 
 - `full` starts and checks all 29 core containers.
 - `hybrid` starts the 22-container backend and routes Docker nginx to seven native frontend servers.
-- `backend` starts the same 22 containers without requiring frontend routes.
 
 The active mode is recorded after a successful start, so `cedarcli docker status` applies the same
-container and route expectations without another option. Add `--include-admin` when starting the
-four optional administration containers; status remembers that selection too.
+container and route expectations without another option. Administration containers are managed
+separately with the `admin` target.
 
 Starts default to `--pull never`, which uses local images and fails if one is absent. Use
 `--pull missing` to fetch only absent images or `--pull always` to refresh every image from its
@@ -94,19 +93,19 @@ cedarcli docker stop all
 
 Individual `start` and `stop` commands remain available for troubleshooting. When an aggregate mode
 is active, recreating infrastructure through those commands preserves its nginx routing. Starting
-the Docker frontend project while `hybrid` or `backend` is active is refused; switch modes through
+the Docker frontend project while `hybrid` is active is refused; switch modes through
 `start all --mode full` instead.
 
 ## Immutable development build trains
 
-`cedarcli build train` dispatches the central publication workflow in `cedar-development`. It
+`cedarcli publish train` dispatches the central publication workflow in `cedar-development`. It
 derives the development base version from `cedar-parent`, allocates a UTC train ID, publishes the
 ordered Java artifact set, then builds and publishes the complete 31-image Docker estate. Resume is
 the only selector exposed to the operator:
 
 ```bash
-cedarcli build train
-cedarcli build train --resume <TRAIN>
+cedarcli publish train
+cedarcli publish train --resume <TRAIN>
 ```
 
 Resume uses the source manifest recorded before publication; it does not rebuild the current heads
@@ -127,8 +126,8 @@ cedarcli cheat
 ## Split frontend publication and native deployment
 
 Workspace and Template Designer remain outside `release all-in-one` until migration acceptance.
-They are also excluded from the generic `deploy frontends` and `deploy all` commands, so an ordinary
-legacy deployment cannot publish or activate them accidentally.
+They are also excluded from the generic `publish frontends` and `publish all` commands, so a
+generic publication cannot include or activate them accidentally.
 
 Use the explicit commands when preparing a split-frontend build:
 
@@ -141,17 +140,17 @@ cedarcli build split-frontends
 cedarcli build split-frontends --server-payload
 
 # Publish both current package versions to the Nexus registries declared by their package.json files.
-cedarcli deploy split-frontends --dry-run
-cedarcli deploy split-frontends
+cedarcli publish split-frontends --dry-run
+cedarcli publish split-frontends
 
 # Run or stop both development Gulp servers locally on ports 4201 and 4202.
-cedarcli start frontend split-frontends
-cedarcli stop frontend split-frontends
+cedarcli native start frontend split-frontends
+cedarcli native stop frontend split-frontends
 ```
 
-`deploy` retains cedarcli's historical meaning of publishing build artifacts: it runs `npm ci` and
-`npm publish` in each repository. It does not change DNS, certificates, nginx, Keycloak, CORS, or
-public routing. Those environment operations remain separate acceptance and cutover gates.
+`publish` runs `npm ci` and `npm publish` in each repository. It does not change DNS, certificates,
+nginx, Keycloak, CORS, or public routing. Those environment operations remain separate acceptance
+and cutover gates.
 
 Staging and production need no Docker. Their nginx virtual hosts serve
 `cedar-workspace/app` and `cedar-template-designer/app` directly after `--server-payload` exits, just

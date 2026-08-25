@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from org.metadatacenter import build
+from org.metadatacenter import build, publish
 from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain
 from org.metadatacenter.util.Util import Util
 
@@ -64,7 +64,7 @@ class BuildTrainTest(unittest.TestCase):
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_allocates_and_dispatches_a_new_train(self, run, allocate):
         run.return_value.returncode = 0
-        result = self.runner.invoke(build.app, ['train'])
+        result = self.runner.invoke(publish.app, ['train'])
         self.assertEqual(0, result.exit_code, result.output)
         allocate.assert_called_once_with()
         self.assertIn('version=2.9.3-dev.20260824.1847', run.call_args.args[0])
@@ -72,7 +72,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('main', run.call_args.args[0])
 
     def test_cli_does_not_expose_a_version_option(self):
-        result = self.runner.invoke(build.app, [
+        result = self.runner.invoke(publish.app, [
             'train', '--version', '2.9.3-dev.20260824.1847',
         ])
         self.assertNotEqual(0, result.exit_code)
@@ -81,11 +81,16 @@ class BuildTrainTest(unittest.TestCase):
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_resume_uses_recorded_id(self, run):
         run.return_value.returncode = 0
-        result = self.runner.invoke(build.app, [
+        result = self.runner.invoke(publish.app, [
             'train', '--resume', '2.9.3-dev.20260824.1847',
         ])
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn('resume=true', run.call_args.args[0])
+
+    def test_build_no_longer_exposes_train(self):
+        result = self.runner.invoke(build.app, ['train'])
+        self.assertNotEqual(0, result.exit_code)
+        self.assertIn('No such command', result.output)
 
 
 if __name__ == '__main__':

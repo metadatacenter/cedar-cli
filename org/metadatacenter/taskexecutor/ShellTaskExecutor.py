@@ -62,8 +62,6 @@ class ShellTaskExecutor(TaskExecutor):
 
         return_code = proc.wait()
         msg = "[green]Processing " + repo.name + ' done. Return code: ' + str(return_code) + '. '
-        # if len(stdout_parts) != repo.expected_build_lines:
-        #     msg += "[yellow]" + str(len(stdout_parts)) + ' lines vs expected ' + str(repo.expected_build_lines)
         job_progress.print(Panel(msg, style=Style(color="green"), subtitle="Shell subprocess"))
         return stdout_parts, return_code
 

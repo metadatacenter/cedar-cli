@@ -7,14 +7,14 @@ from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.operator.BuildOperator import BuildOperator
 from org.metadatacenter.operator.Operator import Operator
 from org.metadatacenter.taskfactory.BuildShellTaskFactory import BuildShellTaskFactory
-from org.metadatacenter.taskfactory.DeployShellTaskFactory import DeployShellTaskFactory
+from org.metadatacenter.taskfactory.PublishShellTaskFactory import PublishShellTaskFactory
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
 console = Console()
 
 
-class DeployOperator(Operator):
+class PublishOperator(Operator):
 
     def __init__(self):
         super().__init__()
@@ -25,27 +25,27 @@ class DeployOperator(Operator):
         repo_list_flat = Util.get_flat_repo_list(repo_list)
         for repo in repo_list_flat:
             if repo.repo_type == RepoType.JAVA_WRAPPER:
-                shell_wrapper = PlanTask("Deploy java wrapper project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(DeployShellTaskFactory.maven_deploy_skip_tests(repo))
+                shell_wrapper = PlanTask("Publish Java wrapper project", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(PublishShellTaskFactory.maven_deploy_skip_tests(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.JAVA:
-                shell_wrapper = PlanTask("Deploy java project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(DeployShellTaskFactory.maven_deploy_skip_tests(repo))
+                shell_wrapper = PlanTask("Publish Java project", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(PublishShellTaskFactory.maven_deploy_skip_tests(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR:
-                shell_wrapper = PlanTask("Deploy angular project", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper = PlanTask("Publish Angular project", TaskType.SHELL_WRAPPER, repo)
                 shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_DIST:
-                shell_wrapper = PlanTask("Deploy angular dist project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(DeployShellTaskFactory.npm_publish(repo))
+                shell_wrapper = PlanTask("Publish Angular dist project", TaskType.SHELL_WRAPPER, repo)
+                shell_wrapper.add_task_as_task(PublishShellTaskFactory.npm_publish(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_JS:
-                shell_wrapper = PlanTask("Deploy angularJS project", TaskType.SHELL_WRAPPER, repo)
-                if repo.deploy_command_list:
-                    shell_wrapper.add_task_as_task(DeployShellTaskFactory.repo_deploy_commands(repo))
+                shell_wrapper = PlanTask("Publish AngularJS project", TaskType.SHELL_WRAPPER, repo)
+                if repo.publish_command_list:
+                    shell_wrapper.add_task_as_task(PublishShellTaskFactory.repo_publish_commands(repo))
                 else:
-                    shell_wrapper.add_task_as_task(DeployShellTaskFactory.npm_install_publish(repo))
+                    shell_wrapper.add_task_as_task(PublishShellTaskFactory.npm_install_publish(repo))
                 task.add_task_as_task(shell_wrapper)
             else:
                 not_handled = PlanTask("Skip repo", TaskType.NOOP, repo)

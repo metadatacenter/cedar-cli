@@ -3,6 +3,7 @@ import shlex
 from typing import Iterable
 
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.ServerWorker import ServerWorker
 from org.metadatacenter.worker.Worker import Worker
 
 
@@ -45,7 +46,9 @@ class NativeWorker(Worker):
 
     @classmethod
     def status(cls):
-        return cls.execute("status", title="Native CEDAR process status")
+        result = cls.execute("status", title="Native CEDAR process status")
+        ServerWorker.status()
+        return result
 
     @classmethod
     def health(cls):

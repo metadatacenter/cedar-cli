@@ -17,6 +17,12 @@ def all_all():
     StopInfrastructureWorker.all()
 
 
+@app.command("backends")
+def backend_all():
+    StopMicroserviceWorker.all()
+    StopInfrastructureWorker.all()
+
+
 @app.command("infra")
 def infra_all():
     StopInfrastructureWorker.all()
@@ -27,18 +33,8 @@ def microservice_all():
     StopMicroserviceWorker.all()
 
 
-@app.command("java")
-def java_all():
-    StopMicroserviceWorker.all()
-
-
 @app.command("frontends")
 def frontend_all():
-    StopFrontendWorker.all()
-
-
-@app.command("uis")
-def ui_all():
     StopFrontendWorker.all()
 
 

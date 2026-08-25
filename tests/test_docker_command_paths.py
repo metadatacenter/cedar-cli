@@ -53,6 +53,29 @@ class DockerCommandPathsTest(unittest.TestCase):
 
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
+    def test_individual_component_commands_use_compose_service_names(self, execute):
+        execute.return_value = CommandOutput([], 0)
+
+        self.assertEqual(0, DockerWorker.start_frontend('designer', detach=True))
+        self.assertEqual(
+            'docker compose up -d --pull never frontend-template-designer',
+            execute.call_args.args[0][0],
+        )
+
+        self.assertEqual(0, DockerWorker.stop_microservice('open'))
+        self.assertEqual(
+            'docker compose stop server-openview',
+            execute.call_args.args[0][0],
+        )
+
+        self.assertEqual(0, DockerWorker.start_keycloak(detach=True))
+        self.assertEqual(
+            'docker compose up -d --pull never keycloak',
+            execute.call_args.args[0][0],
+        )
+
+    @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
+    @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_compose_failure_is_returned_to_the_cli(self, execute):
         execute.return_value = CommandOutput([], 17)
 

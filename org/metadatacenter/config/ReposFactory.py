@@ -1,4 +1,3 @@
-from org.metadatacenter.model.ArtifactType import ArtifactType
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoRelation import RepoRelation
 from org.metadatacenter.model.RepoRelationType import RepoRelationType
@@ -10,79 +9,76 @@ from org.metadatacenter.model.VersionType import VersionType as V
 class ReposFactory:
     git_base = "https://github.com/metadatacenter/"
 
-    def __init__(self):
-        super().__init__()
-
     @staticmethod
     def build_repos():
         repos = Repos()
-        repos.add_repo(Repo("cedar-parent", RepoType.JAVA_WRAPPER, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PROPERTIES]))
-        repos.add_repo(Repo("cedar-libraries", RepoType.JAVA_WRAPPER, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
-        repos.add_repo(Repo("cedar-project", RepoType.JAVA_WRAPPER, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
-        repos.add_repo(Repo("cedar-clients", RepoType.JAVA_WRAPPER, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-parent", RepoType.JAVA_WRAPPER, [V.POM_OWN, V.POM_PROPERTIES]))
+        repos.add_repo(Repo("cedar-libraries", RepoType.JAVA_WRAPPER, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-project", RepoType.JAVA_WRAPPER, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-clients", RepoType.JAVA_WRAPPER, [V.POM_OWN, V.POM_PARENT]))
 
-        repos.add_repo(Repo("cedar-artifact-library", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_library=True))
-        repos.add_repo(Repo("cedar-config-library", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_library=True))
-        repos.add_repo(Repo("cedar-core-library", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_library=True))
-        repos.add_repo(Repo("cedar-model-library", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_library=True))
-        repos.add_repo(Repo("cedar-model-validation-library", RepoType.JAVA, ArtifactType.MAVEN,
+        repos.add_repo(Repo("cedar-artifact-library", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_library=True))
+        repos.add_repo(Repo("cedar-config-library", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_library=True))
+        repos.add_repo(Repo("cedar-core-library", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_library=True))
+        repos.add_repo(Repo("cedar-model-library", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_library=True))
+        repos.add_repo(Repo("cedar-model-validation-library", RepoType.JAVA,
                             [V.POM_OWN, V.POM_PARENT], is_library=True))
-        repos.add_repo(Repo("cedar-rest-library", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_library=True))
+        repos.add_repo(Repo("cedar-rest-library", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_library=True))
 
         repos.add_repo(Repo("cedar-artifact-server",
-                            RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-messaging-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-repo-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-resource-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-schema-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-submission-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-terminology-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-user-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-valuerecommender-server", RepoType.JAVA, ArtifactType.MAVEN,
+                            RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-messaging-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-repo-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-resource-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-schema-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-submission-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-terminology-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-user-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-valuerecommender-server", RepoType.JAVA,
                             [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-worker-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-monitor-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-openview-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-group-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-impex-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-bridge-server", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-worker-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-monitor-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-openview-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-group-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-impex-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
+        repos.add_repo(Repo("cedar-bridge-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
 
-        repos.add_repo(Repo("cedar-keycloak-event-listener", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
-        repos.add_repo(Repo("cedar-microservice-libraries", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
-        repos.add_repo(Repo("cedar-admin-tool", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
-        repos.add_repo(Repo("cedar-cadsr-tools", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
-        repos.add_repo(Repo("cedar-model-library-roundtrip", RepoType.JAVA, ArtifactType.MAVEN, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-keycloak-event-listener", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-microservice-libraries", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-admin-tool", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-cadsr-tools", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
+        repos.add_repo(Repo("cedar-model-library-roundtrip", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
 
-        repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN], is_frontend=True))
+        repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, [V.PACKAGE_OWN], is_frontend=True))
 
         # The split frontends have explicit native build and Nexus publication commands, but remain
-        # outside the ordinary release/deploy selectors until migration acceptance. Registering them
-        # here must not make a legacy deployment publish or activate them accidentally.
-        repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
+        # outside the ordinary release/publish selectors until migration acceptance. Registering
+        # them here must not make a generic publication include or activate them accidentally.
+        repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],
                             is_frontend=True, allow_different_version=True, skip_from_release=True,
                             build_command_list=['npm ci'],
                             server_build_command_list=[
                                 'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace'],
-                            deploy_command_list=[
+                            publish_command_list=[
                                 'npm ci',
                                 'bash "$CEDAR_HOME/cedar-development/ops/'
                                 'publish-frontend-package.sh" workspace'],
-                            skip_from_default_deploy=True))
-        repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, ArtifactType.NPM, [V.PACKAGE_OWN],
+                            skip_from_default_publish=True))
+        repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],
                             is_frontend=True, allow_different_version=True, skip_from_release=True,
                             build_command_list=['npm ci'],
                             server_build_command_list=[
                                 'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" designer'],
-                            deploy_command_list=[
+                            publish_command_list=[
                                 'npm ci',
                                 'bash "$CEDAR_HOME/cedar-development/ops/'
                                 'publish-frontend-package.sh" designer'],
-                            skip_from_default_deploy=True))
+                            skip_from_default_publish=True))
 
-        monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
-        monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR, ArtifactType.NONE,
+        monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, [], is_frontend=True)
+        monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR,
                               [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+        monitoring_dist = Repo("cedar-monitoring-dist", RepoType.ANGULAR_DIST,
                                [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         monitoring_multi.add_sub_repo(monitoring_src)
@@ -94,10 +90,10 @@ class ReposFactory:
         repos.add_relation(monitoring_src_dist_relation)
         repos.add_repo(monitoring_multi)
 
-        bridging_multi = Repo("cedar-bridging", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
-        bridging_src = Repo("cedar-bridging-src", RepoType.ANGULAR, ArtifactType.NONE,
+        bridging_multi = Repo("cedar-bridging", RepoType.MULTI, [], is_frontend=True)
+        bridging_src = Repo("cedar-bridging-src", RepoType.ANGULAR,
                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        bridging_dist = Repo("cedar-bridging-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+        bridging_dist = Repo("cedar-bridging-dist", RepoType.ANGULAR_DIST,
                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         bridging_multi.add_sub_repo(bridging_src)
@@ -109,10 +105,10 @@ class ReposFactory:
         repos.add_relation(bridging_src_dist_relation)
         repos.add_repo(bridging_multi)
 
-        openview_multi = Repo("cedar-openview", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
-        openview_src = Repo("cedar-openview-src", RepoType.ANGULAR, ArtifactType.NONE,
+        openview_multi = Repo("cedar-openview", RepoType.MULTI, [], is_frontend=True)
+        openview_src = Repo("cedar-openview-src", RepoType.ANGULAR,
                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+        openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST,
                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         openview_multi.add_sub_repo(openview_src)
@@ -124,12 +120,12 @@ class ReposFactory:
         repos.add_relation(openview_src_dist_relation)
         repos.add_repo(openview_multi)
 
-        cee_component_demo_multi = Repo("cedar-component-demo", RepoType.MULTI, ArtifactType.NONE, [], is_frontend=True)
-        cee_demo_angular_src = Repo("cedar-cee-demo-angular-src", RepoType.ANGULAR, ArtifactType.NONE,
+        cee_component_demo_multi = Repo("cedar-component-demo", RepoType.MULTI, [], is_frontend=True)
+        cee_demo_angular_src = Repo("cedar-cee-demo-angular-src", RepoType.ANGULAR,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST, ArtifactType.NPM,
+        cee_demo_angular_dist = Repo("cedar-cee-demo-angular-dist", RepoType.ANGULAR_DIST,
                                      [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER, ArtifactType.NONE,
+        cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         cee_component_demo_multi.add_sub_repo(cee_demo_angular_src)
@@ -146,7 +142,7 @@ class ReposFactory:
         # graph under dist/cedar-embeddable-editor/browser/, which cannot be joined by
         # concatenation the way the old webpack chunks could; visual/resolve-build-output.mjs is
         # the single place that knows what the builder emitted and how to turn it into one script.
-        embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR, ArtifactType.NONE,
+        embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True,
@@ -159,45 +155,45 @@ class ReposFactory:
                                  ])
         repos.add_repo(embeddable_editor)
 
-        content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR, ArtifactType.NPM,
+        content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(content_distribution)
 
-        model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT, ArtifactType.NPM,
+        model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True)
         repos.add_repo(model_typescript_library)
 
-        model_typescript_library_demo = Repo("cedar-model-typescript-library-demo", RepoType.TYPESCRIPT, ArtifactType.NPM,
+        model_typescript_library_demo = Repo("cedar-model-typescript-library-demo", RepoType.TYPESCRIPT,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True)
         repos.add_repo(model_typescript_library_demo)
 
-        repos.add_repo(Repo("cedar-model-typescript-library-python", RepoType.PYTHON, ArtifactType.NONE, []))
+        repos.add_repo(Repo("cedar-model-typescript-library-python", RepoType.PYTHON, []))
 
-        model_typescript_library_roundtrip = Repo("cedar-model-typescript-library-roundtrip", RepoType.TYPESCRIPT, ArtifactType.NPM,
+        model_typescript_library_roundtrip = Repo("cedar-model-typescript-library-roundtrip", RepoType.TYPESCRIPT,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True, skip_npm_install=True)
         repos.add_repo(model_typescript_library_roundtrip)
 
 
-        repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, ArtifactType.NONE, []))
-        repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, ArtifactType.NONE, [], is_private=True))
+        repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, []))
+        repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, [], is_private=True))
 
-        repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY, ArtifactType.NONE, []))
-        repos.add_repo(Repo("cedar-swagger-ui", RepoType.CONTENT_DELIVERY, ArtifactType.NONE, []))
+        repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY, []))
+        repos.add_repo(Repo("cedar-swagger-ui", RepoType.CONTENT_DELIVERY, []))
 
-        repos.add_repo(Repo("cedar-docker-build", RepoType.DOCKER_BUILD, ArtifactType.NONE, [], for_docker=True))
-        repos.add_repo(Repo("cedar-docker-deploy", RepoType.DOCKER_DEPLOY, ArtifactType.NONE, [], for_docker=True))
+        repos.add_repo(Repo("cedar-docker-build", RepoType.DOCKER_BUILD, [], for_docker=True))
+        repos.add_repo(Repo("cedar-docker-deploy", RepoType.DOCKER_DEPLOY, [], for_docker=True))
 
-        repos.add_repo(Repo("cedar-development", RepoType.DEVELOPMENT, ArtifactType.NONE, [], for_docker=True))
-        repos.add_repo(Repo("cedar-util", RepoType.MISC, ArtifactType.NONE, []))
+        repos.add_repo(Repo("cedar-development", RepoType.DEVELOPMENT, [], for_docker=True))
+        repos.add_repo(Repo("cedar-util", RepoType.MISC, []))
 
-        repos.add_repo(Repo("cedar-howto", RepoType.PYTHON, ArtifactType.NONE, []))
+        repos.add_repo(Repo("cedar-howto", RepoType.PYTHON, []))
 
-        repos.add_repo(Repo("cedar-cli", RepoType.PYTHON, ArtifactType.NONE, []))
+        repos.add_repo(Repo("cedar-cli", RepoType.PYTHON, []))
 
         return repos

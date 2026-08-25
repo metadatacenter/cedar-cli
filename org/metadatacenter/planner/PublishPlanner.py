@@ -5,7 +5,7 @@ from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
 
-class DeployPlanner(Planner):
+class PublishPlanner(Planner):
 
     def __init__(self):
         super().__init__()
@@ -13,8 +13,8 @@ class DeployPlanner(Planner):
     @staticmethod
     def parent(plan: Plan, parameters: dict = None):
         plan.add_task(
-            "Deploy parent",
-            TaskType.DEPLOY,
+            "Publish parent",
+            TaskType.PUBLISH,
             GlobalContext.repos.get_parent(),
             parameters
         )
@@ -22,8 +22,8 @@ class DeployPlanner(Planner):
     @staticmethod
     def libraries(plan: Plan, parameters: dict = None):
         plan.add_task(
-            "Deploy libraries",
-            TaskType.DEPLOY,
+            "Publish libraries",
+            TaskType.PUBLISH,
             GlobalContext.repos.get_libraries(),
             parameters
         )
@@ -31,8 +31,8 @@ class DeployPlanner(Planner):
     @staticmethod
     def project(plan: Plan, parameters: dict = None):
         plan.add_task(
-            "Deploy project",
-            TaskType.DEPLOY,
+            "Publish project",
+            TaskType.PUBLISH,
             GlobalContext.repos.get_project(),
             parameters
         )
@@ -40,8 +40,8 @@ class DeployPlanner(Planner):
     @staticmethod
     def clients(plan: Plan, parameters: dict = None):
         plan.add_task(
-            "Deploy clients",
-            TaskType.DEPLOY,
+            "Publish clients",
+            TaskType.PUBLISH,
             GlobalContext.repos.get_clients(),
             parameters
         )
@@ -49,9 +49,9 @@ class DeployPlanner(Planner):
     @staticmethod
     def frontends(plan: Plan, parameters: dict = None):
         plan.add_task(
-            "Deploy frontends",
-            TaskType.DEPLOY,
-            GlobalContext.repos.get_frontends_for_default_deploy(),
+            "Publish frontends",
+            TaskType.PUBLISH,
+            GlobalContext.repos.get_frontends_for_default_publish(),
             parameters
         )
 
@@ -59,7 +59,7 @@ class DeployPlanner(Planner):
     def split_frontends(plan: Plan, parameters: dict = None):
         plan.add_task(
             "Publish split frontends",
-            TaskType.DEPLOY,
+            TaskType.PUBLISH,
             GlobalContext.repos.get_split_frontends(),
             parameters
         )
@@ -69,15 +69,15 @@ class DeployPlanner(Planner):
         for repo in GlobalContext.repos.get_list_all():
             if Util.get_wd(repo).lower() == wd.lower():
                 plan.add_task(
-                    "Deploy current repo",
-                    TaskType.DEPLOY,
+                    "Publish current repo",
+                    TaskType.PUBLISH,
                     [repo]
                 )
 
     @staticmethod
     def all(plan: Plan):
-        DeployPlanner.parent(plan)
-        DeployPlanner.libraries(plan)
-        DeployPlanner.project(plan)
-        DeployPlanner.clients(plan)
-        DeployPlanner.frontends(plan)
+        PublishPlanner.parent(plan)
+        PublishPlanner.libraries(plan)
+        PublishPlanner.project(plan)
+        PublishPlanner.clients(plan)
+        PublishPlanner.frontends(plan)

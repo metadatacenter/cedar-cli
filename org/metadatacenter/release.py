@@ -7,7 +7,7 @@ from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.PreReleaseBranchType import PreReleaseBranchType
 from org.metadatacenter.model.TaskType import TaskType
-from org.metadatacenter.planner.DeployPlanner import DeployPlanner
+from org.metadatacenter.planner.PublishPlanner import PublishPlanner
 from org.metadatacenter.planner.ReleaseBranchCheckoutPlanner import ReleaseBranchCheckoutPlanner
 from org.metadatacenter.planner.ReleaseCleanupPlanner import ReleaseCleanupPlanner
 from org.metadatacenter.planner.ReleaseCommitPlanner import ReleaseCommitPlanner
@@ -122,9 +122,9 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run"),
     }
     ReleaseBranchCheckoutPlanner.checkout(plan_checkout_develop, params_checkout_develop)
 
-    GlobalContext.mark_global_task_type(TaskType.DEPLOY)
-    plan_deploy = Plan("Deploy all")
-    DeployPlanner.all(plan_deploy)
+    GlobalContext.mark_global_task_type(TaskType.PUBLISH)
+    plan_publish = Plan("Publish all")
+    PublishPlanner.all(plan_publish)
 
     release_version, pre_branch, tag = Util.get_release_vars(PreReleaseBranchType.RELEASE)
     next_dev_version, post_branch, _ = Util.get_release_vars(PreReleaseBranchType.NEXT_DEV)
@@ -160,28 +160,28 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run"),
     }
     ReleaseBranchCheckoutPlanner.checkout(plan_checkout_main, params_checkout_main)
 
-    GlobalContext.mark_global_task_type(TaskType.DEPLOY)
-    plan_deploy_develop = Plan("Deploy all develop")
-    DeployPlanner.parent(plan_deploy_develop)
-    DeployPlanner.libraries(plan_deploy_develop)
-    DeployPlanner.project(plan_deploy_develop)
-    DeployPlanner.clients(plan_deploy_develop)
-    DeployPlanner.frontends(plan_deploy_develop)
+    GlobalContext.mark_global_task_type(TaskType.PUBLISH)
+    plan_publish_develop = Plan("Publish all develop")
+    PublishPlanner.parent(plan_publish_develop)
+    PublishPlanner.libraries(plan_publish_develop)
+    PublishPlanner.project(plan_publish_develop)
+    PublishPlanner.clients(plan_publish_develop)
+    PublishPlanner.frontends(plan_publish_develop)
 
-    GlobalContext.mark_global_task_type(TaskType.DEPLOY)
-    plan_deploy_main = Plan("Deploy all main")
-    params_deploy_main = {
+    GlobalContext.mark_global_task_type(TaskType.PUBLISH)
+    plan_publish_main = Plan("Publish all main")
+    params_publish_main = {
         'version': release_version
     }
-    DeployPlanner.parent(plan_deploy_main, params_deploy_main)
-    DeployPlanner.libraries(plan_deploy_main, params_deploy_main)
-    DeployPlanner.project(plan_deploy_main, params_deploy_main)
-    DeployPlanner.clients(plan_deploy_main, params_deploy_main)
-    DeployPlanner.frontends(plan_deploy_main, params_deploy_main)
+    PublishPlanner.parent(plan_publish_main, params_publish_main)
+    PublishPlanner.libraries(plan_publish_main, params_publish_main)
+    PublishPlanner.project(plan_publish_main, params_publish_main)
+    PublishPlanner.clients(plan_publish_main, params_publish_main)
+    PublishPlanner.frontends(plan_publish_main, params_publish_main)
 
     for task in plan_checkout_develop.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
-    for task in plan_deploy_develop.tasks:
+    for task in plan_publish_develop.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
     for task in plan_prepare.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
@@ -191,7 +191,7 @@ def all_in_one(dry_run: bool = typer.Option(False, help="Dry run"),
         plan_wrapper.add_task_as_task_no_expand(task)
     for task in plan_checkout_main.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
-    for task in plan_deploy_main.tasks:
+    for task in plan_publish_main.tasks:
         plan_wrapper.add_task_as_task_no_expand(task)
 
     plan_executor.execute(plan_wrapper, dry_run, dump_plan)

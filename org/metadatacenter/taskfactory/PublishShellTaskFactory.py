@@ -3,7 +3,7 @@ from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.TaskType import TaskType
 
 
-class DeployShellTaskFactory:
+class PublishShellTaskFactory:
 
     def __init__(self):
         super().__init__()
@@ -27,7 +27,7 @@ class DeployShellTaskFactory:
         return task
 
     @classmethod
-    def repo_deploy_commands(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("Repo-specific deploy", TaskType.SHELL, repo)
-        task.command_list = list(repo.deploy_command_list)
+    def repo_publish_commands(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("Repo-specific publish", TaskType.SHELL, repo)
+        task.command_list = list(repo.publish_command_list)
         return task

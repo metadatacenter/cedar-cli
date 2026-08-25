@@ -62,30 +62,6 @@ class DockerStatusTest(unittest.TestCase):
     @patch.object(DockerWorker, '_expected_compose_services')
     @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
-    def test_admin_can_be_required_explicitly(self, _version, expected, actual):
-        expected.return_value = (['one'], None)
-        actual.return_value = ({'one': container('one')}, None)
-
-        self.assertTrue(DockerWorker.status(include_admin=True))
-        self.assertEqual(4, expected.call_count)
-        self.assertIn('cedar-admin', [call.args[0] for call in actual.call_args_list])
-
-    @patch.object(DockerWorker, '_compose_containers')
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
-    @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
-    def test_frontends_can_be_excluded_for_legacy_backend_switch(self, _version, expected, actual):
-        expected.return_value = (['one'], None)
-        actual.return_value = ({'one': container('one')}, None)
-
-        self.assertTrue(DockerWorker.status(include_frontends=False))
-        self.assertEqual(2, expected.call_count)
-        self.assertNotIn('cedar-frontend', [call.args[0] for call in actual.call_args_list])
-
-    @patch.object(DockerWorker, '_compose_containers')
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
-    @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_hybrid_checks_backend_containers_and_frontend_routes(self, _version, expected, actual):
         expected.return_value = (['one'], None)
         actual.return_value = ({'one': container('one')}, None)

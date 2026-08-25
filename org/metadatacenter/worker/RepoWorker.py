@@ -48,7 +48,6 @@ class RepoWorker(Worker):
         table = Table("Repo",
                       Column(header="Type", justify="center"),
                       Column(header="Library", justify="center"),
-                      Column(header="Client", justify="center"),
                       Column(header="Microservice", justify="center"),
                       Column(header="Frontend", justify="center"),
                       Column(header="Private", justify="center"),
@@ -60,13 +59,12 @@ class RepoWorker(Worker):
     @staticmethod
     def add_repo_list_row(repo, table):
         is_library = STATUS_ICON_OK if repo.is_library else ""
-        is_client = STATUS_ICON_OK if repo.is_client else ""
         is_microservice = STATUS_ICON_OK if repo.is_microservice else ""
         is_private = STATUS_ICON_OK if repo.is_private else ""
         for_docker = STATUS_ICON_OK if repo.for_docker else ""
         is_frontend = STATUS_ICON_OK if repo.is_frontend else ""
         name = repo.parent_repo.name + ' ⮕ ' + repo.name if repo.is_sub_repo else repo.name
-        table.add_row(name, repo.repo_type, is_library, is_client, is_microservice, is_frontend, is_private, for_docker)
+        table.add_row(name, repo.repo_type, is_library, is_microservice, is_frontend, is_private, for_docker)
 
     @staticmethod
     def analyze_entry(fs_name, repo_map):

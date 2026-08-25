@@ -5,8 +5,9 @@ from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.config.ServersFactory import ServersFactory
 from org.metadatacenter.model.ServerTag import ServerTag
 from org.metadatacenter.model.Plan import Plan
+from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
-from org.metadatacenter.planner.DeployPlanner import DeployPlanner
+from org.metadatacenter.planner.PublishPlanner import PublishPlanner
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.StartFrontendWorker import StartFrontendWorker
 from org.metadatacenter.worker.StopFrontendWorker import StopFrontendWorker
@@ -22,15 +23,15 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
             repo = repos.map[name]
             self.assertTrue(repo.is_frontend)
             self.assertTrue(repo.skip_from_release)
-            self.assertTrue(repo.skip_from_default_deploy)
+            self.assertTrue(repo.skip_from_default_publish)
             self.assertTrue(repo.allow_different_version)
             self.assertEqual(['npm ci'], repo.build_command_list)
             self.assertEqual(1, len(repo.server_build_command_list))
             self.assertIn('build-native-split-frontend.sh', repo.server_build_command_list[0])
-            self.assertEqual('npm ci', repo.deploy_command_list[0])
-            self.assertIn('publish-frontend-package.sh', repo.deploy_command_list[1])
+            self.assertEqual('npm ci', repo.publish_command_list[0])
+            self.assertIn('publish-frontend-package.sh', repo.publish_command_list[1])
             self.assertNotIn(repo, repos.get_release_all())
-            self.assertNotIn(repo, repos.get_frontends_for_default_deploy())
+            self.assertNotIn(repo, repos.get_frontends_for_default_publish())
 
         self.assertEqual(
             ["cedar-workspace", "cedar-template-designer"],
@@ -40,16 +41,17 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
     def test_split_build_and_publish_plans_are_explicit(self, repos):
         build_plan = Plan("Build split frontends")
         BuildPlanner.split_frontends(build_plan)
-        deploy_plan = Plan("Publish split frontends")
-        DeployPlanner.split_frontends(deploy_plan)
-        default_deploy_plan = Plan("Deploy frontends")
-        DeployPlanner.frontends(default_deploy_plan)
+        publish_plan = Plan("Publish split frontends")
+        PublishPlanner.split_frontends(publish_plan)
+        default_publish_plan = Plan("Publish frontends")
+        PublishPlanner.frontends(default_publish_plan)
 
         expected = ["cedar-workspace", "cedar-template-designer"]
         self.assertEqual(expected, [task.repo.name for task in build_plan.tasks])
-        self.assertEqual(expected, [task.repo.name for task in deploy_plan.tasks])
+        self.assertEqual(expected, [task.repo.name for task in publish_plan.tasks])
+        self.assertTrue(all(task.task_type == TaskType.PUBLISH for task in publish_plan.tasks))
         self.assertTrue(all(name not in expected for name in
-                            [task.repo.name for task in default_deploy_plan.tasks]))
+                            [task.repo.name for task in default_publish_plan.tasks]))
 
         server_plan = Plan("Build native server payloads")
         BuildPlanner.split_frontends(server_plan, server_payload=True)

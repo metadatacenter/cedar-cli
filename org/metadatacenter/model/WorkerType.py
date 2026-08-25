@@ -3,4 +3,4 @@ class WorkerType:
     RELEASE_ROLLBACK = "release/rollback"
     RELEASE_COMMIT = "release/commit"
     BUILD = "build"
-    DEPLOY = "deploy"
+    PUBLISH = "publish"

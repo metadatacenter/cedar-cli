@@ -244,7 +244,7 @@ class Util(object):
     def get_build_version(cls, task: PlanTask):
         if 'version' in task.parameters:
             return task.get_parameter('version')
-        if task.task_type == TaskType.BUILD or task.task_type == TaskType.DEPLOY:
+        if task.task_type == TaskType.BUILD or task.task_type == TaskType.PUBLISH:
             return os.environ[Const.CEDAR_VERSION]
         elif task.task_type == TaskType.RELEASE_PREPARE:
             if Const.PARAM_BRANCH_TYPE in task.parameters and task.get_parameter(Const.PARAM_BRANCH_TYPE) == PreReleaseBranchType.NEXT_DEV:

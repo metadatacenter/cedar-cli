@@ -17,6 +17,12 @@ def all_all():
     NativeWorker.start()
 
 
+@app.command("backends")
+def backend_all():
+    StartInfrastructureWorker.all()
+    StartMicroserviceWorker.all()
+
+
 @app.command("infra")
 def infra_all():
     StartInfrastructureWorker.all()
@@ -27,18 +33,8 @@ def microservice_all():
     StartMicroserviceWorker.all()
 
 
-@app.command("java")
-def java_all():
-    StartMicroserviceWorker.all()
-
-
 @app.command("frontends")
 def frontend_all():
-    StartFrontendWorker.all()
-
-
-@app.command("uis")
-def ui_all():
     StartFrontendWorker.all()
 
 

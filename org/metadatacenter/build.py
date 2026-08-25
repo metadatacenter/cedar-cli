@@ -5,22 +5,10 @@ from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
 from org.metadatacenter.util.GlobalContext import GlobalContext
-from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
 
 app = typer.Typer(no_args_is_help=True)
 
 plan_executor = PlanExecutor()
-
-
-@app.command("train")
-def train(
-        resume: str = typer.Option(
-            None,
-            "--resume",
-            help="Resume an incomplete train from its recorded source manifest.",
-        )):
-    """Dispatch the ordered, immutable Java build train in cedar-development CI."""
-    raise typer.Exit(code=BuildTrainWorker.dispatch(resume=resume))
 
 
 @app.command("this")

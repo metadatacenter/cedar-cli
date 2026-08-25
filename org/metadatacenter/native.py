@@ -2,14 +2,17 @@ from typing import List, Optional
 
 import typer
 
+from org.metadatacenter import start, stop
 from org.metadatacenter.worker.NativeWorker import NativeWorker
 
 app = typer.Typer(no_args_is_help=True)
+app.add_typer(start.app, name="start", help="Start native CEDAR components.")
+app.add_typer(stop.app, name="stop", help="Stop native CEDAR components.")
 
 
 @app.command("status")
 def status():
-    """Show PID, port, health, binary freshness, and log error counts."""
+    """Show native process health and expected host-port availability."""
     NativeWorker.status()
 
 

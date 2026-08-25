@@ -9,8 +9,16 @@ from org.metadatacenter.worker.DockerWorker import DockerWorker
 app = typer.Typer(no_args_is_help=True)
 app.command("build")(docker_build.build)
 app.add_typer(docker_remove.app, name="remove", help="Remove Docker containers, images, volumes, or network.")
-app.add_typer(docker_start.app, name="start", help="Start a complete deployment or one Compose project.")
-app.add_typer(docker_stop.app, name="stop", help="Stop a complete deployment or one Compose project.")
+app.add_typer(
+    docker_start.app,
+    name="start",
+    help="Start a complete deployment, Compose project, or individual component.",
+)
+app.add_typer(
+    docker_stop.app,
+    name="stop",
+    help="Stop a complete deployment, Compose project, or individual component.",
+)
 
 
 def exit_on_failure(returncode):
@@ -24,27 +32,11 @@ def status(
             None,
             "--mode",
             help="Expected topology. Defaults to the last successful aggregate deployment, then full.",
-        ),
-        include_admin: bool = typer.Option(
-            False,
-            "--include-admin",
-            help="Also require the optional administration containers.",
-        ),
-        legacy_frontends: Optional[bool] = typer.Option(
-            None,
-            "--frontends/--no-frontends",
-            hidden=True,
         )):
     """Check container health and the acceptance checks for the active Docker mode."""
-    if mode is not None and legacy_frontends is not None:
-        raise typer.BadParameter("use --mode or the legacy frontend switch, not both")
-    if legacy_frontends is not None:
-        mode = DockerDeploymentMode.FULL if legacy_frontends else DockerDeploymentMode.BACKEND
     if mode is None:
-        active_mode, active_admin = DockerWorker.active_deployment()
-        mode = active_mode or DockerDeploymentMode.FULL
-        include_admin = include_admin or active_admin
-    if not DockerWorker.status(mode=mode, include_admin=include_admin):
+        mode = DockerWorker.active_deployment() or DockerDeploymentMode.FULL
+    if not DockerWorker.status(mode=mode):
         raise typer.Exit(code=1)
 
 

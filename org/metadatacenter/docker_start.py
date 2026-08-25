@@ -3,6 +3,10 @@ from enum import Enum
 import typer
 from rich.console import Console
 
+from org.metadatacenter.model.DockerComponentTarget import (
+    DockerFrontendTarget,
+    DockerMicroserviceTarget,
+)
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.BuildTrain import DockerTrain
 from org.metadatacenter.worker.DockerWorker import DockerWorker
@@ -28,7 +32,7 @@ PULL = typer.Option(
 MODE = typer.Option(
     ...,
     "--mode",
-    help="Deployment topology: full, hybrid, or backend.",
+    help="Deployment topology: full or hybrid.",
 )
 
 TIMEOUT = typer.Option(
@@ -62,7 +66,7 @@ def resolve_train(train, local, prefer_active=False):
     if local:
         return None
     if prefer_active and not train:
-        active_mode, _ = DockerWorker.active_deployment()
+        active_mode = DockerWorker.active_deployment()
         if active_mode is not None:
             return DockerWorker.active_train()
     try:
@@ -78,25 +82,27 @@ def start_all(
         pull: PullPolicy = PULL,
         timeout: int = TIMEOUT,
         train: str = TRAIN,
-        local: bool = LOCAL,
-        include_admin: bool = typer.Option(
-            False,
-            "--include-admin",
-            help="Also start and require the four optional administration containers.",
-        )):
+        local: bool = LOCAL):
     exit_on_failure(DockerWorker.start_all(
         mode=mode,
         pull=pull.value,
         timeout=timeout,
-        include_admin=include_admin,
         train=resolve_train(train, local),
     ))
 
 
-@app.command("infrastructure", help="Start the seven infrastructure containers.")
+@app.command("infra", help="Start the seven infrastructure containers.")
 def start_infrastructure(detach: bool = DETACH, pull: PullPolicy = PULL,
                          train: str = TRAIN, local: bool = LOCAL):
     exit_on_failure(DockerWorker.start_infrastructure(
+        detach, pull.value, resolve_train(train, local, prefer_active=True)))
+
+
+@app.command("keycloak", help="Start the Keycloak container.")
+@app.command("kk", help="Start the Keycloak container.")
+def start_keycloak(detach: bool = DETACH, pull: PullPolicy = PULL,
+                   train: str = TRAIN, local: bool = LOCAL):
+    exit_on_failure(DockerWorker.start_keycloak(
         detach, pull.value, resolve_train(train, local, prefer_active=True)))
 
 
@@ -107,11 +113,41 @@ def start_microservices(detach: bool = DETACH, pull: PullPolicy = PULL,
         detach, pull.value, resolve_train(train, local, prefer_active=True)))
 
 
+@app.command("microservice", help="Start one Java microservice, or all microservices.")
+def start_microservice(
+        microservice: DockerMicroserviceTarget = typer.Argument(...),
+        detach: bool = DETACH,
+        pull: PullPolicy = PULL,
+        train: str = TRAIN,
+        local: bool = LOCAL):
+    exit_on_failure(DockerWorker.start_microservice(
+        microservice.value,
+        detach,
+        pull.value,
+        resolve_train(train, local, prefer_active=True),
+    ))
+
+
 @app.command("frontends", help="Start all seven frontend containers.")
 def start_frontends(detach: bool = DETACH, pull: PullPolicy = PULL,
                     train: str = TRAIN, local: bool = LOCAL):
     exit_on_failure(DockerWorker.start_frontends(
         detach, pull.value, resolve_train(train, local, prefer_active=True)))
+
+
+@app.command("frontend", help="Start one frontend container, or all frontend containers.")
+def start_frontend(
+        frontend: DockerFrontendTarget = typer.Argument(...),
+        detach: bool = DETACH,
+        pull: PullPolicy = PULL,
+        train: str = TRAIN,
+        local: bool = LOCAL):
+    exit_on_failure(DockerWorker.start_frontend(
+        frontend.value,
+        detach,
+        pull.value,
+        resolve_train(train, local, prefer_active=True),
+    ))
 
 
 @app.command("admin", help="Start the four optional admin-tool containers.")

@@ -32,9 +32,9 @@ class DockerDeploymentTest(unittest.TestCase):
 
     @patch.object(DockerTrain, 'resolve', return_value='2.9.3-dev.20260824.1847')
     @patch.object(DockerWorker, 'start_all', return_value=0)
-    def test_start_all_cli_passes_mode_pull_timeout_and_admin(self, start_all, resolve):
+    def test_start_all_cli_passes_mode_pull_and_timeout(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
-            'all', '--mode', 'hybrid', '--pull', 'missing', '--timeout', '42', '--include-admin',
+            'all', '--mode', 'hybrid', '--pull', 'missing', '--timeout', '42',
         ])
 
         self.assertEqual(0, result.exit_code, result.output)
@@ -42,7 +42,6 @@ class DockerDeploymentTest(unittest.TestCase):
             mode=DockerDeploymentMode.HYBRID,
             pull='missing',
             timeout=42,
-            include_admin=True,
             train='2.9.3-dev.20260824.1847',
         )
         resolve.assert_called_once_with(None)
@@ -51,7 +50,7 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerWorker, 'start_all', return_value=0)
     def test_start_all_local_does_not_resolve_a_published_train(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
-            'all', '--mode', 'backend', '--local',
+            'all', '--mode', 'full', '--local',
         ])
 
         self.assertEqual(0, result.exit_code, result.output)
@@ -61,28 +60,80 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerTrain, 'resolve')
     @patch.object(DockerWorker, 'start_infrastructure', return_value=0)
     @patch.object(DockerWorker, 'active_train', return_value='2.9.3-dev.20260824.1847')
-    @patch.object(DockerWorker, 'active_deployment', return_value=(DockerDeploymentMode.FULL, False))
+    @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.FULL)
     def test_individual_start_preserves_the_active_train(
             self, _active, _active_train, start, resolve):
-        result = self.runner.invoke(docker_start.app, ['infrastructure'])
+        result = self.runner.invoke(docker_start.app, ['infra'])
 
         self.assertEqual(0, result.exit_code, result.output)
         resolve.assert_not_called()
         start.assert_called_once_with(False, 'never', '2.9.3-dev.20260824.1847')
 
-    @patch.object(DockerWorker, 'stop_all', return_value=0)
-    def test_stop_all_cli_passes_admin_selection(self, stop_all):
-        result = self.runner.invoke(docker_stop.app, ['all', '--include-admin'])
+    def test_individual_infrastructure_stack_is_named_infra(self):
+        for command_group in (docker_start.app, docker_stop.app):
+            self.assertEqual(0, self.runner.invoke(command_group, ['infra', '--help']).exit_code)
+            self.assertEqual(2, self.runner.invoke(
+                command_group, ['infrastructure', '--help']).exit_code)
+
+    @patch.object(DockerWorker, 'start_frontend', return_value=0)
+    @patch.object(DockerTrain, 'resolve')
+    def test_individual_frontend_cli_uses_validated_target(self, resolve, start):
+        result = self.runner.invoke(docker_start.app, [
+            'frontend', 'designer', '--local', '--detach',
+        ])
 
         self.assertEqual(0, result.exit_code, result.output)
-        stop_all.assert_called_once_with(include_admin=True)
+        resolve.assert_not_called()
+        start.assert_called_once_with('designer', True, 'never', None)
+
+    @patch.object(DockerWorker, 'stop_microservice', return_value=0)
+    def test_individual_microservice_cli_uses_validated_target(self, stop):
+        result = self.runner.invoke(docker_stop.app, ['microservice', 'open'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        stop.assert_called_once_with('open')
+
+    @patch.object(DockerWorker, 'start_keycloak', return_value=0)
+    @patch.object(DockerTrain, 'resolve')
+    def test_keycloak_start_accepts_long_and_short_names(self, resolve, start):
+        for target in ('keycloak', 'kk'):
+            result = self.runner.invoke(docker_start.app, [target, '--local'])
+            self.assertEqual(0, result.exit_code, result.output)
+
+        resolve.assert_not_called()
+        self.assertEqual(2, start.call_count)
+
+    @patch.object(DockerWorker, 'stop_keycloak', return_value=0)
+    def test_keycloak_stop_accepts_long_and_short_names(self, stop):
+        for target in ('keycloak', 'kk'):
+            result = self.runner.invoke(docker_stop.app, [target])
+            self.assertEqual(0, result.exit_code, result.output)
+
+        self.assertEqual(2, stop.call_count)
 
     @patch.object(DockerWorker, 'status', return_value=True)
     def test_status_cli_accepts_an_explicit_mode(self, status):
-        result = self.runner.invoke(docker.app, ['status', '--mode', 'backend'])
+        result = self.runner.invoke(docker.app, ['status', '--mode', 'hybrid'])
 
         self.assertEqual(0, result.exit_code, result.output)
-        status.assert_called_once_with(mode=DockerDeploymentMode.BACKEND, include_admin=False)
+        status.assert_called_once_with(mode=DockerDeploymentMode.HYBRID)
+
+    def test_include_admin_option_is_not_exposed(self):
+        for command_group, arguments in (
+                (docker_start.app, ['all', '--mode', 'full', '--include-admin']),
+                (docker_stop.app, ['all', '--include-admin']),
+                (docker.app, ['status', '--include-admin'])):
+            result = self.runner.invoke(command_group, arguments)
+            self.assertEqual(2, result.exit_code, result.output)
+
+    def test_backend_mode_is_not_exposed(self):
+        start_result = self.runner.invoke(docker_start.app, [
+            'all', '--mode', 'backend', '--local',
+        ])
+        status_result = self.runner.invoke(docker.app, ['status', '--mode', 'backend'])
+
+        self.assertEqual(2, start_result.exit_code, start_result.output)
+        self.assertEqual(2, status_result.exit_code, status_result.output)
 
     def test_mode_environment_keeps_container_addresses_separate_from_hybrid_upstreams(self):
         with patch.dict(os.environ, deployment_environment(), clear=True):
@@ -144,22 +195,19 @@ class DockerDeploymentTest(unittest.TestCase):
             DockerDeploymentMode.FULL,
             pull='always',
             timeout=90,
-            include_admin=True,
         ))
 
         self.assertEqual([
             call('infrastructure', 'up', detach=True, pull='always', environment={'MODE': 'full'}),
             call('microservices', 'up', detach=True, pull='always', environment={'MODE': 'full'}),
             call('frontends', 'up', detach=True, pull='always', environment={'MODE': 'full'}),
-            call('admin', 'up', detach=True, pull='always', environment={'MODE': 'full'}),
         ], compose.call_args_list)
         self.assertEqual([
             ['infrastructure'],
             ['infrastructure', 'microservices'],
             ['infrastructure', 'microservices', 'frontends'],
-            ['infrastructure', 'microservices', 'frontends', 'admin'],
         ], [entry.args[0] for entry in wait.call_args_list])
-        record.assert_called_once_with(DockerDeploymentMode.FULL, True)
+        record.assert_called_once_with(DockerDeploymentMode.FULL)
 
     @patch.object(DockerWorker, '_record_active_deployment')
     @patch.object(DockerWorker, '_wait_for_acceptance', return_value=True)
@@ -176,13 +224,13 @@ class DockerDeploymentTest(unittest.TestCase):
             call('infrastructure', 'up', detach=True, pull='never', environment={'MODE': 'hybrid'}),
             call('microservices', 'up', detach=True, pull='never', environment={'MODE': 'hybrid'}),
         ], compose.call_args_list)
-        record.assert_called_once_with(DockerDeploymentMode.HYBRID, False)
+        record.assert_called_once_with(DockerDeploymentMode.HYBRID)
 
     @patch.object(DockerWorker, 'compose')
     @patch.object(DockerWorker, 'preflight', return_value=False)
     @patch.object(DockerWorker, 'mode_environment', return_value=({}, []))
     def test_preflight_failure_does_not_change_containers(self, _environment, _preflight, compose):
-        self.assertEqual(1, DockerWorker.start_all(DockerDeploymentMode.BACKEND))
+        self.assertEqual(1, DockerWorker.start_all(DockerDeploymentMode.HYBRID))
         compose.assert_not_called()
 
     @patch.object(DockerWorker, '_port_owned_by_selected_compose_project', return_value=False)
@@ -197,15 +245,14 @@ class DockerDeploymentTest(unittest.TestCase):
 
         self.assertFalse(DockerWorker.preflight(
             DockerDeploymentMode.FULL,
-            include_admin=False,
             environment={},
         ))
 
     @patch.object(DockerWorker, '_clear_active_deployment')
     @patch.object(DockerWorker, 'compose', return_value=0)
     @patch.object(DockerWorker, 'mode_environment', return_value=({}, []))
-    @patch.object(DockerWorker, 'active_deployment', return_value=(DockerDeploymentMode.HYBRID, False))
-    def test_stop_all_uses_reverse_dependency_order_and_preserves_admin_by_default(
+    @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.HYBRID)
+    def test_stop_all_uses_reverse_dependency_order(
             self, _active, _environment, compose, clear):
         self.assertEqual(0, DockerWorker.stop_all())
         self.assertEqual([
@@ -215,37 +262,28 @@ class DockerDeploymentTest(unittest.TestCase):
         ], compose.call_args_list)
         clear.assert_called_once()
 
-    @patch.object(DockerWorker, '_clear_active_deployment')
-    @patch.object(DockerWorker, 'compose', return_value=0)
-    @patch.object(DockerWorker, 'mode_environment', return_value=({}, []))
-    @patch.object(DockerWorker, 'active_deployment', return_value=(DockerDeploymentMode.FULL, True))
-    def test_stop_all_remembers_admin_selected_by_aggregate_start(
-            self, _active, _environment, compose, _clear):
-        self.assertEqual(0, DockerWorker.stop_all())
-        self.assertEqual('admin', compose.call_args_list[0].args[0])
-
     @patch.object(DockerWorker, 'compose')
-    @patch.object(DockerWorker, 'active_deployment', return_value=(DockerDeploymentMode.HYBRID, False))
+    @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.HYBRID)
     def test_individual_frontend_start_cannot_contradict_active_mode(self, _active, compose):
         self.assertEqual(1, DockerWorker.start_frontends(detach=True))
         compose.assert_not_called()
 
     def test_active_deployment_state_round_trips(self):
         with tempfile.TemporaryDirectory() as cedar_home, patch.object(Util, 'cedar_home', cedar_home):
-            DockerWorker._record_active_deployment(DockerDeploymentMode.BACKEND, True)
+            DockerWorker._record_active_deployment(DockerDeploymentMode.HYBRID)
             state_path = DockerWorker._deployment_state_path()
             with open(state_path, 'r', encoding='utf-8') as state_file:
                 self.assertEqual(
-                    {'mode': 'backend', 'include_admin': True},
+                    {'mode': 'hybrid'},
                     json.load(state_file),
                 )
             self.assertEqual(
-                (DockerDeploymentMode.BACKEND, True),
+                DockerDeploymentMode.HYBRID,
                 DockerWorker.active_deployment(),
             )
             self.assertIsNone(DockerWorker.active_train())
             DockerWorker._clear_active_deployment()
-            self.assertEqual((None, False), DockerWorker.active_deployment())
+            self.assertIsNone(DockerWorker.active_deployment())
 
 
 if __name__ == '__main__':

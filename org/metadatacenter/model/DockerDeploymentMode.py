@@ -4,7 +4,6 @@ from enum import Enum
 class DockerDeploymentMode(str, Enum):
     FULL = "full"
     HYBRID = "hybrid"
-    BACKEND = "backend"
 
     @property
     def includes_frontend_containers(self):

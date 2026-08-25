@@ -1,7 +1,6 @@
 import typer
 from typing import List
 
-from org.metadatacenter import clean_maven
 from org.metadatacenter.worker.CertificateWorker import CertificateWorker
 
 app = typer.Typer(no_args_is_help=True)

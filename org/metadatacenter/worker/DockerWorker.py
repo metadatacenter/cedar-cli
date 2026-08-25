@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shlex
 import socket
 import ssl
 import subprocess
@@ -38,6 +39,34 @@ FRONTEND_PUBLIC_HOSTS = (
     'monitoring',
     'bridging',
 )
+
+FRONTEND_COMPOSE_SERVICES = {
+    'main': 'frontend-main',
+    'openview': 'frontend-openview',
+    'monitoring': 'frontend-monitoring',
+    'bridging': 'frontend-bridging',
+    'content': 'frontend-content',
+    'workspace': 'frontend-workspace',
+    'designer': 'frontend-template-designer',
+}
+
+MICROSERVICE_COMPOSE_SERVICES = {
+    'artifact': 'server-artifact',
+    'bridge': 'server-bridge',
+    'group': 'server-group',
+    'impex': 'server-impex',
+    'messaging': 'server-messaging',
+    'monitor': 'server-monitor',
+    'open': 'server-openview',
+    'repo': 'server-repo',
+    'resource': 'server-resource',
+    'schema': 'server-schema',
+    'submission': 'server-submission',
+    'terminology': 'server-terminology',
+    'user': 'server-user',
+    'valuerecommender': 'server-valuerecommender',
+    'worker': 'server-worker',
+}
 
 
 class DockerWorker(Worker):
@@ -200,12 +229,10 @@ exit ${failed}
         return '❌', name, detail
 
     @staticmethod
-    def _stack_names(mode, include_admin=False):
+    def _stack_names(mode):
         names = ['infrastructure', 'microservices']
         if mode.includes_frontend_containers:
             names.append('frontends')
-        if include_admin:
-            names.append('admin')
         return names
 
     @staticmethod
@@ -214,22 +241,22 @@ exit ${failed}
 
     @staticmethod
     def active_deployment():
-        """Return the last aggregate deployment mode and admin selection, if recorded."""
+        """Return the last aggregate deployment mode, if recorded."""
         try:
             with open(DockerWorker._deployment_state_path(), 'r', encoding='utf-8') as state_file:
                 state = json.load(state_file)
-            return DockerDeploymentMode(state['mode']), bool(state.get('include_admin', False))
+            return DockerDeploymentMode(state['mode'])
         except (FileNotFoundError, KeyError, ValueError, TypeError, json.JSONDecodeError):
-            return None, False
+            return None
 
     @staticmethod
-    def _record_active_deployment(mode, include_admin, train=None):
+    def _record_active_deployment(mode, train=None):
         state_path = DockerWorker._deployment_state_path()
         state_directory = os.path.dirname(state_path)
         os.makedirs(state_directory, exist_ok=True)
         temporary_path = state_path + '.tmp'
         with open(temporary_path, 'w', encoding='utf-8') as state_file:
-            state = {'mode': mode.value, 'include_admin': include_admin}
+            state = {'mode': mode.value}
             if train:
                 state['train'] = train
             json.dump(state, state_file, indent=2)
@@ -412,10 +439,8 @@ exit ${failed}
         return errors
 
     @staticmethod
-    def status(mode=DockerDeploymentMode.FULL, include_admin=False, include_frontends=None):
+    def status(mode=DockerDeploymentMode.FULL):
         """Report container health and the acceptance checks selected by the deployment mode."""
-        if include_frontends is not None:
-            mode = DockerDeploymentMode.FULL if include_frontends else DockerDeploymentMode.BACKEND
         if isinstance(mode, str):
             mode = DockerDeploymentMode(mode)
 
@@ -434,7 +459,7 @@ exit ${failed}
         )
 
         snapshot = DockerWorker._container_snapshot(
-            DockerWorker._stack_names(mode, include_admin),
+            DockerWorker._stack_names(mode),
             environment=environment,
         )
         DockerWorker._render_snapshot(snapshot, mode)
@@ -763,7 +788,7 @@ exit ${failed}
         return bool(projects) and projects.issubset(allowed_projects)
 
     @staticmethod
-    def preflight(mode, include_admin, environment):
+    def preflight(mode, environment):
         """Fail before creating containers when the selected deployment cannot start safely."""
         errors = []
         if DockerWorker.validate(environment=environment) != 0:
@@ -784,7 +809,7 @@ exit ${failed}
                         'run cedarcli docker one-time-setup'
                     )
 
-        stack_names = DockerWorker._stack_names(mode, include_admin)
+        stack_names = DockerWorker._stack_names(mode)
         ports, port_errors = DockerWorker._published_ports(stack_names, environment)
         errors.extend(port_errors)
         for port in ports:
@@ -858,7 +883,7 @@ exit ${failed}
         return False
 
     @staticmethod
-    def start_all(mode, pull='never', timeout=600, include_admin=False, train=None):
+    def start_all(mode, pull='never', timeout=600, train=None):
         if isinstance(mode, str):
             mode = DockerDeploymentMode(mode)
         environment, environment_errors = DockerWorker.mode_environment(mode)
@@ -868,7 +893,7 @@ exit ${failed}
             for error in environment_errors:
                 console.print(f'[red]❌ {error}[/red]')
             return 1
-        if not DockerWorker.preflight(mode, include_admin, environment):
+        if not DockerWorker.preflight(mode, environment):
             return 1
 
         deadline = time.monotonic() + timeout
@@ -877,7 +902,7 @@ exit ${failed}
                 return 1
 
         started_stacks = []
-        requested_stacks = DockerWorker._stack_names(mode, include_admin)
+        requested_stacks = DockerWorker._stack_names(mode)
         for stack in requested_stacks:
             if DockerWorker.compose(stack, 'up', detach=True, pull=pull, environment=environment) != 0:
                 return 1
@@ -890,9 +915,9 @@ exit ${failed}
 
         try:
             if train:
-                DockerWorker._record_active_deployment(mode, include_admin, train=train)
+                DockerWorker._record_active_deployment(mode, train=train)
             else:
-                DockerWorker._record_active_deployment(mode, include_admin)
+                DockerWorker._record_active_deployment(mode)
         except OSError as error:
             console.print(
                 '[red]Containers are ready, but the active deployment mode could not be '
@@ -903,18 +928,13 @@ exit ${failed}
         return 0
 
     @staticmethod
-    def stop_all(include_admin=False):
-        active_mode, active_admin = DockerWorker.active_deployment()
-        include_admin = include_admin or active_admin
-        mode = active_mode or DockerDeploymentMode.FULL
+    def stop_all():
+        mode = DockerWorker.active_deployment() or DockerDeploymentMode.FULL
         environment, errors = DockerWorker.mode_environment(mode)
         if errors:
             environment = os.environ.copy()
 
-        stacks = []
-        if include_admin:
-            stacks.append('admin')
-        stacks.extend(['frontends', 'microservices', 'infrastructure'])
+        stacks = ['frontends', 'microservices', 'infrastructure']
         first_failure = 0
         for stack in stacks:
             returncode = DockerWorker.compose(stack, 'down', environment=environment)
@@ -925,9 +945,9 @@ exit ${failed}
         return first_failure
 
     @staticmethod
-    def compose(stack, action, detach=False, pull=None, environment=None):
+    def compose(stack, action, detach=False, pull=None, environment=None, services=()):
         if environment is None:
-            active_mode, _ = DockerWorker.active_deployment()
+            active_mode = DockerWorker.active_deployment()
             if active_mode is not None:
                 active_environment, errors = DockerWorker.mode_environment(active_mode)
                 if not errors:
@@ -941,6 +961,8 @@ exit ${failed}
             command += ' -d'
         if action == 'up' and pull:
             command += f' --pull {pull}'
+        if services:
+            command += ' ' + ' '.join(shlex.quote(service) for service in services)
         output = Worker.execute_generic_shell_commands(
             [command],
             title=("Starting" if action == 'up' else "Stopping") + " CEDAR " + label,
@@ -957,16 +979,47 @@ exit ${failed}
         return DockerWorker.compose(stack, 'up', detach, pull, environment=environment)
 
     @staticmethod
+    def _individual_service_start(stack, service, detach=False, pull='never', train=None):
+        environment = os.environ.copy()
+        if train:
+            environment['CEDAR_DOCKER_VERSION'] = train
+        return DockerWorker.compose(
+            stack,
+            'up',
+            detach,
+            pull,
+            environment=environment,
+            services=(service,),
+        )
+
+    @staticmethod
     def start_infrastructure(detach=False, pull='never', train=None):
         return DockerWorker._individual_start('infrastructure', detach, pull, train)
+
+    @staticmethod
+    def start_keycloak(detach=False, pull='never', train=None):
+        return DockerWorker._individual_service_start(
+            'infrastructure', 'keycloak', detach, pull, train)
 
     @staticmethod
     def start_microservices(detach=False, pull='never', train=None):
         return DockerWorker._individual_start('microservices', detach, pull, train)
 
     @staticmethod
+    def start_microservice(microservice, detach=False, pull='never', train=None):
+        if microservice == 'all':
+            return DockerWorker.start_microservices(detach, pull, train)
+        return DockerWorker._individual_service_start(
+            'microservices',
+            MICROSERVICE_COMPOSE_SERVICES[microservice],
+            detach,
+            pull,
+            train,
+        )
+
+    @staticmethod
     def start_frontends(detach=False, pull='never', train=None):
-        active_mode, _ = DockerWorker.active_deployment()
+        active_mode = DockerWorker.active_deployment()
         if active_mode is not None and not active_mode.includes_frontend_containers:
             console.print(
                 f'[red]The active Docker mode is {active_mode.value}; switch with '
@@ -974,6 +1027,25 @@ exit ${failed}
             )
             return 1
         return DockerWorker._individual_start('frontends', detach, pull, train)
+
+    @staticmethod
+    def start_frontend(frontend, detach=False, pull='never', train=None):
+        if frontend == 'all':
+            return DockerWorker.start_frontends(detach, pull, train)
+        active_mode = DockerWorker.active_deployment()
+        if active_mode is not None and not active_mode.includes_frontend_containers:
+            console.print(
+                f'[red]The active Docker mode is {active_mode.value}; switch with '
+                'cedarcli docker start all --mode full instead.[/red]'
+            )
+            return 1
+        return DockerWorker._individual_service_start(
+            'frontends',
+            FRONTEND_COMPOSE_SERVICES[frontend],
+            detach,
+            pull,
+            train,
+        )
 
     @staticmethod
     def start_admin(detach=False, pull='never', train=None):
@@ -984,12 +1056,36 @@ exit ${failed}
         return DockerWorker.compose('infrastructure', 'down')
 
     @staticmethod
+    def stop_keycloak():
+        return DockerWorker.compose('infrastructure', 'stop', services=('keycloak',))
+
+    @staticmethod
     def stop_microservices():
         return DockerWorker.compose('microservices', 'down')
 
     @staticmethod
+    def stop_microservice(microservice):
+        if microservice == 'all':
+            return DockerWorker.stop_microservices()
+        return DockerWorker.compose(
+            'microservices',
+            'stop',
+            services=(MICROSERVICE_COMPOSE_SERVICES[microservice],),
+        )
+
+    @staticmethod
     def stop_frontends():
         return DockerWorker.compose('frontends', 'down')
+
+    @staticmethod
+    def stop_frontend(frontend):
+        if frontend == 'all':
+            return DockerWorker.stop_frontends()
+        return DockerWorker.compose(
+            'frontends',
+            'stop',
+            services=(FRONTEND_COMPOSE_SERVICES[frontend],),
+        )
 
     @staticmethod
     def stop_admin():
