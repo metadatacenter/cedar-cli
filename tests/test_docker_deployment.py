@@ -279,8 +279,9 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerWorker, 'compose', return_value=0)
     @patch.object(DockerWorker, 'mode_environment', return_value=({}, []))
     @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.HYBRID)
+    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
     def test_stop_all_uses_reverse_dependency_order(
-            self, _active, _environment, compose, clear):
+            self, _daemon, _active, _environment, compose, clear):
         self.assertEqual(0, DockerWorker.stop_all(DockerDeploymentMode.HYBRID))
         self.assertEqual([
             call('frontends', 'down', environment={}),
@@ -288,6 +289,13 @@ class DockerDeploymentTest(unittest.TestCase):
             call('infrastructure', 'down', environment={}),
         ], compose.call_args_list)
         clear.assert_called_once()
+
+    @patch.object(DockerWorker, 'compose')
+    @patch.object(
+        DockerWorker, '_docker_server_version', return_value=(None, 'daemon unavailable'))
+    def test_stop_all_reports_an_unavailable_daemon_once(self, _daemon, compose):
+        self.assertEqual(1, DockerWorker.stop_all(DockerDeploymentMode.FULL))
+        compose.assert_not_called()
 
     @patch.object(DockerWorker, 'compose')
     @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.HYBRID)

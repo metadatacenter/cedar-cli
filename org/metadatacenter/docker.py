@@ -10,9 +10,11 @@ console = Console()
 
 
 @app.callback()
-def require_docker_mode():
+def require_docker_mode(ctx: typer.Context):
     try:
-        ModeManager.require_surface("docker")
+        # Cleanup must remain available when the recorded deployment and selected mode disagree.
+        ModeManager.require_surface(
+            "docker", check_runtime=ctx.invoked_subcommand != "stop")
     except ModeError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1)

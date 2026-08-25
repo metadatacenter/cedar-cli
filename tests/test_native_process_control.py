@@ -1,4 +1,6 @@
+import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from typer.testing import CliRunner
@@ -166,6 +168,58 @@ class NativeProcessControlTest(unittest.TestCase):
         self.assertIn("cedar-services.sh status", command)
         host_status.assert_called_once_with()
         self.assertIs(result, execute.return_value)
+
+    def test_infrastructure_inventory_excludes_docker_port_forwarders(self):
+        controller = (
+            Path(__file__).resolve().parents[2]
+            / "cedar-development" / "ops" / "cedar-services.sh"
+        )
+        script = f'''\
+export CEDAR_SERVICES_LIBRARY_ONLY=true
+export CEDAR_SERVICES_INSPECT_ONLY=true
+source "{controller}"
+port_owners() {{
+  case "$1" in
+    80) echo 101 ;;
+    443) echo 202 ;;
+  esac
+}}
+process_command() {{
+  case "$1" in
+    101) echo '/opt/homebrew/opt/nginx/bin/nginx' ;;
+    202) echo '/Applications/Docker.app/Contents/MacOS/com.docker.backend' ;;
+  esac
+}}
+port_open() {{ return 1; }}
+running_infrastructure
+'''
+        result = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=False)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("nginx-http (port 80, pid 101)\n", result.stdout)
+
+    def test_native_inventory_checks_every_listener_on_a_service_port(self):
+        controller = (
+            Path(__file__).resolve().parents[2]
+            / "cedar-development" / "ops" / "cedar-services.sh"
+        )
+        script = f'''\
+export CEDAR_SERVICES_LIBRARY_ONLY=true
+export CEDAR_SERVICES_INSPECT_ONLY=true
+source "{controller}"
+pidfile() {{ echo /does/not/exist; }}
+app_port() {{ echo 9009; }}
+names() {{ echo group; }}
+port_owners() {{ printf '101\\n202\\n'; }}
+is_service_process() {{ [ "$2" = 202 ]; }}
+running
+'''
+        result = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=False)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("group\n", result.stdout)
 
 
 if __name__ == "__main__":

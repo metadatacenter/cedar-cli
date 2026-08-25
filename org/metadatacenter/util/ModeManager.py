@@ -89,23 +89,71 @@ class ModeManager:
         os.replace(temporary, path)
 
     @classmethod
-    def clear(cls):
+    def clear(cls, force=False):
         current = cls.require_mode()
+        cls.require_selected_services_stopped(current)
+        deployment_record_cleared = False
         if current in (CedarMode.HYBRID, CedarMode.DOCKER):
             from org.metadatacenter.worker.DockerWorker import DockerWorker
 
-            if (
-                    DockerWorker.active_deployment() is not None
-                    or DockerWorker.running_compose_projects()
-            ):
+            _version, daemon_error = DockerWorker._docker_server_version()
+            projects = set() if daemon_error else DockerWorker.running_compose_projects()
+            if projects:
+                cleanup = []
+                if projects.difference({"cedar-admin"}):
+                    cleanup.append("cedarcli docker stop all")
+                if "cedar-admin" in projects:
+                    cleanup.append("cedarcli docker stop admin")
                 raise ModeError(
-                    "The Docker deployment is still active; run cedarcli docker stop all "
-                    "before clearing the mode"
+                    "CEDAR Docker projects are still running: "
+                    f"{', '.join(sorted(projects))}; run {' and '.join(cleanup)} "
+                    "before clearing the mode. --force cannot bypass running containers"
                 )
+            if daemon_error and not force:
+                raise ModeError(
+                    "Docker is unavailable, so cedarcli cannot confirm that the deployment "
+                    "is stopped. Start Docker and run cedarcli docker stop all, or use "
+                    "cedarcli mode --clear --force if Docker has deliberately been shut down"
+                )
+            if DockerWorker.active_deployment() is not None:
+                DockerWorker._clear_active_deployment()
+                deployment_record_cleared = True
         try:
             cls.state_path().unlink()
         except FileNotFoundError:
             raise ModeError("CEDAR mode is not set")
+        return deployment_record_cleared
+
+    @classmethod
+    def require_selected_services_stopped(cls, mode: CedarMode):
+        """Do not discard the only CLI mode capable of stopping its native processes."""
+        if mode is CedarMode.NATIVE:
+            running_native = cls.running_native_services()
+            if running_native:
+                raise ModeError(
+                    "Native CEDAR applications are still running: "
+                    f"{', '.join(sorted(running_native))}; run cedarcli native stop all "
+                    "before clearing the mode"
+                )
+            listeners = cls.host_infrastructure_listeners()
+            if listeners:
+                raise ModeError(
+                    "Native infrastructure is still listening on CEDAR host ports: "
+                    f"{', '.join(sorted(listeners))}; run cedarcli native stop infra "
+                    "before clearing the mode"
+                )
+        elif mode is CedarMode.HYBRID:
+            from org.metadatacenter.worker.NativeWorker import NativeWorker
+
+            running_native = cls.running_native_services()
+            frontends = running_native.intersection(NativeWorker.FRONTENDS)
+            if frontends:
+                raise ModeError(
+                    "Native frontend services are still running: "
+                    f"{', '.join(sorted(frontends))}; run cedarcli native stop frontends "
+                    "before clearing hybrid mode"
+                )
+        return mode
 
     @classmethod
     def profile_environment(cls, surface: str, mode: CedarMode = None):
@@ -186,8 +234,8 @@ class ModeManager:
         return environment
 
     @classmethod
-    def apply_profile(cls, surface: str):
-        mode = cls.require_surface(surface)
+    def apply_profile(cls, surface: str, check_runtime=True):
+        mode = cls.require_surface(surface, check_runtime=check_runtime)
         os.environ.update(cls.profile_environment(surface, mode))
         return mode
 
@@ -201,9 +249,10 @@ class ModeManager:
         return mode
 
     @classmethod
-    def require_surface(cls, surface: str):
+    def require_surface(cls, surface: str, check_runtime=True):
         mode = cls.require_mode()
-        cls.require_runtime_compatible(mode)
+        if check_runtime:
+            cls.require_runtime_compatible(mode)
         allowed = {
             CedarMode.NATIVE: {"native"},
             CedarMode.HYBRID: {"native", "docker"},
@@ -247,11 +296,16 @@ class ModeManager:
                 f"Configured CEDAR mode {configured} conflicts with the active Docker "
                 f"deployment ({recorded}); stop the recorded deployment before changing mode"
             )
+        if mode is CedarMode.HYBRID and "cedar-frontend" in projects:
+            raise ModeError(
+                "CEDAR mode is hybrid, but Docker frontend containers are still running; "
+                "run cedarcli docker stop frontends before using the hybrid deployment"
+            )
         return mode
 
     @classmethod
     def require_docker_start_compatible(cls, mode: CedarMode):
-        """Reject Docker starts that would collide with verified native CEDAR processes."""
+        """Reject Docker starts that would collide with verified native host processes."""
         if mode is CedarMode.NATIVE:
             return mode
         running_native = cls.running_native_services()
@@ -269,6 +323,13 @@ class ModeManager:
                     "Native backend services are still running: "
                     f"{', '.join(sorted(native_backends))}; hybrid requires the Docker backend"
                 )
+        listeners = cls.host_infrastructure_listeners()
+        if listeners:
+            raise ModeError(
+                "Host infrastructure is still listening on Docker-required ports: "
+                f"{', '.join(sorted(listeners))}; stop the native infrastructure before "
+                "starting the Docker backend"
+            )
         return mode
 
     @classmethod
@@ -292,6 +353,31 @@ class ModeManager:
             detail = result.stderr.strip()
             raise ModeError(
                 "Could not inspect native CEDAR processes"
+                + (f": {detail}" if detail else "")
+            )
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+    @classmethod
+    def host_infrastructure_listeners(cls):
+        controller = cls.cedar_home() / "cedar-development" / "ops" / "cedar-services.sh"
+        if not controller.is_file():
+            return set()
+        environment = {
+            **os.environ,
+            "CEDAR_HOME": str(cls.cedar_home()),
+            "CEDAR_SERVICES_INSPECT_ONLY": "true",
+        }
+        result = subprocess.run(
+            [str(controller), "running-infra"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            detail = result.stderr.strip()
+            raise ModeError(
+                "Could not inspect native CEDAR infrastructure"
                 + (f": {detail}" if detail else "")
             )
         return {line.strip() for line in result.stdout.splitlines() if line.strip()}
@@ -321,18 +407,18 @@ class ModeManager:
 
     @classmethod
     def require_docker_frontends(cls, operation: str):
-        mode = cls.require_surface("docker")
-        if mode is CedarMode.HYBRID:
+        mode = cls.require_surface("docker", check_runtime=operation != "stop")
+        if mode is CedarMode.HYBRID and operation != "stop":
             raise ModeError(
                 f"CEDAR mode is hybrid; Docker frontend {operation} is not allowed"
             )
         return mode
 
     @classmethod
-    def docker_topology(cls):
+    def docker_topology(cls, check_runtime=True):
         from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 
-        mode = cls.require_surface("docker")
+        mode = cls.require_surface("docker", check_runtime=check_runtime)
         return (
             DockerDeploymentMode.HYBRID
             if mode is CedarMode.HYBRID
@@ -395,7 +481,8 @@ class ModeManager:
             return
         surface = arguments[0]
         if surface in ("native", "docker"):
-            cls.apply_profile(surface)
+            cleanup = len(arguments) > 1 and arguments[1] == "stop"
+            cls.apply_profile(surface, check_runtime=not cleanup)
             return
         if surface == "mode":
             return

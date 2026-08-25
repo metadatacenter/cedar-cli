@@ -46,8 +46,20 @@ Select one persistent deployment mode before using either command surface. Selec
 required profiles and starts nothing. It is deliberately a one-time operation: stop the current
 deployment and run `cedarcli mode --clear` before selecting a different mode.
 The CLI checks the actual runtime as well as the saved choice: native operations stop before touching
-a recorded or running Compose deployment, Docker starts reject verified native services, and hybrid
-Docker starts permit native frontends but reject native backend processes.
+a recorded or running Compose deployment, Docker starts reject verified native applications and
+host infrastructure listeners, and hybrid Docker starts permit native frontends but reject native
+backend processes. It also detects a leftover Docker frontend project in hybrid mode.
+
+Clearing a mode does not abandon processes that only that mode is expected to manage. Native mode
+must have its applications and infrastructure stopped first; hybrid must have its native frontends
+and Docker projects stopped; and Docker must have its Docker projects stopped. Stop commands on the
+selected command surface remain available when saved state and the runtime disagree, so those
+conflicts can be cleaned up safely.
+
+If Docker has deliberately been shut down before `cedarcli docker stop all`, the daemon cannot
+confirm teardown. `cedarcli mode --clear --force` discards the inactive Docker deployment record in
+that recovery case. It does not stop containers and refuses to bypass Compose projects while the
+daemon is running.
 
 ```bash
 cedarcli mode native        # complete host-based stack
@@ -95,8 +107,10 @@ cedarcli docker start all
 
 `cedarcli docker status` applies the configured container and route expectations without another
 option. Administration containers are managed separately with the `admin` target. Native mode
-rejects every Docker command, Docker mode rejects every native command, and hybrid rejects native
-backend and Docker-frontend lifecycle operations.
+rejects Docker operations, Docker mode rejects native operations, and hybrid rejects native backend
+operations and Docker frontend starts. Stop is the deliberate exception: the selected command
+surface can stop stale components even when the runtime is inconsistent, and hybrid can stop
+leftover Docker frontends.
 
 Starts default to `--pull never`, which uses local images and fails if one is absent. Use
 `--pull missing` to fetch only absent images or `--pull always` to refresh every image from its
@@ -110,8 +124,8 @@ cedarcli docker stop all
 
 Individual `start` and `stop` commands remain available for troubleshooting. When an aggregate mode
 is active, recreating infrastructure through those commands preserves its nginx routing. Starting
-the Docker frontend project while `hybrid` is active is refused; stop both tiers, clear the mode,
-and select `docker` instead.
+the Docker frontend project while `hybrid` is active is refused. Stopping that project is allowed so
+an accidental or leftover full-Docker frontend tier can be removed before continuing.
 
 ## Immutable development build trains
 

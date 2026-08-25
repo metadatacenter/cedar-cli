@@ -19,6 +19,11 @@ def mode(
             "--clear",
             help="Clear the configured mode after its managed services have been stopped.",
         ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="With --clear, discard Docker state when the Docker daemon is unavailable.",
+        ),
 ):
     """Show, configure, or clear the persistent CEDAR deployment mode."""
     try:
@@ -26,9 +31,13 @@ def mode(
             if selected is not None:
                 raise ModeError("Use a mode value or --clear, not both")
             previous = ModeManager.require_mode()
-            ModeManager.clear()
-            console.print(f"CEDAR mode cleared (was {previous.value}).")
+            discarded = ModeManager.clear(force=force)
+            detail = "; inactive Docker deployment record discarded" if discarded else ""
+            console.print(f"CEDAR mode cleared (was {previous.value}{detail}).")
             return
+
+        if force:
+            raise ModeError("--force is valid only with --clear")
 
         if selected is None:
             current = ModeManager.current()
@@ -43,4 +52,3 @@ def mode(
     except ModeError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1)
-

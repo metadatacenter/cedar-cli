@@ -14,9 +14,12 @@ console = Console()
 
 
 @app.callback()
-def require_native_mode():
+def require_native_mode(ctx: typer.Context):
     try:
-        ModeManager.require_surface("native")
+        # Stop remains available when stale Docker state makes the selected native topology
+        # inconsistent. The hardened native controller only terminates verified CEDAR processes.
+        ModeManager.require_surface(
+            "native", check_runtime=ctx.invoked_subcommand != "stop")
     except ModeError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1)

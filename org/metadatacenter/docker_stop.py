@@ -15,7 +15,7 @@ console = Console()
 @app.callback()
 def require_docker_mode():
     try:
-        ModeManager.require_surface("docker")
+        ModeManager.require_surface("docker", check_runtime=False)
     except ModeError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1)
@@ -28,7 +28,7 @@ def exit_on_failure(returncode):
 
 @app.command("all", help="Stop the active Docker deployment without removing named data volumes.")
 def stop_all():
-    exit_on_failure(DockerWorker.stop_all(ModeManager.docker_topology()))
+    exit_on_failure(DockerWorker.stop_all())
 
 
 @app.command("infra", help="Stop the infrastructure Compose project.")
@@ -54,21 +54,11 @@ def stop_microservice(microservice: DockerMicroserviceTarget = typer.Argument(..
 
 @app.command("frontends", help="Stop the seven-frontend Compose project.")
 def stop_frontends():
-    try:
-        ModeManager.require_docker_frontends("stop")
-    except ModeError as error:
-        console.print(f"[red]{error}[/red]")
-        raise typer.Exit(code=1)
     exit_on_failure(DockerWorker.stop_frontends())
 
 
 @app.command("frontend", help="Stop one frontend container, or all frontend containers.")
 def stop_frontend(frontend: DockerFrontendTarget = typer.Argument(...)):
-    try:
-        ModeManager.require_docker_frontends("stop")
-    except ModeError as error:
-        console.print(f"[red]{error}[/red]")
-        raise typer.Exit(code=1)
     exit_on_failure(DockerWorker.stop_frontend(frontend.value))
 
 

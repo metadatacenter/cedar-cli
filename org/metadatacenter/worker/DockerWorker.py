@@ -129,6 +129,7 @@ exit ${failed}
         ],
             title="Validating CEDAR compose stacks",
             env=validation_environment,
+            show_command=False,
         )
         return output.returncode
 
@@ -958,6 +959,14 @@ exit ${failed}
 
     @staticmethod
     def stop_all(mode=None):
+        _version, daemon_error = DockerWorker._docker_server_version()
+        if daemon_error:
+            console.print(
+                "[red]Docker is unavailable; no Compose project was changed.[/red]\n"
+                "Start Docker and retry, or use cedarcli mode --clear --force if Docker "
+                "has deliberately been shut down."
+            )
+            return 1
         mode = mode or DockerWorker.active_deployment() or DockerDeploymentMode.FULL
         if isinstance(mode, str):
             mode = DockerDeploymentMode(mode)

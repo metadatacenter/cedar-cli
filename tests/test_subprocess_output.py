@@ -61,6 +61,22 @@ class SubprocessOutputTest(unittest.TestCase):
         worker_console.print.assert_any_call("first line", markup=False)
         worker_console.print.assert_any_call("second line", markup=False)
 
+    @patch("org.metadatacenter.worker.Worker.console")
+    @patch("org.metadatacenter.worker.Worker.subprocess.Popen")
+    def test_generic_worker_can_hide_an_inline_implementation(self, popen, worker_console):
+        popen.return_value = self.process_with_output(b"OK   cedar-infrastructure\n")
+
+        Worker.execute_generic_shell_commands(
+            ["several\nlines\nof shell"],
+            "Validating CEDAR compose stacks",
+            show_command=False,
+        )
+
+        worker_console.print.assert_any_call(
+            "[yellow]Validating CEDAR compose stacks[/yellow]")
+        rendered = " ".join(str(call) for call in worker_console.print.call_args_list)
+        self.assertNotIn("several", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

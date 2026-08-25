@@ -17,7 +17,7 @@ console = Console()
 @app.callback()
 def require_allowed_native_stop(ctx: typer.Context):
     try:
-        mode = ModeManager.require_surface("native")
+        mode = ModeManager.require_surface("native", check_runtime=False)
         if mode is CedarMode.HYBRID and ctx.invoked_subcommand not in ("frontends", "frontend"):
             raise ModeError(
                 f"CEDAR mode is hybrid; native stop {ctx.invoked_subcommand} would operate on the Docker backend"
