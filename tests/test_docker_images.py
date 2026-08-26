@@ -32,7 +32,7 @@ class DockerImagesTest(unittest.TestCase):
     @patch.object(DockerImages, 'resolve', side_effect=lambda target: [target])
     @patch.object(ModeManager, 'require_surface', return_value=CedarMode.DOCKER)
     def test_cli_build_accepts_shared_targets_and_images(
-            self, _surface, resolve, _dependencies, _build):
+            self, surface, resolve, _dependencies, _build):
         runner = CliRunner()
 
         for arguments, expected in (
@@ -43,6 +43,7 @@ class DockerImagesTest(unittest.TestCase):
                 result = runner.invoke(docker.app, arguments)
                 self.assertEqual(0, result.exit_code, result.output)
                 self.assertEqual(expected, resolve.call_args.args[0])
+        surface.assert_not_called()
 
     @patch.object(DockerImages, 'image_prefix', return_value='metadatacenter')
     @patch.object(DockerImages, '_manifest_path', return_value=str(

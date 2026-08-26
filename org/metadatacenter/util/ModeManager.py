@@ -480,6 +480,11 @@ class ModeManager:
         if not arguments or "--help" in arguments or "-h" in arguments:
             return
         surface = arguments[0]
+        # Image builds consume only cedar-docker-build's manifest and explicit environment values;
+        # they neither inspect nor mutate a deployment. Keeping them profile-free lets immutable
+        # train jobs build from their pinned CLI and Docker-builder checkouts in a clean workspace.
+        if surface == "docker" and len(arguments) > 1 and arguments[1] == "build":
+            return
         if surface in ("native", "docker"):
             cleanup = len(arguments) > 1 and arguments[1] == "stop"
             cls.apply_profile(surface, check_runtime=not cleanup)

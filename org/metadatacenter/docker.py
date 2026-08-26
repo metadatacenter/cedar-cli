@@ -11,6 +11,11 @@ console = Console()
 
 @app.callback()
 def require_docker_mode(ctx: typer.Context):
+    # Building an image is independent of the selected runtime topology. In particular, immutable
+    # train jobs run in a clean workspace with no deployment profile or persistent mode. Runtime,
+    # setup, validation, and removal commands remain behind the normal Docker-mode safety gate.
+    if ctx.invoked_subcommand == "build":
+        return
     try:
         # Cleanup must remain available when the recorded deployment and selected mode disagree.
         ModeManager.require_surface(

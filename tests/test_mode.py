@@ -352,6 +352,12 @@ class ModeRuntimeSafetyTest(unittest.TestCase):
 
         apply_profile.assert_called_once_with("docker", check_runtime=True)
 
+    @patch.object(ModeManager, "apply_profile")
+    def test_bootstrap_does_not_require_a_deployment_profile_for_image_builds(self, apply_profile):
+        ModeManager.bootstrap(["docker", "build", "cedar-java", "--train", "2.9.3-dev.20260826.0606"])
+
+        apply_profile.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
