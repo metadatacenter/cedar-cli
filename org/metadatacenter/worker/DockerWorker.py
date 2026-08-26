@@ -13,6 +13,8 @@ from rich.console import Console
 from rich.table import Table
 
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
+from org.metadatacenter.util.BuildTrain import DockerTrain
+from org.metadatacenter.util.DockerImages import DockerImages
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
@@ -87,6 +89,26 @@ STATUS_SERVICE_ORDER = {
         'admin-tool',
     ),
 }
+
+MICROSERVICE_WRITABLE_VOLUMES = (
+    'log_artifact',
+    'log_bridge',
+    'log_group',
+    'log_impex',
+    'log_messaging',
+    'log_monitor',
+    'log_openview',
+    'log_repo',
+    'log_resource',
+    'log_schema',
+    'log_submission',
+    'log_terminology',
+    'log_user',
+    'log_valuerecommender',
+    'log_worker',
+    'resource_state',
+    'terminology_data',
+)
 
 
 class DockerWorker(Worker):
@@ -178,6 +200,118 @@ exit ${failed}
         if result.returncode != 0:
             return None, result.stderr.strip() or 'Docker daemon is unavailable'
         return result.stdout.strip(), None
+
+    @staticmethod
+    def _train_image_names(stack, services=()):
+        selected = tuple(services) if services else STATUS_SERVICE_ORDER[stack]
+        names = []
+        for service in selected:
+            if stack == 'infrastructure':
+                names.append(f'cedar-infra-{service}')
+            elif stack == 'microservices':
+                names.append(f'cedar-{service}')
+            elif stack == 'frontends':
+                names.append(f'cedar-{service}')
+        return names
+
+    @staticmethod
+    def _inspect_image(reference):
+        result = DockerWorker._docker_command(['image', 'inspect', reference])
+        if result.returncode != 0:
+            return None, result.stderr.strip() or f'{reference} is not present locally'
+        try:
+            inspected = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            return None, f'Could not parse docker image inspect for {reference}: {error}'
+        if not isinstance(inspected, list) or len(inspected) != 1:
+            return None, f'docker image inspect returned an invalid result for {reference}'
+        return inspected[0], None
+
+    @staticmethod
+    def _prepare_train_images(train, stack_names, pull, environment, services_by_stack=None):
+        services_by_stack = services_by_stack or {}
+        try:
+            completion = DockerTrain.completion(train)
+        except ValueError as error:
+            console.print(f'[red]❌ {error}[/red]')
+            return False
+        inventory = {entry['image']: entry for entry in completion['images']}
+        required = []
+        for stack in stack_names:
+            required.extend(DockerWorker._train_image_names(
+                stack, services_by_stack.get(stack, ())))
+
+        for image in required:
+            record = inventory.get(image)
+            if record is None:
+                console.print(
+                    f'[red]❌ Docker completion record for {train} does not contain {image}.[/red]'
+                )
+                return False
+            expected_reference = DockerImages.reference(image, train, environment)
+            if record['reference'] != expected_reference:
+                console.print(
+                    f'[red]❌ {image} is configured as {expected_reference}, but the completed '
+                    f'train records {record["reference"]}.[/red]'
+                )
+                return False
+
+            inspected, inspect_error = DockerWorker._inspect_image(expected_reference)
+            should_pull = pull == 'always' or (pull == 'missing' and inspected is None)
+            if should_pull:
+                result = DockerWorker._docker_command(['pull', expected_reference])
+                if result.returncode != 0:
+                    console.print(
+                        f'[red]❌ Could not pull {expected_reference}: '
+                        f'{result.stderr.strip() or result.stdout.strip()}[/red]'
+                    )
+                    return False
+                inspected, inspect_error = DockerWorker._inspect_image(expected_reference)
+            if inspected is None:
+                console.print(f'[red]❌ {inspect_error}[/red]')
+                return False
+
+            repository = expected_reference.rsplit(':', 1)[0]
+            expected_digest = f'{repository}@{record["digest"]}'
+            if expected_digest not in inspected.get('RepoDigests', []):
+                console.print(
+                    f'[red]❌ {expected_reference} is not the completed train image '
+                    f'{expected_digest}. Refusing to start it.[/red]'
+                )
+                return False
+        console.print(
+            f'[green]Verified {len(required)} local image digests for Docker train {train}.[/green]'
+        )
+        return True
+
+    @staticmethod
+    def _prepare_microservice_volumes(reference):
+        for volume in MICROSERVICE_WRITABLE_VOLUMES:
+            create = DockerWorker._docker_command(['volume', 'create', volume])
+            if create.returncode != 0:
+                console.print(
+                    f'[red]❌ Could not create or inspect volume {volume}: '
+                    f'{create.stderr.strip()}[/red]'
+                )
+                return False
+            result = DockerWorker._docker_command([
+                'run', '--rm', '--pull=never', '--user', '0:0', '--entrypoint', '/bin/sh',
+                '--volume', f'{volume}:/volume', reference,
+                '-c',
+                'owner=$(stat -c %u:%g /volume); '
+                'if [ "$owner" != "10001:10001" ] || '
+                '[ ! -e /volume/.cedar-owner-10001 ]; then '
+                'chown -R 10001:10001 /volume && '
+                'touch /volume/.cedar-owner-10001 && '
+                'chown 10001:10001 /volume/.cedar-owner-10001; fi',
+            ])
+            if result.returncode != 0:
+                console.print(
+                    f'[red]❌ Could not prepare volume {volume} for the CEDAR service user: '
+                    f'{result.stderr.strip() or result.stdout.strip()}[/red]'
+                )
+                return False
+        return True
 
     @staticmethod
     def _expected_compose_services(stack_directory, environment=None):
@@ -970,15 +1104,31 @@ exit ${failed}
         if not DockerWorker.preflight(mode, environment):
             return 1
 
+        requested_stacks = DockerWorker._stack_names(mode)
+        compose_pull = pull
+        if train:
+            if not DockerWorker._prepare_train_images(
+                    train, requested_stacks, pull, environment):
+                return 1
+            # Pulling is complete and the local tags have been matched to the completion record.
+            # Do not give Compose a chance to resolve the tags again between verification and start.
+            compose_pull = 'never'
+        if 'microservices' in requested_stacks:
+            artifact_version = train or DockerImages.manifest(environment)[1]
+            artifact_reference = DockerImages.reference(
+                'cedar-server-artifact', artifact_version, environment)
+            if not DockerWorker._prepare_microservice_volumes(artifact_reference):
+                return 1
+
         deadline = time.monotonic() + timeout
         if not mode.includes_frontend_containers:
             if DockerWorker.compose('frontends', 'down', environment=environment) != 0:
                 return 1
 
         started_stacks = []
-        requested_stacks = DockerWorker._stack_names(mode)
         for stack in requested_stacks:
-            if DockerWorker.compose(stack, 'up', detach=True, pull=pull, environment=environment) != 0:
+            if DockerWorker.compose(
+                    stack, 'up', detach=True, pull=compose_pull, environment=environment) != 0:
                 return 1
             started_stacks.append(stack)
             if not DockerWorker._wait_for_stacks(list(started_stacks), deadline, mode, environment):
@@ -1061,6 +1211,15 @@ exit ${failed}
         environment = os.environ.copy()
         if train:
             environment['CEDAR_DOCKER_VERSION'] = train
+            if not DockerWorker._prepare_train_images(train, [stack], pull, environment):
+                return 1
+            pull = 'never'
+        if stack == 'microservices':
+            artifact_version = train or DockerImages.manifest(environment)[1]
+            artifact_reference = DockerImages.reference(
+                'cedar-server-artifact', artifact_version, environment)
+            if not DockerWorker._prepare_microservice_volumes(artifact_reference):
+                return 1
         return DockerWorker.compose(stack, 'up', detach, pull, environment=environment)
 
     @staticmethod
@@ -1068,6 +1227,16 @@ exit ${failed}
         environment = os.environ.copy()
         if train:
             environment['CEDAR_DOCKER_VERSION'] = train
+            if not DockerWorker._prepare_train_images(
+                    train, [stack], pull, environment, {stack: (service,)}):
+                return 1
+            pull = 'never'
+        if stack == 'microservices':
+            artifact_version = train or DockerImages.manifest(environment)[1]
+            artifact_reference = DockerImages.reference(
+                f'cedar-{service}', artifact_version, environment)
+            if not DockerWorker._prepare_microservice_volumes(artifact_reference):
+                return 1
         return DockerWorker.compose(
             stack,
             'up',

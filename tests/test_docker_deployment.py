@@ -248,6 +248,9 @@ class DockerDeploymentTest(unittest.TestCase):
             'https://auth.metadatacenter.orgx/realms/CEDAR/.well-known/openid-configuration',
         ])
 
+    @patch.object(DockerWorker, '_prepare_microservice_volumes', return_value=True)
+    @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
+           return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
     @patch.object(DockerWorker, '_record_active_deployment')
     @patch.object(DockerWorker, '_wait_for_acceptance', return_value=True)
     @patch.object(DockerWorker, '_wait_for_stacks', return_value=True)
@@ -255,7 +258,8 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerWorker, 'preflight', return_value=True)
     @patch.object(DockerWorker, 'mode_environment', return_value=({'MODE': 'full'}, []))
     def test_full_start_orders_all_selected_stacks(
-            self, _environment, _preflight, compose, wait, _acceptance, record):
+            self, _environment, _preflight, compose, wait, _acceptance, record,
+            _manifest, prepare_volumes):
         self.assertEqual(0, DockerWorker.start_all(
             DockerDeploymentMode.FULL,
             pull='always',
@@ -273,7 +277,101 @@ class DockerDeploymentTest(unittest.TestCase):
             ['infrastructure', 'microservices', 'frontends'],
         ], [entry.args[0] for entry in wait.call_args_list])
         record.assert_called_once_with(DockerDeploymentMode.FULL)
+        prepare_volumes.assert_called_once()
 
+    @patch.object(DockerWorker, '_docker_command')
+    @patch.object(DockerTrain, 'completion')
+    def test_train_image_gate_pulls_then_requires_the_recorded_repo_digest(
+            self, completion, command):
+        version = '2.9.3-dev.20260824.1847'
+        environment = {'CEDAR_IMAGE_PREFIX': 'registry.example/cedar'}
+        reference = f'registry.example/cedar/cedar-server-artifact:{version}'
+        digest = 'sha256:' + 'a' * 64
+        completion.return_value = {'version': version, 'images': [{
+            'image': 'cedar-server-artifact',
+            'reference': reference,
+            'digest': digest,
+        }]}
+        missing = type('Result', (), {
+            'returncode': 1, 'stdout': '', 'stderr': 'missing',
+        })()
+        pulled = type('Result', (), {
+            'returncode': 0, 'stdout': 'pulled', 'stderr': '',
+        })()
+        inspected = type('Result', (), {
+            'returncode': 0,
+            'stdout': json.dumps([{'RepoDigests': [
+                f'registry.example/cedar/cedar-server-artifact@{digest}',
+            ]}]),
+            'stderr': '',
+        })()
+        command.side_effect = [missing, pulled, inspected]
+
+        self.assertTrue(DockerWorker._prepare_train_images(
+            version,
+            ['microservices'],
+            'missing',
+            environment,
+            {'microservices': ('server-artifact',)},
+        ))
+        self.assertEqual([
+            call(['image', 'inspect', reference]),
+            call(['pull', reference]),
+            call(['image', 'inspect', reference]),
+        ], command.call_args_list)
+
+    @patch.object(DockerWorker, '_docker_command')
+    @patch.object(DockerTrain, 'completion')
+    def test_train_image_gate_rejects_a_preexisting_wrong_digest(
+            self, completion, command):
+        version = '2.9.3-dev.20260824.1847'
+        environment = {'CEDAR_IMAGE_PREFIX': 'registry.example/cedar'}
+        reference = f'registry.example/cedar/cedar-server-artifact:{version}'
+        completion.return_value = {'version': version, 'images': [{
+            'image': 'cedar-server-artifact',
+            'reference': reference,
+            'digest': 'sha256:' + 'a' * 64,
+        }]}
+        command.return_value = type('Result', (), {
+            'returncode': 0,
+            'stdout': json.dumps([{'RepoDigests': [
+                'registry.example/cedar/cedar-server-artifact@sha256:' + 'b' * 64,
+            ]}]),
+            'stderr': '',
+        })()
+
+        self.assertFalse(DockerWorker._prepare_train_images(
+            version,
+            ['microservices'],
+            'never',
+            environment,
+            {'microservices': ('server-artifact',)},
+        ))
+        command.assert_called_once_with(['image', 'inspect', reference])
+
+    @patch.object(DockerWorker, '_docker_command')
+    def test_volume_preparation_runs_as_root_only_for_fixed_volume_ownership(self, command):
+        command.return_value = type('Result', (), {
+            'returncode': 0, 'stdout': '', 'stderr': '',
+        })()
+        reference = 'registry.example/cedar-server-artifact:train'
+
+        self.assertTrue(DockerWorker._prepare_microservice_volumes(reference))
+        self.assertIn(call([
+            'run', '--rm', '--pull=never', '--user', '0:0', '--entrypoint', '/bin/sh',
+            '--volume', 'resource_state:/volume', reference,
+            '-c',
+            'owner=$(stat -c %u:%g /volume); '
+            'if [ "$owner" != "10001:10001" ] || '
+            '[ ! -e /volume/.cedar-owner-10001 ]; then '
+            'chown -R 10001:10001 /volume && '
+            'touch /volume/.cedar-owner-10001 && '
+            'chown 10001:10001 /volume/.cedar-owner-10001; fi',
+        ]), command.call_args_list)
+
+    @patch.object(DockerWorker, '_prepare_microservice_volumes', return_value=True)
+    @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
+           return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
     @patch.object(DockerWorker, '_record_active_deployment')
     @patch.object(DockerWorker, '_wait_for_acceptance', return_value=True)
     @patch.object(DockerWorker, '_wait_for_stacks', return_value=True)
@@ -281,7 +379,8 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerWorker, 'preflight', return_value=True)
     @patch.object(DockerWorker, 'mode_environment', return_value=({'MODE': 'hybrid'}, []))
     def test_hybrid_stops_docker_frontends_then_starts_only_the_backend(
-            self, _environment, _preflight, compose, _wait, _acceptance, record):
+            self, _environment, _preflight, compose, _wait, _acceptance, record,
+            _manifest, _prepare_volumes):
         self.assertEqual(0, DockerWorker.start_all(DockerDeploymentMode.HYBRID))
 
         self.assertEqual([

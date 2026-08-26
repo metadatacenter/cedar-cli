@@ -110,11 +110,42 @@ class DockerTrain(BuildTrain):
         return cls.validate(payload.get('version'))
 
     @classmethod
-    def completed(cls, version, opener=None):
+    def completion(cls, version, opener=None):
         version = cls.validate(version)
         payload = cls._read(f'docker/completed/{version}.json', opener=opener)
         if payload.get('version') != version:
             raise ValueError(f'Docker completion record does not describe {version}')
+        images = payload.get('images')
+        if not isinstance(images, list) or not images:
+            raise ValueError(f'Docker completion record for {version} has no images')
+        names = set()
+        references = set()
+        for image in images:
+            if not isinstance(image, dict):
+                raise ValueError(f'Docker completion record for {version} has an invalid image')
+            name = image.get('image')
+            reference = image.get('reference')
+            digest = image.get('digest')
+            if not isinstance(name, str) or not name.startswith('cedar-'):
+                raise ValueError(f'Docker completion record for {version} has an invalid image name')
+            if not isinstance(reference, str) or reference.rsplit(':', 1)[-1] != version:
+                raise ValueError(
+                    f'Docker completion record for {version} has an invalid image reference'
+                )
+            if not isinstance(digest, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+                raise ValueError(
+                    f'Docker completion record for {version} has an invalid image digest'
+                )
+            if name in names or reference in references:
+                raise ValueError(f'Docker completion record for {version} has duplicate images')
+            names.add(name)
+            references.add(reference)
+        return payload
+
+    @classmethod
+    def completed(cls, version, opener=None):
+        version = cls.validate(version)
+        cls.completion(version, opener=opener)
         return version
 
 

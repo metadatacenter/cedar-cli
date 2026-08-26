@@ -61,6 +61,41 @@ class BuildTrainTest(unittest.TestCase):
             DockerTrain.current(environment={}, opener=opener),
         )
 
+    def test_docker_completion_validates_immutable_image_inventory(self):
+        version = '2.9.3-dev.20260824.1847'
+
+        def opener(url, timeout):
+            self.assertTrue(url.endswith(f'/docker/completed/{version}.json'))
+            self.assertEqual(15, timeout)
+            return Response(json.dumps({
+                'version': version,
+                'images': [{
+                    'image': 'cedar-server-artifact',
+                    'reference': f'registry.example/cedar-server-artifact:{version}',
+                    'digest': 'sha256:' + 'a' * 64,
+                }],
+            }).encode())
+
+        completion = DockerTrain.completion(version, opener=opener)
+        self.assertEqual('sha256:' + 'a' * 64, completion['images'][0]['digest'])
+
+    def test_docker_completion_rejects_an_invalid_digest(self):
+        version = '2.9.3-dev.20260824.1847'
+
+        def opener(_url, timeout):
+            self.assertEqual(15, timeout)
+            return Response(json.dumps({
+                'version': version,
+                'images': [{
+                    'image': 'cedar-server-artifact',
+                    'reference': f'registry.example/cedar-server-artifact:{version}',
+                    'digest': 'latest',
+                }],
+            }).encode())
+
+        with self.assertRaisesRegex(ValueError, 'invalid image digest'):
+            DockerTrain.completion(version, opener=opener)
+
     def test_npm_current_reads_only_the_verified_package_pointer(self):
         def opener(url, timeout):
             self.assertTrue(url.endswith('/npm/current.json'))
