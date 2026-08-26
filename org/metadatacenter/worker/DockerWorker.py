@@ -564,7 +564,7 @@ exit ${failed}
         # Passing them to all images rather than working out which image wants which is deliberate:
         # Docker ignores a build argument a Dockerfile does not declare, and the alternative is a
         # second place recording which image installs which server.
-        server_versions = DockerImages.server_versions()
+        server_versions = DockerImages.server_versions(environment)
         if train:
             server_versions['CEDAR_MAVEN_VERSION'] = train
         build_args = ' '.join([
@@ -578,6 +578,10 @@ exit ${failed}
         source_manifest = environment.get('CEDAR_TRAIN_MANIFEST_SHA256')
         if source_manifest and not re.fullmatch(r'[0-9a-f]{64}', source_manifest):
             console.print('[red]CEDAR_TRAIN_MANIFEST_SHA256 must be a lowercase SHA-256 digest.[/red]')
+            return 1
+        frontend_manifest = environment.get('CEDAR_FRONTEND_MANIFEST_SHA256')
+        if frontend_manifest and not re.fullmatch(r'[0-9a-f]{64}', frontend_manifest):
+            console.print('[red]CEDAR_FRONTEND_MANIFEST_SHA256 must be a lowercase SHA-256 digest.[/red]')
             return 1
         steps = []
         for image in images:
@@ -596,6 +600,11 @@ exit ${failed}
                 labels.append(
                     '--label org.metadatacenter.cedar.source-manifest-sha256='
                     f'"{source_manifest}"'
+                )
+            if frontend_manifest:
+                labels.append(
+                    '--label org.metadatacenter.cedar.frontend-manifest-sha256='
+                    f'"{frontend_manifest}"'
                 )
             steps.append(f"""
 echo "==> {image}"

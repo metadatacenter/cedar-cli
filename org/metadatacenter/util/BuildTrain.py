@@ -102,3 +102,24 @@ class DockerTrain(BuildTrain):
         if payload.get('version') != version:
             raise ValueError(f'Docker completion record does not describe {version}')
         return version
+
+
+class NpmTrain(BuildTrain):
+    """Resolves only npm graphs whose registry tarballs and source commits were verified."""
+
+    @classmethod
+    def current(cls, environment=None, opener=None):
+        environment = os.environ if environment is None else environment
+        override = environment.get('CEDAR_NPM_TRAIN_VERSION')
+        if override:
+            return cls.validate(override)
+        payload = cls._read('npm/current.json', opener=opener)
+        return cls.validate(payload.get('version'))
+
+    @classmethod
+    def completed(cls, version, opener=None):
+        version = cls.validate(version)
+        payload = cls._read(f'npm/completed/{version}.json', opener=opener)
+        if payload.get('version') != version:
+            raise ValueError(f'npm completion record does not describe {version}')
+        return version

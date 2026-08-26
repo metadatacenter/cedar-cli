@@ -9,7 +9,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from org.metadatacenter import build, publish
-from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain
+from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain, NpmTrain
 from org.metadatacenter.util.Util import Util
 
 
@@ -60,6 +60,17 @@ class BuildTrainTest(unittest.TestCase):
             DockerTrain.current(environment={}, opener=opener),
         )
 
+    def test_npm_current_reads_only_the_verified_package_pointer(self):
+        def opener(url, timeout):
+            self.assertTrue(url.endswith('/npm/current.json'))
+            self.assertEqual(15, timeout)
+            return Response(json.dumps({'version': '2.9.3-dev.20260824.1847'}).encode())
+
+        self.assertEqual(
+            '2.9.3-dev.20260824.1847',
+            NpmTrain.current(environment={}, opener=opener),
+        )
+
     @patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847')
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_allocates_and_dispatches_a_new_train(self, run, allocate):
@@ -69,7 +80,7 @@ class BuildTrainTest(unittest.TestCase):
         allocate.assert_called_once_with()
         self.assertIn('version=2.9.3-dev.20260824.1847', run.call_args.args[0])
         self.assertIn('resume=false', run.call_args.args[0])
-        self.assertIn('main', run.call_args.args[0])
+        self.assertIn('develop', run.call_args.args[0])
 
     def test_cli_does_not_expose_a_version_option(self):
         result = self.runner.invoke(publish.app, [
@@ -91,6 +102,20 @@ class BuildTrainTest(unittest.TestCase):
         result = self.runner.invoke(build.app, ['train'])
         self.assertNotEqual(0, result.exit_code)
         self.assertIn('No such command', result.output)
+
+    @patch.object(BuildTrain, '_read')
+    def test_cli_reports_each_persisted_train_stage(self, read):
+        read.side_effect = lambda path: (
+            {'version': '2.9.3-dev.20260824.1847'}
+            if path.startswith(('trains/', 'completed/', 'npm/'))
+            else (_ for _ in ()).throw(ValueError('build-train state does not exist'))
+        )
+        result = self.runner.invoke(publish.app, [
+            'train-status', '2.9.3-dev.20260824.1847',
+        ])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('npm: recorded', result.output)
+        self.assertIn('Docker: pending', result.output)
 
 
 if __name__ == '__main__':

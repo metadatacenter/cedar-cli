@@ -146,7 +146,7 @@ class DockerImages:
         return images, selected_version, cls.image_prefix(environment)
 
     @classmethod
-    def server_versions(cls):
+    def server_versions(cls, environment=None):
         """The locked infrastructure server versions the images are built against.
 
         Every `export <NAME>_VERSION=` in the manifest other than the CEDAR image version itself,
@@ -154,10 +154,15 @@ class DockerImages:
         Dockerfiles declare these as build arguments with no default, so a version missing here
         fails the build rather than being silently substituted.
         """
+        environment = os.environ if environment is None else environment
         with open(cls._manifest_path(), encoding='utf-8') as manifest:
             text = manifest.read()
         found = re.findall(r'^export ([A-Z0-9_]+(?:_VERSION|_SHA256))=(\S+)', text, re.M)
-        return {name: value for name, value in found if name != 'IMAGE_VERSION'}
+        return {
+            name: environment.get(name, value)
+            for name, value in found
+            if name != 'IMAGE_VERSION'
+        }
 
     @staticmethod
     def short_name(image):

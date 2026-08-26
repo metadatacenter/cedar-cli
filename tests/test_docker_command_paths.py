@@ -40,6 +40,16 @@ class DockerCommandPathsTest(unittest.TestCase):
         self.assertIn('org.opencontainers.image.revision="' + 'a' * 40 + '"', command)
         self.assertIn('-t "example/cedar/cedar-infra-nginx:2.9.3-dev.20260824.1847"', command)
 
+    def test_server_versions_allow_the_train_manifest_to_override_frontend_pins(self):
+        with patch.object(DockerImages, '_manifest_path', return_value='/tmp/cedar-images-base.sh'):
+            with patch('builtins.open', unittest.mock.mock_open(
+                    read_data='export CEDAR_WORKSPACE_NPM_VERSION=old\nexport NGINX_VERSION=1.2.3\n')):
+                versions = DockerImages.server_versions({
+                    'CEDAR_WORKSPACE_NPM_VERSION': 'immutable-train-version',
+                })
+        self.assertEqual('immutable-train-version', versions['CEDAR_WORKSPACE_NPM_VERSION'])
+        self.assertEqual('1.2.3', versions['NGINX_VERSION'])
+
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_start_uses_local_snapshot_pull_policy_and_current_stack(self, execute):

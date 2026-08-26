@@ -23,6 +23,12 @@ def train(
     raise typer.Exit(code=BuildTrainWorker.dispatch(resume=resume))
 
 
+@app.command("train-status")
+def train_status(version: str = typer.Argument(..., help="Immutable train identifier.")):
+    """Show which persisted Maven, npm, and Docker train stages are recorded."""
+    raise typer.Exit(code=BuildTrainWorker.status(version))
+
+
 @app.command("this")
 def this(wd: str = typer.Option(None, help="Working directory"),
          dry_run: bool = typer.Option(False, help="Dry run"),
