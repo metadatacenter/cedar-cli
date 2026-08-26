@@ -484,7 +484,7 @@ class ModeManager:
             cleanup = len(arguments) > 1 and arguments[1] == "stop"
             cls.apply_profile(surface, check_runtime=not cleanup)
             return
-        if surface == "mode":
+        if surface in ("mode", "env"):
             return
         mode = cls.current()
         if mode is not None:

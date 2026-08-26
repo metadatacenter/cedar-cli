@@ -864,7 +864,7 @@ exit ${failed}
                 if result.returncode != 0:
                     errors.append(
                         f'Docker {resource_type} {resource_name} is missing; '
-                        'run cedarcli docker one-time-setup'
+                        'run cedarcli docker setup one-time-setup'
                     )
 
         stack_names = DockerWorker._stack_names(mode)

@@ -3,7 +3,7 @@ import os
 import re
 import tempfile
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 from typer.testing import CliRunner
 
@@ -164,6 +164,41 @@ class DockerDeploymentTest(unittest.TestCase):
 
         self.assertEqual(2, start_result.exit_code, start_result.output)
         self.assertEqual(2, status_result.exit_code, status_result.output)
+
+    def test_docker_setup_exposes_only_bootstrap_operations(self):
+        docker_help = self.runner.invoke(docker.app, ['--help'])
+        result = self.runner.invoke(docker.app, ['setup', '--help'])
+        output = ANSI_ESCAPE.sub('', result.output)
+
+        self.assertEqual(0, docker_help.exit_code, docker_help.output)
+        self.assertIn('setup', ANSI_ESCAPE.sub('', docker_help.output))
+        self.assertEqual(0, result.exit_code, result.output)
+        for command in (
+                'one-time-setup', 'create-network',
+                'create-certificates-volume', 'copy-certificates'):
+            self.assertIn(command, output)
+
+        old_path = self.runner.invoke(docker.app, ['one-time-setup'])
+        self.assertEqual(2, old_path.exit_code, old_path.output)
+
+    @patch.object(DockerWorker, 'copy_certificates', return_value=0)
+    @patch.object(DockerWorker, 'create_certificates_volume', return_value=0)
+    @patch.object(DockerWorker, 'create_network', return_value=0)
+    def test_one_time_setup_runs_bootstrap_operations_in_order(
+            self, create_network, create_volumes, copy_certificates):
+        manager = Mock()
+        manager.attach_mock(create_network, 'create_network')
+        manager.attach_mock(create_volumes, 'create_volumes')
+        manager.attach_mock(copy_certificates, 'copy_certificates')
+
+        result = self.runner.invoke(docker.app, ['setup', 'one-time-setup'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual([
+            call.create_network(),
+            call.create_volumes(),
+            call.copy_certificates(),
+        ], manager.mock_calls)
 
     def test_mode_environment_keeps_container_addresses_separate_from_hybrid_upstreams(self):
         with patch.dict(os.environ, deployment_environment(), clear=True):
