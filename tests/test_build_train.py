@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from org.metadatacenter import build, publish
 from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain, NpmTrain
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
 
 
 class Response(io.BytesIO):
@@ -97,6 +98,101 @@ class BuildTrainTest(unittest.TestCase):
         ])
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn('resume=true', run.call_args.args[0])
+
+    def test_cli_dry_run_checks_but_never_dispatches(self):
+        subprocess_result = type('Result', (), {
+            'returncode': 0, 'stdout': '', 'stderr': '',
+        })()
+        with (
+            patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847'),
+            patch.object(
+                BuildTrain, '_read',
+                side_effect=ValueError('build-train state does not exist'),
+            ),
+            patch.object(
+                BuildTrainWorker, '_configuration_summary',
+                return_value=(44, 'cedar-model-typescript-library',
+                              'cedar-embeddable-editor', 7, 3),
+            ),
+            patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
+                  return_value=subprocess_result) as run,
+        ):
+            result = self.runner.invoke(publish.app, ['train', '--dry-run'])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('DRY RUN', result.output)
+        self.assertIn('44 repositories', result.output)
+        self.assertIn('7 frontends', result.output)
+        self.assertIn('Would dispatch:', result.output)
+        self.assertIn('No changes made.', result.output)
+        self.assertEqual(2, run.call_count)
+        self.assertFalse(any(call.args[0][1:3] == ['workflow', 'run'] for call in run.call_args_list))
+
+    def test_cli_dry_run_refuses_a_train_id_collision(self):
+        with (
+            patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847'),
+            patch.object(
+                BuildTrain, '_read',
+                return_value={'version': '2.9.3-dev.20260824.1847'},
+            ),
+            patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run') as run,
+        ):
+            result = self.runner.invoke(publish.app, ['train', '--dry-run'])
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn('already exists', result.output)
+        run.assert_not_called()
+
+    def test_cli_resume_dry_run_reports_the_next_incomplete_stage(self):
+        version = '2.9.3-dev.20260824.1847'
+
+        def state(path):
+            if path in {f'trains/{version}.json', f'completed/{version}.json'}:
+                return {'version': version}
+            raise ValueError('build-train state does not exist')
+
+        subprocess_result = type('Result', (), {
+            'returncode': 0, 'stdout': '', 'stderr': '',
+        })()
+        with (
+            patch.object(BuildTrain, '_read', side_effect=state),
+            patch.object(
+                BuildTrainWorker, '_configuration_summary',
+                return_value=(44, 'cedar-model-typescript-library',
+                              'cedar-embeddable-editor', 7, 3),
+            ),
+            patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
+                  return_value=subprocess_result) as run,
+        ):
+            result = self.runner.invoke(publish.app, [
+                'train', '--resume', version, '--dry-run',
+            ])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Mode: resume', result.output)
+        self.assertIn('Next incomplete stage: npm plan', result.output)
+        self.assertIn('resume=true', result.output)
+        self.assertFalse(any(call.args[0][1:3] == ['workflow', 'run'] for call in run.call_args_list))
+
+    def test_train_configuration_summary_validates_the_npm_graph(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(Util, 'cedar_home', directory):
+            ops = Path(directory) / 'cedar-development' / 'ops'
+            ops.mkdir(parents=True)
+            (ops / 'build-train.json').write_text(json.dumps({
+                'organization': 'metadatacenter',
+                'sourceBranch': 'develop',
+                'repositories': ['model', 'cee', 'frontend', 'demo'],
+            }), encoding='utf-8')
+            (ops / 'frontend-train.json').write_text(json.dumps({
+                'model': {'repository': 'model'},
+                'cee': {'repository': 'cee'},
+                'frontends': [{
+                    'id': 'main', 'image': 'frontend-main',
+                    'repository': 'frontend', 'npmVersionVariable': 'MAIN_VERSION',
+                }],
+                'additionalCeeConsumers': [{'repository': 'demo'}],
+            }), encoding='utf-8')
+            self.assertEqual(
+                (4, 'model', 'cee', 1, 1),
+                BuildTrainWorker._configuration_summary(),
+            )
 
     def test_build_no_longer_exposes_train(self):
         result = self.runner.invoke(build.app, ['train'])

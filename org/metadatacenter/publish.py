@@ -18,9 +18,14 @@ def train(
             None,
             "--resume",
             help="Resume an incomplete train from its recorded source manifest.",
+        ),
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Validate and show the dispatch without starting a workflow.",
         )):
     """Publish an ordered, immutable Maven and Docker build train."""
-    raise typer.Exit(code=BuildTrainWorker.dispatch(resume=resume))
+    raise typer.Exit(code=BuildTrainWorker.dispatch(resume=resume, dry_run=dry_run))
 
 
 @app.command("train-status")
