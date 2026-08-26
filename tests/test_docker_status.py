@@ -25,9 +25,10 @@ def container(service, state='running', health='healthy'):
 class DockerStatusTest(unittest.TestCase):
 
     def setUp(self):
+        self.output = StringIO()
         self.console_patch = patch(
             'org.metadatacenter.worker.DockerWorker.console',
-            Console(file=StringIO(), force_terminal=False),
+            Console(file=self.output, force_terminal=False),
         )
         self.console_patch.start()
         self.mode_environment_patch = patch.object(
@@ -83,6 +84,12 @@ class DockerStatusTest(unittest.TestCase):
     def test_unavailable_daemon_fails_before_reading_compose(self, _version, expected):
         self.assertFalse(DockerWorker.status())
         expected.assert_not_called()
+        output = self.output.getvalue()
+        self.assertIn('Docker is unavailable', output)
+        self.assertIn('Start Docker Desktop', output)
+        self.assertNotIn('daemon unavailable', output)
+        self.assertNotIn('0/0 selected Docker services', output)
+        self.assertNotIn('docker compose logs', output)
 
     def test_container_report_handles_health_and_runtime_state(self):
         self.assertEqual('✅', DockerWorker._container_report(container('ok'))[0])
@@ -91,6 +98,25 @@ class DockerStatusTest(unittest.TestCase):
         self.assertEqual('❌', DockerWorker._container_report(container('bad', health='unhealthy'))[0])
         self.assertEqual('❌', DockerWorker._container_report(container('stopped', state='exited'))[0])
         self.assertEqual('❌', DockerWorker._container_report(None)[0])
+
+    def test_status_service_order_is_stable_and_keeps_unknown_services(self):
+        first = DockerWorker._ordered_status_services(
+            'frontends',
+            ['frontend-workspace', 'future-frontend', 'frontend-main', 'frontend-content'],
+        )
+        second = DockerWorker._ordered_status_services(
+            'frontends',
+            ['frontend-content', 'frontend-main', 'future-frontend', 'frontend-workspace'],
+        )
+
+        expected = [
+            'frontend-main',
+            'frontend-content',
+            'frontend-workspace',
+            'future-frontend',
+        ]
+        self.assertEqual(expected, first)
+        self.assertEqual(expected, second)
 
     @patch.object(DockerWorker, '_docker_command')
     def test_compose_container_inventory_uses_labels(self, command):

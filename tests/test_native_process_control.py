@@ -16,6 +16,11 @@ from org.metadatacenter.worker.StopFrontendWorker import StopFrontendWorker
 from org.metadatacenter.worker.StopInfrastructureWorker import StopInfrastructureWorker
 from org.metadatacenter.worker.StopMicroserviceWorker import StopMicroserviceWorker
 
+NATIVE_CONTROLLER = (
+    Path(__file__).resolve().parents[2]
+    / "cedar-development" / "ops" / "cedar-services.sh"
+)
+
 
 @patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
 class NativeProcessControlTest(unittest.TestCase):
@@ -169,15 +174,15 @@ class NativeProcessControlTest(unittest.TestCase):
         host_status.assert_called_once_with()
         self.assertIs(result, execute.return_value)
 
+    @unittest.skipUnless(
+        NATIVE_CONTROLLER.is_file(),
+        "requires the sibling cedar-development checkout",
+    )
     def test_infrastructure_inventory_excludes_docker_port_forwarders(self):
-        controller = (
-            Path(__file__).resolve().parents[2]
-            / "cedar-development" / "ops" / "cedar-services.sh"
-        )
         script = f'''\
 export CEDAR_SERVICES_LIBRARY_ONLY=true
 export CEDAR_SERVICES_INSPECT_ONLY=true
-source "{controller}"
+source "{NATIVE_CONTROLLER}"
 port_owners() {{
   case "$1" in
     80) echo 101 ;;
@@ -199,15 +204,15 @@ running_infrastructure
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("nginx-http (port 80, pid 101)\n", result.stdout)
 
+    @unittest.skipUnless(
+        NATIVE_CONTROLLER.is_file(),
+        "requires the sibling cedar-development checkout",
+    )
     def test_native_inventory_checks_every_listener_on_a_service_port(self):
-        controller = (
-            Path(__file__).resolve().parents[2]
-            / "cedar-development" / "ops" / "cedar-services.sh"
-        )
         script = f'''\
 export CEDAR_SERVICES_LIBRARY_ONLY=true
 export CEDAR_SERVICES_INSPECT_ONLY=true
-source "{controller}"
+source "{NATIVE_CONTROLLER}"
 pidfile() {{ echo /does/not/exist; }}
 app_port() {{ echo 9009; }}
 names() {{ echo group; }}

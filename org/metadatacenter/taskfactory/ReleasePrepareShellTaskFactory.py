@@ -294,7 +294,7 @@ class ReleasePrepareShellTaskFactory:
     @classmethod
     def macro_update_index_html_version_numbers(cls, version: str):
         return ('echo "Update openview and bridging index.html"',
-                "      if [[ -e src/index.html ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/\/cedar-embeddable-editor-.*\.js/\/cedar-embeddable-editor-'" + version + "'\.js/g' src/index.html; fi")
+                "      if [[ -e src/index.html ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/\\/cedar-embeddable-editor-.*\\.js/\\/cedar-embeddable-editor-'" + version + "'\\.js/g' src/index.html; fi")
 
     @classmethod
     def macro_update_package_json_and_travis(cls, version: str):
@@ -302,7 +302,7 @@ class ReleasePrepareShellTaskFactory:
                 "      jq '.version=\"'" + version + "'\"' package.json | sponge package.json",
                 "      jq '.version=\"'" + version + "'\"' package-lock.json | sponge package-lock.json",
                 "      jq '.packages[\"\"].version=\"'" + version + "'\"' package-lock.json | sponge package-lock.json",
-                "      if [[ -e .travis.yml ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/- CEDAR_VERSION\s*=.*\".*\"/- CEDAR_VERSION=\"'" + version + "'\"/g' .travis.yml; fi")
+                "      if [[ -e .travis.yml ]]; then " + GlobalContext.get_sed_replace_in_place() + " 's/- CEDAR_VERSION\\s*=.*\".*\"/- CEDAR_VERSION=\"'" + version + "'\"/g' .travis.yml; fi")
 
     @classmethod
     def macro_update_development_cedar_version(cls, version: str):
@@ -312,14 +312,14 @@ class ReleasePrepareShellTaskFactory:
     @classmethod
     def macro_update_env_cedar_docker_version(cls, version: str):
         return ('echo "Update to next release version"',
-                "      find . -name .env -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^CEDAR_DOCKER_VERSION=.*$/CEDAR_DOCKER_VERSION='" + version + "'/' {} \; -print")
+                "      find . -name .env -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^CEDAR_DOCKER_VERSION=.*$/CEDAR_DOCKER_VERSION='" + version + "'/' {} \\; -print")
 
     @classmethod
     def macro_update_docker_build_versions(cls, version: str):
         return ('echo "Update to next release version"',
-                "      find . -name Dockerfile -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^FROM metadatacenter\/cedar-microservice:.*$/FROM metadatacenter\/cedar-microservice:'" + version + "'/' {} \; -print",
-                "      find . -name Dockerfile -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^FROM metadatacenter\/cedar-java:.*$/FROM metadatacenter\/cedar-java:'" + version + "'/' {} \; -print",
-                "      find . -name Dockerfile -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^ENV CEDAR_VERSION=.*$/ENV CEDAR_VERSION='" + version + "'/' {} \; -print",
+                "      find . -name Dockerfile -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^FROM metadatacenter\\/cedar-microservice:.*$/FROM metadatacenter\\/cedar-microservice:'" + version + "'/' {} \\; -print",
+                "      find . -name Dockerfile -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^FROM metadatacenter\\/cedar-java:.*$/FROM metadatacenter\\/cedar-java:'" + version + "'/' {} \\; -print",
+                "      find . -name Dockerfile -exec " + GlobalContext.get_sed_replace_in_place() + " 's/^ENV CEDAR_VERSION=.*$/ENV CEDAR_VERSION='" + version + "'/' {} \\; -print",
                 "      " + GlobalContext.get_sed_replace_in_place() + " 's/^export IMAGE_VERSION=.*$/export IMAGE_VERSION='" + version + "'/' ./bin/cedar-images-base.sh"
                 )
 

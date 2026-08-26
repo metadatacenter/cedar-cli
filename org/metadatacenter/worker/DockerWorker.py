@@ -68,6 +68,26 @@ MICROSERVICE_COMPOSE_SERVICES = {
     'worker': 'server-worker',
 }
 
+STATUS_SERVICE_ORDER = {
+    'infrastructure': (
+        'mysql',
+        'mongo',
+        'redis-persistent',
+        'opensearch',
+        'neo4j',
+        'keycloak',
+        'nginx',
+    ),
+    'microservices': tuple(MICROSERVICE_COMPOSE_SERVICES.values()),
+    'frontends': tuple(FRONTEND_COMPOSE_SERVICES.values()),
+    'admin': (
+        'redis-commander',
+        'kibana',
+        'phpmyadmin',
+        'admin-tool',
+    ),
+}
+
 
 class DockerWorker(Worker):
 
@@ -356,6 +376,7 @@ exit ${failed}
                 stack_directory,
                 environment=environment,
             )
+            services = DockerWorker._ordered_status_services(stack_name, services)
 
             if compose_error:
                 snapshot['expected'] += 1
@@ -383,6 +404,16 @@ exit ${failed}
         return snapshot
 
     @staticmethod
+    def _ordered_status_services(stack_name, services):
+        """Use a stable human-facing order and retain unknown future services at the end."""
+        preferred = STATUS_SERVICE_ORDER.get(stack_name, ())
+        rank = {service: position for position, service in enumerate(preferred)}
+        return sorted(
+            services,
+            key=lambda service: (rank.get(service, len(preferred)), service),
+        )
+
+    @staticmethod
     def _snapshot_ready(snapshot):
         return (
             snapshot['daemon_error'] is None
@@ -393,7 +424,10 @@ exit ${failed}
     @staticmethod
     def _render_snapshot(snapshot, mode):
         if snapshot['daemon_error']:
-            console.print(f"[red]❌ Docker status unavailable:[/red] {snapshot['daemon_error']}")
+            console.print(
+                "[red]❌ Docker is unavailable.[/red] Start Docker Desktop or repair "
+                "Docker daemon access, then retry."
+            )
             return
 
         table = Table(
@@ -483,6 +517,8 @@ exit ${failed}
             environment=environment,
         )
         DockerWorker._render_snapshot(snapshot, mode)
+        if snapshot['daemon_error']:
+            return False
         if not DockerWorker._snapshot_ready(snapshot):
             console.print(
                 f"[red]❌ {snapshot['healthy']}/{snapshot['expected']} selected Docker services are ready.[/red] "

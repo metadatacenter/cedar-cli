@@ -23,9 +23,8 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # Checked out under its own directory so cedar-docker-build can sit beside
-      # it. tests/test_docker_images.py resolves the image manifest as a sibling
-      # clone, the same layout $CEDAR_HOME has, and fails on a lone checkout.
+      # Checked out under its own directory so the repositories whose source-of-truth files the
+      # CLI consumes can sit beside it, matching the normal $CEDAR_HOME layout.
       - name: Check out cedar-cli
         uses: actions/checkout@v7
         with:
@@ -41,6 +40,16 @@ jobs:
           repository: metadatacenter/cedar-docker-build
           ref: develop
           path: cedar-docker-build
+
+      # The native lifecycle integration checks source cedar-services.sh in inspection/library mode.
+      # They exercise process-ownership and Docker-port-forwarder safeguards without starting or
+      # stopping anything.
+      - name: Check out cedar-development beside it
+        uses: actions/checkout@v7
+        with:
+          repository: metadatacenter/cedar-development
+          ref: develop
+          path: cedar-development
 
       # requirements.txt names no Python version and the CLI runs under whatever
       # python3 the developer has. 3.12 is the version Read the Docs builds the
@@ -58,8 +67,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
-      # Every test mocks its subprocess and filesystem calls, so nothing here
-      # starts a service or reaches the network.
+      # Tests either mock subprocess/filesystem calls or source the native controller in its
+      # inspection-only library mode. Nothing starts a service or reaches the network.
       - name: Run tests
         working-directory: cedar-cli
         run: python -m pytest tests -v

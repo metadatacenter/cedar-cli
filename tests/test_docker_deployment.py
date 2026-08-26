@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest.mock import call, patch
@@ -13,6 +14,8 @@ from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain
 from org.metadatacenter.util.ModeManager import ModeManager
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.DockerWorker import DockerWorker
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def deployment_environment():
@@ -109,7 +112,7 @@ class DockerDeploymentTest(unittest.TestCase):
         short_result = self.runner.invoke(docker_start.app, ['infra', '-d'])
 
         self.assertEqual(0, help_result.exit_code, help_result.output)
-        self.assertIn('--detach', help_result.output)
+        self.assertIn('--detach', ANSI_ESCAPE.sub('', help_result.output))
         self.assertEqual(2, short_result.exit_code, short_result.output)
 
     @patch.object(DockerWorker, 'stop_microservice', return_value=0)
