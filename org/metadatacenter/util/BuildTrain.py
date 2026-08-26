@@ -16,6 +16,9 @@ class BuildTrain:
         "https://raw.githubusercontent.com/metadatacenter/cedar-development/"
         "build-trains"
     )
+    STATE_BROWSE_URL = (
+        "https://github.com/metadatacenter/cedar-development/tree/build-trains"
+    )
     VERSION_RE = re.compile(r"^\d+\.\d+\.\d+-dev\.\d{8}\.\d{4}$")
 
     @classmethod
@@ -48,7 +51,7 @@ class BuildTrain:
     @classmethod
     def _read(cls, relative_path, opener=None):
         opener = opener or urllib.request.urlopen
-        url = f'{cls.STATE_BASE_URL}/{relative_path}'
+        url = cls.state_url(relative_path)
         try:
             with opener(url, timeout=15) as response:
                 return json.load(response)
@@ -58,6 +61,17 @@ class BuildTrain:
             raise ValueError(f'cannot read build-train state: HTTP {error.code}') from error
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
             raise ValueError(f'cannot read build-train state: {error}') from error
+
+    @classmethod
+    def state_url(cls, relative_path):
+        return f'{cls.STATE_BASE_URL}/{relative_path}'
+
+    @classmethod
+    def browse_url(cls, relative_path):
+        return (
+            "https://github.com/metadatacenter/cedar-development/blob/"
+            f"build-trains/{relative_path}"
+        )
 
     @classmethod
     def current(cls, environment=None, opener=None):

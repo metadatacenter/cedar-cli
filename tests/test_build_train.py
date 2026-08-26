@@ -116,6 +116,13 @@ class BuildTrainTest(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn('npm: recorded', result.output)
         self.assertIn('Docker: pending', result.output)
+        self.assertIn(
+            'https://github.com/metadatacenter/cedar-development/blob/'
+            'build-trains/npm/completed/2.9.3-dev.20260824.1847.json',
+            result.output,
+        )
+        self.assertIn(BuildTrain.STATE_BROWSE_URL, result.output)
+        self.assertNotIn(f'Manifests: {BuildTrain.STATE_BASE_URL}/', result.output)
 
 
 if __name__ == '__main__':

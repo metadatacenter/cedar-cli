@@ -29,9 +29,11 @@ class BuildTrainWorker:
         )
         console.print(f'Build train {selected}')
         for label, path in stages:
+            recorded = False
             try:
                 BuildTrain._read(path)
                 state = '[green]recorded[/green]'
+                recorded = True
             except ValueError as error:
                 state = (
                     '[yellow]pending[/yellow]'
@@ -39,7 +41,12 @@ class BuildTrainWorker:
                     else '[red]unavailable[/red]'
                 )
             console.print(f'  {label}: {state}')
-        console.print(f'Manifests: {BuildTrain.STATE_BASE_URL}/')
+            if recorded:
+                console.print(f'    {BuildTrain.browse_url(path)}', soft_wrap=True)
+        console.print(
+            f'Manifest branch: {BuildTrain.STATE_BROWSE_URL}',
+            soft_wrap=True,
+        )
         return 0
 
     @classmethod
