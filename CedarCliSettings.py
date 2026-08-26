@@ -6,6 +6,7 @@ console = Console()
 
 class CedarCliSettings(object):
     do_fail_on_error = True
+    skip_tests = False
     shell_path = '/bin/bash'
     _sed_replace_in_place = None
 

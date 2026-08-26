@@ -112,6 +112,14 @@ class GlobalContext(object):
         CedarCliSettings.do_fail_on_error = False
 
     @classmethod
+    def should_skip_tests(cls):
+        return CedarCliSettings.skip_tests
+
+    @classmethod
+    def mark_skip_tests(cls, skip_tests: bool):
+        CedarCliSettings.skip_tests = skip_tests
+
+    @classmethod
     def get_shell(cls):
         return CedarCliSettings.shell_path
 

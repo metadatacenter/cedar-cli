@@ -28,10 +28,9 @@ class BuildOperator(Operator):
         build_frontends = (task.get_parameter("force_frontend_build") is True or
                            (Const.CEDAR_DEV_BUILD_FRONTENDS in os.environ and
                             os.environ[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'))
-        # The Java build skips its tests. Run them separately, or with mvn directly in the repo.
-        # Making the build run them, and offering --tests / --skip-tests to choose, is an open
-        # roadmap item rather than a settled default.
-        java_build = BuildShellTaskFactory.maven_clean_install_skip_tests
+        java_build = (BuildShellTaskFactory.maven_clean_install_skip_tests
+                      if GlobalContext.should_skip_tests()
+                      else BuildShellTaskFactory.maven_clean_install)
         for repo in repo_list_flat:
             if repo.repo_type == RepoType.JAVA_WRAPPER:
                 shell_wrapper = PlanTask("Build java wrapper project", TaskType.SHELL_WRAPPER, repo)

@@ -37,10 +37,15 @@ class ShellTaskExecutor(TaskExecutor):
             title_align="left"),
             style=Style(color="green"))
         if not dry_run:
+            first_failure = 0
             for command in commands_to_execute:
                 stdout_parts, return_code = self.execute_shell_command(task, repo, command, cwd, job_progress)
-                if return_code != 0 and GlobalContext.fail_on_error():
-                    return return_code
+                if return_code != 0:
+                    if first_failure == 0:
+                        first_failure = return_code
+                    if GlobalContext.fail_on_error():
+                        return return_code
+            return first_failure
         else:
             time.sleep(0.1)
         return 0
