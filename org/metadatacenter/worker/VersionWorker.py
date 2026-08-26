@@ -52,6 +52,7 @@ class VersionWorker(Worker):
         table.caption = report.get_caption()
         console.print(table)
         Util.write_rich_cedar_file('last_version_check.rich.txt', table)
+        return 1 if report.cnt_nok else 0
 
     def get_version_report(self, repo, report: VersionReport):
         if repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
@@ -196,7 +197,7 @@ class VersionWorker(Worker):
             if os.path.isfile(docker_path):
                 docker_content = Util.read_file(docker_path)
                 docker_version = Util.match_cedar_version(docker_content)
-                if docker_version is not None:
+                if docker_version is not None and not VersionWorker.is_dynamic_version(docker_version):
                     report.add(repo, full_dir_suffix, Const.FILE_DOCKER, VersionType.ENV_CEDAR_VERSION, docker_version)
 
                 docker_version = Util.match_from_metadatacenter_version(docker_content)
@@ -208,6 +209,12 @@ class VersionWorker(Worker):
         docker_version = Util.match_image_version(docker_content)
         if docker_version is not None:
             report.add(repo, root_dir_suffix, Const.FILE_BIN_IMAGE_BASE, VersionType.IMAGE_VERSION, docker_version)
+
+    @staticmethod
+    def is_dynamic_version(version):
+        """Return true for Dockerfile values supplied by the immutable build train."""
+        normalized = version.strip().strip('"\'')
+        return normalized in {'$CEDAR_MAVEN_VERSION', '${CEDAR_MAVEN_VERSION}'}
 
     @staticmethod
     def analyze_docker_deploy(repo, report: VersionReport):
