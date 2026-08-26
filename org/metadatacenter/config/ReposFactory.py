@@ -23,7 +23,6 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-model-library", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_library=True))
         repos.add_repo(Repo("cedar-model-validation-library", RepoType.JAVA,
                             [V.POM_OWN, V.POM_PARENT], is_library=True))
-        repos.add_repo(Repo("cedar-rest-library", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_library=True))
 
         repos.add_repo(Repo("cedar-artifact-server",
                             RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
