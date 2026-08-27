@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 
@@ -17,13 +18,27 @@ class BuildTrainWorker:
     WORKFLOW = 'build-train.yml'
     REPOSITORY = 'metadatacenter/cedar-development'
 
+    @classmethod
+    def _dispatched_run_id(cls, result):
+        output = '\n'.join(
+            value for value in (result.stdout, result.stderr)
+            if isinstance(value, str)
+        )
+        match = re.search(
+            rf'https://github\.com/{re.escape(cls.REPOSITORY)}/actions/runs/(\d+)',
+            output,
+        )
+        return match.group(1) if match else None
+
     @staticmethod
     def _stages(version):
         return (
             ('source', f'trains/{version}.json'),
             ('Maven', f'completed/{version}.json'),
             ('npm plan', f'npm/trains/{version}.json'),
-            ('npm', f'npm/completed/{version}.json'),
+            ('npm model', f'npm/model/completed/{version}.json'),
+            ('npm CEE', f'npm/cee/completed/{version}.json'),
+            ('npm frontends', f'npm/completed/{version}.json'),
             ('Docker plan', f'docker/trains/{version}.json'),
             ('Docker', f'docker/completed/{version}.json'),
         )
@@ -222,15 +237,48 @@ class BuildTrainWorker:
         if dry_run:
             return cls._dry_run(selected, resume, command)
         try:
-            result = subprocess.run(command, text=True, check=False)
+            result = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
         except OSError as error:
             console.print(f'[red]Could not run GitHub CLI: {error}[/red]')
             return 1
         if result.returncode:
+            detail = (result.stderr or result.stdout or '').strip()
+            if detail:
+                console.print(detail, markup=False)
             return result.returncode
         console.print(f'[green]Dispatched build train {selected}.[/green]')
-        console.print(
-            f'Follow it with: gh run list --repo {cls.REPOSITORY} '
-            f'--workflow {cls.WORKFLOW}'
-        )
+        run_id = cls._dispatched_run_id(result)
+        if run_id:
+            console.print(
+                f'https://github.com/{cls.REPOSITORY}/actions/runs/{run_id}',
+                soft_wrap=True,
+            )
+            console.print(
+                f'Major-stage summary: cedarcli publish train-status {selected}',
+                soft_wrap=True,
+            )
+            console.print(
+                'Detailed live output: '
+                + shlex.join([
+                    'gh', 'run', 'watch', run_id,
+                    '--repo', cls.REPOSITORY,
+                    '--compact',
+                    '--exit-status',
+                ]),
+                soft_wrap=True,
+            )
+        else:
+            console.print(
+                '[yellow]GitHub CLI did not return the exact run ID.[/yellow]'
+            )
+            console.print(
+                f'Find it with: gh run list --repo {cls.REPOSITORY} '
+                f'--workflow {cls.WORKFLOW}',
+                soft_wrap=True,
+            )
         return 0

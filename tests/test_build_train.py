@@ -111,12 +111,39 @@ class BuildTrainTest(unittest.TestCase):
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_allocates_and_dispatches_a_new_train(self, run, allocate):
         run.return_value.returncode = 0
+        run.return_value.stdout = (
+            'https://github.com/metadatacenter/cedar-development/actions/runs/33097135798\n'
+        )
+        run.return_value.stderr = ''
         result = self.runner.invoke(publish.app, ['train'])
         self.assertEqual(0, result.exit_code, result.output)
         allocate.assert_called_once_with()
         self.assertIn('version=2.9.3-dev.20260824.1847', run.call_args.args[0])
         self.assertIn('resume=false', run.call_args.args[0])
         self.assertIn('develop', run.call_args.args[0])
+        self.assertIn(
+            'Major-stage summary: cedarcli publish train-status '
+            '2.9.3-dev.20260824.1847',
+            result.output,
+        )
+        self.assertIn(
+            'Detailed live output: gh run watch 33097135798 '
+            '--repo metadatacenter/cedar-development --compact --exit-status',
+            result.output,
+        )
+        self.assertNotIn('Detailed live output: gh run list', result.output)
+
+    @patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847')
+    @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
+    def test_cli_does_not_call_a_run_listing_a_follow_command(self, run, _allocate):
+        run.return_value.returncode = 0
+        run.return_value.stdout = ''
+        run.return_value.stderr = ''
+        result = self.runner.invoke(publish.app, ['train'])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('did not return the exact run ID', result.output)
+        self.assertIn('Find it with: gh run list', result.output)
+        self.assertNotIn('Detailed live output: gh run list', result.output)
 
     def test_cli_does_not_expose_a_version_option(self):
         result = self.runner.invoke(publish.app, [
@@ -245,7 +272,9 @@ class BuildTrainTest(unittest.TestCase):
             'train-status', '2.9.3-dev.20260824.1847',
         ])
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn('npm: recorded', result.output)
+        self.assertIn('npm model: recorded', result.output)
+        self.assertIn('npm CEE: recorded', result.output)
+        self.assertIn('npm frontends: recorded', result.output)
         self.assertIn('Docker: pending', result.output)
         self.assertIn(
             'https://github.com/metadatacenter/cedar-development/blob/'
