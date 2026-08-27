@@ -50,20 +50,29 @@ class DockerCommandPathsTest(unittest.TestCase):
         self.assertEqual('immutable-train-version', versions['CEDAR_WORKSPACE_NPM_VERSION'])
         self.assertEqual('1.2.3', versions['NGINX_VERSION'])
 
+    @patch.object(DockerWorker, '_prepare_frontend_volumes', return_value=True)
+    @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
+           return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
-    def test_start_uses_local_snapshot_pull_policy_and_current_stack(self, execute):
+    def test_start_uses_local_snapshot_pull_policy_and_current_stack(
+            self, execute, _manifest, prepare_frontend_volumes):
         execute.return_value = CommandOutput([], 0)
 
         self.assertEqual(0, DockerWorker.start_frontends(detach=True))
+        prepare_frontend_volumes.assert_called_once()
 
         command = execute.call_args.args[0][0]
         self.assertEqual('docker compose up --detach --pull never', command)
         self.assertTrue(execute.call_args.kwargs['cwd'].endswith('cedar-docker-deploy/cedar-frontend'))
 
+    @patch.object(DockerWorker, '_prepare_frontend_volumes', return_value=True)
+    @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
+           return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
-    def test_individual_component_commands_use_compose_service_names(self, execute):
+    def test_individual_component_commands_use_compose_service_names(
+            self, execute, _manifest, _prepare_frontend_volumes):
         execute.return_value = CommandOutput([], 0)
 
         self.assertEqual(0, DockerWorker.start_frontend('designer', detach=True))

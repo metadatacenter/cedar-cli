@@ -110,6 +110,19 @@ MICROSERVICE_WRITABLE_VOLUMES = (
     'terminology_data',
 )
 
+# The frontend containers run nginx as the image's own unprivileged user (uid 101), and their
+# nginx configs write into these volumes, so ones created by older root-running images need the
+# same one-time ownership treatment the microservice volumes get.
+FRONTEND_LOG_VOLUMES = (
+    'log_frontend_main',
+    'log_frontend_content',
+    'log_frontend_openview',
+    'log_frontend_monitoring',
+    'log_frontend_bridging',
+    'log_frontend_workspace',
+    'log_frontend_template_designer',
+)
+
 
 class DockerWorker(Worker):
 
@@ -286,7 +299,17 @@ exit ${failed}
 
     @staticmethod
     def _prepare_microservice_volumes(reference):
-        for volume in MICROSERVICE_WRITABLE_VOLUMES:
+        return DockerWorker._prepare_writable_volumes(
+            reference, MICROSERVICE_WRITABLE_VOLUMES, '10001:10001')
+
+    @staticmethod
+    def _prepare_frontend_volumes(reference):
+        return DockerWorker._prepare_writable_volumes(reference, FRONTEND_LOG_VOLUMES, '101:101')
+
+    @staticmethod
+    def _prepare_writable_volumes(reference, volumes, owner):
+        sentinel = f".cedar-owner-{owner.split(':', 1)[0]}"
+        for volume in volumes:
             create = DockerWorker._docker_command(['volume', 'create', volume])
             if create.returncode != 0:
                 console.print(
@@ -299,11 +322,11 @@ exit ${failed}
                 '--volume', f'{volume}:/volume', reference,
                 '-c',
                 'owner=$(stat -c %u:%g /volume); '
-                'if [ "$owner" != "10001:10001" ] || '
-                '[ ! -e /volume/.cedar-owner-10001 ]; then '
-                'chown -R 10001:10001 /volume && '
-                'touch /volume/.cedar-owner-10001 && '
-                'chown 10001:10001 /volume/.cedar-owner-10001; fi',
+                f'if [ "$owner" != "{owner}" ] || '
+                f'[ ! -e /volume/{sentinel} ]; then '
+                f'chown -R {owner} /volume && '
+                f'touch /volume/{sentinel} && '
+                f'chown {owner} /volume/{sentinel}; fi',
             ])
             if result.returncode != 0:
                 console.print(
@@ -1119,6 +1142,12 @@ exit ${failed}
                 'cedar-server-artifact', artifact_version, environment)
             if not DockerWorker._prepare_microservice_volumes(artifact_reference):
                 return 1
+        if 'frontends' in requested_stacks:
+            frontend_version = train or DockerImages.manifest(environment)[1]
+            frontend_reference = DockerImages.reference(
+                'cedar-frontend-main', frontend_version, environment)
+            if not DockerWorker._prepare_frontend_volumes(frontend_reference):
+                return 1
 
         deadline = time.monotonic() + timeout
         if not mode.includes_frontend_containers:
@@ -1220,6 +1249,12 @@ exit ${failed}
                 'cedar-server-artifact', artifact_version, environment)
             if not DockerWorker._prepare_microservice_volumes(artifact_reference):
                 return 1
+        if stack == 'frontends':
+            frontend_version = train or DockerImages.manifest(environment)[1]
+            frontend_reference = DockerImages.reference(
+                'cedar-frontend-main', frontend_version, environment)
+            if not DockerWorker._prepare_frontend_volumes(frontend_reference):
+                return 1
         return DockerWorker.compose(stack, 'up', detach, pull, environment=environment)
 
     @staticmethod
@@ -1236,6 +1271,12 @@ exit ${failed}
             artifact_reference = DockerImages.reference(
                 f'cedar-{service}', artifact_version, environment)
             if not DockerWorker._prepare_microservice_volumes(artifact_reference):
+                return 1
+        if stack == 'frontends':
+            frontend_version = train or DockerImages.manifest(environment)[1]
+            frontend_reference = DockerImages.reference(
+                f'cedar-{service}', frontend_version, environment)
+            if not DockerWorker._prepare_frontend_volumes(frontend_reference):
                 return 1
         return DockerWorker.compose(
             stack,

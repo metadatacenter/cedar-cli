@@ -369,6 +369,26 @@ class DockerDeploymentTest(unittest.TestCase):
             'chown 10001:10001 /volume/.cedar-owner-10001; fi',
         ]), command.call_args_list)
 
+    @patch.object(DockerWorker, '_docker_command')
+    def test_frontend_log_volumes_are_prepared_for_the_nginx_user(self, command):
+        command.return_value = type('Result', (), {
+            'returncode': 0, 'stdout': '', 'stderr': '',
+        })()
+        reference = 'registry.example/cedar-frontend-main:train'
+
+        self.assertTrue(DockerWorker._prepare_frontend_volumes(reference))
+        self.assertIn(call([
+            'run', '--rm', '--pull=never', '--user', '0:0', '--entrypoint', '/bin/sh',
+            '--volume', 'log_frontend_main:/volume', reference,
+            '-c',
+            'owner=$(stat -c %u:%g /volume); '
+            'if [ "$owner" != "101:101" ] || '
+            '[ ! -e /volume/.cedar-owner-101 ]; then '
+            'chown -R 101:101 /volume && '
+            'touch /volume/.cedar-owner-101 && '
+            'chown 101:101 /volume/.cedar-owner-101; fi',
+        ]), command.call_args_list)
+
     @patch.object(DockerWorker, '_prepare_microservice_volumes', return_value=True)
     @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
            return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
