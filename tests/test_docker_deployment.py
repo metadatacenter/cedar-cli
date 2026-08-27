@@ -248,6 +248,7 @@ class DockerDeploymentTest(unittest.TestCase):
             'https://auth.metadatacenter.orgx/realms/CEDAR/.well-known/openid-configuration',
         ])
 
+    @patch.object(DockerWorker, '_prepare_frontend_volumes', return_value=True)
     @patch.object(DockerWorker, '_prepare_microservice_volumes', return_value=True)
     @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
            return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
@@ -259,7 +260,7 @@ class DockerDeploymentTest(unittest.TestCase):
     @patch.object(DockerWorker, 'mode_environment', return_value=({'MODE': 'full'}, []))
     def test_full_start_orders_all_selected_stacks(
             self, _environment, _preflight, compose, wait, _acceptance, record,
-            _manifest, prepare_volumes):
+            _manifest, prepare_microservice_volumes, prepare_frontend_volumes):
         self.assertEqual(0, DockerWorker.start_all(
             DockerDeploymentMode.FULL,
             pull='always',
@@ -277,7 +278,8 @@ class DockerDeploymentTest(unittest.TestCase):
             ['infrastructure', 'microservices', 'frontends'],
         ], [entry.args[0] for entry in wait.call_args_list])
         record.assert_called_once_with(DockerDeploymentMode.FULL)
-        prepare_volumes.assert_called_once()
+        prepare_microservice_volumes.assert_called_once()
+        prepare_frontend_volumes.assert_called_once()
 
     @patch.object(DockerWorker, '_docker_command')
     @patch.object(DockerTrain, 'completion')

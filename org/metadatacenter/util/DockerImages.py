@@ -53,10 +53,13 @@ class DockerImages:
         """Return the compatibility default declared by the shell build manifest."""
         try:
             manifest_path = cls._manifest_path()
-        except ValueError:
+        except (OSError, ValueError):
             return cls.DEFAULT_IMAGE_PREFIX
-        with open(manifest_path, encoding='utf-8') as manifest:
-            text = manifest.read()
+        try:
+            with open(manifest_path, encoding='utf-8') as manifest:
+                text = manifest.read()
+        except OSError:
+            return cls.DEFAULT_IMAGE_PREFIX
         parameterized = re.search(
             r'^export CEDAR_IMAGE_PREFIX="\$\{CEDAR_IMAGE_PREFIX:-([^}]+)\}"',
             text,

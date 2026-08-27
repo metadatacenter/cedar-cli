@@ -1,3 +1,4 @@
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -13,6 +14,10 @@ from org.metadatacenter.util.GlobalContext import GlobalContext
 
 
 class BuildPolicyTest(unittest.TestCase):
+
+    @staticmethod
+    def plain_output(output):
+        return re.sub(r"\x1b\[[0-9;]*m", "", output)
 
     def setUp(self):
         CedarCliSettings.skip_tests = False
@@ -66,13 +71,14 @@ class BuildPolicyTest(unittest.TestCase):
                 "this", "parent", "libraries", "project", "clients", "java", "all"):
             result = self.runner.invoke(build.app, [command, "--help"])
             self.assertEqual(0, result.exit_code, result.output)
-            self.assertIn("--tests", result.output)
-            self.assertIn("--skip-tests", result.output)
+            output = self.plain_output(result.output)
+            self.assertIn("--tests", output)
+            self.assertIn("--skip-tests", output)
 
         for command in ("frontends", "split-frontends"):
             result = self.runner.invoke(build.app, [command, "--help"])
             self.assertEqual(0, result.exit_code, result.output)
-            self.assertNotIn("--skip-tests", result.output)
+            self.assertNotIn("--skip-tests", self.plain_output(result.output))
 
     def test_continue_mode_runs_all_commands_and_returns_the_first_failure(self):
         executor = ShellTaskExecutor()
