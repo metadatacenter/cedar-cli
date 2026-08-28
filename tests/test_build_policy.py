@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from CedarCliSettings import CedarCliSettings
 from org.metadatacenter import build
+from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
@@ -79,6 +80,16 @@ class BuildPolicyTest(unittest.TestCase):
             result = self.runner.invoke(build.app, [command, "--help"])
             self.assertEqual(0, result.exit_code, result.output)
             self.assertNotIn("--skip-tests", self.plain_output(result.output))
+
+    def test_openview_build_runs_its_production_asset_gate(self):
+        repos = ReposFactory.build_repos()
+        openview = repos.map["cedar-openview"]
+        openview_source = next(repo for repo in openview.sub_repos
+                               if repo.name == "cedar-openview-src")
+
+        self.assertEqual(
+            ['npm install --legacy-peer-deps', 'npm run build'],
+            openview_source.build_command_list)
 
     def test_continue_mode_runs_all_commands_and_returns_the_first_failure(self):
         executor = ShellTaskExecutor()

@@ -106,7 +106,8 @@ class ReposFactory:
 
         openview_multi = Repo("cedar-openview", RepoType.MULTI, [], is_frontend=True)
         openview_src = Repo("cedar-openview-src", RepoType.ANGULAR,
-                            [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+                            [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                            build_command_list=['npm install --legacy-peer-deps', 'npm run build'])
         openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST,
                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
