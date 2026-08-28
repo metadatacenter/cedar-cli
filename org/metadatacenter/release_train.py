@@ -72,25 +72,35 @@ NPM_VERSION_SURFACES = {
         "cedar-cee-demo-ember-src",
     ],
 }
+MAVEN_GENERATED_VERSION_FILES = {
+    "cedar-terminology-server": {
+        "cedar-terminology-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-terminology-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+}
 FRONTEND_BUILD_SURFACES = [
     {"id": "template-editor", "repository": "cedar-template-editor", "directory": ".",
      "install": [], "build": []},
     {"id": "workspace", "repository": "cedar-workspace", "directory": ".",
      "install": [], "build": []},
     {"id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-src",
-     "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-openview-src/dist/cedar-openview"},
     {"id": "bridging", "repository": "cedar-bridging", "directory": "cedar-bridging-src",
-     "install": [], "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "install": [], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-bridging-src/dist/cedar-bridging"},
     {"id": "monitoring", "repository": "cedar-monitoring", "directory": "cedar-monitoring-src",
-     "install": [], "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-monitoring-src/dist/cedar-monitoring"},
     {"id": "content", "repository": "cedar-content-distribution", "directory": ".",
-     "install": [], "build": []},
+     "install": ["--legacy-peer-deps"], "build": []},
     {"id": "cee-demo-angular", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-angular-src", "install": ["--legacy-peer-deps"],
-     "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "build": ["npm", "run", "build"],
      "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src"},
     {"id": "cee-demo-ember", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-ember-src", "install": [],
@@ -1218,6 +1228,20 @@ class ReleaseVersionPreparer:
                 changed.add(path.relative_to(root).as_posix())
         if not changed:
             raise ReleaseError(f"{root.name} has no Maven version {old} to stamp")
+        for relative, pattern in MAVEN_GENERATED_VERSION_FILES.get(root.name, {}).items():
+            path = root / relative
+            old_marker = pattern.format(old).encode()
+            new_marker = pattern.format(new).encode()
+            try:
+                content = path.read_bytes()
+            except OSError as error:
+                raise ReleaseError(f"cannot read tracked generated version file {path}: {error}") from error
+            if content.count(old_marker) != 1:
+                raise ReleaseError(
+                    f"{path} does not contain exactly one generated API version {old}"
+                )
+            path.write_bytes(content.replace(old_marker, new_marker))
+            changed.add(relative)
         return changed
 
     @classmethod

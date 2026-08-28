@@ -798,6 +798,19 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     "<project><parent><version>2.9.3-SNAPSHOT</version></parent></project>\n"
                 ),
             },
+            "cedar-terminology-server": {
+                "pom.xml": (
+                    "<project><version>2.9.3-SNAPSHOT</version></project>\n"
+                ),
+                (
+                    "cedar-terminology-server-application/src/main/resources/"
+                    "assets/swagger-api/swagger.json"
+                ): '{"info":{"version" : "2.9.3-SNAPSHOT"}}\n',
+                (
+                    "cedar-terminology-server-application/src/main/resources/"
+                    "assets/swagger-api/swagger.yaml"
+                ): "info:\n  version: 2.9.3-SNAPSHOT\n",
+            },
             "cedar-template-editor": {},
             "cedar-development": {
                 "bin/util/set-env-generic.sh": f"export CEDAR_VERSION={source_version}\n",
@@ -860,7 +873,7 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             manifest.update({
                 "sourceRepositories": revisions,
                 "releaseRepositories": list(revisions),
-                "mavenRepositories": ["maven-repo"],
+                "mavenRepositories": ["maven-repo", "cedar-terminology-server"],
                 "frontendPreparation": {
                     "workspace": str(release_workspace),
                     "consumers": [{
@@ -905,6 +918,26 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             self.assertIn(
                 "<version>2.9.4-SNAPSHOT</version>",
                 (next_workspace / "maven-repo" / "pom.xml").read_text(),
+            )
+            release_swagger = (
+                release_workspace / "cedar-terminology-server"
+                / "cedar-terminology-server-application/src/main/resources/assets/"
+                "swagger-api/swagger.json"
+            )
+            next_swagger = (
+                next_workspace / "cedar-terminology-server"
+                / "cedar-terminology-server-application/src/main/resources/assets/"
+                "swagger-api/swagger.yaml"
+            )
+            self.assertIn('"version" : "2.9.3"', release_swagger.read_text())
+            self.assertIn("version: 2.9.4-SNAPSHOT", next_swagger.read_text())
+            self.assertIn(
+                release_swagger.relative_to(
+                    release_workspace / "cedar-terminology-server"
+                ).as_posix(),
+                result["release"]["repositories"]["cedar-terminology-server"][
+                    "changedFiles"
+                ],
             )
             self.assertIn(
                 "${CEDAR_MAVEN_VERSION}",
@@ -982,6 +1015,28 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertIn(
                 "nextDevelopment:npm:template-editor:install", {task["id"] for task in tasks},
             )
+
+    def test_angular_builds_do_not_forward_options_past_chained_package_scripts(self):
+        angular_surfaces = {"openview", "bridging", "monitoring", "cee-demo-angular"}
+        commands = {
+            surface["id"]: surface["build"]
+            for surface in release_train.FRONTEND_BUILD_SURFACES
+            if surface["id"] in angular_surfaces
+        }
+        self.assertEqual(
+            {surface: ["npm", "run", "build"] for surface in angular_surfaces},
+            commands,
+        )
+
+    def test_frontend_install_modes_cover_committed_peer_dependency_graphs(self):
+        install_options = {
+            surface["id"]: surface["install"]
+            for surface in release_train.FRONTEND_BUILD_SURFACES
+        }
+        self.assertEqual(["--legacy-peer-deps"], install_options["openview"])
+        self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
+        self.assertEqual(["--legacy-peer-deps"], install_options["content"])
+        self.assertEqual(["--legacy-peer-deps"], install_options["cee-demo-angular"])
 
     def test_failed_build_resume_keeps_logs_and_skips_completed_tasks(self):
         with tempfile.TemporaryDirectory() as directory:
