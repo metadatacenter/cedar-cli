@@ -1446,11 +1446,11 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
             self.assertEqual(records, resumed["remoteIntegration"]["completedTasks"])
 
     @staticmethod
-    def _commit_on_remote_main(remote, relative, content, message):
+    def _commit_on_remote_main(remote, relative, content, message, branch="main"):
         with tempfile.TemporaryDirectory() as work:
             clone = Path(work) / "clone"
             subprocess.run(["git", "clone", "--quiet", str(remote), str(clone)], check=True)
-            subprocess.run(["git", "-C", str(clone), "switch", "--quiet", "main"], check=True)
+            subprocess.run(["git", "-C", str(clone), "switch", "--quiet", branch], check=True)
             target = clone / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content)
@@ -1461,7 +1461,7 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
                 "-C", str(clone), "commit", "--quiet", "-m", message,
             ], check=True)
             subprocess.run([
-                "git", "-C", str(clone), "push", "--quiet", "origin", "main",
+                "git", "-C", str(clone), "push", "--quiet", "origin", branch,
             ], check=True)
 
     def test_main_only_content_does_not_survive_into_the_released_tree(self):
@@ -1510,6 +1510,59 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
                     remotes[repository], "ls-tree", "--name-only", main,
                 ).split()
                 self.assertNotIn("license.txt", listing)
+
+    def _surveyor(self, directory):
+        state, _creator, cedar_home, _rw, _nw = (
+            ReleaseLocalRefsTest().make_release(directory)
+        )
+        manifest, _ = state.read_current_manifest()
+        remotes = {
+            repository: self._bare_remote(
+                Path(directory), repository, cedar_home / repository, revision,
+            )
+            for repository, revision in manifest["sourceRepositories"].items()
+        }
+        integrator = ReleaseRemoteIntegrator(
+            state,
+            remote_resolver=lambda repository: str(remotes[repository]),
+            environment={
+                "CEDAR_HOME": str(cedar_home),
+                "CEDAR_RELEASE_GIT_NAME": "CEDAR Release Test",
+                "CEDAR_RELEASE_GIT_EMAIL": "release-test@metadatacenter.org",
+            },
+        )
+        return manifest, remotes, integrator
+
+    def test_survey_reports_main_only_content_before_any_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, remotes, integrator = self._surveyor(directory)
+            self.assertEqual({}, integrator.survey(manifest))
+            for repository in manifest["releaseRepositories"]:
+                self._commit_on_remote_main(
+                    remotes[repository],
+                    "license.txt",
+                    "Copyright (c) 2026, The Board of Trustees\n",
+                    "Update copyright year to 2026",
+                )
+            findings = integrator.survey(manifest)
+            self.assertEqual(set(manifest["releaseRepositories"]), set(findings))
+            for paths in findings.values():
+                self.assertEqual(["license.txt"], paths)
+
+    def test_survey_rejects_develop_that_left_the_train_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, remotes, integrator = self._surveyor(directory)
+            repository = manifest["releaseRepositories"][0]
+            self._commit_on_remote_main(
+                remotes[repository],
+                "drift.txt",
+                "moved on\n",
+                "Advance develop past the train source",
+                branch="develop",
+            )
+            with self.assertRaises(ReleaseError) as raised:
+                integrator.survey(manifest)
+            self.assertIn("develop advanced beyond train source", str(raised.exception))
 
     def test_changed_remote_ref_blocks_resume(self):
         with tempfile.TemporaryDirectory() as directory:

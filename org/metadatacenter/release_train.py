@@ -1892,6 +1892,66 @@ class ReleaseRemoteIntegrator:
             raise ReleaseError("release does not contain the complete verified local ref set")
         return result
 
+    SURVEY_VERSION_FILES = frozenset({
+        "pom.xml", "package.json", "package-lock.json", "npm-shrinkwrap.json",
+    })
+
+    def survey(self, manifest: dict) -> dict[str, list[str]]:
+        """Compare every release remote with the train source before anything is built.
+
+        Both questions this answers are otherwise reached only at remote integration, once
+        the release has already spent its Maven and frontend builds: whether a remote
+        develop has moved off the train source, which is fatal, and what main carries that
+        develop does not, which the release replaces. Answering them from ls-remote costs
+        seconds and keeps a stale remote from being discovered hours in.
+        """
+        cedar_home = self.environment.get("CEDAR_HOME")
+        if not cedar_home:
+            raise ReleaseError("CEDAR_HOME is not set")
+        findings: dict[str, list[str]] = {}
+        for repository in manifest.get("releaseRepositories", []):
+            source = manifest.get("sourceRepositories", {}).get(repository)
+            if not source:
+                raise ReleaseError(f"{repository} has no recorded train source")
+            root = Path(cedar_home) / repository
+            remote = self.remote_resolver(repository)
+            references = self._remote_refs(
+                root, remote, ["refs/heads/main", "refs/heads/develop"],
+            )
+            develop = references.get("refs/heads/develop")
+            main = references.get("refs/heads/main")
+            if develop is None or main is None:
+                raise ReleaseError(f"{repository} remote must contain main and develop")
+            if develop != source:
+                raise ReleaseError(
+                    f"{repository} develop advanced beyond train source {source}"
+                )
+            self.git._run([
+                "git", "-C", str(root), "fetch", "--quiet", "--no-tags", remote,
+                "+refs/heads/main:refs/remotes/cedar-release/survey-main",
+                "+refs/heads/develop:refs/remotes/cedar-release/survey-develop",
+            ])
+            base = self.git._run([
+                "git", "-C", str(root), "merge-base",
+                "refs/remotes/cedar-release/survey-main",
+                "refs/remotes/cedar-release/survey-develop",
+            ])
+            changed_on_main = set(self.git._run([
+                "git", "-C", str(root), "diff", "--name-only", base,
+                "refs/remotes/cedar-release/survey-main",
+            ]).splitlines())
+            changed_on_develop = set(self.git._run([
+                "git", "-C", str(root), "diff", "--name-only", base,
+                "refs/remotes/cedar-release/survey-develop",
+            ]).splitlines())
+            replaced = sorted(
+                path for path in changed_on_main - changed_on_develop
+                if path and PurePosixPath(path).name not in self.SURVEY_VERSION_FILES
+            )
+            if replaced:
+                findings[repository] = replaced
+        return findings
+
     def tasks(self, manifest: dict) -> list[dict]:
         by_repository = self._by_repository(manifest)
         tasks = []
@@ -2964,6 +3024,26 @@ def _build_or_exit(
         raise typer.Exit(1) from error
 
 
+def _render_remote_survey(manifest: dict) -> None:
+    try:
+        findings = ReleaseRemoteIntegrator(ReleaseState()).survey(manifest)
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    if not findings:
+        console.print("Remote state:        develop matches the train source, main adds nothing")
+        return
+    replaced = sum(len(paths) for paths in findings.values())
+    console.print(
+        f"[yellow]Remote state:        {replaced} file(s) in {len(findings)} repositories are "
+        "on main only; the release replaces them[/yellow]"
+    )
+    for repository, paths in sorted(findings.items()):
+        console.print(f"  {repository}")
+        for path in paths:
+            console.print(f"    {path}")
+
+
 @app.command("plan")
 def plan(
     release_version: str = typer.Option(..., "--version", help="Explicit CEDAR release version"),
@@ -2974,6 +3054,7 @@ def plan(
     """Validate explicit release inputs without changing release state."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
+    _render_remote_survey(manifest)
     console.print("No changes made.")
 
 
