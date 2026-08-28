@@ -811,6 +811,19 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     "assets/swagger-api/swagger.yaml"
                 ): "info:\n  version: 2.9.3-SNAPSHOT\n",
             },
+            "cedar-resource-server": {
+                "pom.xml": (
+                    "<project><version>2.9.3-SNAPSHOT</version></project>\n"
+                ),
+                (
+                    "cedar-resource-server-application/src/main/resources/"
+                    "assets/swagger-api/swagger.json"
+                ): '{"info":{"version" : "2.9.3-SNAPSHOT"}}\n',
+                (
+                    "cedar-resource-server-application/src/main/resources/"
+                    "assets/swagger-api/swagger.yaml"
+                ): "info:\n  version: 2.9.3-SNAPSHOT\n",
+            },
             "cedar-template-editor": {},
             "cedar-development": {
                 "bin/util/set-env-generic.sh": f"export CEDAR_VERSION={source_version}\n",
@@ -873,7 +886,11 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             manifest.update({
                 "sourceRepositories": revisions,
                 "releaseRepositories": list(revisions),
-                "mavenRepositories": ["maven-repo", "cedar-terminology-server"],
+                "mavenRepositories": [
+                    "maven-repo",
+                    "cedar-resource-server",
+                    "cedar-terminology-server",
+                ],
                 "frontendPreparation": {
                     "workspace": str(release_workspace),
                     "consumers": [{
@@ -936,6 +953,29 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     release_workspace / "cedar-terminology-server"
                 ).as_posix(),
                 result["release"]["repositories"]["cedar-terminology-server"][
+                    "changedFiles"
+                ],
+            )
+            release_resource_swagger = (
+                release_workspace / "cedar-resource-server"
+                / "cedar-resource-server-application/src/main/resources/assets/"
+                "swagger-api/swagger.yaml"
+            )
+            next_resource_swagger = (
+                next_workspace / "cedar-resource-server"
+                / "cedar-resource-server-application/src/main/resources/assets/"
+                "swagger-api/swagger.json"
+            )
+            self.assertIn("version: 2.9.3", release_resource_swagger.read_text())
+            self.assertIn(
+                '"version" : "2.9.4-SNAPSHOT"',
+                next_resource_swagger.read_text(),
+            )
+            self.assertIn(
+                release_resource_swagger.relative_to(
+                    release_workspace / "cedar-resource-server"
+                ).as_posix(),
+                result["release"]["repositories"]["cedar-resource-server"][
                     "changedFiles"
                 ],
             )

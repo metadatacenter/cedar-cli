@@ -73,6 +73,14 @@ NPM_VERSION_SURFACES = {
     ],
 }
 MAVEN_GENERATED_VERSION_FILES = {
+    "cedar-resource-server": {
+        "cedar-resource-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-resource-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
     "cedar-terminology-server": {
         "cedar-terminology-server-application/src/main/resources/assets/swagger-api/swagger.json": (
             '"version" : "{}"'
