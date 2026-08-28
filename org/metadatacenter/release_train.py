@@ -2015,6 +2015,11 @@ class ReleaseRemoteIntegrator:
             raise ReleaseError(
                 f"integration commit for {prepared['repository']} changed the prepared tree"
             )
+        # Publication packs each surface from the workspace's checked-out commit and refuses
+        # any workspace whose HEAD is not the integration commit, so leave the workspace on
+        # the integration branch. Writing the commit from the prepared tree does not move
+        # HEAD by itself the way the merge this replaced did.
+        self.git._run(["git", "-C", str(root), "switch", "--quiet", "--force", branch])
         return commit
 
     def _push(self, root: Path, remote: str, commit: str, reference: str) -> None:
@@ -2334,8 +2339,13 @@ class ReleaseArtifactPublisher:
         repository = repository_url.rstrip("/").rsplit("/", 1)[-1]
         continuation = None
         artifacts = set()
+        # Nexus indexes a snapshot component under its expanded timestamped version, such as
+        # 2.9.4-20260828.215713-1, so searching for the -SNAPSHOT version matches nothing.
+        # maven.baseVersion is the field that keeps the base version, and it applies only to
+        # snapshots; release versions are indexed under version itself.
+        key = "maven.baseVersion" if version.endswith("-SNAPSHOT") else "version"
         while True:
-            query = {"repository": repository, "version": version}
+            query = {"repository": repository, key: version}
             if continuation:
                 query["continuationToken"] = continuation
             result = self.http.read_json(

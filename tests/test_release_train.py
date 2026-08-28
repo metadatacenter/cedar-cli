@@ -1564,6 +1564,25 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
                 integrator.survey(manifest)
             self.assertIn("develop advanced beyond train source", str(raised.exception))
 
+    def test_integration_leaves_the_release_workspace_on_the_main_commit(self):
+        """Publication packs from the workspace's checked-out commit and refuses any other."""
+        with tempfile.TemporaryDirectory() as directory:
+            _state, _integrator, _remotes, completed = self.make_integrated_release(directory)
+            release_workspace = Path(completed["frontendPreparation"]["workspace"])
+            # repo-main carries a separate next-development workspace, so its release
+            # workspace keeps the main integration checkout. cedar-workspace integrates both
+            # variants in one directory and publishes through its own path, so it is excluded.
+            record = completed["remoteIntegration"]["completedTasks"]["repo-main"]
+            root = release_workspace / "repo-main"
+            self.assertEqual(
+                record["main"]["commit"],
+                ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD"),
+            )
+            self.assertEqual(
+                record["main"]["tree"],
+                ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}"),
+            )
+
     def test_changed_remote_ref_blocks_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             state, integrator, remotes, completed = self.make_integrated_release(directory)
@@ -1575,6 +1594,42 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
             state.update_current_manifest({"phase": "remote-integration-failed"})
             with self.assertRaisesRegex(ReleaseError, "remote refs changed"):
                 integrate_active_release(state, integrator)
+
+
+class ReleaseNexusInventorySearchTest(unittest.TestCase):
+    """Nexus indexes snapshots under a timestamped version, releases under the version."""
+
+    class _Http:
+        def __init__(self):
+            self.urls = []
+
+        def read_json(self, url, missing_ok=False):
+            self.urls.append(url)
+            return ({"items": [{"name": "cedar-core-library"}]}, b"{}")
+
+    def _publisher(self, http):
+        return ReleaseArtifactPublisher(
+            ReleaseState(root=Path(tempfile.gettempdir()) / "unused-state"),
+            http=http, sleeper=lambda _seconds: None,
+        )
+
+    def test_snapshot_inventory_searches_the_base_version(self):
+        http = self._Http()
+        found = self._publisher(http)._nexus_artifacts(
+            "https://nexus.example/repository/snapshots/", "2.9.4-SNAPSHOT",
+        )
+        self.assertEqual({"cedar-core-library"}, found)
+        self.assertIn("maven.baseVersion=2.9.4-SNAPSHOT", http.urls[0])
+        self.assertNotIn("&version=", http.urls[0])
+
+    def test_release_inventory_searches_the_version(self):
+        http = self._Http()
+        found = self._publisher(http)._nexus_artifacts(
+            "https://nexus.example/repository/releases/", "2.9.3",
+        )
+        self.assertEqual({"cedar-core-library"}, found)
+        self.assertIn("version=2.9.3", http.urls[0])
+        self.assertNotIn("maven.baseVersion", http.urls[0])
 
 
 class ReleaseArtifactPublicationTest(unittest.TestCase):
