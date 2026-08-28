@@ -89,6 +89,14 @@ MAVEN_GENERATED_VERSION_FILES = {
             "version: {}"
         ),
     },
+    "cedar-valuerecommender-server": {
+        "cedar-valuerecommender-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-valuerecommender-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
 }
 FRONTEND_BUILD_SURFACES = [
     {"id": "template-editor", "repository": "cedar-template-editor", "directory": ".",

@@ -824,6 +824,19 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     "assets/swagger-api/swagger.yaml"
                 ): "info:\n  version: 2.9.3-SNAPSHOT\n",
             },
+            "cedar-valuerecommender-server": {
+                "pom.xml": (
+                    "<project><version>2.9.3-SNAPSHOT</version></project>\n"
+                ),
+                (
+                    "cedar-valuerecommender-server-application/src/main/resources/"
+                    "assets/swagger-api/swagger.json"
+                ): '{"info":{"version" : "2.9.3-SNAPSHOT"}}\n',
+                (
+                    "cedar-valuerecommender-server-application/src/main/resources/"
+                    "assets/swagger-api/swagger.yaml"
+                ): "info:\n  version: 2.9.3-SNAPSHOT\n",
+            },
             "cedar-template-editor": {},
             "cedar-development": {
                 "bin/util/set-env-generic.sh": f"export CEDAR_VERSION={source_version}\n",
@@ -890,6 +903,7 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     "maven-repo",
                     "cedar-resource-server",
                     "cedar-terminology-server",
+                    "cedar-valuerecommender-server",
                 ],
                 "frontendPreparation": {
                     "workspace": str(release_workspace),
@@ -976,6 +990,31 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     release_workspace / "cedar-resource-server"
                 ).as_posix(),
                 result["release"]["repositories"]["cedar-resource-server"][
+                    "changedFiles"
+                ],
+            )
+            release_valuerecommender_swagger = (
+                release_workspace / "cedar-valuerecommender-server"
+                / "cedar-valuerecommender-server-application/src/main/resources/assets/"
+                "swagger-api/swagger.yaml"
+            )
+            next_valuerecommender_swagger = (
+                next_workspace / "cedar-valuerecommender-server"
+                / "cedar-valuerecommender-server-application/src/main/resources/assets/"
+                "swagger-api/swagger.json"
+            )
+            self.assertIn(
+                "version: 2.9.3", release_valuerecommender_swagger.read_text()
+            )
+            self.assertIn(
+                '"version" : "2.9.4-SNAPSHOT"',
+                next_valuerecommender_swagger.read_text(),
+            )
+            self.assertIn(
+                release_valuerecommender_swagger.relative_to(
+                    release_workspace / "cedar-valuerecommender-server"
+                ).as_posix(),
+                result["release"]["repositories"]["cedar-valuerecommender-server"][
                     "changedFiles"
                 ],
             )
