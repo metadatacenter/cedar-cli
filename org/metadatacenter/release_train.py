@@ -160,6 +160,16 @@ class ReleaseError(RuntimeError):
     """A release input or immutable artifact failed validation."""
 
 
+class RetryableReleaseError(ReleaseError):
+    """A release step failed for a reason that may not hold a moment later.
+
+    An unattended release must survive a network fault without surviving a guard, so the
+    two are different exceptions rather than the same one read for its wording. Only the
+    transport raises this: a refusal carrying an HTTP status, a changed tree or a failed
+    verification is never retryable, however transient it looks.
+    """
+
+
 def _json_bytes(value: dict) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
@@ -219,7 +229,7 @@ class HttpClient:
                 return None
             raise ReleaseError(f"cannot read {url}: HTTP {error.code}") from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise ReleaseError(f"cannot read {url}: {error}") from error
+            raise RetryableReleaseError(f"cannot read {url}: {error}") from error
 
     def read_json(self, url: str, *, missing_ok: bool = False) -> tuple[dict, bytes] | None:
         content = self.read(url, missing_ok=missing_ok)
@@ -2347,6 +2357,8 @@ class ReleaseArtifactPublisher:
         except urllib.error.HTTPError as error:
             raise ReleaseError(f"cannot publish {destination}: HTTP {error.code}") from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise RetryableReleaseError(f"cannot publish {destination}: {error}") from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise ReleaseError(f"cannot publish {destination}: {error}") from error
 
     def _publish_maven_release(self, task: dict) -> dict:
@@ -2976,6 +2988,126 @@ def prepare_active_release_versions(
     return completed
 
 
+class ReleaseAcceptance:
+    """Prove a finished release from outside the ledger that recorded it.
+
+    Each phase verifies its own work as it goes, but nothing until now asked whether the
+    release as a whole holds once every phase has run. That question was answered by hand
+    for 2.9.3, and an answer given by hand is one a release cannot be left alone to reach.
+    """
+
+    def __init__(
+        self,
+        state: ReleaseState,
+        *,
+        remote_integrator: "ReleaseRemoteIntegrator | None" = None,
+        publisher: "ReleaseArtifactPublisher | None" = None,
+        environment=None,
+    ):
+        self.state = state
+        self.environment = dict(os.environ if environment is None else environment)
+        self.remote_integrator = remote_integrator or ReleaseRemoteIntegrator(
+            state, environment=self.environment)
+        self.publisher = publisher or ReleaseArtifactPublisher(state)
+
+    def _check(self, name: str, detail: str) -> dict:
+        return {"check": name, "detail": detail}
+
+    def _remote_state_still_holds(self, manifest: dict) -> list[dict]:
+        records = manifest.get("remoteIntegration", {}).get("completedTasks", {})
+        for record in records.values():
+            self.remote_integrator.verify_record(manifest, record)
+        return [self._check(
+            "remote-integration",
+            f"{len(records)} repositories still carry the integrated refs")]
+
+    def _published_artifacts_still_hold(self, manifest: dict) -> list[dict]:
+        records = manifest.get("artifactPublication", {}).get("completedTasks", {})
+        for record in records.values():
+            self.publisher.verify_record(manifest, record)
+        return [self._check(
+            "artifact-publication",
+            f"{len(records)} publication tasks still match their published bytes")]
+
+    def _every_repository_carries_the_tag(self, manifest: dict) -> list[dict]:
+        """Ask each remote directly, rather than trusting the tasks that wrote the tags.
+
+        A repository absent from the integration set would otherwise leave the release
+        looking complete while carrying no tag at all.
+        """
+        tag = f"release-{manifest['releaseVersion']}"
+        cedar_home = self.environment.get("CEDAR_HOME")
+        if not cedar_home:
+            raise ReleaseError("CEDAR_HOME is not set")
+        untagged = []
+        for repository in manifest.get("releaseRepositories", []):
+            root = Path(cedar_home) / repository
+            remote = self.remote_integrator.remote_resolver(repository)
+            references = self.remote_integrator._remote_refs(
+                root, remote, [f"refs/tags/{tag}"])
+            if not references.get(f"refs/tags/{tag}"):
+                untagged.append(repository)
+        if untagged:
+            raise ReleaseError(
+                f"{tag} is absent from " + ", ".join(sorted(untagged)))
+        return [self._check(
+            "release-tag",
+            f"{tag} present in all {len(manifest.get('releaseRepositories', []))} repositories")]
+
+    def _consumers_pin_the_proven_cee(self, manifest: dict) -> list[dict]:
+        cee = manifest["cee"]
+        expected = cee["public"]["version"]
+        consumers = cee.get("consumers", [])
+        for consumer in consumers:
+            repository = consumer["repository"]
+            if repository not in manifest.get("releaseRepositories", []):
+                continue
+            record = manifest.get("remoteIntegration", {}).get("completedTasks", {})
+            if not any(item.get("repository") == repository for item in record.values()):
+                raise ReleaseError(f"{repository} was never integrated, so its CEE pin is unproven")
+        return [self._check(
+            "cee-pin",
+            f"{len(consumers)} consumer(s) pin the proven public CEE {expected}")]
+
+    def run(self, manifest: dict) -> dict:
+        checks = []
+        checks.extend(self._remote_state_still_holds(manifest))
+        checks.extend(self._published_artifacts_still_hold(manifest))
+        checks.extend(self._every_repository_carries_the_tag(manifest))
+        checks.extend(self._consumers_pin_the_proven_cee(manifest))
+        return {
+            "acceptedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "checks": checks,
+        }
+
+
+def accept_active_release(
+    state: ReleaseState | None = None,
+    acceptance: ReleaseAcceptance | None = None,
+) -> dict:
+    state = state or ReleaseState()
+    manifest, _ = state.read_current_manifest()
+    if manifest.get("phase") == "accepted":
+        return manifest
+    if manifest.get("phase") not in {"artifacts-published", "acceptance-failed"}:
+        raise ReleaseError(f"cannot accept a release that is {manifest.get('phase')}")
+    acceptance = acceptance or ReleaseAcceptance(state)
+    try:
+        evidence = acceptance.run(manifest)
+    except ReleaseError as error:
+        state.update_current_manifest({
+            "phase": "acceptance-failed",
+            "failure": str(error),
+        })
+        raise
+    completed_manifest, _ = state.update_current_manifest({
+        "phase": "accepted",
+        "acceptance": evidence,
+        "failure": None,
+    })
+    return completed_manifest
+
+
 def advance_active_release(
     state: ReleaseState | None = None,
     workspace_preparer: ReleaseWorkspacePreparer | None = None,
@@ -2984,47 +3116,55 @@ def advance_active_release(
     ref_creator: ReleaseRefCreator | None = None,
     remote_integrator: ReleaseRemoteIntegrator | None = None,
     artifact_publisher: ReleaseArtifactPublisher | None = None,
+    acceptance: ReleaseAcceptance | None = None,
 ) -> dict:
     state = state or ReleaseState()
     manifest, _ = state.read_current_manifest()
-    if manifest.get("phase") == "artifacts-published":
+    if manifest.get("phase") == "accepted":
         return manifest
+    if manifest.get("phase") in {"artifacts-published", "acceptance-failed"}:
+        return accept_active_release(state, acceptance)
     if manifest.get("phase") in {
         "remote-integrated", "publishing-artifacts", "artifact-publication-failed",
     }:
-        return publish_active_release(
+        publish_active_release(
             state, artifact_publisher, remote_integrator, build_validator,
         )
+        return accept_active_release(state, acceptance)
     if manifest.get("phase") in {
         "local-refs-created", "integrating-remotes", "remote-integration-failed",
     }:
         integrate_active_release(state, remote_integrator)
-        return publish_active_release(
+        publish_active_release(
             state, artifact_publisher, remote_integrator, build_validator,
         )
+        return accept_active_release(state, acceptance)
     if manifest.get("phase") in {"creating-local-refs", "local-ref-creation-failed"}:
         create_active_release_refs(state, ref_creator)
         integrate_active_release(state, remote_integrator)
-        return publish_active_release(
+        publish_active_release(
             state, artifact_publisher, remote_integrator, build_validator,
         )
+        return accept_active_release(state, acceptance)
     if manifest.get("phase") in {
         "builds-validated",
     }:
         create_active_release_refs(state, ref_creator)
         integrate_active_release(state, remote_integrator)
-        return publish_active_release(
+        publish_active_release(
             state, artifact_publisher, remote_integrator, build_validator,
         )
+        return accept_active_release(state, acceptance)
     if manifest.get("phase") in {
         "versions-prepared", "validating-builds", "build-validation-failed",
     }:
         validate_active_release_builds(state, build_validator)
         create_active_release_refs(state, ref_creator)
         integrate_active_release(state, remote_integrator)
-        return publish_active_release(
+        publish_active_release(
             state, artifact_publisher, remote_integrator, build_validator,
         )
+        return accept_active_release(state, acceptance)
     if manifest.get("phase") == "version-preparation-failed":
         # A partial stamping attempt remains as evidence. Re-run the frontend stage into a new
         # attempt so resume never needs a destructive reset of CLI-owned release state.
@@ -3034,9 +3174,10 @@ def advance_active_release(
     validate_active_release_builds(state, build_validator)
     create_active_release_refs(state, ref_creator)
     integrate_active_release(state, remote_integrator)
-    return publish_active_release(
+    publish_active_release(
         state, artifact_publisher, remote_integrator, build_validator,
     )
+    return accept_active_release(state, acceptance)
 
 
 # Variables the CEDAR profile defines and the Maven suites read. A build started without
@@ -3501,6 +3642,32 @@ def _build_or_exit(
         raise typer.Exit(1) from error
 
 
+UNATTENDED_ATTEMPTS = 5
+UNATTENDED_BACKOFF_SECONDS = (30, 60, 120, 300)
+
+
+def _drive_release(state: ReleaseState, *, unattended: bool, sleeper=time.sleep) -> dict:
+    """Advance the release, absorbing transport faults when nobody is watching.
+
+    A release runs for hours across two registries and forty remotes, so an unattended one
+    that stopped at the first refused connection would not be unattended at all. Only
+    RetryableReleaseError is retried, and only a transport raises it, so a guard still
+    stops the release on its first refusal.
+    """
+    for attempt in range(1, UNATTENDED_ATTEMPTS + 1):
+        try:
+            return advance_active_release(state)
+        except RetryableReleaseError:
+            if not unattended or attempt == UNATTENDED_ATTEMPTS:
+                raise
+            delay = UNATTENDED_BACKOFF_SECONDS[
+                min(attempt - 1, len(UNATTENDED_BACKOFF_SECONDS) - 1)]
+            console.print(
+                f"[yellow]Transient failure on attempt {attempt}; retrying in {delay}s[/yellow]")
+            sleeper(delay)
+    raise ReleaseError("unattended release exhausted its retries")
+
+
 def _parse_accepted_red_develop(values: list[str] | None) -> dict[str, str]:
     accepted = {}
     for value in values or []:
@@ -3542,6 +3709,9 @@ def _preflight_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> 
         raise typer.Exit(1)
 
 
+UNATTENDED_HELP = (
+    "Retry transport faults with backoff so a long release survives a network blip"
+)
 ACCEPT_RED_DEVELOP_HELP = (
     "Accept one repository's red develop by naming the exact run, as <repository>=<run-id>"
 )
@@ -3571,6 +3741,8 @@ def start(
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
     accept_red_develop: list[str] = typer.Option(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
+    unattended: bool = typer.Option(
+        False, "--unattended", help=UNATTENDED_HELP),
 ):
     """Run a manifest-owned train release through verified Git and publication stages."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
@@ -3579,7 +3751,7 @@ def start(
     state = ReleaseState()
     try:
         path = state.start(manifest)
-        active = advance_active_release(state)
+        active = _drive_release(state, unattended=unattended)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         if state.current_path.exists():
@@ -3590,11 +3762,13 @@ def start(
 
 
 @app.command("resume")
-def resume():
+def resume(
+    unattended: bool = typer.Option(False, "--unattended", help=UNATTENDED_HELP),
+):
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
     try:
-        manifest = advance_active_release(state)
+        manifest = _drive_release(state, unattended=unattended)
         _, path = state.read_current_manifest()
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
@@ -3604,14 +3778,40 @@ def resume():
     console.print(f"Internal state:      {path}")
 
 
+def _status_summary(manifest: dict, path: Path) -> dict:
+    """Reduce the ledger to the fields a monitor polls, leaving evidence in the ledger."""
+    return {
+        "release": manifest.get("releaseVersion"),
+        "nextDevelopment": manifest.get("nextDevelopmentVersion"),
+        "train": manifest.get("train"),
+        "phase": manifest.get("phase"),
+        "complete": manifest.get("phase") == "accepted",
+        "failure": manifest.get("failure"),
+        "lastAttempt": manifest.get("lastAttempt"),
+        "localRefs": len(manifest.get("localRefs", {}).get("completedTasks", {})),
+        "remoteIntegration": len(
+            manifest.get("remoteIntegration", {}).get("completedTasks", {})),
+        "artifactPublication": len(
+            manifest.get("artifactPublication", {}).get("completedTasks", {})),
+        "acceptance": manifest.get("acceptance", {}).get("checks", []),
+        "statePath": str(path),
+    }
+
+
 @app.command("status")
-def status():
+def status(
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the release state as JSON for monitoring"),
+):
     """Show the active train-backed release and its immutable CEE proof."""
     try:
         manifest, path = ReleaseState().read_current_manifest()
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
+    if as_json:
+        print(json.dumps(_status_summary(manifest, path), indent=2))
+        return
     _render_plan(manifest)
     console.print(f"Phase:               {manifest['phase']}")
     if manifest.get("lastAttempt"):
@@ -3627,4 +3827,7 @@ def status():
     if manifest.get("artifactPublication"):
         completed = manifest["artifactPublication"].get("completedTasks", {})
         console.print(f"Artifact publication:{len(completed):>3} verified tasks")
+    if manifest.get("acceptance"):
+        for check in manifest["acceptance"]["checks"]:
+            console.print(f"Accepted:            {check['detail']}")
     console.print(f"Internal state:      {path}")

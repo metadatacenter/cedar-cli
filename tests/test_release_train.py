@@ -29,6 +29,9 @@ from org.metadatacenter.release_train import (
     ReleaseRefCreator,
     ReleaseRemoteIntegrator,
     ReleaseState,
+    ReleaseAcceptance,
+    RetryableReleaseError,
+    accept_active_release,
     ReleaseVersionPreparer,
     ReleaseWorkspacePreparer,
     advance_active_release,
@@ -633,10 +636,10 @@ class ReleaseStateAndCliTest(unittest.TestCase):
                 "--cee-version", PUBLIC_VERSION,
             ])
             self.assertEqual(0, start.exit_code, start.output)
-            self.assertIn("Phase:               artifacts-published", start.output)
+            self.assertIn("Phase:               accepted", start.output)
             status = self.runner.invoke(release_train.app, ["status"])
             self.assertEqual(0, status.exit_code, status.output)
-            self.assertIn("Phase:               artifacts-published", status.output)
+            self.assertIn("Phase:               accepted", status.output)
             self.assertIn("Local refs:          0 prepared refs", status.output)
             self.assertIn("Remote integration:  0 repositories", status.output)
             self.assertIn("Artifact publication:  0 verified tasks", status.output)
@@ -2293,6 +2296,144 @@ class ReleaseLicenseStampingTest(unittest.TestCase):
 
         self.assertIn("license.txt", changed)
         self.assertIn("pom.xml", changed)
+
+
+class ReleaseAcceptanceTest(unittest.TestCase):
+    """The release proves itself, rather than leaving an operator to prove it by hand."""
+
+    def _published(self, directory):
+        state = ReleaseState(root=Path(directory))
+        manifest = manifest_fixture()
+        manifest["releaseRepositories"] = ["repo-one", "repo-two"]
+        state.start(manifest)
+        state.update_current_manifest({"phase": "artifacts-published"})
+        return state
+
+    @staticmethod
+    def _acceptance(state, *, tagged):
+        acceptance = ReleaseAcceptance(
+            state, environment={"CEDAR_HOME": "/tmp/cedar-acceptance"})
+        acceptance.remote_integrator.remote_resolver = lambda repository: "origin"
+        acceptance.remote_integrator._remote_refs = (
+            lambda root, remote, refs: {ref: "a" * 40 for ref in refs}
+            if root.name in tagged else {})
+        return acceptance
+
+    def test_a_repository_without_the_release_tag_fails_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._published(directory)
+            acceptance = self._acceptance(state, tagged={"repo-one"})
+
+            with self.assertRaisesRegex(ReleaseError, "release-2.9.3 is absent from repo-two"):
+                accept_active_release(state, acceptance)
+
+            manifest, _ = state.read_current_manifest()
+            self.assertEqual("acceptance-failed", manifest["phase"])
+            self.assertIn("repo-two", manifest["failure"])
+
+    def test_a_release_that_holds_everywhere_is_recorded_as_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._published(directory)
+            acceptance = self._acceptance(state, tagged={"repo-one", "repo-two"})
+
+            manifest = accept_active_release(state, acceptance)
+
+        self.assertEqual("accepted", manifest["phase"])
+        details = [check["detail"] for check in manifest["acceptance"]["checks"]]
+        self.assertTrue(any("release-2.9.3 present in all 2" in detail for detail in details))
+        self.assertIsNotNone(manifest["acceptance"]["acceptedAt"])
+
+    def test_acceptance_is_reached_from_a_published_release(self):
+        """Publication is no longer the end of the route."""
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._published(directory)
+            acceptance = self._acceptance(state, tagged={"repo-one", "repo-two"})
+
+            manifest = advance_active_release(state, acceptance=acceptance)
+
+        self.assertEqual("accepted", manifest["phase"])
+
+    def test_an_accepted_release_is_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._published(directory)
+            state.update_current_manifest({"phase": "accepted"})
+
+            manifest = advance_active_release(state, acceptance=None)
+
+        self.assertEqual("accepted", manifest["phase"])
+
+
+class UnattendedReleaseTest(unittest.TestCase):
+    """A network blip must not end a release; a guard must still end it at once."""
+
+    def _state(self, directory):
+        state = ReleaseState(root=Path(directory))
+        state.start(manifest_fixture())
+        return state
+
+    def test_a_transport_fault_is_retried_with_backoff(self):
+        slept = []
+        outcomes = [
+            RetryableReleaseError("connection reset"),
+            RetryableReleaseError("connection reset"),
+            {"phase": "accepted"},
+        ]
+
+        def advance(_state):
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(release_train, "advance_active_release", advance):
+            manifest = release_train._drive_release(
+                self._state(directory), unattended=True, sleeper=slept.append)
+
+        self.assertEqual("accepted", manifest["phase"])
+        self.assertEqual([30, 60], slept)
+
+    def test_a_guard_failure_stops_immediately_even_when_unattended(self):
+        slept = []
+
+        def advance(_state):
+            raise ReleaseError("integration commit changed the prepared tree")
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(release_train, "advance_active_release", advance):
+            with self.assertRaisesRegex(ReleaseError, "changed the prepared tree"):
+                release_train._drive_release(
+                    self._state(directory), unattended=True, sleeper=slept.append)
+
+        self.assertEqual([], slept, "a guard failure must not be retried")
+
+    def test_an_attended_release_does_not_retry(self):
+        slept = []
+
+        def advance(_state):
+            raise RetryableReleaseError("connection reset")
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(release_train, "advance_active_release", advance):
+            with self.assertRaises(RetryableReleaseError):
+                release_train._drive_release(
+                    self._state(directory), unattended=False, sleeper=slept.append)
+
+        self.assertEqual([], slept)
+
+    def test_retries_are_bounded(self):
+        slept = []
+
+        def advance(_state):
+            raise RetryableReleaseError("connection reset")
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(release_train, "advance_active_release", advance):
+            with self.assertRaises(RetryableReleaseError):
+                release_train._drive_release(
+                    self._state(directory), unattended=True, sleeper=slept.append)
+
+        self.assertEqual(release_train.UNATTENDED_ATTEMPTS - 1, len(slept))
 
 
 if __name__ == "__main__":
