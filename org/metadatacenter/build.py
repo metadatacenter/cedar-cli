@@ -10,11 +10,20 @@ app = typer.Typer(no_args_is_help=True)
 
 plan_executor = PlanExecutor()
 
+JAVA_TESTS_OPTION_HELP = "Run Java test suites. Default: run."
+
+
+def configure_java_tests(tests: bool):
+    GlobalContext.mark_skip_tests(not tests)
+
 
 @app.command("this")
 def this(wd: str = typer.Option(None, help="Working directory"),
          dry_run: bool = typer.Option(False, help="Dry run"),
-         dump_plan: bool = typer.Option(False, help="Dump plan")):
+         dump_plan: bool = typer.Option(False, help="Dump plan"),
+         tests: bool = typer.Option(
+             True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+    configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build this")
     BuildPlanner.this(plan, wd)
@@ -23,7 +32,10 @@ def this(wd: str = typer.Option(None, help="Working directory"),
 
 @app.command("parent")
 def parent(dry_run: bool = typer.Option(False, help="Dry run"),
-           dump_plan: bool = typer.Option(False, help="Dump plan")):
+           dump_plan: bool = typer.Option(False, help="Dump plan"),
+           tests: bool = typer.Option(
+               True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+    configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build parent")
     BuildPlanner.parent(plan)
@@ -32,7 +44,10 @@ def parent(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("libraries")
 def libraries(dry_run: bool = typer.Option(False, help="Dry run"),
-              dump_plan: bool = typer.Option(False, help="Dump plan")):
+              dump_plan: bool = typer.Option(False, help="Dump plan"),
+              tests: bool = typer.Option(
+                  True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+    configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build libraries")
     BuildPlanner.libraries(plan)
@@ -41,7 +56,10 @@ def libraries(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("project")
 def project(dry_run: bool = typer.Option(False, help="Dry run"),
-            dump_plan: bool = typer.Option(False, help="Dump plan")):
+            dump_plan: bool = typer.Option(False, help="Dump plan"),
+            tests: bool = typer.Option(
+                True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+    configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build project")
     BuildPlanner.project(plan)
@@ -50,7 +68,10 @@ def project(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("clients")
 def clients(dry_run: bool = typer.Option(False, help="Dry run"),
-            dump_plan: bool = typer.Option(False, help="Dump plan")):
+            dump_plan: bool = typer.Option(False, help="Dump plan"),
+            tests: bool = typer.Option(
+                True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+    configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build clients")
     BuildPlanner.clients(plan)
@@ -59,7 +80,10 @@ def clients(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("java")
 def java(dry_run: bool = typer.Option(False, help="Dry run"),
-         dump_plan: bool = typer.Option(False, help="Dump plan")):
+         dump_plan: bool = typer.Option(False, help="Dump plan"),
+         tests: bool = typer.Option(
+             True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+    configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build java")
     BuildPlanner.parent(plan)
@@ -93,7 +117,10 @@ def split_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("all")
 def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
-              dump_plan: bool = typer.Option(False, help="Dump plan")):
+              dump_plan: bool = typer.Option(False, help="Dump plan"),
+              tests: bool = typer.Option(
+                  True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+    configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
     BuildPlanner.parent(plan)

@@ -1,6 +1,5 @@
 from typing import List
 
-from org.metadatacenter.model.ArtifactType import ArtifactType
 from org.metadatacenter.model.PrePostType import PrePostType
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.VersionType import VersionType
@@ -8,25 +7,21 @@ from org.metadatacenter.model.VersionType import VersionType
 
 class Repo:
 
-    def __init__(self, name: str, repo_type: RepoType, artifact_type: ArtifactType,
-                 version_list: List[VersionType],
-                 is_client=False, is_library=False, is_microservice=False, is_private=False, for_docker=False,
-                 is_frontend=False, expected_build_lines=100,
+    def __init__(self, name: str, repo_type: RepoType, version_list: List[VersionType],
+                 is_library=False, is_microservice=False, is_private=False, for_docker=False,
+                 is_frontend=False,
                  allow_different_version=False, skip_from_release=False, skip_npm_install=False,
                  build_command_list: List[str] = None, server_build_command_list: List[str] = None,
-                 deploy_command_list: List[str] = None,
-                 skip_from_default_deploy=False):
+                 publish_command_list: List[str] = None,
+                 skip_from_default_publish=False):
         self.name = name
         self.repo_type = repo_type
-        self.artifact_type = artifact_type
         self.version_list = version_list
-        self.is_client = is_client
         self.is_library = is_library
         self.is_microservice = is_microservice
         self.is_private = is_private
         self.for_docker = for_docker
         self.is_frontend = is_frontend
-        self.expected_build_lines = expected_build_lines
         self.is_sub_repo = False
         self.sub_repos = []
         self.parent_repo = None
@@ -34,7 +29,7 @@ class Repo:
         self.allow_different_version = allow_different_version
         self.skip_from_release = skip_from_release
         self.skip_npm_install = skip_npm_install
-        self.skip_from_default_deploy = skip_from_default_deploy
+        self.skip_from_default_publish = skip_from_default_publish
         # Shell commands that build this repo, replacing the ones its repo type implies.
         # A repo that owns its own packaging pipeline sets this so the CLI drives that
         # pipeline instead of reproducing it from outside.
@@ -44,7 +39,7 @@ class Repo:
         self.server_build_command_list = server_build_command_list
         # Shell commands that publish this repo. A repo with an explicit publication pipeline uses
         # this instead of the generic commands implied by its repository type.
-        self.deploy_command_list = deploy_command_list
+        self.publish_command_list = publish_command_list
 
     def __eq__(self, obj):
         return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()

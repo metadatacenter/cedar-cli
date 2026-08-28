@@ -1,25 +1,49 @@
-import typer
+from enum import Enum
+from typing import Optional
 
+import typer
+from rich.console import Console
+
+from org.metadatacenter.util.ModeManager import ModeError
 from org.metadatacenter.worker.EnvWorker import EnvWorker
 
 app = typer.Typer(no_args_is_help=True)
+console = Console()
 
 
-@app.command("list", help="Lists all CEDAR environment variables")
-def env_list():
-    EnvWorker.list()
+class EnvironmentSurface(str, Enum):
+    NATIVE = "native"
+    DOCKER = "docker"
 
 
-@app.command("core", help="Lists core CEDAR environment variables")
-def core():
-    EnvWorker.core()
+def run(operation, *args):
+    try:
+        operation(*args)
+    except ModeError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
 
 
-@app.command("release", help="Lists CEDAR environment variables key to release process")
-def core():
-    EnvWorker.release()
+@app.command("status", help="Show the selected mode and its effective environment sources")
+def status():
+    run(EnvWorker.status)
 
 
-@app.command("filter", help="Lists CEDAR environment variables that contain the passed filter term")
-def filter(filter_term: str = typer.Argument('', help="Environment variable name to search for")):
-    EnvWorker.filter(filter_term)
+@app.command("list", help="List effective CEDAR variables with sensitive values redacted")
+def env_list(surface: Optional[EnvironmentSurface] = typer.Argument(
+        None, help="Environment surface to inspect in hybrid mode: native or docker")):
+    run(EnvWorker.list, surface.value if surface else None)
+
+
+@app.command("release", help="Show the CEDAR inputs used by the release process")
+def release():
+    run(EnvWorker.release)
+
+
+@app.command("filter", help="Filter effective CEDAR variables with sensitive values redacted")
+def filter(
+        filter_term: str = typer.Argument(..., help="Environment variable name to search for"),
+        surface: Optional[EnvironmentSurface] = typer.Argument(
+            None, help="Environment surface to inspect in hybrid mode: native or docker"),
+):
+    run(EnvWorker.filter, filter_term, surface.value if surface else None)

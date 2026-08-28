@@ -1,102 +1,73 @@
-from rich.console import Console
-
-from org.metadatacenter.util.GlobalContext import GlobalContext
-from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.worker.Worker import Worker
-
-console = Console()
 
 
 class StartMicroserviceWorker(Worker):
 
-    def __init__(self):
-        super().__init__()
-
     @staticmethod
     def all():
-        if GlobalContext.get_use_osa():
-            Worker.execute_generic_shell_commands(
-                ["osascript " + Util.get_osa_script_path('start-microservices-new-tab.scpt')],
-                title="Launching Microservices in new tab",
-            )
-        else:
-            Worker.execute_generic_shell_commands(
-                ["source " + Util.get_bash_script_path('start-microservices.sh')],
-                title="Launching Microservices",
-            )
+        return NativeWorker.start(NativeWorker.MICROSERVICES)
 
     @staticmethod
     def artifact():
-        StartMicroserviceWorker._start("artifact")
+        return StartMicroserviceWorker._start("artifact")
 
     @staticmethod
     def bridge():
-        StartMicroserviceWorker._start("bridge")
+        return StartMicroserviceWorker._start("bridge")
 
     @staticmethod
     def group():
-        StartMicroserviceWorker._start("group")
+        return StartMicroserviceWorker._start("group")
 
     @staticmethod
     def impex():
-        StartMicroserviceWorker._start("impex")
+        return StartMicroserviceWorker._start("impex")
 
     @staticmethod
     def messaging():
-        StartMicroserviceWorker._start("messaging")
+        return StartMicroserviceWorker._start("messaging")
 
     @staticmethod
     def monitor():
-        StartMicroserviceWorker._start("monitor")
+        return StartMicroserviceWorker._start("monitor")
 
     @staticmethod
     def open():
-        StartMicroserviceWorker._start("open")
+        return StartMicroserviceWorker._start("openview")
 
     @staticmethod
     def repo():
-        StartMicroserviceWorker._start("repo")
+        return StartMicroserviceWorker._start("repo")
 
     @staticmethod
     def resource():
-        StartMicroserviceWorker._start("resource")
+        return StartMicroserviceWorker._start("resource")
 
     @staticmethod
     def schema():
-        StartMicroserviceWorker._start("schema")
+        return StartMicroserviceWorker._start("schema")
 
     @staticmethod
     def submission():
-        StartMicroserviceWorker._start("submission")
+        return StartMicroserviceWorker._start("submission")
 
     @staticmethod
     def terminology():
-        StartMicroserviceWorker._start("terminology")
+        return StartMicroserviceWorker._start("terminology")
 
     @staticmethod
     def user():
-        StartMicroserviceWorker._start("user")
+        return StartMicroserviceWorker._start("user")
 
     @staticmethod
     def valuerecommender():
-        StartMicroserviceWorker._start("valuerecommender")
+        return StartMicroserviceWorker._start("valuerecommender")
 
     @staticmethod
     def worker():
-        StartMicroserviceWorker._start("worker")
+        return StartMicroserviceWorker._start("worker")
 
     @staticmethod
     def _start(service_name: str):
-        title = f"Launching {service_name.capitalize()} Microservice"
-        if GlobalContext.get_use_osa():
-            script = f"start-microservice-{service_name}-new-tab.scpt"
-            Worker.execute_generic_shell_commands(
-                ["osascript " + Util.get_osa_script_path(script)],
-                title=title + " in new tab",
-            )
-        else:
-            script = f"start-microservice-{service_name}.sh"
-            Worker.execute_generic_shell_commands(
-                ["source " + Util.get_bash_script_path(script)],
-                title=title,
-            )
+        return NativeWorker.start((service_name,))

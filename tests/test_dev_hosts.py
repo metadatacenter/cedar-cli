@@ -1,4 +1,5 @@
 import unittest
+import os
 from unittest.mock import patch
 
 from org.metadatacenter.config.SubdomainsFactory import SubdomainsFactory
@@ -9,7 +10,8 @@ class DevHostsTest(unittest.TestCase):
 
     @patch('org.metadatacenter.worker.DevWorker.Worker.execute_generic_shell_commands')
     def test_add_hosts_uses_the_central_subdomain_inventory(self, execute):
-        DevWorker.add_hosts()
+        with patch.dict(os.environ, {"CEDAR_HOST": "metadatacenter.orgx"}):
+            DevWorker.add_hosts()
 
         command = execute.call_args.args[0][0]
         configured = {name for name in SubdomainsFactory.build_subdomains().map if name}
@@ -19,6 +21,7 @@ class DevHostsTest(unittest.TestCase):
         self.assertIn('    "workspace"', command)
         self.assertIn('    "designer"', command)
         self.assertIn('    "shared"', command)
+        self.assertIn('sudo tee -a /etc/hosts', command)
 
 
 if __name__ == '__main__':

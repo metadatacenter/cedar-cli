@@ -1,25 +1,21 @@
 import typer
 
-from org.metadatacenter.worker.ArtifactsWorker import ArtifactsWorker
+from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.VersionWorker import VersionWorker
 
 app = typer.Typer(no_args_is_help=True)
 
 version_worker = VersionWorker()
-artifacts_worker = ArtifactsWorker()
 
 
 @app.command("versions")
 def versions():
-    version_worker.check_versions()
-
-
-@app.command("artifacts")
-def versions():
-    artifacts_worker.check_artifacts()
+    """Check version declarations across configured repositories."""
+    exit_on_failure(version_worker.check_versions())
 
 
 @app.command("repos")
 def repos():
-    RepoWorker.check_repos()
+    """Check that configured repositories exist and list unmanaged Git clones."""
+    exit_on_failure(RepoWorker.check_repos())

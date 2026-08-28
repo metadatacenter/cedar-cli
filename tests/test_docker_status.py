@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from rich.console import Console
 
+from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
@@ -24,13 +25,24 @@ def container(service, state='running', health='healthy'):
 class DockerStatusTest(unittest.TestCase):
 
     def setUp(self):
+        self.output = StringIO()
         self.console_patch = patch(
             'org.metadatacenter.worker.DockerWorker.console',
-            Console(file=StringIO(), force_terminal=False),
+            Console(file=self.output, force_terminal=False),
         )
         self.console_patch.start()
+        self.mode_environment_patch = patch.object(
+            DockerWorker,
+            'mode_environment',
+            return_value=({}, []),
+        )
+        self.mode_environment_patch.start()
+        self.acceptance_patch = patch.object(DockerWorker, '_acceptance_errors', return_value=[])
+        self.acceptance = self.acceptance_patch.start()
 
     def tearDown(self):
+        self.acceptance_patch.stop()
+        self.mode_environment_patch.stop()
         self.console_patch.stop()
 
     @patch.object(DockerWorker, '_compose_containers')
@@ -51,25 +63,14 @@ class DockerStatusTest(unittest.TestCase):
     @patch.object(DockerWorker, '_expected_compose_services')
     @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
-    def test_admin_can_be_required_explicitly(self, _version, expected, actual):
+    def test_hybrid_checks_backend_containers_and_frontend_routes(self, _version, expected, actual):
         expected.return_value = (['one'], None)
         actual.return_value = ({'one': container('one')}, None)
 
-        self.assertTrue(DockerWorker.status(include_admin=True))
-        self.assertEqual(4, expected.call_count)
-        self.assertIn('cedar-admin', [call.args[0] for call in actual.call_args_list])
-
-    @patch.object(DockerWorker, '_compose_containers')
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
-    @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
-    def test_frontends_can_be_excluded_for_hybrid_mode(self, _version, expected, actual):
-        expected.return_value = (['one'], None)
-        actual.return_value = ({'one': container('one')}, None)
-
-        self.assertTrue(DockerWorker.status(include_frontends=False))
+        self.assertTrue(DockerWorker.status(mode=DockerDeploymentMode.HYBRID))
         self.assertEqual(2, expected.call_count)
         self.assertNotIn('cedar-frontend', [call.args[0] for call in actual.call_args_list])
+        self.acceptance.assert_called_once_with(DockerDeploymentMode.HYBRID)
 
     @patch.object(DockerWorker, '_compose_containers', return_value=({}, None))
     @patch.object(DockerWorker, '_expected_compose_services', return_value=(['missing'], None))
@@ -83,6 +84,12 @@ class DockerStatusTest(unittest.TestCase):
     def test_unavailable_daemon_fails_before_reading_compose(self, _version, expected):
         self.assertFalse(DockerWorker.status())
         expected.assert_not_called()
+        output = self.output.getvalue()
+        self.assertIn('Docker is unavailable', output)
+        self.assertIn('Start Docker Desktop', output)
+        self.assertNotIn('daemon unavailable', output)
+        self.assertNotIn('0/0 selected Docker services', output)
+        self.assertNotIn('docker compose logs', output)
 
     def test_container_report_handles_health_and_runtime_state(self):
         self.assertEqual('✅', DockerWorker._container_report(container('ok'))[0])
@@ -91,6 +98,25 @@ class DockerStatusTest(unittest.TestCase):
         self.assertEqual('❌', DockerWorker._container_report(container('bad', health='unhealthy'))[0])
         self.assertEqual('❌', DockerWorker._container_report(container('stopped', state='exited'))[0])
         self.assertEqual('❌', DockerWorker._container_report(None)[0])
+
+    def test_status_service_order_is_stable_and_keeps_unknown_services(self):
+        first = DockerWorker._ordered_status_services(
+            'frontends',
+            ['frontend-workspace', 'future-frontend', 'frontend-main', 'frontend-content'],
+        )
+        second = DockerWorker._ordered_status_services(
+            'frontends',
+            ['frontend-content', 'frontend-main', 'future-frontend', 'frontend-workspace'],
+        )
+
+        expected = [
+            'frontend-main',
+            'frontend-content',
+            'frontend-workspace',
+            'future-frontend',
+        ]
+        self.assertEqual(expected, first)
+        self.assertEqual(expected, second)
 
     @patch.object(DockerWorker, '_docker_command')
     def test_compose_container_inventory_uses_labels(self, command):

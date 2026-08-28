@@ -110,11 +110,21 @@ class PlanExecutor(Executor):
         )
 
         with Live(progress_table, refresh_per_second=10) as live:
-            self.execute_recursively(plan, max_depth, 0, [], live, overall_progress,
-                                     overall_task, job_progress, repo_progress, repo_task, dry_run)
+            failures = self.execute_recursively(
+                plan, max_depth, 0, [], live, overall_progress,
+                overall_task, job_progress, repo_progress, repo_task, dry_run)
 
         for a in range(0, 5):
             console.print()
+        if failures:
+            details = "\n".join(f"- {failure}" for failure in failures)
+            console.print(Panel(
+                f"[bright_magenta]Execution completed with {len(failures)} failed task(s).[/bright_magenta]\n"
+                + details,
+                title="Execution completed with failures",
+                title_align="left"),
+                style=Style(color="orange_red1"))
+            raise SystemExit(1)
         console.print(Panel(
             "[bright_green] Execution succeeded!",
             title="Execution succeeded",
@@ -123,6 +133,7 @@ class PlanExecutor(Executor):
 
     def execute_recursively(self, plan: Plan, max_depth: int, current_depth: int, task_stack: List[Plan], live, overall_progress,
                             overall_task, job_progress, repo_progress, repo_task, dry_run: bool):
+        failures = []
         task_stack.append(plan)
 
         repo_progress.tasks[repo_task].description = plan.repo.name if isinstance(plan, PlanTask) else ""
@@ -151,14 +162,20 @@ class PlanExecutor(Executor):
                         style=Style(color="orange_red1"))
                     sys.exit(1)
                 else:
+                    failure = (
+                        f"task #{plan.node_id} {plan.name} "
+                        f"({plan.repo.name}) exited {return_code}")
+                    failures.append(failure)
                     job_progress.print(Panel(
                         "\n" * 5 +
-                        "[bright_magenta] Execution continued, error disregarded!" +
+                        "[bright_magenta] Execution continued after a recorded error!" +
                         "\n" * 5,
                         title="Execution continued",
                         title_align="left"),
                         style=Style(color="orange_red1"))
 
         for task in plan.tasks:
-            self.execute_recursively(task, max_depth, current_depth + 1, task_stack, live, overall_progress,
-                                     overall_task, job_progress, repo_progress, repo_task, dry_run)
+            failures.extend(self.execute_recursively(
+                task, max_depth, current_depth + 1, task_stack, live, overall_progress,
+                overall_task, job_progress, repo_progress, repo_task, dry_run))
+        return failures

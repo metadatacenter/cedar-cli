@@ -1,6 +1,9 @@
 import binascii
 import hashlib
 import os
+import re
+import shlex
+from pathlib import Path
 
 from rich.console import Console
 from rich.style import Style
@@ -8,9 +11,14 @@ from rich.table import Table
 
 from org.metadatacenter.config.SubdomainsFactory import SubdomainsFactory
 from org.metadatacenter.util.Const import Const
+from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
+
+
+class DevError(ValueError):
+    pass
 
 
 class DevWorker(Worker):
@@ -18,54 +26,33 @@ class DevWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    # TODO think about recreating this functionality in Python
     @staticmethod
     def create_directories():
-        Worker.execute_generic_shell_commands([
-            """
-echo "Creating CEDAR directories for local development"
-
-mkdir -p ${CEDAR_HOME}/cache/terminology/
-mkdir -p ${CEDAR_HOME}/CEDAR_CA/
-mkdir -p ${CEDAR_HOME}/export/
-mkdir -p ${CEDAR_HOME}/tmp/
-
-mkdir -p ${CEDAR_HOME}/log/frontend-bridging/
-mkdir -p ${CEDAR_HOME}/log/frontend-cedar/
-mkdir -p ${CEDAR_HOME}/log/frontend-content/
-mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular/
-mkdir -p ${CEDAR_HOME}/log/frontend-cee-demo-angular-dist/
-mkdir -p ${CEDAR_HOME}/log/frontend-monitoring/
-mkdir -p ${CEDAR_HOME}/log/frontend-openview/
-mkdir -p ${CEDAR_HOME}/log/frontend-shared/
-
-mkdir -p ${CEDAR_HOME}/log/server-artifact/
-mkdir -p ${CEDAR_HOME}/log/server-auth
-mkdir -p ${CEDAR_HOME}/log/server-bridge/
-mkdir -p ${CEDAR_HOME}/log/server-group
-mkdir -p ${CEDAR_HOME}/log/server-impex/
-mkdir -p ${CEDAR_HOME}/log/server-messaging
-mkdir -p ${CEDAR_HOME}/log/server-monitor
-mkdir -p ${CEDAR_HOME}/log/server-open
-mkdir -p ${CEDAR_HOME}/log/server-repo
-mkdir -p ${CEDAR_HOME}/log/server-resource
-mkdir -p ${CEDAR_HOME}/log/server-schema
-mkdir -p ${CEDAR_HOME}/log/server-submission
-mkdir -p ${CEDAR_HOME}/log/server-terminology
-mkdir -p ${CEDAR_HOME}/log/server-user
-mkdir -p ${CEDAR_HOME}/log/server-valuerecommender
-mkdir -p ${CEDAR_HOME}/log/server-worker
-
-mkdir -p ${CEDAR_HOME}/log/cadsr-tools/
-
-mkdir -p ${CEDAR_HOME}/log/nginx/
-"""
-        ],
-            title="Creating all CEDAR log and working directories",
-        )
+        cedar_home = Path(Util.cedar_home)
+        relative_paths = [
+            'cache/terminology', 'CEDAR_CA', 'export', 'tmp', 'log/run',
+            'log/frontend-bridging', 'log/frontend-cedar', 'log/frontend-content',
+            'log/frontend-cee-demo-angular', 'log/frontend-cee-demo-angular-dist',
+            'log/frontend-monitoring', 'log/frontend-openview', 'log/frontend-shared',
+            'log/frontend-workspace', 'log/frontend-designer',
+            'log/server-artifact', 'log/server-auth', 'log/server-bridge', 'log/server-group',
+            'log/server-impex', 'log/server-messaging', 'log/server-monitor', 'log/server-open',
+            'log/server-repo', 'log/server-resource', 'log/server-schema',
+            'log/server-submission', 'log/server-terminology', 'log/server-user',
+            'log/server-valuerecommender', 'log/server-worker', 'log/cadsr-tools', 'log/nginx',
+        ]
+        for relative_path in relative_paths:
+            (cedar_home / relative_path).mkdir(parents=True, exist_ok=True)
+        console.print(f"[green]CEDAR working directories are ready under {cedar_home}.[/green]")
+        return 0
 
     @staticmethod
     def add_hosts():
+        domain = os.environ.get(Const.CEDAR_HOST)
+        if not domain:
+            raise DevError("CEDAR_HOST is not set. Load a CEDAR profile before adding hostnames.")
+        if not re.fullmatch(r"[A-Za-z0-9.-]+", domain):
+            raise DevError(f"CEDAR_HOST is not a valid hostname suffix: {domain}")
         host_lines = "\n".join(
             f'    "{name}"'
             for name in SubdomainsFactory.build_subdomains().map
@@ -76,20 +63,17 @@ CEDAR_HOSTS=(
 __CEDAR_HOST_LINES__
 )
 
-counter=0
+hosts=()
 echo "Testing the list of CEDAR hosts:"
 for i in "${CEDAR_HOSTS[@]}"
 do
-  HOST=$i.${CEDAR_HOST}
-  ping -c 1 ${HOST} > /dev/null 2>&1
-
-  if [[ $? != 0 ]];
+  HOST="$i.${CEDAR_HOST}"
+  if ! ping -c 1 "$HOST" > /dev/null 2>&1
   then
-    echo "Host unknown :" ${HOST}
-    hosts[$counter]=${HOST}
-    ((counter++))
+    echo "Host unknown : $HOST"
+    hosts+=("$HOST")
   else
-    echo "Host known   :" ${HOST}
+    echo "Host known   : $HOST"
   fi
 done
 
@@ -101,21 +85,22 @@ then
 else
   echo "Some CEDAR hosts are unknown, we will prompt for your password in order to make modifications to /etc/hosts !"
   echo
-  STR="$'\n'$'\n'# Added by CEDAR install process on $(date +%Y-%m-%d) [YYYY-mm-dd] from here:$'\n'"
-  sudo bash -c "echo ${STR} >> /etc/hosts"
-  for i in "${hosts[@]}"
-  do
-    echo "Host unknown, adding to /etc/hosts:" $i
-    STR="127.0.0.1$'\t'$i"
-    sudo bash -c "echo ${STR} >> /etc/hosts"
-  done
-  STR="$'\n'# Added by CEDAR install process until here.$'\n'"
-  sudo bash -c "echo ${STR} >> /etc/hosts"
+  block=$(mktemp)
+  trap 'rm -f "$block"' EXIT
+  {
+    printf "\n# Added by CEDAR install process on %s from here:\n" "$(date +%Y-%m-%d)"
+    for i in "${hosts[@]}"; do
+      echo "Host unknown, adding to /etc/hosts: $i" >&2
+      printf "127.0.0.1\t%s\n" "$i"
+    done
+    printf "# Added by CEDAR install process until here.\n"
+  } > "$block"
+  sudo tee -a /etc/hosts < "$block" > /dev/null || exit 1
 fi
 
 echo
 """
-        Worker.execute_generic_shell_commands([
+        return Worker.execute_generic_shell_commands([
             command.replace("__CEDAR_HOST_LINES__", host_lines)
         ],
             title="Adding CEDAR hostnames to /etc/hosts",
@@ -123,14 +108,32 @@ echo
 
     @staticmethod
     def copy_keycloak_listener():
-        Worker.execute_generic_shell_commands([
-            """
-cp $CEDAR_HOME/cedar-keycloak-event-listener/target/cedar-keycloak-event-listener.jar ${CEDAR_KEYCLOAK_HOME}/providers/.
-cd ${CEDAR_KEYCLOAK_HOME}/bin
-./kc.sh build
-"""
-        ],
-            title="Adding CEDAR hostnames to /etc/hosts",
+        cedar_home = Path(Util.cedar_home)
+        keycloak_home_value = os.environ.get('CEDAR_KEYCLOAK_HOME')
+        if not keycloak_home_value:
+            raise DevError("CEDAR_KEYCLOAK_HOME is not set. Load the target CEDAR profile first.")
+        source = cedar_home / 'cedar-keycloak-event-listener' / 'target' / 'cedar-keycloak-event-listener.jar'
+        keycloak_home = Path(keycloak_home_value)
+        provider_dir = keycloak_home / 'providers'
+        build_script = keycloak_home / 'bin' / 'kc.sh'
+        missing = []
+        if not source.is_file():
+            missing.append(str(source))
+        if not provider_dir.is_dir():
+            missing.append(str(provider_dir))
+        if not build_script.is_file():
+            missing.append(str(build_script))
+        if missing:
+            raise DevError(f"Cannot install the Keycloak listener; missing: {', '.join(missing)}")
+        command = (
+            f"cp {shlex.quote(str(source))} {shlex.quote(str(provider_dir))}/"
+            " && "
+            f"{shlex.quote(str(build_script))} build"
+        )
+        return Worker.execute_generic_shell_commands(
+            [command],
+            cwd=str(keycloak_home / 'bin'),
+            title="Installing the CEDAR Keycloak event listener",
         )
 
     @staticmethod
@@ -140,11 +143,7 @@ cd ${CEDAR_KEYCLOAK_HOME}/bin
         else:
             salt = 'saltme'
 
-        try:
-            digest = hashlib.sha256()
-        except Exception as e:
-            print(f"Error while building SHA-256 digest: {e}")
-            return None
+        digest = hashlib.sha256()
 
         digest.update(salt.encode('utf-8'))
         digest.update(user_id.encode('utf-8'))
@@ -158,8 +157,8 @@ cd ${CEDAR_KEYCLOAK_HOME}/bin
         api_key = binascii.hexlify(hash_bytes).decode('utf-8')
 
         table = Table("Name", "Value", title="Generated CEDAR apiKey")
-        table.add_row('salt', salt)
         table.add_row('userId', user_id)
         table.add_row('apiKey', api_key)
         table.style = Style(color="green")
         console.print(table)
+        return api_key

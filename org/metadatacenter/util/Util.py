@@ -5,6 +5,7 @@ import shutil
 import sys
 from datetime import datetime
 from math import log2
+from pathlib import Path
 from typing import List
 
 import rich
@@ -95,9 +96,14 @@ class Util(object):
         if Const.CEDAR_HOME in os.environ:
             cls.cedar_home = os.environ[Const.CEDAR_HOME]
         else:
-            err = 'CEDAR_HOME environment variable is not set. In order to proceed, please set it to an existing folder'
-            console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
-            sys.exit(1)
+            inferred = Path(__file__).resolve().parents[4]
+            if (inferred / 'cedar-development').is_dir():
+                cls.cedar_home = str(inferred)
+                os.environ[Const.CEDAR_HOME] = cls.cedar_home
+            else:
+                err = 'CEDAR_HOME environment variable is not set and could not be inferred from the cedarcli installation'
+                console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
+                sys.exit(1)
 
     @classmethod
     def check_release_variables(cls):
@@ -152,16 +158,12 @@ class Util(object):
             return True
 
     @classmethod
-    def get_osa_script_path(cls, script_name):
-        return os.path.join(os.getcwd(), 'scripts', 'osa', script_name)
-
-    @classmethod
     def get_bash_script_path(cls, script_name):
-        return os.path.join(os.getcwd(), 'scripts', 'bash', script_name)
+        return str(Path(__file__).resolve().parents[3] / 'scripts' / 'bash' / script_name)
 
     @classmethod
     def get_asset_file_path(cls, asset_path: List[str]):
-        return os.path.join(os.getcwd(), 'assets', *asset_path)
+        return str(Path(__file__).resolve().parents[3] / 'assets' / Path(*asset_path))
 
     @classmethod
     def write_cedar_file(cls, file_name: str, content):
@@ -248,7 +250,7 @@ class Util(object):
     def get_build_version(cls, task: PlanTask):
         if 'version' in task.parameters:
             return task.get_parameter('version')
-        if task.task_type == TaskType.BUILD or task.task_type == TaskType.DEPLOY:
+        if task.task_type == TaskType.BUILD or task.task_type == TaskType.PUBLISH:
             return os.environ[Const.CEDAR_VERSION]
         elif task.task_type == TaskType.RELEASE_PREPARE:
             if Const.PARAM_BRANCH_TYPE in task.parameters and task.get_parameter(Const.PARAM_BRANCH_TYPE) == PreReleaseBranchType.NEXT_DEV:

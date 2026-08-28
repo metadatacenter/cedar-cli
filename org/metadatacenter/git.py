@@ -1,4 +1,5 @@
 import typer
+from typing import List
 
 from org.metadatacenter import git_clone, git_list
 from org.metadatacenter.worker.GitWorker import GitWorker
@@ -46,5 +47,13 @@ def git_next():
 
 
 @app.command("add-commit-push")
-def git_add_commit_push(comment: str):
-    git_worker.git_add_commit_push(comment)
+def git_add_commit_push(
+        comment: str,
+        repo: str = typer.Option(..., "--repo", "-r", help="Exact repository name"),
+        paths: List[str] = typer.Option(..., "--path", "-p", help="Explicit file or directory to stage")):
+    try:
+        result = git_worker.git_add_commit_push(comment, repo, paths)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
+    if any(triple.err for triple in result.results):
+        raise typer.Exit(code=1)

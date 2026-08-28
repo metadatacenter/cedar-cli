@@ -1,106 +1,75 @@
-# cedar-cli
-## About
-CEDAR CLI is CEDAR's command line interface used to facilitate:
-* Development
-* Docker install
-* Native install
-* Managing a running CEDAR server
+# cedarcli
 
-As such, you should install `cedar-cli` in the context of an existing or a new `CEDAR` installation.
+[![CI](https://github.com/metadatacenter/cedar-cli/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/metadatacenter/cedar-cli/actions/workflows/ci.yml)
 
-This is why we are setting `CEDAR_HOME` and the alias in the script below. You should have these set in your bash profile. 
-## How to install
+Start with the published documentation:
+
+- [cedarcli Manual](https://metadatacenter.readthedocs.io/en/latest/developer-guide/cedarcli/)
+  explains repositories, Maven, builds, publication, and the native, hybrid, and Docker modes.
+- [Developer Install](https://metadatacenter.readthedocs.io/en/latest/install-developer/overview/)
+  installs cedarcli as part of a source development environment.
+- [Docker Install](https://metadatacenter.readthedocs.io/en/latest/install-docker/overview/)
+  installs cedarcli as part of a container deployment.
+- [CEDAR CLI Cheat Sheet](https://metadatacenter.readthedocs.io/en/latest/install-docker/cedarcli-cheat-sheet/)
+  is the compact command reference.
+
+This README is for contributors to the CLI itself. The published manual is the user guide.
+
+## What This Repository Implements
+
+cedarcli is a Python command-line coordinator for a multi-repository CEDAR installation. It invokes
+Git, Maven, npm, Docker Compose, and the native process controllers while preserving CEDAR's
+dependency order and deployment-mode boundaries. It is not a daemon and does not replace those
+underlying tools.
+
+The main implementation areas are:
+
+- `cedar.py` registers the top-level command groups.
+- `org/metadatacenter/*.py` defines the Typer command surfaces.
+- `org/metadatacenter/config/` and `org/metadatacenter/model/` describe repositories, images,
+  targets, and plans.
+- `org/metadatacenter/planner/`, `org/metadatacenter/executor/`, and
+  `org/metadatacenter/worker/` translate commands into work and run it.
+- `org/metadatacenter/util/` contains shared environment, mode, build-train, Docker, and process
+  safeguards.
+- `tests/` exercises command paths without starting a real CEDAR deployment.
+- `cli.sh` and its `python3` variant `cli3.sh` are shell wrappers used by the `cedarcli` alias. They
+  activate the repository virtual environment, preserve the caller's working directory for
+  `build this` and `publish this`, and return the Python process's exit status.
+
+## Contributor Setup
+
+The installation guides establish `CEDAR_HOME`, clone the companion repositories, and create the
+normal alias. For work on cedarcli itself, create its isolated Python environment and install the
+runtime and test dependencies:
 
 ```bash
-export CEDAR_HOME='/Users/cedar-dev/CEDAR/'
-
-cd ${CEDAR_HOME}
-git clone https://github.com/metadatacenter/cedar-cli
-
-cd cedar-cli
-git checkout develop
-
-python -m venv ./.venv
+cd "$CEDAR_HOME/cedar-cli"
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-
-alias cedarcli='source $CEDAR_HOME/cedar-cli/cli.sh'
-
-cedar.py --help
+python -m pip install -r requirements.txt pytest
 ```
 
-## Available commands
-`cedar-cli` is executed by running `cedarcli` after the alias is set.
-
-The available commands will be listed by executing:
-```bash
-cedarcli
-```
-
-## Native and Docker status
-
-The two deployment modes deliberately have separate status commands:
+Run the test suite from this repository:
 
 ```bash
-cedarcli status                       # Native processes and host-port health checks
-cedarcli docker status                # Required Docker infrastructure, services, and frontends
-cedarcli docker status --no-frontends # 22-container backend for a native-frontend hybrid
-cedarcli docker status --include-admin # Also require the optional admin tools
+python -m pytest tests -v
 ```
 
-Docker keeps some ports private to `cedarnet`, so the native status command cannot accurately
-assess a Docker deployment. Docker status instead compares each Compose project's expected service
-inventory with its containers and health checks, and exits nonzero if anything is missing,
-stopped, unhealthy, or still starting.
+The tests expect `cedar-development` and `cedar-docker-build` beside `cedar-cli`, matching the
+normal `$CEDAR_HOME` layout. They mock external process and network work or use inspection-only
+controller paths; the CI suite does not start CEDAR.
 
-Docker starts default to `--pull never`, matching the current locally-built `2.9.2-SNAPSHOT`
-workflow. Use `--pull missing` or `--pull always` explicitly after configuring a registry-backed
-deployment:
+## Changing Commands
 
-```bash
-cedarcli docker start infrastructure -d
-cedarcli docker start microservices -d
-cedarcli docker start frontends -d
-```
+Keep command parsing in the command module and put orchestration in a planner or worker. Reuse the
+repository catalog and shared target models instead of restating repository, service, frontend, or
+image inventories. Mode checks belong at the command boundary so a new operation cannot silently
+cross from native ownership into Docker ownership, or the reverse.
 
-## Cheat sheet
-The full set of commands and subcommands will be shown as a `pdf` file after executing:
-```bash
-cedarcli cheat
-```
-
-![CEDAR CLI commands](assets/docs/cedar-cli.png?raw=true "CEDAR CLI commands")
-
-## Split frontend publication and native deployment
-
-Workspace and Template Designer remain outside `release all-in-one` until migration acceptance.
-They are also excluded from the generic `deploy frontends` and `deploy all` commands, so an ordinary
-legacy deployment cannot publish or activate them accidentally.
-
-Use the explicit commands when preparing a split-frontend build:
-
-```bash
-# Reproducibly install the exact locked dependencies in both Git checkouts.
-cedarcli build split-frontends
-
-# On a native staging/production host, configure both static trees and write build identity.
-# This requires CEDAR_FRONTEND_BEHAVIOR=server and the exact environment frontend URLs.
-cedarcli build split-frontends --server-payload
-
-# Publish both current package versions to the Nexus registries declared by their package.json files.
-cedarcli deploy split-frontends --dry-run
-cedarcli deploy split-frontends
-
-# Run or stop both development Gulp servers locally on ports 4201 and 4202.
-cedarcli start frontend split-frontends
-cedarcli stop frontend split-frontends
-```
-
-`deploy` retains cedarcli's historical meaning of publishing build artifacts: it runs `npm ci` and
-`npm publish` in each repository. It does not change DNS, certificates, nginx, Keycloak, CORS, or
-public routing. Those environment operations remain separate acceptance and cutover gates.
-
-Staging and production need no Docker. Their nginx virtual hosts serve
-`cedar-workspace/app` and `cedar-template-designer/app` directly after `--server-payload` exits, just
-as the existing native deployment serves the monolith's `app` tree. The start/stop commands are for
-the local `CEDAR_FRONTEND_BEHAVIOR=develop` profile, not for a static nginx host.
+When a user-facing command changes, update its tests, the
+[cedarcli Manual](https://github.com/metadatacenter/cedar-mkdocs/tree/main/docs/developer-guide/cedarcli),
+and the
+[cheat-sheet generator](https://github.com/metadatacenter/cedar-mkdocs/blob/main/tools/generate_cedarcli_cheatsheet.py).
+Regenerate `assets/docs/cedar-cli.pdf` and `assets/docs/cedar-cli.png` rather than editing those
+artifacts directly.

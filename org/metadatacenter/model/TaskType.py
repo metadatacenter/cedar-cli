@@ -1,6 +1,6 @@
 class TaskType:
     BUILD = "build"
-    DEPLOY = "deploy"
+    PUBLISH = "publish"
     SHELL = "shell"
     SHELL_WRAPPER = "shell-wrapper"
     NOOP = "noop"

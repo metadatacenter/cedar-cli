@@ -15,7 +15,7 @@ def remove_containers():
     exit_on_failure(DockerWorker.remove_containers())
 
 
-@app.command("images", help="Remove local metadatacenter/cedar-* images.")
+@app.command("images", help="Remove local CEDAR images under the configured image prefix.")
 def remove_images():
     exit_on_failure(DockerWorker.remove_images())
 

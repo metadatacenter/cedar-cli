@@ -1,50 +1,51 @@
 import typer
 
 from org.metadatacenter.worker.StopFrontendWorker import StopFrontendWorker
+from org.metadatacenter.util.CliResult import exit_on_failure
 
 app = typer.Typer(no_args_is_help=True)
 
 
 @app.command("main")
 def main():
-    StopFrontendWorker.main()
+    exit_on_failure(StopFrontendWorker.main())
 
 
 @app.command("openview")
 def openview():
-    StopFrontendWorker.openview()
+    exit_on_failure(StopFrontendWorker.openview())
 
 
 @app.command("monitoring")
 def monitoring():
-    StopFrontendWorker.monitoring()
+    exit_on_failure(StopFrontendWorker.monitoring())
 
 
 @app.command("bridging")
 def bridging():
-    StopFrontendWorker.bridging()
+    exit_on_failure(StopFrontendWorker.bridging())
 
 
 @app.command("content")
 def content():
-    StopFrontendWorker.content()
+    exit_on_failure(StopFrontendWorker.content())
 
 
 @app.command("workspace")
 def workspace():
-    StopFrontendWorker.workspace()
+    exit_on_failure(StopFrontendWorker.workspace())
 
 
 @app.command("designer")
 def designer():
-    StopFrontendWorker.designer()
+    exit_on_failure(StopFrontendWorker.designer())
 
 
 @app.command("split-frontends")
 def split_frontends():
-    StopFrontendWorker.split_frontends()
+    exit_on_failure(StopFrontendWorker.split_frontends())
 
 
 @app.command("all")
 def frontend_all():
-    StopFrontendWorker.all()
+    exit_on_failure(StopFrontendWorker.all())

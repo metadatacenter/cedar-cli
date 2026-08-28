@@ -1,50 +1,66 @@
 import typer
+from rich.console import Console
 
 from org.metadatacenter import stop_frontend, stop_microservice
+from org.metadatacenter.model.CedarMode import CedarMode
+from org.metadatacenter.util.ModeManager import ModeError, ModeManager
+from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.worker.StopFrontendWorker import StopFrontendWorker
 from org.metadatacenter.worker.StopInfrastructureWorker import StopInfrastructureWorker
 from org.metadatacenter.worker.StopMicroserviceWorker import StopMicroserviceWorker
+from org.metadatacenter.worker.NativeWorker import NativeWorker
 
 app = typer.Typer(no_args_is_help=True)
+console = Console()
+
+
+@app.callback()
+def require_allowed_native_stop(ctx: typer.Context):
+    try:
+        mode = ModeManager.require_surface("native", check_runtime=False)
+        if mode is CedarMode.HYBRID and ctx.invoked_subcommand not in ("frontends", "frontend"):
+            raise ModeError(
+                f"CEDAR mode is hybrid; native stop {ctx.invoked_subcommand} would operate on the Docker backend"
+            )
+    except ModeError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
+
+
 app.add_typer(stop_frontend.app, name="frontend")
 app.add_typer(stop_microservice.app, name="microservice")
 
 
 @app.command("all")
 def all_all():
-    StopFrontendWorker.all()
-    StopMicroserviceWorker.all()
-    StopInfrastructureWorker.all()
+    exit_on_failure(NativeWorker.stop())
+    exit_on_failure(StopInfrastructureWorker.all())
+
+
+@app.command("backends")
+def backend_all():
+    exit_on_failure(StopMicroserviceWorker.all())
+    exit_on_failure(StopInfrastructureWorker.all())
 
 
 @app.command("infra")
 def infra_all():
-    StopInfrastructureWorker.all()
+    exit_on_failure(StopInfrastructureWorker.all())
 
 
 @app.command("microservices")
 def microservice_all():
-    StopMicroserviceWorker.all()
-
-
-@app.command("java")
-def java_all():
-    StopMicroserviceWorker.all()
+    exit_on_failure(StopMicroserviceWorker.all())
 
 
 @app.command("frontends")
 def frontend_all():
-    StopFrontendWorker.all()
-
-
-@app.command("uis")
-def ui_all():
-    StopFrontendWorker.all()
+    exit_on_failure(StopFrontendWorker.all())
 
 
 @app.command("kk")
 def infra_kk():
-    StopInfrastructureWorker.keycloak()
+    exit_on_failure(StopInfrastructureWorker.keycloak())
 
 
 @app.command("keycloak")

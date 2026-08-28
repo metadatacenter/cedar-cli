@@ -1,6 +1,7 @@
 import difflib
 import os
 import re
+import subprocess
 
 from org.metadatacenter.util.Util import Util
 
@@ -13,7 +14,11 @@ from org.metadatacenter.util.Util import Util
 
 
 class DockerImages:
-    GROUPS = ['infrastructure', 'microservices', 'frontends', 'admin']
+    GROUPS = ['infra', 'microservices', 'frontends', 'admin']
+    INTERNAL_IMAGES = {'cedar-java', 'cedar-microservice'}
+    DEFAULT_IMAGE_PREFIX = 'metadatacenter'
+    _REPOSITORY_COMPONENT = re.compile(r'^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$')
+    _REGISTRY_HOST = re.compile(r'^[a-z0-9]+(?:[.-][a-z0-9]+)*$')
 
     @staticmethod
     def build_home():
@@ -25,21 +30,126 @@ class DockerImages:
         return os.path.join(home, 'cedar-docker-build')
 
     @classmethod
+    def source_revision(cls):
+        """Exact cedar-docker-build commit used for OCI provenance labels, when available."""
+        try:
+            result = subprocess.run(
+                ['git', '-C', cls.build_home(), 'rev-parse', 'HEAD'],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except (OSError, ValueError):
+            return None
+        revision = result.stdout.strip()
+        return revision if result.returncode == 0 and re.fullmatch(r'[0-9a-f]{40}', revision) else None
+
+    @classmethod
     def _manifest_path(cls):
         return os.path.join(cls.build_home(), 'bin', 'cedar-images-base.sh')
 
     @classmethod
-    def manifest(cls):
-        """Image names and version, read from the shell manifest that stays the source of truth."""
-        text = open(cls._manifest_path()).read()
-        version = re.search(r'^export IMAGE_VERSION=(\S+)', text, re.M)
-        prefix = re.search(r'^export CEDAR_IMAGE_PREFIX="([^"]+)"', text, re.M)
-        array = re.search(r'CEDAR_DOCKER_IMAGES=\((.*?)\)', text, re.S)
-        images = re.findall(r'"([^"]+)"', array.group(1)) if array else []
-        return images, (version.group(1) if version else None), (prefix.group(1) if prefix else 'metadatacenter')
+    def default_image_prefix(cls):
+        """Return the compatibility default declared by the shell build manifest."""
+        try:
+            manifest_path = cls._manifest_path()
+        except (OSError, ValueError):
+            return cls.DEFAULT_IMAGE_PREFIX
+        try:
+            with open(manifest_path, encoding='utf-8') as manifest:
+                text = manifest.read()
+        except OSError:
+            return cls.DEFAULT_IMAGE_PREFIX
+        parameterized = re.search(
+            r'^export CEDAR_IMAGE_PREFIX="\$\{CEDAR_IMAGE_PREFIX:-([^}]+)\}"',
+            text,
+            re.M,
+        )
+        if parameterized:
+            return parameterized.group(1)
+        legacy = re.search(r'^export CEDAR_IMAGE_PREFIX="([^"]+)"', text, re.M)
+        return legacy.group(1) if legacy else cls.DEFAULT_IMAGE_PREFIX
 
     @classmethod
-    def server_versions(cls):
+    def validate_image_prefix(cls, prefix):
+        """Validate a Docker repository prefix such as registry.example.org:5000/cedar."""
+        if not prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX is empty')
+        if len(prefix) > 255:
+            raise ValueError('CEDAR_IMAGE_PREFIX is longer than 255 characters')
+        if prefix != prefix.lower():
+            raise ValueError('CEDAR_IMAGE_PREFIX must be lowercase')
+        if '://' in prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX must not include a URL scheme')
+        if prefix.startswith('/') or prefix.endswith('/') or '//' in prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX must not start or end with / or contain //')
+        if any(character.isspace() for character in prefix) or '@' in prefix:
+            raise ValueError('CEDAR_IMAGE_PREFIX must not contain whitespace or a digest')
+
+        components = prefix.split('/')
+        first = components[0]
+        if ':' in first:
+            host, separator, port = first.rpartition(':')
+            if not separator or not cls._REGISTRY_HOST.fullmatch(host):
+                raise ValueError('CEDAR_IMAGE_PREFIX has an invalid registry host')
+            if not port.isdigit() or not 1 <= int(port) <= 65535:
+                raise ValueError('CEDAR_IMAGE_PREFIX has an invalid registry port')
+            components = components[1:]
+
+        if not components and ':' in first:
+            return prefix
+        if any(not cls._REPOSITORY_COMPONENT.fullmatch(component) for component in components):
+            raise ValueError('CEDAR_IMAGE_PREFIX has an invalid repository component')
+        return prefix
+
+    @classmethod
+    def image_prefix(cls, environment=None):
+        environment = os.environ if environment is None else environment
+        prefix = environment.get('CEDAR_IMAGE_PREFIX')
+        if prefix is None:
+            prefix = cls.default_image_prefix()
+        return cls.validate_image_prefix(prefix)
+
+    @classmethod
+    def base_image_prefix(cls, environment=None):
+        """Registry prefix for the two non-runtime Java base images.
+
+        It defaults to the runtime prefix so existing Docker Hub and local builds keep using one
+        namespace. Registry publication can put the bases in a private/internal repository without
+        leaking that repository into Compose.
+        """
+        environment = os.environ if environment is None else environment
+        prefix = environment.get('CEDAR_BASE_IMAGE_PREFIX')
+        if prefix is None:
+            prefix = cls.image_prefix(environment)
+        return cls.validate_image_prefix(prefix)
+
+    @classmethod
+    def prefix_for(cls, image, environment=None):
+        if image in cls.INTERNAL_IMAGES:
+            return cls.base_image_prefix(environment)
+        return cls.image_prefix(environment)
+
+    @classmethod
+    def reference(cls, image, version, environment=None):
+        return f'{cls.prefix_for(image, environment)}/{image}:{version}'
+
+    @classmethod
+    def manifest(cls, environment=None):
+        """Image names and version, read from the shell manifest that stays the source of truth."""
+        environment = os.environ if environment is None else environment
+        with open(cls._manifest_path(), encoding='utf-8') as manifest:
+            text = manifest.read()
+        version = re.search(r'^export IMAGE_VERSION=(\S+)', text, re.M)
+        array = re.search(r'CEDAR_DOCKER_IMAGES=\((.*?)\)', text, re.S)
+        images = re.findall(r'"([^"]+)"', array.group(1)) if array else []
+        selected_version = environment.get('CEDAR_TRAIN_VERSION')
+        if selected_version is None:
+            selected_version = version.group(1) if version else None
+        return images, selected_version, cls.image_prefix(environment)
+
+    @classmethod
+    def server_versions(cls, environment=None):
         """The locked infrastructure server versions the images are built against.
 
         Every `export <NAME>_VERSION=` in the manifest other than the CEDAR image version itself,
@@ -47,9 +157,15 @@ class DockerImages:
         Dockerfiles declare these as build arguments with no default, so a version missing here
         fails the build rather than being silently substituted.
         """
-        text = open(cls._manifest_path()).read()
+        environment = os.environ if environment is None else environment
+        with open(cls._manifest_path(), encoding='utf-8') as manifest:
+            text = manifest.read()
         found = re.findall(r'^export ([A-Z0-9_]+(?:_VERSION|_SHA256))=(\S+)', text, re.M)
-        return {name: value for name, value in found if name != 'IMAGE_VERSION'}
+        return {
+            name: environment.get(name, value)
+            for name, value in found
+            if name != 'IMAGE_VERSION'
+        }
 
     @staticmethod
     def short_name(image):
@@ -81,8 +197,10 @@ class DockerImages:
         if not os.path.exists(path):
             return []
         bases = []
-        for line in open(path).read().splitlines():
-            m = re.match(r'\s*FROM\s+metadatacenter/(\S+?):', line)
+        with open(path, encoding='utf-8') as dockerfile:
+            lines = dockerfile.read().splitlines()
+        for line in lines:
+            m = re.match(r'\s*FROM\s+\$\{CEDAR_IMAGE_PREFIX\}/(\S+?):', line)
             if m:
                 bases.append(m.group(1))
         return bases
@@ -112,7 +230,8 @@ class DockerImages:
         if target == 'all':
             return list(images)
         if target in cls.GROUPS:
-            selected = [i for i in images if cls.group_of(i) == target]
+            internal_group = 'infrastructure' if target == 'infra' else target
+            selected = [i for i in images if cls.group_of(i) == internal_group]
             if not selected:
                 raise ValueError(f'no images in group "{target}"')
             return selected

@@ -40,7 +40,7 @@ class GlobalContext(object):
     @classmethod
     def init_task_operators(cls):
         from org.metadatacenter.operator.BuildOperator import BuildOperator
-        from org.metadatacenter.operator.DeployOperator import DeployOperator
+        from org.metadatacenter.operator.PublishOperator import PublishOperator
         from org.metadatacenter.operator.ReleasePrepareOperator import ReleasePrepareOperator
         from org.metadatacenter.operator.ReleasePrepareCreateBranchOperator import ReleasePrepareCreateBranchOperator
         from org.metadatacenter.operator.ReleaseRollbackOperator import ReleaseRollbackOperator
@@ -49,7 +49,7 @@ class GlobalContext(object):
         from org.metadatacenter.operator.ReleaseBranchCheckoutOperator import ReleaseBranchCheckoutOperator
         cls.task_operators = {
             TaskType.BUILD: BuildOperator(),
-            TaskType.DEPLOY: DeployOperator(),
+            TaskType.PUBLISH: PublishOperator(),
             TaskType.RELEASE_PREPARE: ReleasePrepareOperator(),
             TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchOperator(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator(),
@@ -61,7 +61,7 @@ class GlobalContext(object):
     @classmethod
     def init_task_executors(cls):
         from org.metadatacenter.taskexecutor.BuildTaskExecutor import BuildTaskExecutor
-        from org.metadatacenter.taskexecutor.DeployTaskExecutor import DeployTaskExecutor
+        from org.metadatacenter.taskexecutor.PublishTaskExecutor import PublishTaskExecutor
         from org.metadatacenter.taskexecutor.ReleasePrepareTaskExecutor import ReleasePrepareTaskExecutor
         from org.metadatacenter.taskexecutor.ReleasePrepareCreateBranchTaskExecutor import ReleasePrepareCreateBranchTaskExecutor
         from org.metadatacenter.taskexecutor.ShellWrapperTaskExecutor import ShellWrapperTaskExecutor
@@ -73,7 +73,7 @@ class GlobalContext(object):
         from org.metadatacenter.taskexecutor.ReleaseBranchCheckoutTaskExecutor import ReleaseBranchCheckoutTaskExecutor
         cls.task_executors = {
             TaskType.BUILD: BuildTaskExecutor(),
-            TaskType.DEPLOY: DeployTaskExecutor(),
+            TaskType.PUBLISH: PublishTaskExecutor(),
             TaskType.RELEASE_PREPARE: ReleasePrepareTaskExecutor(),
             TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchTaskExecutor(),
             TaskType.RELEASE_ROLLBACK: ReleaseRollbackTaskExecutor(),
@@ -112,13 +112,17 @@ class GlobalContext(object):
         CedarCliSettings.do_fail_on_error = False
 
     @classmethod
+    def should_skip_tests(cls):
+        return CedarCliSettings.skip_tests
+
+    @classmethod
+    def mark_skip_tests(cls, skip_tests: bool):
+        CedarCliSettings.skip_tests = skip_tests
+
+    @classmethod
     def get_shell(cls):
         return CedarCliSettings.shell_path
 
     @classmethod
     def get_sed_replace_in_place(cls):
         return CedarCliSettings.get_sed_replace_in_place()
-
-    @classmethod
-    def get_use_osa(cls):
-        return CedarCliSettings.get_use_osa()
