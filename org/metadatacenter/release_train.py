@@ -74,6 +74,9 @@ NPM_VERSION_SURFACES = {
         "cedar-cee-demo-ember-src",
     ],
 }
+LICENSE_FILE_NAME = "license.txt"
+LICENSE_COPYRIGHT_RE = re.compile(r"^Copyright \(c\) (\d{4}),", re.MULTILINE)
+
 MAVEN_GENERATED_VERSION_FILES = {
     "cedar-resource-server": {
         "cedar-resource-server-application/src/main/resources/assets/swagger-api/swagger.json": (
@@ -1311,7 +1314,37 @@ class ReleaseVersionPreparer:
         return changed
 
     @classmethod
+    def _stamp_license(cls, root: Path, year: str) -> set[str]:
+        """Move the copyright year forward so releases, rather than January, keep it current.
+
+        Only the year moves, and only on a copyright line of the shape preflight recognised.
+        A licence that does not carry one is left alone rather than rewritten to a guess.
+        """
+        path = root / LICENSE_FILE_NAME
+        if not path.is_file():
+            return set()
+        text = path.read_text(encoding="utf-8")
+        match = LICENSE_COPYRIGHT_RE.search(text)
+        if match is None or match.group(1) == year:
+            return set()
+        path.write_text(text[:match.start(1)] + year + text[match.end(1):], encoding="utf-8")
+        return {LICENSE_FILE_NAME}
+
+    @classmethod
     def _stamp_repository(
+        cls,
+        repository: str,
+        root: Path,
+        old: str,
+        new: str,
+        maven_repositories: set[str],
+        copyright_year: str,
+    ) -> set[str]:
+        changed = cls._stamp_license(root, copyright_year)
+        return changed | cls._stamp_versions(repository, root, old, new, maven_repositories)
+
+    @classmethod
+    def _stamp_versions(
         cls,
         repository: str,
         root: Path,
@@ -1374,6 +1407,7 @@ class ReleaseVersionPreparer:
             raise ReleaseError("release manifest has no explicit train source SNAPSHOT version")
         release_version = manifest["releaseVersion"]
         next_version = manifest["nextDevelopmentVersion"]
+        copyright_year = str(dt.datetime.fromisoformat(manifest["createdAt"]).year)
         if old == next_version:
             raise ReleaseError("next development version must differ from the train source version")
 
@@ -1415,7 +1449,7 @@ class ReleaseVersionPreparer:
             for repository in release_repositories:
                 root = workspace / repository
                 stamped = self._stamp_repository(
-                    repository, root, old, target, maven_repositories
+                    repository, root, old, target, maven_repositories, copyright_year
                 )
                 allowed = set(stamped)
                 allowed.update(cee_allowed_by_repo.get(repository, set()))
@@ -3036,8 +3070,6 @@ GENERATED_VERSION_FILE_GLOBS = (
     "*/src/main/resources/assets/swagger-api/swagger.yaml",
 )
 
-LICENSE_FILE_NAME = "license.txt"
-LICENSE_COPYRIGHT_RE = re.compile(r"^Copyright \(c\) (\d{4}),", re.MULTILINE)
 
 
 @dataclasses.dataclass(frozen=True)

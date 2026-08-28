@@ -2223,5 +2223,77 @@ class ReleasePreflightTest(unittest.TestCase):
                 f"{command.__name__} does not run preflight")
 
 
+class ReleaseLicenseStampingTest(unittest.TestCase):
+    """A release, rather than the turn of a year, is what keeps the copyright current."""
+
+    LICENSE = (
+        "Copyright (c) 2025, The Board of Trustees of Leland Stanford Junior University\n"
+        "All rights reserved.\n"
+        "\n"
+        "Redistribution and use in source and binary forms are permitted provided that\n"
+        "the above copyright notice is retained.\n"
+    )
+
+    def _repository(self, directory, text=None):
+        root = Path(directory) / "repo-one"
+        root.mkdir(parents=True, exist_ok=True)
+        if text is not None:
+            (root / "license.txt").write_text(text, encoding="utf-8")
+        return root
+
+    def test_a_stale_year_is_advanced_and_reported_as_changed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._repository(directory, self.LICENSE)
+            changed = ReleaseVersionPreparer._stamp_license(root, "2026")
+            updated = (root / "license.txt").read_text(encoding="utf-8")
+
+        self.assertEqual({"license.txt"}, changed)
+        self.assertTrue(updated.startswith("Copyright (c) 2026, The Board of Trustees"))
+
+    def test_nothing_but_the_year_moves(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._repository(directory, self.LICENSE)
+            ReleaseVersionPreparer._stamp_license(root, "2026")
+            updated = (root / "license.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            self.LICENSE.replace("2025", "2026", 1), updated,
+            "the stamp rewrote something other than the copyright year")
+
+    def test_a_year_already_current_is_left_untouched(self):
+        """Reporting a change that did not happen would trip the byte-inventory guard."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._repository(directory, self.LICENSE.replace("2025", "2026"))
+            before = (root / "license.txt").read_bytes()
+            changed = ReleaseVersionPreparer._stamp_license(root, "2026")
+
+            self.assertEqual(set(), changed)
+            self.assertEqual(before, (root / "license.txt").read_bytes())
+
+    def test_an_unrecognised_licence_is_left_alone_rather_than_guessed_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._repository(directory, "All rights reserved.\n")
+            changed = ReleaseVersionPreparer._stamp_license(root, "2026")
+
+        self.assertEqual(set(), changed)
+
+    def test_a_repository_without_a_licence_stamps_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._repository(directory)
+            self.assertEqual(set(), ReleaseVersionPreparer._stamp_license(root, "2026"))
+
+    def test_the_licence_is_stamped_alongside_the_version_surfaces(self):
+        """Every repository gets the year, whatever kind of version surface it carries."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._repository(directory, self.LICENSE)
+            (root / "pom.xml").write_text(
+                "<project><version>2.9.3-SNAPSHOT</version></project>\n", encoding="utf-8")
+            changed = ReleaseVersionPreparer._stamp_repository(
+                "repo-one", root, "2.9.3-SNAPSHOT", "2.9.3", {"repo-one"}, "2026")
+
+        self.assertIn("license.txt", changed)
+        self.assertIn("pom.xml", changed)
+
+
 if __name__ == "__main__":
     unittest.main()
