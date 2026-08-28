@@ -17,16 +17,20 @@ from org.metadatacenter import release_train
 from org.metadatacenter.release_train import (
     DEV_CEE_NAME,
     PUBLIC_CEE_NAME,
+    ReleaseArtifactPublisher,
     ReleaseError,
     ReleasePlanner,
     ReleaseBuildValidator,
     ReleaseRefCreator,
+    ReleaseRemoteIntegrator,
     ReleaseState,
     ReleaseVersionPreparer,
     ReleaseWorkspacePreparer,
     advance_active_release,
     compare_cee_packages,
     create_active_release_refs,
+    integrate_active_release,
+    publish_active_release,
     prepare_active_release,
     validate_active_release_builds,
 )
@@ -323,6 +327,12 @@ class ReleasePlannerTest(unittest.TestCase):
                 "frontend-bridging": "3" * 40,
                 "frontend-openview": "4" * 40,
                 "frontend-demo": "5" * 40,
+                "cedar-template-editor": "6" * 40,
+                "cedar-openview": "7" * 40,
+                "cedar-content-distribution": "8" * 40,
+                "cedar-monitoring": "9" * 40,
+                "cedar-bridging": "0" * 40,
+                "cedar-component-demo": "c" * 40,
             },
         }
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
@@ -353,6 +363,7 @@ class ReleasePlannerTest(unittest.TestCase):
             "repositories": list(source["repositories"]),
             "mavenRepositories": ["frontend-main"],
             "phases": [{"name": "main", "repository": "frontend-main"}],
+            "requiredArtifacts": ["frontend-main"],
         }
         npm_plan = {
             "version": TRAIN,
@@ -516,6 +527,8 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             self.assertEqual([], list(Path(directory).iterdir()))
         build.assert_called_once()
 
+    @patch.object(ReleaseArtifactPublisher, "tasks", return_value=[])
+    @patch.object(ReleaseRemoteIntegrator, "tasks", return_value=[])
     @patch.object(ReleaseRefCreator, "tasks", return_value=[])
     @patch.object(ReleaseBuildValidator, "tasks", return_value=[])
     @patch.object(ReleaseVersionPreparer, "prepare", return_value={"release": {}, "nextDevelopment": {}})
@@ -523,6 +536,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
     @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
     def test_start_persists_internal_state_and_status_finds_it(
         self, _build, _workspace_prepare, _version_prepare, _build_tasks, _ref_tasks,
+        _remote_tasks, _artifact_tasks,
     ):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -535,14 +549,13 @@ class ReleaseStateAndCliTest(unittest.TestCase):
                 "--cee-version", PUBLIC_VERSION,
             ])
             self.assertEqual(0, start.exit_code, start.output)
-            self.assertIn(
-                "Local release branches and tags created; nothing was pushed.",
-                start.output,
-            )
+            self.assertIn("Phase:               artifacts-published", start.output)
             status = self.runner.invoke(release_train.app, ["status"])
             self.assertEqual(0, status.exit_code, status.output)
-            self.assertIn("Phase:               local-refs-created", status.output)
-            self.assertIn("Local refs:          0 repositories; pushed: no", status.output)
+            self.assertIn("Phase:               artifacts-published", status.output)
+            self.assertIn("Local refs:          0 prepared refs", status.output)
+            self.assertIn("Remote integration:  0 repositories", status.output)
+            self.assertIn("Artifact publication:  0 verified tasks", status.output)
 
 
 class ReleaseWorkspaceTest(unittest.TestCase):
@@ -772,14 +785,35 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 workspace_preparer._clone(
                     repository, revision, release_workspace / repository,
                 )
+            release_manifest = release_workspace / "cedar-template-editor" / "package.json"
+            release_lock = release_workspace / "cedar-template-editor" / "package-lock.json"
+            package = json.loads(release_manifest.read_bytes())
+            lock = json.loads(release_lock.read_bytes())
+            package["dependencies"]["cedar-embeddable-editor"] = PUBLIC_VERSION
+            lock["packages"][""]["dependencies"]["cedar-embeddable-editor"] = PUBLIC_VERSION
+            release_manifest.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+            release_lock.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
             manifest = manifest_fixture()
             manifest.update({
                 "sourceRepositories": revisions,
                 "releaseRepositories": list(revisions),
                 "mavenRepositories": ["maven-repo"],
-                "frontendPreparation": {"workspace": str(release_workspace)},
+                "frontendPreparation": {
+                    "workspace": str(release_workspace),
+                    "consumers": [{
+                        "repository": "cedar-template-editor",
+                        "manifest": "package.json",
+                        "lock": "package-lock.json",
+                        "manifestSha256": release_train._file_sha256(release_manifest),
+                        "lockSha256": release_train._file_sha256(release_lock),
+                    }],
+                },
             })
-            manifest["cee"]["consumers"] = []
+            manifest["cee"]["consumers"] = [{
+                "repository": "cedar-template-editor",
+                "manifest": "package.json",
+                "lock": "package-lock.json",
+            }]
             result = ReleaseVersionPreparer(
                 state, workspace_preparer=workspace_preparer,
             ).prepare(manifest)
@@ -793,6 +827,14 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             )
             self.assertEqual("2.9.3", release_package["version"])
             self.assertEqual("2.9.4-SNAPSHOT", next_package["version"])
+            self.assertEqual(
+                PUBLIC_VERSION,
+                release_package["dependencies"]["cedar-embeddable-editor"],
+            )
+            self.assertEqual(
+                PUBLIC_VERSION,
+                next_package["dependencies"]["cedar-embeddable-editor"],
+            )
             self.assertIn(
                 "<version>2.9.3</version>",
                 (release_workspace / "maven-repo" / "pom.xml").read_text(),
@@ -941,6 +983,28 @@ class ReleaseBuildValidationTest(unittest.TestCase):
                 validate_active_release_builds(
                     state, ReleaseBuildValidator(state, executor=lambda *_args: ""),
                 )
+
+    def test_changed_frontend_build_output_blocks_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "build.log"
+            output = root / "dist"
+            output.mkdir()
+            bundle = output / "main.js"
+            log.write_text("built\n", encoding="utf-8")
+            bundle.write_text("release bundle\n", encoding="utf-8")
+            record = {
+                "id": "release:npm:frontend:build",
+                "log": str(log),
+                "logSha256": release_train._file_sha256(log),
+                "buildOutput": str(output),
+                "outputFiles": {"main.js": release_train._file_sha256(bundle)},
+            }
+
+            ReleaseBuildValidator.verify_completed_task(record)
+            bundle.write_text("changed bundle\n", encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseError, "build output changed"):
+                ReleaseBuildValidator.verify_completed_task(record)
 
 
 class ReleaseLocalRefsTest(unittest.TestCase):
@@ -1117,6 +1181,283 @@ class ReleaseLocalRefsTest(unittest.TestCase):
                 create_active_release_refs(state, creator)
             failed, _ = state.read_current_manifest()
             self.assertEqual("local-ref-creation-failed", failed["phase"])
+
+
+class ReleaseRemoteIntegrationTest(unittest.TestCase):
+    @staticmethod
+    def _bare_remote(base, repository, source, source_revision):
+        remote = base / "remotes" / f"{repository}.git"
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "--quiet", "--bare", str(remote)], check=True)
+        subprocess.run([
+            "git", "-C", str(source), "push", "--quiet", str(remote),
+            f"{source_revision}:refs/heads/main",
+            f"{source_revision}:refs/heads/develop",
+        ], check=True)
+        return remote
+
+    def make_integrated_release(self, directory):
+        state, creator, cedar_home, _release_workspace, _next_workspace = (
+            ReleaseLocalRefsTest().make_release(directory)
+        )
+        create_active_release_refs(state, creator)
+        manifest, _ = state.read_current_manifest()
+        remotes = {
+            repository: self._bare_remote(
+                Path(directory), repository, cedar_home / repository, revision,
+            )
+            for repository, revision in manifest["sourceRepositories"].items()
+        }
+        integrator = ReleaseRemoteIntegrator(
+            state,
+            remote_resolver=lambda repository: str(remotes[repository]),
+            environment={"CEDAR_HOME": str(cedar_home)},
+        )
+        completed = integrate_active_release(state, integrator)
+        return state, integrator, remotes, completed
+
+    def test_integrates_exact_release_and_next_trees_into_main_and_develop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _integrator, remotes, completed = self.make_integrated_release(directory)
+
+            self.assertEqual("remote-integrated", completed["phase"])
+            records = completed["remoteIntegration"]["completedTasks"]
+            self.assertEqual({"repo-main", "cedar-workspace"}, set(records))
+            for repository, record in records.items():
+                main = ReleaseLocalRefsTest._git(
+                    remotes[repository], "rev-parse", "refs/heads/main",
+                )
+                develop = ReleaseLocalRefsTest._git(
+                    remotes[repository], "rev-parse", "refs/heads/develop",
+                )
+                self.assertEqual(record["main"]["commit"], main)
+                self.assertEqual(record["develop"]["commit"], develop)
+                main_tree = ReleaseLocalRefsTest._git(
+                    remotes[repository], "rev-parse", f"{main}^{{tree}}",
+                )
+                develop_tree = ReleaseLocalRefsTest._git(
+                    remotes[repository], "rev-parse", f"{develop}^{{tree}}",
+                )
+                self.assertEqual(record["main"]["tree"], main_tree)
+                self.assertEqual(record["develop"]["tree"], develop_tree)
+
+            resumed = integrate_active_release(state, _integrator)
+            self.assertEqual(records, resumed["remoteIntegration"]["completedTasks"])
+
+    def test_changed_remote_ref_blocks_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, remotes, completed = self.make_integrated_release(directory)
+            record = completed["remoteIntegration"]["completedTasks"]["repo-main"]
+            subprocess.run([
+                "git", "--git-dir", str(remotes["repo-main"]), "update-ref",
+                "refs/heads/develop", record["sourceRevision"],
+            ], check=True)
+            state.update_current_manifest({"phase": "remote-integration-failed"})
+            with self.assertRaisesRegex(ReleaseError, "remote refs changed"):
+                integrate_active_release(state, integrator)
+
+
+class ReleaseArtifactPublicationTest(unittest.TestCase):
+    @staticmethod
+    def _publication_plan():
+        return {
+            "maven": {
+                "releaseRepository": "https://nexus.example/repository/releases/",
+                "nextDevelopmentRepository": "https://nexus.example/repository/snapshots/",
+                "requiredArtifacts": ["repo-main"],
+            },
+            "npm": {
+                "registry": "https://nexus.example/repository/npm/",
+                "surfaces": [{
+                    "id": "main", "repository": "repo-main", "directory": ".",
+                }],
+            },
+        }
+
+    def make_release(self, directory):
+        state, integrator, remotes, completed = (
+            ReleaseRemoteIntegrationTest().make_integrated_release(directory)
+        )
+        state.update_current_manifest({
+            "publicationPlan": self._publication_plan(),
+            "mavenPhases": [{"name": "main", "repository": "repo-main"}],
+        })
+        manifest, _ = state.read_current_manifest()
+        return state, integrator, remotes, manifest
+
+    def test_publication_plan_uses_release_git_provenance_and_only_stable_npm(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _integrator, _remotes, manifest = self.make_release(directory)
+            tasks = ReleaseArtifactPublisher(state, executor=lambda *_args: {}).tasks(manifest)
+            identifiers = [task["id"] for task in tasks]
+            self.assertEqual([
+                "maven:release:publish",
+                "maven:release:verify",
+                "npm:release:main",
+                "maven:nextDevelopment:main",
+                "maven:nextDevelopment:verify",
+            ], identifiers)
+            npm_task = tasks[2]
+            integration = manifest["remoteIntegration"]["completedTasks"]["repo-main"]
+            self.assertEqual(integration["main"]["commit"], npm_task["expectedCommit"])
+            self.assertNotIn("npm:nextDevelopment", " ".join(identifiers))
+
+    def test_failed_publication_resumes_after_verified_completed_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, _remotes, manifest = self.make_release(directory)
+            calls = []
+
+            class FakePublisher:
+                @staticmethod
+                def tasks(_manifest):
+                    return [
+                        {"id": "one", "kind": "fake"},
+                        {"id": "two", "kind": "fake"},
+                        {"id": "three", "kind": "fake"},
+                    ]
+
+                def run_task(self, _manifest, task):
+                    calls.append(task["id"])
+                    if task["id"] == "two" and calls.count("two") == 1:
+                        raise ReleaseError("registry unavailable")
+                    return {**task, "proof": task["id"]}
+
+                @staticmethod
+                def verify_record(_manifest, record):
+                    if record.get("proof") != record.get("id"):
+                        raise ReleaseError("publication proof changed")
+
+            publisher = FakePublisher()
+            with self.assertRaisesRegex(ReleaseError, "registry unavailable"):
+                publish_active_release(
+                    state, publisher, remote_integrator=integrator,
+                )
+            failed, _ = state.read_current_manifest()
+            self.assertEqual("artifact-publication-failed", failed["phase"])
+            self.assertEqual({"one"}, set(failed["artifactPublication"]["completedTasks"]))
+
+            completed = publish_active_release(
+                state, publisher, remote_integrator=integrator,
+            )
+            self.assertEqual("artifacts-published", completed["phase"])
+            self.assertEqual(["one", "two", "two", "three"], calls)
+
+    def test_maven_release_upload_accepts_only_identical_existing_bytes(self):
+        class ExistingHttp:
+            def __init__(self, content):
+                self.content = content
+
+            def read(self, _url, missing_ok=False):
+                return self.content
+
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / "repository"
+            artifact = local / "org/metadatacenter/repo-main/2.9.3/repo-main-2.9.3.jar"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"release bytes")
+            task = {
+                "id": "maven:release:publish",
+                "kind": "maven-release-upload",
+                "variant": "release",
+                "version": "2.9.3",
+                "repository": "https://nexus.example/repository/releases/",
+                "localRepository": str(local),
+            }
+            publisher = ReleaseArtifactPublisher(
+                ReleaseState(root=Path(directory) / "state"),
+                http=ExistingHttp(b"release bytes"),
+            )
+            record = publisher._publish_maven_release(task)
+            self.assertEqual(
+                hashlib.sha256(b"release bytes").hexdigest(),
+                record["files"]["org/metadatacenter/repo-main/2.9.3/repo-main-2.9.3.jar"],
+            )
+            publisher.http = ExistingHttp(b"different")
+            with self.assertRaisesRegex(ReleaseError, "different bytes"):
+                publisher._publish_maven_release(task)
+
+    def test_npm_registry_verification_requires_exact_tarball_and_git_commit(self):
+        package = {
+            "name": "cedar-frontend",
+            "version": "2.9.3",
+            "gitHead": "a" * 40,
+        }
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+            content = json.dumps(package).encode()
+            info = tarfile.TarInfo("package/package.json")
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+        tarball = stream.getvalue()
+        tarball_url = "https://nexus.example/cedar-frontend.tgz"
+        package_url = "https://nexus.example/repository/npm/cedar-frontend"
+        package_integrity = integrity(tarball)
+
+        class RegistryHttp:
+            def read_json(self, url, missing_ok=False):
+                self.last_url = url
+                return ({"versions": {"2.9.3": {
+                    "dist": {"tarball": tarball_url, "integrity": package_integrity},
+                }}}, b"{}")
+
+            def read(self, url, missing_ok=False):
+                self.last_url = url
+                return tarball
+
+        task = {
+            "id": "npm:release:main",
+            "kind": "npm-release",
+            "version": "2.9.3",
+            "registry": "https://nexus.example/repository/npm/",
+            "expectedCommit": "a" * 40,
+        }
+        evidence = {
+            "name": "cedar-frontend",
+            "integrity": package_integrity,
+            "tarballSha256": hashlib.sha256(tarball).hexdigest(),
+        }
+        publisher = ReleaseArtifactPublisher(
+            ReleaseState(root=Path(tempfile.gettempdir()) / "unused-state"),
+            http=RegistryHttp(), sleeper=lambda _seconds: None,
+        )
+        verified = publisher._verify_npm_package(task, evidence, wait=False)
+        self.assertEqual(tarball_url, verified["tarball"])
+        bad = {**evidence, "tarballSha256": "0" * 64}
+        with self.assertRaisesRegex(ReleaseError, "tarball differs"):
+            publisher._verify_npm_package(task, bad, wait=False)
+
+    def test_npm_pack_is_archived_from_the_integrated_commit_with_git_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            root = workspace / "frontend"
+            root.mkdir(parents=True)
+            (root / "package.json").write_text(json.dumps({
+                "name": "cedar-frontend",
+                "version": "2.9.3",
+                "publishConfig": {"registry": "https://nexus.example/repository/npm/"},
+            }) + "\n", encoding="utf-8")
+            (root / "README.md").write_text("frontend\n", encoding="utf-8")
+            commit = ReleaseWorkspaceTest._commit_repository(root)
+            tree = ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}")
+            task = {
+                "id": "npm:release:frontend",
+                "kind": "npm-release",
+                "repository": "frontend",
+                "directory": ".",
+                "version": "2.9.3",
+                "registry": "https://nexus.example/repository/npm/",
+                "workspace": str(workspace),
+                "expectedCommit": commit,
+                "expectedTree": tree,
+            }
+            publisher = ReleaseArtifactPublisher(
+                ReleaseState(root=Path(directory) / "state"),
+            )
+            tarball, evidence = publisher._pack_npm(task)
+            package = publisher._npm_tarball_package("packed frontend", tarball.read_bytes())
+            self.assertEqual("cedar-frontend", evidence["name"])
+            self.assertEqual(commit, package["gitHead"])
+            self.assertEqual("2.9.3", package["version"])
 
 
 if __name__ == "__main__":

@@ -15,8 +15,11 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import tarfile
+import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,22 +78,50 @@ FRONTEND_BUILD_SURFACES = [
     {"id": "workspace", "repository": "cedar-workspace", "directory": ".",
      "install": [], "build": []},
     {"id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-src",
-     "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build", "--", "--configuration=production"]},
+     "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "buildOutput": "cedar-openview-src/dist/cedar-openview"},
     {"id": "bridging", "repository": "cedar-bridging", "directory": "cedar-bridging-src",
-     "install": [], "build": ["npm", "run", "build", "--", "--configuration=production"]},
+     "install": [], "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "buildOutput": "cedar-bridging-src/dist/cedar-bridging"},
     {"id": "monitoring", "repository": "cedar-monitoring", "directory": "cedar-monitoring-src",
-     "install": [], "build": ["npm", "run", "build", "--", "--configuration=production"]},
+     "install": [], "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "buildOutput": "cedar-monitoring-src/dist/cedar-monitoring"},
     {"id": "content", "repository": "cedar-content-distribution", "directory": ".",
      "install": [], "build": []},
     {"id": "cee-demo-angular", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-angular-src", "install": ["--legacy-peer-deps"],
-     "build": ["npm", "run", "build", "--", "--configuration=production"]},
+     "build": ["npm", "run", "build", "--", "--configuration=production"],
+     "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src"},
     {"id": "cee-demo-ember", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-ember-src", "install": [],
      "build": ["npm", "run", "build"]},
     {"id": "cee-demo-react", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-react", "install": [],
      "build": ["npm", "run", "build"]},
+]
+MAVEN_RELEASE_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/releases/"
+MAVEN_SNAPSHOT_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/snapshots/"
+NPM_RELEASE_SURFACES = [
+    {"id": "template-editor", "repository": "cedar-template-editor", "directory": "."},
+    {
+        "id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-dist",
+        "buildOutput": "cedar-openview-src/dist/cedar-openview",
+    },
+    {"id": "content", "repository": "cedar-content-distribution", "directory": "."},
+    {
+        "id": "monitoring", "repository": "cedar-monitoring",
+        "directory": "cedar-monitoring-dist",
+        "buildOutput": "cedar-monitoring-src/dist/cedar-monitoring",
+    },
+    {
+        "id": "bridging", "repository": "cedar-bridging", "directory": "cedar-bridging-dist",
+        "buildOutput": "cedar-bridging-src/dist/cedar-bridging",
+    },
+    {
+        "id": "cee-demo-angular", "repository": "cedar-component-demo",
+        "directory": "cedar-cee-demo-angular-dist",
+        "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src",
+    },
 ]
 
 
@@ -104,6 +135,20 @@ def _json_bytes(value: dict) -> bytes:
 
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _directory_file_hashes(root: Path) -> dict[str, str]:
+    if not root.is_dir():
+        raise ReleaseError(f"build output directory is missing: {root}")
+    files = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise ReleaseError(f"build output contains a symbolic link: {path}")
+        if path.is_file():
+            files[path.relative_to(root).as_posix()] = _file_sha256(path)
+    if not files:
+        raise ReleaseError(f"build output directory is empty: {root}")
+    return files
 
 
 def _validate_stable_version(value: str, label: str) -> str:
@@ -569,6 +614,34 @@ class ReleasePlanner:
         return result
 
     @staticmethod
+    def _publication_plan(build_config: dict, release_repositories: list[str]) -> dict:
+        required = build_config.get("requiredArtifacts")
+        if not isinstance(required, list) or not required or not all(
+            isinstance(item, str) and item for item in required
+        ):
+            raise ReleaseError("train build configuration has no required Maven artifacts")
+        npm_surfaces = copy.deepcopy(NPM_RELEASE_SURFACES)
+        missing = sorted(
+            {surface["repository"] for surface in npm_surfaces} - set(release_repositories)
+        )
+        if missing:
+            raise ReleaseError(
+                "release repository set is missing npm publication repositories: "
+                + ", ".join(missing)
+            )
+        return {
+            "maven": {
+                "releaseRepository": MAVEN_RELEASE_REPOSITORY,
+                "nextDevelopmentRepository": MAVEN_SNAPSHOT_REPOSITORY,
+                "requiredArtifacts": list(required),
+            },
+            "npm": {
+                "registry": "https://nexus.bmir.stanford.edu/repository/npm-cedar/",
+                "surfaces": npm_surfaces,
+            },
+        }
+
+    @staticmethod
     def _cee_consumers(config: dict, npm_plan: dict, source: dict) -> list[dict]:
         repositories = source.get("repositories", {})
         if not isinstance(repositories, dict):
@@ -709,6 +782,7 @@ class ReleasePlanner:
             build_config, source
         )
         maven_phases = self._maven_phases(build_config, maven_repositories)
+        publication_plan = self._publication_plan(build_config, release_repositories)
         consumers = self._cee_consumers(frontend_config, npm_plan, source)
 
         planned_cee = npm_plan.get("cee", {})
@@ -777,6 +851,7 @@ class ReleasePlanner:
             "releaseRepositories": release_repositories,
             "mavenRepositories": maven_repositories,
             "mavenPhases": maven_phases,
+            "publicationPlan": publication_plan,
             "cee": {
                 "development": {
                     "name": DEV_CEE_NAME,
@@ -1263,6 +1338,24 @@ class ReleaseVersionPreparer:
                 consumer["manifest"], consumer["lock"],
             })
 
+        for repository, relative_paths in cee_allowed_by_repo.items():
+            if repository not in release_repositories:
+                continue
+            for relative in relative_paths:
+                source = release_workspace / repository / relative
+                destination = next_workspace / repository / relative
+                expected = next(
+                    record[f"{kind}Sha256"]
+                    for record in frontend["consumers"]
+                    if record["repository"] == repository
+                    for kind in ("manifest", "lock")
+                    if record[kind] == relative
+                )
+                if _file_sha256(source) != expected:
+                    raise ReleaseError(f"prepared CEE consumer changed before version stamping: {source}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+
         variants = {}
         for variant, workspace, target in (
             ("release", release_workspace, release_version),
@@ -1275,8 +1368,7 @@ class ReleaseVersionPreparer:
                     repository, root, old, target, maven_repositories
                 )
                 allowed = set(stamped)
-                if variant == "release":
-                    allowed.update(cee_allowed_by_repo.get(repository, set()))
+                allowed.update(cee_allowed_by_repo.get(repository, set()))
                 actual = self._actual_changes(root)
                 unexpected = sorted(actual - allowed)
                 missing = sorted(allowed - actual)
@@ -1376,7 +1468,7 @@ class ReleaseBuildValidator:
                     "tests": False,
                 })
                 if surface["build"]:
-                    tasks.append({
+                    build_task = {
                         "id": self._task_id(variant, "npm", surface["id"], "build"),
                         "variant": variant,
                         "kind": "frontend-build",
@@ -1384,7 +1476,12 @@ class ReleaseBuildValidator:
                         "cwd": str(root),
                         "command": surface["build"],
                         "tests": False,
-                    })
+                    }
+                    if surface.get("buildOutput"):
+                        build_task["buildOutput"] = str(
+                            workspace / surface["repository"] / surface["buildOutput"]
+                        )
+                    tasks.append(build_task)
         identifiers = [task["id"] for task in tasks]
         if len(identifiers) != len(set(identifiers)):
             raise ReleaseError("release build plan contains duplicate task identifiers")
@@ -1436,13 +1533,16 @@ class ReleaseBuildValidator:
             log.parent.mkdir(parents=True, exist_ok=True)
             output = self.executor(task, environment)
             log.write_text(output or "", encoding="utf-8")
-        return {
+        record = {
             **task,
             "startedAt": started,
             "completedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
             "log": str(log),
             "logSha256": _file_sha256(log),
         }
+        if task.get("buildOutput"):
+            record["outputFiles"] = _directory_file_hashes(Path(task["buildOutput"]))
+        return record
 
     @staticmethod
     def failed_task_evidence(manifest: dict, task: dict) -> dict:
@@ -1464,6 +1564,12 @@ class ReleaseBuildValidator:
         expected = record.get("logSha256")
         if not log.is_file() or not isinstance(expected, str) or _file_sha256(log) != expected:
             raise ReleaseError(f"completed build evidence is missing or changed for {record.get('id')}")
+        if record.get("buildOutput"):
+            expected_files = record.get("outputFiles")
+            if not isinstance(expected_files, dict) or not expected_files:
+                raise ReleaseError(f"completed build has no output evidence for {record.get('id')}")
+            if _directory_file_hashes(Path(record["buildOutput"])) != expected_files:
+                raise ReleaseError(f"completed build output changed for {record.get('id')}")
 
 
 class ReleaseRefCreator:
@@ -1689,6 +1795,715 @@ class ReleaseRefCreator:
             raise ReleaseError(f"recorded local tree changed for {task['repository']}")
 
 
+class ReleaseRemoteIntegrator:
+    """Integrate verified release commits into remote main/develop without touching source clones."""
+
+    def __init__(self, state: ReleaseState, git_runner=None, remote_resolver=None, environment=None):
+        self.state = state
+        self.environment = dict(os.environ if environment is None else environment)
+        self.git = git_runner or ReleaseWorkspacePreparer(
+            state, environment=self.environment,
+        )
+        self.ref_creator = ReleaseRefCreator(
+            state, git_runner=self.git, environment=self.environment,
+        )
+        self.remote_resolver = remote_resolver or self._source_remote
+
+    def _source_remote(self, repository: str) -> str:
+        cedar_home = self.environment.get("CEDAR_HOME")
+        if not cedar_home:
+            raise ReleaseError("CEDAR_HOME is not set")
+        root = Path(cedar_home) / repository
+        remote = self.git._run(["git", "-C", str(root), "remote", "get-url", "origin"])
+        expected = (
+            rf"(?:https://github\.com/metadatacenter/{re.escape(repository)}(?:\.git)?|"
+            rf"git@github\.com:metadatacenter/{re.escape(repository)}\.git)"
+        )
+        if not re.fullmatch(expected, remote):
+            raise ReleaseError(f"{repository} origin is not the expected metadatacenter remote")
+        return remote
+
+    @staticmethod
+    def _by_repository(manifest: dict) -> dict[str, dict]:
+        completed = manifest.get("localRefs", {}).get("completedTasks", {})
+        if not isinstance(completed, dict):
+            raise ReleaseError("release has no verified local refs")
+        result: dict[str, dict] = {}
+        for record in completed.values():
+            repository = record.get("repository")
+            variant = record.get("variant")
+            if not isinstance(repository, str) or variant not in {"release", "nextDevelopment"}:
+                raise ReleaseError("release contains an invalid local ref record")
+            if variant in result.setdefault(repository, {}):
+                raise ReleaseError(f"release contains duplicate local refs for {repository}")
+            result[repository][variant] = record
+        expected = {
+            task["id"] for task in ReleaseRefCreator(ReleaseState()).tasks(manifest)
+        }
+        if set(completed) != expected:
+            raise ReleaseError("release does not contain the complete verified local ref set")
+        return result
+
+    def tasks(self, manifest: dict) -> list[dict]:
+        by_repository = self._by_repository(manifest)
+        tasks = []
+        for repository, records in by_repository.items():
+            release = records.get("release")
+            if not isinstance(release, dict):
+                raise ReleaseError(f"release has no stable local ref for {repository}")
+            tasks.append({
+                "id": repository,
+                "repository": repository,
+                "sourceRevision": manifest["sourceRepositories"][repository],
+                "release": release,
+                "nextDevelopment": records.get("nextDevelopment"),
+            })
+        return tasks
+
+    def _remote_refs(self, root: Path, remote: str, references: list[str]) -> dict[str, str]:
+        output = self.git._run(["git", "-C", str(root), "ls-remote", "--refs", remote, *references])
+        result = {}
+        for line in output.splitlines():
+            commit, reference = line.split("\t", 1)
+            if not GIT_SHA_RE.fullmatch(commit):
+                raise ReleaseError(f"remote returned an invalid commit for {reference}")
+            result[reference] = commit
+        return result
+
+    def _integration_commit(
+        self,
+        root: Path,
+        branch: str,
+        base: str,
+        prepared: dict,
+        message: str,
+    ) -> str:
+        reference = f"refs/heads/{branch}"
+        commit = self.ref_creator._ref(root, reference)
+        if commit is None:
+            self.git._run(["git", "-C", str(root), "switch", "--quiet", "-C", branch, base])
+            name, email = self.ref_creator._identity(root)
+            self.git._run([
+                "git", "-c", f"user.name={name}", "-c", f"user.email={email}",
+                "-c", "commit.gpgSign=false", "-C", str(root), "merge", "--quiet",
+                "--no-ff", "--no-edit", "-X", "theirs", "-m", message, prepared["commit"],
+            ])
+            commit = self.git._run(["git", "-C", str(root), "rev-parse", "HEAD"])
+        parents = self.git._run([
+            "git", "-C", str(root), "rev-list", "--parents", "-n", "1", commit,
+        ]).split()
+        if parents != [commit, base, prepared["commit"]]:
+            raise ReleaseError(
+                f"integration commit for {prepared['repository']} has unexpected parents"
+            )
+        tree = self.git._run(["git", "-C", str(root), "rev-parse", f"{commit}^{{tree}}"])
+        if tree != prepared["tree"]:
+            raise ReleaseError(
+                f"integration commit for {prepared['repository']} changed the prepared tree"
+            )
+        return commit
+
+    def _push(self, root: Path, remote: str, commit: str, reference: str) -> None:
+        self.git._run(["git", "-C", str(root), "push", "--porcelain", remote,
+                       f"{commit}:{reference}"])
+
+    def integrate(self, manifest: dict, task: dict) -> dict:
+        release = task["release"]
+        next_development = task.get("nextDevelopment")
+        self.ref_creator.verify_record(manifest, release)
+        if next_development:
+            self.ref_creator.verify_record(manifest, next_development)
+        root = Path(release["workspace"]) / task["repository"]
+        develop_root = (
+            Path(next_development["workspace"]) / task["repository"]
+            if next_development else root
+        )
+        remote = self.remote_resolver(task["repository"])
+        release_branch_ref = f"refs/heads/{release['branch']}"
+        tag_ref = f"refs/tags/{release['tag']}"
+        post_branch_ref = (
+            f"refs/heads/{next_development['branch']}" if next_development else None
+        )
+        queried = ["refs/heads/main", "refs/heads/develop", release_branch_ref, tag_ref]
+        if post_branch_ref:
+            queried.append(post_branch_ref)
+        remote_refs = self._remote_refs(root, remote, queried)
+        for fetch_root in {root, develop_root}:
+            self.git._run([
+                "git", "-C", str(fetch_root), "fetch", "--quiet", "--no-tags", remote,
+                "+refs/heads/main:refs/remotes/cedar-release/main",
+                "+refs/heads/develop:refs/remotes/cedar-release/develop",
+            ])
+        source = task["sourceRevision"]
+        develop_prepared = next_development or release
+
+        local_main_ref = f"cedar-release/integrate-main-{manifest['releaseVersion']}"
+        local_develop_ref = f"cedar-release/integrate-develop-{manifest['releaseVersion']}"
+        existing_main = self.ref_creator._ref(root, f"refs/heads/{local_main_ref}")
+        existing_develop = self.ref_creator._ref(
+            develop_root, f"refs/heads/{local_develop_ref}",
+        )
+        remote_main = remote_refs.get("refs/heads/main")
+        remote_develop = remote_refs.get("refs/heads/develop")
+        if remote_main is None or remote_develop is None:
+            raise ReleaseError(f"{task['repository']} remote must contain main and develop")
+        if existing_develop is None and remote_develop != source:
+            raise ReleaseError(
+                f"{task['repository']} develop advanced beyond train source {source}"
+            )
+
+        main_base = remote_main
+        if existing_main is not None and remote_main == existing_main:
+            main_base = self.git._run(["git", "-C", str(root), "rev-parse", f"{existing_main}^1"])
+        develop_base = source
+        main_commit = self._integration_commit(
+            root, local_main_ref, main_base, release,
+            f"Release CEDAR {manifest['releaseVersion']} from train {manifest['train']}",
+        )
+        develop_commit = self._integration_commit(
+            develop_root, local_develop_ref, develop_base, develop_prepared,
+            f"Advance after CEDAR {manifest['releaseVersion']} to "
+            f"{manifest['nextDevelopmentVersion']}",
+        )
+
+        prepared_refs = [
+            (root, release_branch_ref, release["commit"]),
+            (root, tag_ref, release["commit"]),
+        ]
+        if post_branch_ref:
+            prepared_refs.append((develop_root, post_branch_ref, next_development["commit"]))
+        for push_root, reference, commit in prepared_refs:
+            existing = remote_refs.get(reference)
+            if existing is not None and existing != commit:
+                raise ReleaseError(f"{task['repository']} remote {reference} already differs")
+            if existing is None:
+                self._push(push_root, remote, commit, reference)
+                remote_refs[reference] = commit
+
+        if remote_refs["refs/heads/main"] != main_commit:
+            if remote_refs["refs/heads/main"] != main_base:
+                raise ReleaseError(f"{task['repository']} main changed during release integration")
+            self._push(root, remote, main_commit, "refs/heads/main")
+            remote_refs["refs/heads/main"] = main_commit
+        if remote_refs["refs/heads/develop"] != develop_commit:
+            if remote_refs["refs/heads/develop"] != develop_base:
+                raise ReleaseError(f"{task['repository']} develop changed during release integration")
+            self._push(develop_root, remote, develop_commit, "refs/heads/develop")
+            remote_refs["refs/heads/develop"] = develop_commit
+
+        record = {
+            "id": task["id"],
+            "repository": task["repository"],
+            "remote": remote,
+            "sourceRevision": source,
+            "releaseBranch": {"ref": release_branch_ref, "commit": release["commit"]},
+            "tag": {"ref": tag_ref, "commit": release["commit"]},
+            "main": {"base": main_base, "commit": main_commit, "tree": release["tree"]},
+            "develop": {
+                "base": develop_base,
+                "commit": develop_commit,
+                "tree": develop_prepared["tree"],
+            },
+            "completedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        if post_branch_ref:
+            record["postBranch"] = {
+                "ref": post_branch_ref, "commit": next_development["commit"],
+            }
+        self.verify_record(manifest, record)
+        return record
+
+    def verify_record(self, manifest: dict, record: dict) -> None:
+        task = next((item for item in self.tasks(manifest) if item["id"] == record.get("id")), None)
+        if task is None:
+            raise ReleaseError(f"recorded remote task no longer exists: {record.get('id')}")
+        root = Path(task["release"]["workspace"]) / task["repository"]
+        references = [
+            record["releaseBranch"]["ref"], record["tag"]["ref"],
+            "refs/heads/main", "refs/heads/develop",
+        ]
+        if record.get("postBranch"):
+            references.append(record["postBranch"]["ref"])
+        actual = self._remote_refs(root, record["remote"], references)
+        expected = {
+            record["releaseBranch"]["ref"]: record["releaseBranch"]["commit"],
+            record["tag"]["ref"]: record["tag"]["commit"],
+            "refs/heads/main": record["main"]["commit"],
+            "refs/heads/develop": record["develop"]["commit"],
+        }
+        if record.get("postBranch"):
+            expected[record["postBranch"]["ref"]] = record["postBranch"]["commit"]
+        if actual != expected:
+            raise ReleaseError(f"remote refs changed after integration for {task['repository']}")
+
+
+class ReleaseArtifactPublisher:
+    """Publish only the already-integrated release trees and verify their registry bytes."""
+
+    def __init__(
+        self,
+        state: ReleaseState,
+        http: HttpClient | None = None,
+        environment=None,
+        executor=None,
+        sleeper=None,
+    ):
+        self.state = state
+        self.environment = dict(os.environ if environment is None else environment)
+        self.http = http or HttpClient(environment=self.environment)
+        self.executor = executor
+        self.sleeper = sleeper or time.sleep
+
+    @staticmethod
+    def _integration_record(manifest: dict, repository: str) -> dict:
+        record = manifest.get("remoteIntegration", {}).get("completedTasks", {}).get(repository)
+        if not isinstance(record, dict):
+            raise ReleaseError(f"release has no verified remote integration for {repository}")
+        return record
+
+    def tasks(self, manifest: dict) -> list[dict]:
+        plan = manifest.get("publicationPlan")
+        if not isinstance(plan, dict):
+            raise ReleaseError("release manifest has no artifact publication plan")
+        maven = plan.get("maven", {})
+        npm = plan.get("npm", {})
+        phases = manifest.get("mavenPhases")
+        if not isinstance(phases, list) or not phases:
+            raise ReleaseError("release manifest has no Maven publication phases")
+        release_workspace = Path(manifest["versionPreparation"]["release"]["workspace"])
+        next_workspace = Path(
+            manifest["versionPreparation"]["nextDevelopment"]["workspace"]
+        )
+        attempt = Path(manifest["frontendPreparation"]["workspace"]).parent
+        tasks = [{
+            "id": "maven:release:publish",
+            "kind": "maven-release-upload",
+            "variant": "release",
+            "version": manifest["releaseVersion"],
+            "repository": maven.get("releaseRepository"),
+            "localRepository": str(attempt / "build-cache" / "release" / "m2" / "repository"),
+        }, {
+            "id": "maven:release:verify",
+            "kind": "maven-verify",
+            "variant": "release",
+            "version": manifest["releaseVersion"],
+            "repository": maven.get("releaseRepository"),
+            "requiredArtifacts": maven.get("requiredArtifacts"),
+        }]
+        for surface in npm.get("surfaces", []):
+            integration = self._integration_record(manifest, surface["repository"])
+            task = {
+                **surface,
+                "id": f"npm:release:{surface['id']}",
+                "kind": "npm-release",
+                "variant": "release",
+                "version": manifest["releaseVersion"],
+                "registry": npm.get("registry"),
+                "workspace": str(release_workspace),
+                "expectedCommit": integration["main"]["commit"],
+                "expectedTree": integration["main"]["tree"],
+            }
+            if surface.get("buildOutput"):
+                task["buildEvidenceId"] = f"release:npm:{surface['id']}:build"
+            tasks.append(task)
+        for phase in phases:
+            integration = self._integration_record(manifest, phase["repository"])
+            root = next_workspace / phase["repository"]
+            tasks.append({
+                "id": f"maven:nextDevelopment:{phase['name']}",
+                "kind": "maven-snapshot-deploy",
+                "variant": "nextDevelopment",
+                "version": manifest["nextDevelopmentVersion"],
+                "repository": phase["repository"],
+                "workspace": str(next_workspace),
+                "cwd": str(root),
+                "expectedCommit": integration["develop"]["commit"],
+                "expectedTree": integration["develop"]["tree"],
+                "command": [
+                    str(root / "mvnw"), "--batch-mode", "--no-transfer-progress",
+                    f"-Dmaven.repo.local={attempt / 'publication-cache' / 'm2' / 'repository'}",
+                    "deploy", "-DskipTests", "-DretryFailedDeploymentCount=3",
+                ],
+            })
+        tasks.append({
+            "id": "maven:nextDevelopment:verify",
+            "kind": "maven-verify",
+            "variant": "nextDevelopment",
+            "version": manifest["nextDevelopmentVersion"],
+            "repository": maven.get("nextDevelopmentRepository"),
+            "requiredArtifacts": maven.get("requiredArtifacts"),
+        })
+        identifiers = [task["id"] for task in tasks]
+        if len(identifiers) != len(set(identifiers)):
+            raise ReleaseError("artifact publication plan contains duplicate tasks")
+        return tasks
+
+    @staticmethod
+    def _verify_workspace(task: dict) -> None:
+        root = Path(task["workspace"]) / task["repository"]
+        try:
+            commit = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
+                text=True, capture_output=True,
+            ).stdout.strip()
+            tree = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], check=True,
+                text=True, capture_output=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise ReleaseError(f"cannot verify publication workspace {root}: {error}") from error
+        if commit != task["expectedCommit"] or tree != task["expectedTree"]:
+            raise ReleaseError(f"publication workspace changed for {task['repository']}")
+
+    @staticmethod
+    def _maven_candidates(local_repository: Path, version: str) -> list[Path]:
+        group = local_repository / "org" / "metadatacenter"
+        candidates = sorted(
+            path for path in group.rglob("*")
+            if path.is_file()
+            and path.parent.name == version
+            and not path.name.startswith(".")
+            and path.name != "_remote.repositories"
+            and not path.name.startswith("maven-metadata")
+            and not path.name.endswith((
+                ".lastUpdated", ".sha1", ".md5", ".sha256", ".sha512",
+            ))
+        ) if group.is_dir() else []
+        if not candidates:
+            raise ReleaseError(f"validated Maven repository has no files for {version}")
+        return candidates
+
+    def _upload(self, destination: str, content: bytes) -> None:
+        username = self.environment.get("BMIR_NEXUS_USERNAME")
+        password = self.environment.get("BMIR_NEXUS_PASSWORD")
+        if not username or not password:
+            raise ReleaseError("BMIR_NEXUS_USERNAME and BMIR_NEXUS_PASSWORD are required")
+        token = base64.b64encode(f"{username}:{password}".encode()).decode()
+        request = urllib.request.Request(
+            destination, data=content, method="PUT",
+            headers={"Authorization": f"Basic {token}", "Content-Type": "application/octet-stream"},
+        )
+        try:
+            with self.http.opener(request, timeout=120) as response:
+                if response.status not in (200, 201, 204):
+                    raise ReleaseError(
+                        f"Nexus returned HTTP {response.status} for {destination}"
+                    )
+        except urllib.error.HTTPError as error:
+            raise ReleaseError(f"cannot publish {destination}: HTTP {error.code}") from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise ReleaseError(f"cannot publish {destination}: {error}") from error
+
+    def _publish_maven_release(self, task: dict) -> dict:
+        local_repository = Path(task["localRepository"])
+        files = {}
+        for source in self._maven_candidates(local_repository, task["version"]):
+            relative = source.relative_to(local_repository).as_posix()
+            content = source.read_bytes()
+            destination = task["repository"].rstrip("/") + "/" + relative
+            existing = self.http.read(destination, missing_ok=True)
+            if existing is None:
+                self._upload(destination, content)
+            elif existing != content:
+                raise ReleaseError(f"immutable Maven release path contains different bytes: {destination}")
+            files[relative] = _sha256(content)
+        return {
+            **task,
+            "files": files,
+            "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+
+    def _nexus_artifacts(self, repository_url: str, version: str) -> set[str]:
+        if not isinstance(repository_url, str) or "/repository/" not in repository_url:
+            raise ReleaseError("release manifest contains an invalid Maven repository")
+        base = repository_url.split("/repository/", 1)[0]
+        repository = repository_url.rstrip("/").rsplit("/", 1)[-1]
+        continuation = None
+        artifacts = set()
+        while True:
+            query = {"repository": repository, "version": version}
+            if continuation:
+                query["continuationToken"] = continuation
+            result = self.http.read_json(
+                f"{base}/service/rest/v1/search?{urllib.parse.urlencode(query)}"
+            )
+            assert result is not None
+            payload, _ = result
+            items = payload.get("items", [])
+            if not isinstance(items, list):
+                raise ReleaseError("Nexus search returned an invalid artifact inventory")
+            artifacts.update(
+                item.get("name") for item in items
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
+            continuation = payload.get("continuationToken")
+            if not continuation:
+                return artifacts
+
+    def _verify_maven_inventory(self, task: dict, wait: bool) -> dict:
+        required = task.get("requiredArtifacts")
+        if not isinstance(required, list) or not required:
+            raise ReleaseError("Maven publication has no required artifact inventory")
+        attempts = 12 if wait else 1
+        published = set()
+        missing = set(required)
+        for attempt in range(attempts):
+            published = self._nexus_artifacts(task["repository"], task["version"])
+            missing = set(required) - published
+            if not missing:
+                break
+            if attempt + 1 < attempts:
+                self.sleeper(10)
+        if missing:
+            raise ReleaseError(
+                f"Nexus is missing required {task['variant']} artifacts: "
+                + ", ".join(sorted(missing))
+            )
+        return {
+            **task,
+            "verifiedArtifacts": sorted(published),
+            "verifiedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+
+    @staticmethod
+    def _copy_build_output(source: Path, destination: Path) -> None:
+        if not source.is_dir() or not destination.is_dir():
+            raise ReleaseError(f"frontend build output is missing: {source}")
+        for child in source.iterdir():
+            target = destination / child.name
+            if child.is_dir():
+                shutil.copytree(child, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(child, target)
+
+    def _npm_version_record(self, registry: str, name: str, version: str) -> dict | None:
+        url = registry.rstrip("/") + "/" + urllib.parse.quote(name, safe="")
+        result = self.http.read_json(url, missing_ok=True)
+        if result is None:
+            return None
+        metadata, _ = result
+        record = metadata.get("versions", {}).get(version)
+        return record if isinstance(record, dict) else None
+
+    @staticmethod
+    def _npm_tarball_package(identity: str, content: bytes) -> dict:
+        try:
+            with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
+                members = [
+                    member for member in archive.getmembers()
+                    if PurePosixPath(member.name) == PurePosixPath("package/package.json")
+                ]
+                if len(members) != 1 or not members[0].isfile():
+                    raise ReleaseError(f"{identity} has no unique package/package.json")
+                stream = archive.extractfile(members[0])
+                if stream is None:
+                    raise ReleaseError(f"{identity} package.json is unreadable")
+                package = json.load(stream)
+        except (tarfile.TarError, json.JSONDecodeError) as error:
+            raise ReleaseError(f"{identity} is not a readable npm tarball") from error
+        if not isinstance(package, dict):
+            raise ReleaseError(f"{identity} package.json is not an object")
+        return package
+
+    def _verify_npm_package(self, task: dict, evidence: dict, *, wait: bool) -> dict:
+        attempts = 12 if wait else 1
+        record = None
+        for attempt in range(attempts):
+            record = self._npm_version_record(task["registry"], evidence["name"], task["version"])
+            if record is not None:
+                break
+            if attempt + 1 < attempts:
+                self.sleeper(10)
+        if record is None:
+            raise ReleaseError(f"npm registry is missing {evidence['name']}@{task['version']}")
+        distribution = record.get("dist", {})
+        tarball_url = distribution.get("tarball")
+        integrity = distribution.get("integrity")
+        if integrity != evidence["integrity"] or not isinstance(tarball_url, str):
+            raise ReleaseError(f"npm registry metadata differs for {evidence['name']}@{task['version']}")
+        tarball = self.http.read(tarball_url)
+        assert tarball is not None
+        _verify_integrity(f"{evidence['name']}@{task['version']}", tarball, integrity)
+        if _sha256(tarball) != evidence["tarballSha256"]:
+            raise ReleaseError(f"npm registry tarball differs for {evidence['name']}@{task['version']}")
+        package = self._npm_tarball_package(
+            f"{evidence['name']}@{task['version']}", tarball,
+        )
+        if (
+            package.get("name") != evidence["name"]
+            or package.get("version") != task["version"]
+            or package.get("gitHead") != task["expectedCommit"]
+        ):
+            raise ReleaseError(f"npm package provenance differs for {evidence['name']}@{task['version']}")
+        return {**evidence, "tarball": tarball_url, "verifiedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
+
+    def _pack_npm(self, task: dict) -> tuple[Path, dict]:
+        self._verify_workspace(task)
+        workspace = Path(task["workspace"])
+        root = workspace / task["repository"]
+        if task.get("buildOutput"):
+            build_record = (
+                self.state.read_current_manifest()[0]
+                .get("buildValidation", {})
+                .get("completedTasks", {})
+                .get(task.get("buildEvidenceId"))
+            )
+            expected_output = str(root / task["buildOutput"])
+            if (
+                not isinstance(build_record, dict)
+                or build_record.get("buildOutput") != expected_output
+            ):
+                raise ReleaseError(f"release has no build-output proof for {task['id']}")
+            ReleaseBuildValidator.verify_completed_task(build_record)
+        attempt = Path(workspace).parent
+        publication_root = attempt / "publication-packages"
+        publication_root.mkdir(parents=True, exist_ok=True)
+        npm_environment = dict(self.environment)
+        npm_environment["npm_config_cache"] = str(attempt / "publication-cache" / "npm")
+        stage = Path(tempfile.mkdtemp(prefix=f"{task['id'].replace(':', '-')}-", dir=publication_root))
+        archive = stage / "source.tar"
+        try:
+            subprocess.run([
+                "git", "-C", str(root), "archive", "--format=tar", f"--output={archive}",
+                task["expectedCommit"],
+            ], check=True, capture_output=True, text=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            detail = getattr(error, "stderr", None) or str(error)
+            raise ReleaseError(f"cannot archive {task['repository']}: {detail.strip()}") from error
+        source_root = stage / "source"
+        source_root.mkdir()
+        try:
+            with tarfile.open(archive, mode="r:") as content:
+                content.extractall(source_root, filter="data")
+        except (OSError, tarfile.TarError) as error:
+            raise ReleaseError(f"cannot extract {task['repository']} release source") from error
+        package_root = source_root if task["directory"] == "." else source_root / task["directory"]
+        if task.get("buildOutput"):
+            self._copy_build_output(root / task["buildOutput"], package_root)
+        package_path = package_root / "package.json"
+        try:
+            package = json.loads(package_path.read_bytes())
+        except (OSError, json.JSONDecodeError) as error:
+            raise ReleaseError(f"cannot read staged npm package {package_path}: {error}") from error
+        if package.get("version") != task["version"]:
+            raise ReleaseError(f"{package_path} does not identify release {task['version']}")
+        registry = package.get("publishConfig", {}).get("registry")
+        if registry != task["registry"]:
+            raise ReleaseError(f"{package_path} does not publish to the planned registry")
+        package["gitHead"] = task["expectedCommit"]
+        try:
+            package_path.write_bytes(_json_bytes(package))
+        except OSError as error:
+            raise ReleaseError(f"cannot stamp npm provenance in {package_path}: {error}") from error
+        try:
+            pack = subprocess.run([
+                "npm", "pack", str(package_root), "--pack-destination", str(stage),
+                "--ignore-scripts", "--json",
+            ], check=False, text=True, capture_output=True, env=npm_environment)
+        except OSError as error:
+            raise ReleaseError(f"cannot run npm pack for {task['id']}: {error}") from error
+        if pack.returncode:
+            detail = (pack.stderr or pack.stdout).strip()
+            raise ReleaseError(f"npm pack failed for {task['id']}: {detail}")
+        try:
+            packed = json.loads(pack.stdout)
+            filename = packed[0]["filename"]
+            if not isinstance(filename, str) or PurePosixPath(filename).name != filename:
+                raise ReleaseError(f"npm pack returned an unsafe filename for {task['id']}")
+            tarball_path = stage / filename
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as error:
+            raise ReleaseError(f"npm pack returned invalid evidence for {task['id']}") from error
+        try:
+            content = tarball_path.read_bytes()
+        except OSError as error:
+            raise ReleaseError(f"cannot read npm tarball for {task['id']}: {error}") from error
+        return tarball_path, {
+            "name": package["name"],
+            "integrity": "sha512-" + base64.b64encode(hashlib.sha512(content).digest()).decode(),
+            "tarballSha256": _sha256(content),
+            "packedTarball": str(tarball_path),
+        }
+
+    def _publish_npm(self, task: dict) -> dict:
+        tarball, evidence = self._pack_npm(task)
+        existing = self._npm_version_record(task["registry"], evidence["name"], task["version"])
+        if existing is None:
+            command = [
+                "npm", "publish", str(tarball), "--tag", "latest",
+                "--registry", task["registry"], "--loglevel=notice",
+            ]
+            npm_environment = dict(self.environment)
+            npm_environment["npm_config_cache"] = str(
+                Path(task["workspace"]).parent / "publication-cache" / "npm"
+            )
+            try:
+                result = subprocess.run(command, check=False, text=True, env=npm_environment)
+            except OSError as error:
+                raise ReleaseError(f"cannot run npm publish for {evidence['name']}: {error}") from error
+            if result.returncode:
+                raise ReleaseError(f"npm publish exited {result.returncode}: {evidence['name']}")
+        verified = self._verify_npm_package(task, evidence, wait=True)
+        return {**task, **verified, "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
+
+    def _deploy_snapshot(self, manifest: dict, task: dict) -> dict:
+        self._verify_workspace(task)
+        attempt = Path(manifest["frontendPreparation"]["workspace"]).parent
+        log = attempt / "publication-logs" / f"{task['id'].replace(':', '-')}.log"
+        environment = dict(self.environment)
+        environment["CEDAR_HOME"] = task["workspace"]
+        ReleaseBuildValidator._stream_command(
+            task["command"], Path(task["cwd"]), environment, log,
+        )
+        return {
+            **task,
+            "log": str(log),
+            "logSha256": _file_sha256(log),
+            "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+
+    def run_task(self, manifest: dict, task: dict) -> dict:
+        if self.executor is not None:
+            return self.executor(manifest, task)
+        if task["kind"] == "maven-release-upload":
+            return self._publish_maven_release(task)
+        if task["kind"] == "maven-verify":
+            return self._verify_maven_inventory(task, wait=True)
+        if task["kind"] == "npm-release":
+            return self._publish_npm(task)
+        if task["kind"] == "maven-snapshot-deploy":
+            return self._deploy_snapshot(manifest, task)
+        raise ReleaseError(f"unknown artifact publication task {task['kind']}")
+
+    def verify_record(self, manifest: dict, record: dict) -> None:
+        task = next((item for item in self.tasks(manifest) if item["id"] == record.get("id")), None)
+        if task is None or task.get("kind") != record.get("kind"):
+            raise ReleaseError(f"recorded publication task no longer exists: {record.get('id')}")
+        if self.executor is not None:
+            return
+        if task["kind"] == "maven-release-upload":
+            local_repository = Path(task["localRepository"])
+            files = record.get("files")
+            if not isinstance(files, dict) or not files:
+                raise ReleaseError("recorded Maven release has no file evidence")
+            for relative, digest in files.items():
+                local = local_repository / relative
+                if _file_sha256(local) != digest:
+                    raise ReleaseError(f"recorded Maven release input changed: {local}")
+                remote = self.http.read(task["repository"].rstrip("/") + "/" + relative)
+                if remote is None or _sha256(remote) != digest:
+                    raise ReleaseError(f"recorded Maven release artifact changed: {relative}")
+        elif task["kind"] == "maven-verify":
+            self._verify_maven_inventory(task, wait=False)
+        elif task["kind"] == "npm-release":
+            self._verify_workspace(task)
+            self._verify_npm_package(task, record, wait=False)
+        elif task["kind"] == "maven-snapshot-deploy":
+            self._verify_workspace(task)
+            log = Path(record.get("log", ""))
+            if not log.is_file() or _file_sha256(log) != record.get("logSha256"):
+                raise ReleaseError(f"recorded publication log changed for {task['id']}")
+
+
 def validate_active_release_builds(
     state: ReleaseState | None = None,
     validator: ReleaseBuildValidator | None = None,
@@ -1815,6 +2630,130 @@ def create_active_release_refs(
     return completed_manifest
 
 
+def integrate_active_release(
+    state: ReleaseState | None = None,
+    integrator: ReleaseRemoteIntegrator | None = None,
+) -> dict:
+    state = state or ReleaseState()
+    manifest, _ = state.read_current_manifest()
+    if manifest.get("phase") == "remote-integrated":
+        return manifest
+    if manifest.get("phase") not in {
+        "local-refs-created", "integrating-remotes", "remote-integration-failed",
+    }:
+        raise ReleaseError(f"cannot integrate remotes while release is {manifest.get('phase')}")
+    integrator = integrator or ReleaseRemoteIntegrator(state)
+    tasks = integrator.tasks(manifest)
+    task_ids = {task["id"] for task in tasks}
+    evidence = copy.deepcopy(manifest.get("remoteIntegration") or {
+        "startedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "completedTasks": {},
+    })
+    completed = evidence.get("completedTasks")
+    if not isinstance(completed, dict) or not set(completed).issubset(task_ids):
+        raise ReleaseError("recorded remote integration does not match the release plan")
+    for record in completed.values():
+        integrator.verify_record(manifest, record)
+    state.update_current_manifest({
+        "phase": "integrating-remotes",
+        "remoteIntegration": evidence,
+        "failure": None,
+    })
+    for task in tasks:
+        if task["id"] in completed:
+            continue
+        try:
+            record = integrator.integrate(manifest, task)
+        except ReleaseError as error:
+            evidence["failedTask"] = task["id"]
+            state.update_current_manifest({
+                "phase": "remote-integration-failed",
+                "remoteIntegration": evidence,
+                "failure": str(error),
+            })
+            raise
+        completed[task["id"]] = record
+        evidence.pop("failedTask", None)
+        state.update_current_manifest({
+            "phase": "integrating-remotes",
+            "remoteIntegration": evidence,
+            "failure": None,
+        })
+    evidence["completedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    completed_manifest, _ = state.update_current_manifest({
+        "phase": "remote-integrated",
+        "remoteIntegration": evidence,
+        "failure": None,
+    })
+    return completed_manifest
+
+
+def publish_active_release(
+    state: ReleaseState | None = None,
+    publisher: ReleaseArtifactPublisher | None = None,
+    remote_integrator: ReleaseRemoteIntegrator | None = None,
+    build_validator: ReleaseBuildValidator | None = None,
+) -> dict:
+    state = state or ReleaseState()
+    manifest, _ = state.read_current_manifest()
+    if manifest.get("phase") == "artifacts-published":
+        return manifest
+    if manifest.get("phase") not in {
+        "remote-integrated", "publishing-artifacts", "artifact-publication-failed",
+    }:
+        raise ReleaseError(f"cannot publish artifacts while release is {manifest.get('phase')}")
+    remote_integrator = remote_integrator or ReleaseRemoteIntegrator(state)
+    for record in manifest.get("remoteIntegration", {}).get("completedTasks", {}).values():
+        remote_integrator.verify_record(manifest, record)
+    build_validator = build_validator or ReleaseBuildValidator(state)
+    for record in manifest.get("buildValidation", {}).get("completedTasks", {}).values():
+        build_validator.verify_completed_task(record)
+    publisher = publisher or ReleaseArtifactPublisher(state)
+    tasks = publisher.tasks(manifest)
+    task_ids = {task["id"] for task in tasks}
+    evidence = copy.deepcopy(manifest.get("artifactPublication") or {
+        "startedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "completedTasks": {},
+    })
+    completed = evidence.get("completedTasks")
+    if not isinstance(completed, dict) or not set(completed).issubset(task_ids):
+        raise ReleaseError("recorded artifact publication does not match the release plan")
+    for record in completed.values():
+        publisher.verify_record(manifest, record)
+    state.update_current_manifest({
+        "phase": "publishing-artifacts",
+        "artifactPublication": evidence,
+        "failure": None,
+    })
+    for task in tasks:
+        if task["id"] in completed:
+            continue
+        try:
+            record = publisher.run_task(manifest, task)
+        except ReleaseError as error:
+            evidence["failedTask"] = task["id"]
+            state.update_current_manifest({
+                "phase": "artifact-publication-failed",
+                "artifactPublication": evidence,
+                "failure": str(error),
+            })
+            raise
+        completed[task["id"]] = record
+        evidence.pop("failedTask", None)
+        state.update_current_manifest({
+            "phase": "publishing-artifacts",
+            "artifactPublication": evidence,
+            "failure": None,
+        })
+    evidence["completedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    completed_manifest, _ = state.update_current_manifest({
+        "phase": "artifacts-published",
+        "artifactPublication": evidence,
+        "failure": None,
+    })
+    return completed_manifest
+
+
 def prepare_active_release(
     state: ReleaseState | None = None,
     preparer: ReleaseWorkspacePreparer | None = None,
@@ -1883,22 +2822,49 @@ def advance_active_release(
     version_preparer: ReleaseVersionPreparer | None = None,
     build_validator: ReleaseBuildValidator | None = None,
     ref_creator: ReleaseRefCreator | None = None,
+    remote_integrator: ReleaseRemoteIntegrator | None = None,
+    artifact_publisher: ReleaseArtifactPublisher | None = None,
 ) -> dict:
     state = state or ReleaseState()
     manifest, _ = state.read_current_manifest()
-    if manifest.get("phase") == "local-refs-created":
+    if manifest.get("phase") == "artifacts-published":
         return manifest
+    if manifest.get("phase") in {
+        "remote-integrated", "publishing-artifacts", "artifact-publication-failed",
+    }:
+        return publish_active_release(
+            state, artifact_publisher, remote_integrator, build_validator,
+        )
+    if manifest.get("phase") in {
+        "local-refs-created", "integrating-remotes", "remote-integration-failed",
+    }:
+        integrate_active_release(state, remote_integrator)
+        return publish_active_release(
+            state, artifact_publisher, remote_integrator, build_validator,
+        )
     if manifest.get("phase") in {"creating-local-refs", "local-ref-creation-failed"}:
-        return create_active_release_refs(state, ref_creator)
+        create_active_release_refs(state, ref_creator)
+        integrate_active_release(state, remote_integrator)
+        return publish_active_release(
+            state, artifact_publisher, remote_integrator, build_validator,
+        )
     if manifest.get("phase") in {
         "builds-validated",
     }:
-        return create_active_release_refs(state, ref_creator)
+        create_active_release_refs(state, ref_creator)
+        integrate_active_release(state, remote_integrator)
+        return publish_active_release(
+            state, artifact_publisher, remote_integrator, build_validator,
+        )
     if manifest.get("phase") in {
         "versions-prepared", "validating-builds", "build-validation-failed",
     }:
         validate_active_release_builds(state, build_validator)
-        return create_active_release_refs(state, ref_creator)
+        create_active_release_refs(state, ref_creator)
+        integrate_active_release(state, remote_integrator)
+        return publish_active_release(
+            state, artifact_publisher, remote_integrator, build_validator,
+        )
     if manifest.get("phase") == "version-preparation-failed":
         # A partial stamping attempt remains as evidence. Re-run the frontend stage into a new
         # attempt so resume never needs a destructive reset of CLI-owned release state.
@@ -1906,7 +2872,11 @@ def advance_active_release(
     prepare_active_release(state, workspace_preparer)
     prepare_active_release_versions(state, version_preparer)
     validate_active_release_builds(state, build_validator)
-    return create_active_release_refs(state, ref_creator)
+    create_active_release_refs(state, ref_creator)
+    integrate_active_release(state, remote_integrator)
+    return publish_active_release(
+        state, artifact_publisher, remote_integrator, build_validator,
+    )
 
 
 def _render_plan(manifest: dict) -> None:
@@ -1960,7 +2930,7 @@ def start(
     from_train: str = typer.Option(..., "--from-train", help="Completed development build train"),
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
 ):
-    """Prepare, validate, and commit isolated release sources to local refs."""
+    """Run a manifest-owned train release through verified Git and publication stages."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     state = ReleaseState()
     try:
@@ -1972,7 +2942,7 @@ def start(
             console.print("Release state and the failed attempt were retained; use cedarcli release resume.")
         raise typer.Exit(1) from error
     _render_plan(active)
-    console.print("Local release branches and tags created; nothing was pushed.")
+    console.print(f"Phase:               {active['phase']}")
     console.print(f"Internal state:      {path}")
 
 
@@ -2007,5 +2977,11 @@ def status():
         console.print(f"Failure:             {manifest['failure']}")
     if manifest.get("localRefs"):
         completed = manifest["localRefs"].get("completedTasks", {})
-        console.print(f"Local refs:          {len(completed)} repositories; pushed: no")
+        console.print(f"Local refs:          {len(completed)} prepared refs")
+    if manifest.get("remoteIntegration"):
+        completed = manifest["remoteIntegration"].get("completedTasks", {})
+        console.print(f"Remote integration:  {len(completed)} repositories")
+    if manifest.get("artifactPublication"):
+        completed = manifest["artifactPublication"].get("completedTasks", {})
+        console.print(f"Artifact publication:{len(completed):>3} verified tasks")
     console.print(f"Internal state:      {path}")
