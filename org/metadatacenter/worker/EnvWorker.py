@@ -14,14 +14,6 @@ from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
-release_list = [
-    Const.CEDAR_HOME,
-    Const.CEDAR_HOST,
-    Const.CEDAR_VERSION,
-    Const.CEDAR_RELEASE_VERSION,
-    Const.CEDAR_NEXT_DEVELOPMENT_VERSION,
-]
-
 CEDAR_ENV_PREFIX = 'CEDAR_'
 SENSITIVE_NAME_PARTS = (
     'PASSWORD',
@@ -147,16 +139,6 @@ class EnvWorker(Worker):
                     )
         table.style = Style(color="green")
         console.print(table)
-
-    @staticmethod
-    def release():
-        mode = ModeManager.current()
-        environment = os.environ
-        if mode is not None:
-            surface = 'docker' if mode is CedarMode.DOCKER else 'native'
-            environment = ModeManager.profile_environment(surface, mode)
-        table = Table("Name", "Value", title="CEDAR release environment variables")
-        EnvWorker.list_specific_vars(table, release_list, environment)
 
     @staticmethod
     def list_specific_vars(table: Table, var_names: List[str], environment=None):

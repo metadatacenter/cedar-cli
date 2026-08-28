@@ -1,8 +1,6 @@
 class Const:
     CEDAR_HOME = 'CEDAR_HOME'
     CEDAR_VERSION = 'CEDAR_VERSION'
-    CEDAR_RELEASE_VERSION = 'CEDAR_RELEASE_VERSION'
-    CEDAR_NEXT_DEVELOPMENT_VERSION = 'CEDAR_NEXT_DEVELOPMENT_VERSION'
     CEDAR_CA_HOME = 'CEDAR_CA_HOME'
     CEDAR_CA_COMMON_NAME = 'CEDAR_CA_COMMON_NAME'
 
@@ -24,5 +22,3 @@ class Const:
     FILE_BIN_IMAGE_BASE = "bin/cedar-images-base.sh"
     FILE_BIN_UTIL_SET_ENV_GENERIC = "bin/util/set-env-generic.sh"
 
-    PARAM_BRANCH_TYPE = 'branch_type'
-    PARAM_RELEASE_PREPARE_PHASE = 'release_prepare_phase'

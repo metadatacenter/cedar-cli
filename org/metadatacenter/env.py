@@ -35,11 +35,6 @@ def env_list(surface: Optional[EnvironmentSurface] = typer.Argument(
     run(EnvWorker.list, surface.value if surface else None)
 
 
-@app.command("release", help="Show the CEDAR inputs used by the release process")
-def release():
-    run(EnvWorker.release)
-
-
 @app.command("filter", help="Filter effective CEDAR variables with sensitive values redacted")
 def filter(
         filter_term: str = typer.Argument(..., help="Environment variable name to search for"),

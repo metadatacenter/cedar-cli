@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import typer
 from typer.testing import CliRunner
 
 from org.metadatacenter import release_train
@@ -562,6 +563,20 @@ class ReleasePlannerTest(unittest.TestCase):
 class ReleaseStateAndCliTest(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
+
+    def test_release_offers_only_the_train_backed_commands(self):
+        from org.metadatacenter import release
+
+        group = typer.Typer()
+        group.add_typer(release.app, name="release")
+        release.app.add_typer(release_train.app)
+        result = self.runner.invoke(group, ["release", "--help"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        for command in ("plan", "start", "resume", "status"):
+            self.assertIn(command, result.output)
+        for retired in ("all-in-one", "prepare", "commit", "cleanup", "rollback", "check-tools"):
+            self.assertNotIn(retired, result.output)
 
     def test_state_owns_the_manifest_and_refuses_a_second_active_release(self):
         with tempfile.TemporaryDirectory() as directory:
