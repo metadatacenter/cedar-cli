@@ -1211,7 +1211,11 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
         integrator = ReleaseRemoteIntegrator(
             state,
             remote_resolver=lambda repository: str(remotes[repository]),
-            environment={"CEDAR_HOME": str(cedar_home)},
+            environment={
+                "CEDAR_HOME": str(cedar_home),
+                "CEDAR_RELEASE_GIT_NAME": "CEDAR Release Test",
+                "CEDAR_RELEASE_GIT_EMAIL": "release-test@metadatacenter.org",
+            },
         )
         completed = integrate_active_release(state, integrator)
         return state, integrator, remotes, completed
