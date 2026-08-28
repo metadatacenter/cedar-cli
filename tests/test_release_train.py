@@ -1445,6 +1445,72 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
             resumed = integrate_active_release(state, _integrator)
             self.assertEqual(records, resumed["remoteIntegration"]["completedTasks"])
 
+    @staticmethod
+    def _commit_on_remote_main(remote, relative, content, message):
+        with tempfile.TemporaryDirectory() as work:
+            clone = Path(work) / "clone"
+            subprocess.run(["git", "clone", "--quiet", str(remote), str(clone)], check=True)
+            subprocess.run(["git", "-C", str(clone), "switch", "--quiet", "main"], check=True)
+            target = clone / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+            subprocess.run(["git", "-C", str(clone), "add", relative], check=True)
+            subprocess.run([
+                "git", "-c", "user.name=Main Only",
+                "-c", "user.email=main-only@metadatacenter.org",
+                "-C", str(clone), "commit", "--quiet", "-m", message,
+            ], check=True)
+            subprocess.run([
+                "git", "-C", str(clone), "push", "--quiet", "origin", "main",
+            ], check=True)
+
+    def test_main_only_content_does_not_survive_into_the_released_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, creator, cedar_home, _release_workspace, _next_workspace = (
+                ReleaseLocalRefsTest().make_release(directory)
+            )
+            create_active_release_refs(state, creator)
+            manifest, _ = state.read_current_manifest()
+            remotes = {
+                repository: self._bare_remote(
+                    Path(directory), repository, cedar_home / repository, revision,
+                )
+                for repository, revision in manifest["sourceRepositories"].items()
+            }
+            for remote in remotes.values():
+                self._commit_on_remote_main(
+                    remote,
+                    "license.txt",
+                    "Copyright (c) 2026, The Board of Trustees\n",
+                    "Update copyright year to 2026",
+                )
+            integrator = ReleaseRemoteIntegrator(
+                state,
+                remote_resolver=lambda repository: str(remotes[repository]),
+                environment={
+                    "CEDAR_HOME": str(cedar_home),
+                    "CEDAR_RELEASE_GIT_NAME": "CEDAR Release Test",
+                    "CEDAR_RELEASE_GIT_EMAIL": "release-test@metadatacenter.org",
+                },
+            )
+            completed = integrate_active_release(state, integrator)
+
+            self.assertEqual("remote-integrated", completed["phase"])
+            records = completed["remoteIntegration"]["completedTasks"]
+            self.assertEqual({"repo-main", "cedar-workspace"}, set(records))
+            for repository, record in records.items():
+                main = ReleaseLocalRefsTest._git(
+                    remotes[repository], "rev-parse", "refs/heads/main",
+                )
+                main_tree = ReleaseLocalRefsTest._git(
+                    remotes[repository], "rev-parse", f"{main}^{{tree}}",
+                )
+                self.assertEqual(record["main"]["tree"], main_tree)
+                listing = ReleaseLocalRefsTest._git(
+                    remotes[repository], "ls-tree", "--name-only", main,
+                ).split()
+                self.assertNotIn("license.txt", listing)
+
     def test_changed_remote_ref_blocks_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             state, integrator, remotes, completed = self.make_integrated_release(directory)

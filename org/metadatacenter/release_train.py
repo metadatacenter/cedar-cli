@@ -1929,14 +1929,20 @@ class ReleaseRemoteIntegrator:
         reference = f"refs/heads/{branch}"
         commit = self.ref_creator._ref(root, reference)
         if commit is None:
-            self.git._run(["git", "-C", str(root), "switch", "--quiet", "-C", branch, base])
+            # The integration commit must carry the prepared tree exactly, so it is written
+            # from that tree rather than merged towards it. A merge preserves whatever the
+            # base branch holds and the prepared side does not also change -- a file the
+            # base still carries, or one the release deleted -- which silently readmits
+            # unreleased content into the release. Building the commit from the prepared
+            # tree makes the published branch equal the validated release content, and the
+            # base branch keeps that history through the recorded parent.
             name, email = self.ref_creator._identity(root)
-            self.git._run([
+            commit = self.git._run([
                 "git", "-c", f"user.name={name}", "-c", f"user.email={email}",
-                "-c", "commit.gpgSign=false", "-C", str(root), "merge", "--quiet",
-                "--no-ff", "--no-edit", "-X", "theirs", "-m", message, prepared["commit"],
+                "-c", "commit.gpgSign=false", "-C", str(root), "commit-tree",
+                prepared["tree"], "-p", base, "-p", prepared["commit"], "-m", message,
             ])
-            commit = self.git._run(["git", "-C", str(root), "rev-parse", "HEAD"])
+            self.git._run(["git", "-C", str(root), "branch", "--force", branch, commit])
         parents = self.git._run([
             "git", "-C", str(root), "rev-list", "--parents", "-n", "1", commit,
         ]).split()
