@@ -7,6 +7,7 @@ import os
 import subprocess
 import tarfile
 import tempfile
+import inspect
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +22,9 @@ from org.metadatacenter.release_train import (
     ReleaseArtifactPublisher,
     ReleaseError,
     ReleasePlanner,
+    ReleasePreflight,
+    MAVEN_GENERATED_VERSION_FILES,
+    NEXUS_AUTHENTICATED_ENDPOINT,
     ReleaseBuildValidator,
     ReleaseRefCreator,
     ReleaseRemoteIntegrator,
@@ -588,8 +592,9 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseError, "already active"):
                 state.start(manifest_fixture())
 
+    @patch.object(ReleasePreflight, "run", return_value=[])
     @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
-    def test_plan_is_side_effect_free(self, build):
+    def test_plan_is_side_effect_free(self, build, _preflight):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
         ):
@@ -611,10 +616,11 @@ class ReleaseStateAndCliTest(unittest.TestCase):
     @patch.object(ReleaseBuildValidator, "tasks", return_value=[])
     @patch.object(ReleaseVersionPreparer, "prepare", return_value={"release": {}, "nextDevelopment": {}})
     @patch.object(ReleaseWorkspacePreparer, "prepare", return_value={"attempt": "001"})
+    @patch.object(ReleasePreflight, "run", return_value=[])
     @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
     def test_start_persists_internal_state_and_status_finds_it(
-        self, _build, _workspace_prepare, _version_prepare, _build_tasks, _ref_tasks,
-        _remote_tasks, _artifact_tasks,
+        self, _build, _preflight, _workspace_prepare, _version_prepare, _build_tasks,
+        _ref_tasks, _remote_tasks, _artifact_tasks,
     ):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -1848,6 +1854,373 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             self.assertEqual("cedar-frontend", evidence["name"])
             self.assertEqual(commit, package["gitHead"])
             self.assertEqual("2.9.3", package["version"])
+
+
+class FakeNexus:
+    """Stand in for HttpClient, failing only the URLs a test names."""
+
+    def __init__(self, failing=frozenset()):
+        self.failing = set(failing)
+        self.reads = []
+
+    def read(self, url, *, missing_ok=False):
+        self.reads.append(url)
+        if url in self.failing:
+            raise ReleaseError(f"cannot read {url}: HTTP 401")
+        return b"{}"
+
+    def read_json(self, url, *, missing_ok=False):
+        return {}, b"{}"
+
+
+class FakeCompletedProcess:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class FakeCommands:
+    """Answer commands by the first matching prefix, so a check drives real argument lists."""
+
+    def __init__(self, answers=None, default=FakeCompletedProcess()):
+        self.answers = answers or {}
+        self.default = default
+        self.calls = []
+
+    def __call__(self, args, **kwargs):
+        self.calls.append(list(args))
+        for prefix, answer in self.answers.items():
+            if list(args)[:len(prefix)] == list(prefix):
+                return answer
+        return self.default
+
+
+PREFLIGHT_ENVIRONMENT = {
+    "PATH": os.environ.get("PATH", ""),
+    "CEDAR_HOME": "/tmp/cedar-preflight",
+    "CEDAR_HOST": "metadatacenter.orgx",
+    "CEDAR_DEVELOP_HOME": "/tmp/cedar-preflight/cedar-development",
+    "CEDAR_NET_GATEWAY": "10.0.0.1",
+    "CEDAR_FRONTEND_TARGET": "native",
+    "BMIR_NEXUS_USERNAME": "releaser",
+    "BMIR_NEXUS_PASSWORD": "secret",
+}
+
+
+class ReleasePreflightTest(unittest.TestCase):
+    """Every check answers a question that once cost a release its build phase."""
+
+    def _preflight(self, *, environment=None, commands=None, http=None,
+                   manifest=None, root=None, accepted=None):
+        values = dict(PREFLIGHT_ENVIRONMENT)
+        if root is not None:
+            values["CEDAR_HOME"] = str(root)
+        values.update(environment or {})
+        payload = manifest or manifest_fixture()
+        return ReleasePreflight(
+            payload,
+            state=ReleaseState(root=Path(tempfile.gettempdir()) / "preflight-state"),
+            command_runner=commands or FakeCommands(),
+            http=http or FakeNexus(),
+            environment=values,
+            accepted_red_develop=accepted,
+        )
+
+    @staticmethod
+    def _checked_out(directory, repository, *, files=None):
+        root = Path(directory) / repository
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "license.txt").write_text(
+            "Copyright (c) 2026, The Board of Trustees\n", encoding="utf-8")
+        for relative, content in (files or {}).items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        return root
+
+    def test_java_other_than_seventeen_is_refused(self):
+        commands = FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(
+                stderr='openjdk version "25.0.1" 2025-10-21'),
+        })
+        findings = self._preflight(commands=commands).check_toolchain()
+
+        self.assertTrue(findings)
+        self.assertIn("Java 25", findings[0].message)
+        self.assertIn("java_home -v 17", findings[0].remedy)
+
+    def test_java_seventeen_passes(self):
+        commands = FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(
+                stderr='openjdk version "17.0.13" 2024-10-15'),
+        })
+        self.assertEqual([], self._preflight(commands=commands).check_toolchain())
+
+    def test_an_unsourced_profile_is_named_variable_by_variable(self):
+        findings = self._preflight(
+            environment={"CEDAR_DEVELOP_HOME": "", "CEDAR_NET_GATEWAY": ""}).check_profile()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("CEDAR_DEVELOP_HOME", findings[0].message)
+        self.assertIn("CEDAR_NET_GATEWAY", findings[0].message)
+        self.assertIn("cedar-profile-native-develop.sh", findings[0].remedy)
+
+    def test_absent_nexus_credentials_fail_before_any_build(self):
+        findings = self._preflight(
+            environment={"BMIR_NEXUS_PASSWORD": ""}).check_nexus_authorization()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("anonymous", findings[0].message)
+
+    def test_nexus_credentials_that_do_not_authenticate_fail(self):
+        findings = self._preflight(
+            http=FakeNexus(failing={NEXUS_AUTHENTICATED_ENDPOINT})).check_nexus_authorization()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("does not authenticate", findings[0].message)
+
+    def test_authenticated_writable_nexus_passes(self):
+        self.assertEqual([], self._preflight().check_nexus_authorization())
+
+    def test_npm_without_a_registry_identity_fails(self):
+        commands = FakeCommands({
+            ("npm", "whoami"): FakeCompletedProcess(returncode=1, stderr="ENEEDAUTH"),
+        })
+        findings = self._preflight(commands=commands).check_npm_authorization()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("npm login", findings[0].remedy)
+
+    def test_a_remote_that_refuses_main_is_found_before_the_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["repo-one"]
+            manifest["sourceRepositories"] = {"repo-one": "a" * 40}
+            commands = FakeCommands({
+                ("git",): FakeCompletedProcess(
+                    returncode=1,
+                    stderr="remote: error: GH006: Protected branch update failed"),
+            })
+            findings = self._preflight(
+                commands=commands, manifest=manifest, root=directory).check_push_permission()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("Protected branch", findings[0].message)
+        self.assertIn("branch protection", findings[0].remedy)
+
+    def test_push_permission_asks_about_main_and_the_release_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["repo-one"]
+            manifest["sourceRepositories"] = {"repo-one": "a" * 40}
+            commands = FakeCommands()
+            self._preflight(
+                commands=commands, manifest=manifest, root=directory).check_push_permission()
+
+        self.assertEqual(1, len(commands.calls))
+        pushed = commands.calls[0]
+        self.assertIn("--dry-run", pushed)
+        self.assertIn("a" * 40 + ":refs/heads/main", pushed)
+        self.assertIn("a" * 40 + ":refs/tags/release-2.9.3", pushed)
+
+    def test_an_already_used_release_tag_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["repo-one"]
+            commands = FakeCommands({
+                ("git", "-C"): FakeCompletedProcess(
+                    stdout="abc123\trefs/tags/release-2.9.3"),
+            })
+            findings = self._preflight(
+                commands=commands, manifest=manifest,
+                root=directory).check_target_version_unused()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("already carries release-2.9.3", findings[0].message)
+
+    @staticmethod
+    def _release_of(*repositories):
+        manifest = manifest_fixture()
+        manifest["releaseRepositories"] = list(repositories)
+        manifest["sourceRepositories"] = {name: "a" * 40 for name in repositories}
+        return manifest
+
+    def test_ci_is_asked_about_the_train_source_rather_than_the_current_develop(self):
+        """A release advances develop everywhere, so the latest run answers the wrong question."""
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(
+                stdout="success\tcompleted\t1\tCI"),
+        })
+        self._preflight(
+            commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertIn(f"head_sha={'a' * 40}", commands.calls[0][2])
+
+    def test_a_source_commit_with_no_ci_run_is_advisory(self):
+        commands = FakeCommands({("gh", "api"): FakeCompletedProcess(stdout="")})
+        findings = self._preflight(
+            commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal)
+        self.assertIn("no CI run", findings[0].message)
+
+    def test_a_still_running_workflow_is_advisory(self):
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(stdout="pending\tin_progress\t7\tCI"),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal)
+        self.assertIn("still in_progress", findings[0].message)
+
+    def test_a_red_develop_blocks_the_release(self):
+        manifest = self._release_of("repo-one")
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(
+                stdout="failure\tcompleted\t33211149320\tCI"),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=manifest).check_develop_is_green()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("--accept-red-develop repo-one=33211149320", findings[0].remedy)
+
+    def test_a_red_develop_accepted_by_run_becomes_advisory(self):
+        manifest = self._release_of("repo-one")
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(
+                stdout="failure\tcompleted\t33211149320\tCI"),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=manifest,
+            accepted={"repo-one": "33211149320"}).check_develop_is_green()
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal)
+        self.assertIn("accepted explicitly", findings[0].message)
+
+    def test_accepting_a_different_run_does_not_clear_the_current_one(self):
+        manifest = self._release_of("repo-one")
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(
+                stdout="failure\tcompleted\t33211149320\tCI"),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=manifest,
+            accepted={"repo-one": "1"}).check_develop_is_green()
+
+        self.assertTrue(findings[0].fatal)
+
+    def test_a_green_develop_passes(self):
+        manifest = self._release_of("repo-one")
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(
+                stdout="success\tcompleted\t33211149320\tCI"),
+        })
+        self.assertEqual(
+            [], self._preflight(commands=commands, manifest=manifest).check_develop_is_green())
+
+    def test_an_undeclared_generated_swagger_file_is_found_before_the_build(self):
+        """This is the valuerecommender failure, reached without spending a build."""
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "cedar-undeclared-server", files={
+                "cedar-undeclared-server-application/src/main/resources/assets/"
+                "swagger-api/swagger.json": '{"version" : "2.9.3-SNAPSHOT"}',
+            })
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["cedar-undeclared-server"]
+            findings = self._preflight(
+                manifest=manifest, root=directory).check_generated_version_files()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("swagger.json", findings[0].message)
+        self.assertIn("MAVEN_GENERATED_VERSION_FILES", findings[0].remedy)
+
+    def test_a_declared_generated_file_passes(self):
+        repository = "cedar-resource-server"
+        declared = next(iter(MAVEN_GENERATED_VERSION_FILES[repository]))
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, repository, files={declared: "{}"})
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = [repository]
+            findings = self._preflight(
+                manifest=manifest, root=directory).check_generated_version_files()
+
+        self.assertEqual([], findings)
+
+    def test_a_license_without_a_copyright_year_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._checked_out(directory, "repo-one")
+            (root / "license.txt").write_text("All rights reserved.\n", encoding="utf-8")
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["repo-one"]
+            findings = self._preflight(
+                manifest=manifest, root=directory).check_license_files()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+
+    def test_a_missing_license_is_advisory_rather_than_fatal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._checked_out(directory, "repo-one")
+            (root / "license.txt").unlink()
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["repo-one"]
+            findings = self._preflight(
+                manifest=manifest, root=directory).check_license_files()
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal)
+
+    def test_a_dirty_working_tree_blocks_the_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["repo-one"]
+            commands = FakeCommands({
+                ("git", "-C", str(Path(directory) / "repo-one"), "rev-parse"):
+                    FakeCompletedProcess(stdout="develop"),
+                ("git", "-C", str(Path(directory) / "repo-one"), "status"):
+                    FakeCompletedProcess(stdout=" M pom.xml"),
+            })
+            findings = self._preflight(
+                commands=commands, manifest=manifest, root=directory).check_working_trees()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("1 uncommitted change", findings[0].message)
+
+    def test_unpushed_develop_commits_block_the_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = manifest_fixture()
+            manifest["releaseRepositories"] = ["repo-one"]
+            root = str(Path(directory) / "repo-one")
+            commands = FakeCommands({
+                ("git", "-C", root, "rev-parse"): FakeCompletedProcess(stdout="develop"),
+                ("git", "-C", root, "status"): FakeCompletedProcess(stdout=""),
+                ("git", "-C", root, "rev-list"): FakeCompletedProcess(stdout="2"),
+            })
+            findings = self._preflight(
+                commands=commands, manifest=manifest, root=directory).check_working_trees()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("2 unpushed commit", findings[0].message)
+
+    def test_start_and_plan_settle_the_same_preconditions(self):
+        """A release must not be startable from a state that plan would have refused."""
+        for command in (release_train.plan, release_train.start):
+            self.assertIn(
+                "_preflight_or_exit", inspect.getsource(command),
+                f"{command.__name__} does not run preflight")
 
 
 if __name__ == "__main__":

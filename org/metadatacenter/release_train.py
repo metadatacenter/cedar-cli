@@ -1,13 +1,15 @@
 """Manifest-backed CEDAR releases sourced from immutable build trains.
 
-This module is deliberately independent of the legacy release planners.  The
-new commands may coexist with them until the train-backed release is complete.
+This module owns the whole release. It plans one from explicit inputs, settles every
+precondition before the first build, and drives the phases that follow through to
+published artifacts and a recorded proof that the release holds.
 """
 
 from __future__ import annotations
 
 import base64
 import copy
+import dataclasses
 import datetime as dt
 import hashlib
 import io
@@ -3003,6 +3005,439 @@ def advance_active_release(
     )
 
 
+# Variables the CEDAR profile defines and the Maven suites read. A build started without
+# them fails deep inside Dropwizard configuration with UndefinedEnvironmentVariableException.
+PROFILE_REQUIRED_VARIABLES = (
+    "CEDAR_HOME",
+    "CEDAR_HOST",
+    "CEDAR_DEVELOP_HOME",
+    "CEDAR_NET_GATEWAY",
+    "CEDAR_FRONTEND_TARGET",
+)
+PROFILE_COMMAND = "source $CEDAR_HOME/cedar-profile-native-develop.sh"
+
+REQUIRED_TOOLS = ("git", "mvn", "node", "npm")
+REQUIRED_JAVA_MAJOR = 17
+# A train, its attempt tree and the archives of earlier attempts.
+REQUIRED_FREE_BYTES = 40 * 1024 ** 3
+
+NEXUS_HOST = "https://nexus.bmir.stanford.edu"
+NEXUS_NPM_REGISTRY = f"{NEXUS_HOST}/repository/npm-cedar/"
+# Anonymous callers receive 403 from this endpoint, so a 200 proves the configured
+# credentials authenticate. It does not prove the deploy privilege on a given
+# repository, which only a write can establish.
+NEXUS_AUTHENTICATED_ENDPOINT = f"{NEXUS_HOST}/service/rest/v1/status/check"
+NEXUS_WRITABLE_ENDPOINT = f"{NEXUS_HOST}/service/rest/v1/status/writable"
+
+# Files a Maven build regenerates with the project version inside. Every match must be
+# declared in MAVEN_GENERATED_VERSION_FILES, or the prepared-file guard trips mid-build.
+GENERATED_VERSION_FILE_GLOBS = (
+    "*/src/main/resources/assets/swagger-api/swagger.json",
+    "*/src/main/resources/assets/swagger-api/swagger.yaml",
+)
+
+LICENSE_FILE_NAME = "license.txt"
+LICENSE_COPYRIGHT_RE = re.compile(r"^Copyright \(c\) (\d{4}),", re.MULTILINE)
+
+
+@dataclasses.dataclass(frozen=True)
+class PreflightFinding:
+    """One settled precondition, carrying the action that clears it."""
+
+    check: str
+    severity: str
+    message: str
+    remedy: str = ""
+
+    @property
+    def fatal(self) -> bool:
+        return self.severity == "fail"
+
+
+class ReleasePreflight:
+    """Settle every release precondition that is knowable before the first build.
+
+    The 2.9.3 release failed five times, and each failure was a condition that already
+    held when the release started: undeclared generated files, absent Nexus credentials,
+    a blocked push to main, a red develop, and content carried only on main. Each cost
+    the hours of Maven and frontend building that preceded the phase that noticed. Every
+    check here answers one of those questions from local state or a cheap remote read, so
+    a release either refuses in its first minute or runs with its preconditions settled.
+    """
+
+    CHECKS = (
+        "check_toolchain",
+        "check_profile",
+        "check_disk_space",
+        "check_working_trees",
+        "check_nexus_authorization",
+        "check_npm_authorization",
+        "check_push_permission",
+        "check_target_version_unused",
+        "check_develop_is_green",
+        "check_generated_version_files",
+        "check_license_files",
+        "check_remote_survey",
+    )
+
+    def __init__(
+        self,
+        manifest: dict,
+        *,
+        state: "ReleaseState | None" = None,
+        command_runner=None,
+        http: HttpClient | None = None,
+        environment=None,
+        accepted_red_develop: dict[str, str] | None = None,
+    ):
+        self.manifest = manifest
+        self.environment = dict(os.environ if environment is None else environment)
+        self.state = state or ReleaseState()
+        self.command_runner = command_runner or subprocess.run
+        self.http = http or HttpClient(environment=self.environment)
+        self.accepted_red_develop = dict(accepted_red_develop or {})
+
+    @property
+    def repositories(self) -> list[str]:
+        return list(self.manifest.get("releaseRepositories", []))
+
+    def _root(self, repository: str) -> Path:
+        cedar_home = self.environment.get("CEDAR_HOME")
+        if not cedar_home:
+            raise ReleaseError("CEDAR_HOME is not set")
+        return Path(cedar_home) / repository
+
+    def _capture(self, args: list[str], *, cwd: Path | None = None) -> tuple[int, str, str]:
+        """Run a command and report its outcome instead of raising on failure.
+
+        A failing command is the answer to several checks rather than an error, so
+        preflight needs the return code where the release runner needs an exception.
+        """
+        try:
+            result = self.command_runner(
+                args,
+                cwd=str(cwd) if cwd else None,
+                env=self.environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            return 127, "", str(error)
+        return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
+
+    def run(self) -> list[PreflightFinding]:
+        findings: list[PreflightFinding] = []
+        for name in self.CHECKS:
+            findings.extend(getattr(self, name)())
+        return findings
+
+    def check_toolchain(self) -> list[PreflightFinding]:
+        findings = []
+        for tool in REQUIRED_TOOLS:
+            if shutil.which(tool, path=self.environment.get("PATH")) is None:
+                findings.append(PreflightFinding(
+                    "toolchain", "fail", f"{tool} is not on PATH",
+                    f"install {tool} and make it available to the release shell",
+                ))
+        code, _, stderr = self._capture(["java", "-version"])
+        if code != 0:
+            findings.append(PreflightFinding(
+                "toolchain", "fail", "java is not on PATH",
+                'export JAVA_HOME=$(/usr/libexec/java_home -v 17)',
+            ))
+            return findings
+        match = re.search(r'version "(\d+)', stderr)
+        major = int(match.group(1)) if match else None
+        if major != REQUIRED_JAVA_MAJOR:
+            findings.append(PreflightFinding(
+                "toolchain", "fail",
+                f"Java {major or 'of unknown version'} is active, and CEDAR builds require "
+                f"Java {REQUIRED_JAVA_MAJOR}",
+                'export JAVA_HOME=$(/usr/libexec/java_home -v 17)',
+            ))
+        return findings
+
+    def check_profile(self) -> list[PreflightFinding]:
+        missing = [name for name in PROFILE_REQUIRED_VARIABLES if not self.environment.get(name)]
+        if not missing:
+            return []
+        return [PreflightFinding(
+            "profile", "fail",
+            "the CEDAR profile is not sourced, so " + ", ".join(missing) + " are undefined",
+            PROFILE_COMMAND,
+        )]
+
+    def check_disk_space(self) -> list[PreflightFinding]:
+        try:
+            free = shutil.disk_usage(self.state.root.parent).free
+        except OSError as error:
+            return [PreflightFinding("disk", "warn", f"cannot measure free space: {error}")]
+        if free >= REQUIRED_FREE_BYTES:
+            return []
+        return [PreflightFinding(
+            "disk", "fail",
+            f"{free // 1024 ** 3} GiB free, and a release needs "
+            f"{REQUIRED_FREE_BYTES // 1024 ** 3} GiB for the train, the attempt tree and archives",
+            "free space or archive earlier release attempts",
+        )]
+
+    def check_working_trees(self) -> list[PreflightFinding]:
+        findings = []
+        for repository in self.repositories:
+            root = self._root(repository)
+            if not root.is_dir():
+                findings.append(PreflightFinding(
+                    "working-tree", "fail", f"{repository} is not checked out at {root}",
+                    f"cedarcli git clone {repository}",
+                ))
+                continue
+            code, branch, _ = self._capture(
+                ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"])
+            if code != 0:
+                findings.append(PreflightFinding(
+                    "working-tree", "fail", f"{repository} is not a readable git repository"))
+                continue
+            if branch != "develop":
+                findings.append(PreflightFinding(
+                    "working-tree", "fail", f"{repository} is on {branch} rather than develop",
+                    f"git -C {root} switch develop",
+                ))
+            _, dirty, _ = self._capture(["git", "-C", str(root), "status", "--porcelain"])
+            if dirty:
+                count = len(dirty.splitlines())
+                findings.append(PreflightFinding(
+                    "working-tree", "fail",
+                    f"{repository} has {count} uncommitted change(s)",
+                    f"commit or stash them in {root}",
+                ))
+            code, ahead, _ = self._capture(
+                ["git", "-C", str(root), "rev-list", "--count", "@{upstream}..HEAD"])
+            if code == 0 and ahead.isdigit() and int(ahead) > 0:
+                findings.append(PreflightFinding(
+                    "working-tree", "fail",
+                    f"{repository} has {ahead} unpushed commit(s) on develop",
+                    f"git -C {root} push",
+                ))
+        return findings
+
+    def check_nexus_authorization(self) -> list[PreflightFinding]:
+        username = self.environment.get("BMIR_NEXUS_USERNAME")
+        password = self.environment.get("BMIR_NEXUS_PASSWORD")
+        if not username or not password:
+            return [PreflightFinding(
+                "nexus", "fail",
+                "BMIR_NEXUS_USERNAME and BMIR_NEXUS_PASSWORD are not both set, and Nexus "
+                "reads fall back to anonymous, so nothing else reveals this until the "
+                "first upload",
+                "export both from the bmir-nexus-releases server in ~/.m2/settings.xml",
+            )]
+        findings = []
+        try:
+            self.http.read(NEXUS_AUTHENTICATED_ENDPOINT)
+        except ReleaseError as error:
+            findings.append(PreflightFinding(
+                "nexus", "fail",
+                f"BMIR_NEXUS_USERNAME does not authenticate against Nexus: {error}",
+                "check the credentials against the bmir-nexus-releases server entry",
+            ))
+            return findings
+        try:
+            self.http.read(NEXUS_WRITABLE_ENDPOINT)
+        except ReleaseError as error:
+            findings.append(PreflightFinding(
+                "nexus", "fail", f"Nexus does not report itself writable: {error}",
+                "wait for Nexus to return to a writable state",
+            ))
+        return findings
+
+    def check_npm_authorization(self) -> list[PreflightFinding]:
+        code, _, stderr = self._capture(
+            ["npm", "whoami", "--registry", NEXUS_NPM_REGISTRY])
+        if code == 0:
+            return []
+        return [PreflightFinding(
+            "npm", "fail",
+            f"npm is not authenticated against {NEXUS_NPM_REGISTRY}: {stderr.splitlines()[-1] if stderr else 'no identity'}",
+            f"npm login --registry {NEXUS_NPM_REGISTRY}",
+        )]
+
+    def check_push_permission(self) -> list[PreflightFinding]:
+        """Ask each remote whether the release's own writes would be accepted.
+
+        A release writes main and a tag in every repository. A branch protection rule or a
+        lapsed token refuses those at remote integration, after the build phase has already
+        run, so the question is asked here with a push that transmits nothing.
+        """
+        findings = []
+        tag = f"release-{self.manifest.get('releaseVersion')}"
+        for repository in self.repositories:
+            root = self._root(repository)
+            if not root.is_dir():
+                continue
+            source = self.manifest.get("sourceRepositories", {}).get(repository)
+            if not source:
+                continue
+            code, _, stderr = self._capture([
+                "git", "-C", str(root), "push", "--dry-run", "--force", "origin",
+                f"{source}:refs/heads/main", f"{source}:refs/tags/{tag}",
+            ])
+            if code != 0:
+                detail = stderr.splitlines()[-1] if stderr else "push refused"
+                findings.append(PreflightFinding(
+                    "push", "fail",
+                    f"{repository} refuses the release's writes to main and {tag}: {detail}",
+                    "grant push access, or lift the branch protection on main",
+                ))
+        return findings
+
+    def check_target_version_unused(self) -> list[PreflightFinding]:
+        version = self.manifest.get("releaseVersion")
+        tag = f"release-{version}"
+        findings = []
+        for repository in self.repositories:
+            root = self._root(repository)
+            if not root.is_dir():
+                continue
+            code, output, _ = self._capture(
+                ["git", "-C", str(root), "ls-remote", "--tags", "origin", f"refs/tags/{tag}"])
+            if code == 0 and output:
+                findings.append(PreflightFinding(
+                    "version", "fail",
+                    f"{repository} already carries {tag}",
+                    f"choose an unused release version, or delete {tag} deliberately",
+                ))
+        return findings
+
+    def check_develop_is_green(self) -> list[PreflightFinding]:
+        """Refuse to release a source commit that its own CI reports broken.
+
+        The question is asked of the exact commit the train was built from, not of whatever
+        develop points at now. That is both the more precise question and the stable one: a
+        release advances develop to the next snapshot in every repository at once, and the
+        CI those pushes trigger can race the parent snapshot they depend on, leaving a tail
+        of red runs that say nothing about the source being released.
+        """
+        if shutil.which("gh", path=self.environment.get("PATH")) is None:
+            return [PreflightFinding(
+                "ci", "fail", "gh is not on PATH, so the source commit's CI state cannot be read",
+                "install the GitHub CLI and authenticate it with gh auth login",
+            )]
+        findings = []
+        for repository in self.repositories:
+            source = self.manifest.get("sourceRepositories", {}).get(repository)
+            if not source:
+                continue
+            code, output, stderr = self._capture([
+                "gh", "api",
+                f"repos/metadatacenter/{repository}/actions/runs"
+                f"?head_sha={source}&per_page=20",
+                # A run still in flight has a null conclusion, and an empty leading field
+                # would be lost to the surrounding strip, so name it.
+                "--jq", '.workflow_runs[] | [.conclusion // "pending", .status, .id, .name]'
+                        " | @tsv",
+            ])
+            if code != 0:
+                findings.append(PreflightFinding(
+                    "ci", "warn",
+                    f"{repository} CI state is unreadable: "
+                    f"{stderr.splitlines()[-1] if stderr else code}",
+                ))
+                continue
+            if not output:
+                findings.append(PreflightFinding(
+                    "ci", "warn",
+                    f"{repository} has no CI run for the train source {source[:8]}",
+                ))
+                continue
+            for line in output.splitlines():
+                conclusion, status, run_id, name = (line.split("\t") + ["", "", "", ""])[:4]
+                if status != "completed":
+                    findings.append(PreflightFinding(
+                        "ci", "warn",
+                        f"{repository} {name or 'CI'} is still {status} for {source[:8]}",
+                    ))
+                    continue
+                if conclusion in {"success", "skipped", "neutral"}:
+                    continue
+                if self.accepted_red_develop.get(repository) == run_id:
+                    findings.append(PreflightFinding(
+                        "ci", "warn",
+                        f"{repository} develop is {conclusion} in run {run_id}, accepted explicitly",
+                    ))
+                    continue
+                findings.append(PreflightFinding(
+                    "ci", "fail",
+                    f"{repository} {name or 'CI'} is {conclusion} for the train source "
+                    f"{source[:8]} in run {run_id}",
+                    f"fix develop and build a new train, or accept this run with "
+                    f"--accept-red-develop {repository}={run_id}",
+                ))
+        return findings
+
+    def check_generated_version_files(self) -> list[PreflightFinding]:
+        """Find version-bearing generated files the stamping table does not declare.
+
+        An undeclared file is regenerated during the build with the release version inside,
+        which the prepared-file guard then reports as drift. Declaring it is the fix, and
+        finding it here costs a directory walk rather than a build.
+        """
+        findings = []
+        for repository in self.repositories:
+            root = self._root(repository)
+            if not root.is_dir():
+                continue
+            declared = set(MAVEN_GENERATED_VERSION_FILES.get(repository, {}))
+            for glob in GENERATED_VERSION_FILE_GLOBS:
+                for path in sorted(root.glob(glob)):
+                    relative = path.relative_to(root).as_posix()
+                    if relative in declared:
+                        continue
+                    findings.append(PreflightFinding(
+                        "generated-files", "fail",
+                        f"{repository} regenerates {relative}, which carries the version and "
+                        "is not declared",
+                        f"add {relative} to MAVEN_GENERATED_VERSION_FILES[{repository!r}]",
+                    ))
+        return findings
+
+    def check_license_files(self) -> list[PreflightFinding]:
+        findings = []
+        for repository in self.repositories:
+            root = self._root(repository)
+            if not root.is_dir():
+                continue
+            path = root / LICENSE_FILE_NAME
+            if not path.is_file():
+                findings.append(PreflightFinding(
+                    "license", "warn",
+                    f"{repository} has no {LICENSE_FILE_NAME}, so its copyright year is not stamped",
+                ))
+                continue
+            if not LICENSE_COPYRIGHT_RE.search(path.read_text(encoding="utf-8", errors="replace")):
+                findings.append(PreflightFinding(
+                    "license", "fail",
+                    f"{repository} has a {LICENSE_FILE_NAME} with no recognisable copyright year",
+                    f"restore the 'Copyright (c) YYYY,' line in {path}",
+                ))
+        return findings
+
+    def check_remote_survey(self) -> list[PreflightFinding]:
+        try:
+            replaced = ReleaseRemoteIntegrator(self.state, environment=self.environment).survey(
+                self.manifest)
+        except ReleaseError as error:
+            return [PreflightFinding("remote", "fail", str(error))]
+        findings = []
+        for repository, paths in sorted(replaced.items()):
+            findings.append(PreflightFinding(
+                "remote", "warn",
+                f"{repository} carries {len(paths)} file(s) on main alone, which the release "
+                "replaces: " + ", ".join(paths),
+            ))
+        return findings
+
+
 def _render_plan(manifest: dict) -> None:
     cee = manifest["cee"]
     console.print(f"Release:             {manifest['releaseVersion']}")
@@ -3034,24 +3469,50 @@ def _build_or_exit(
         raise typer.Exit(1) from error
 
 
-def _render_remote_survey(manifest: dict) -> None:
+def _parse_accepted_red_develop(values: list[str] | None) -> dict[str, str]:
+    accepted = {}
+    for value in values or []:
+        repository, separator, run_id = value.partition("=")
+        if not separator or not repository.strip() or not run_id.strip():
+            console.print(
+                f"[red]--accept-red-develop expects <repository>=<run-id>, not {value!r}[/red]")
+            raise typer.Exit(1)
+        accepted[repository.strip()] = run_id.strip()
+    return accepted
+
+
+def _preflight_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> None:
+    """Report every settled precondition, and stop before any state changes if one failed."""
     try:
-        findings = ReleaseRemoteIntegrator(ReleaseState()).survey(manifest)
+        findings = ReleasePreflight(
+            manifest, accepted_red_develop=accepted_red_develop,
+        ).run()
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
+    failures = [finding for finding in findings if finding.fatal]
+    warnings = [finding for finding in findings if not finding.fatal]
     if not findings:
-        console.print("Remote state:        develop matches the train source, main adds nothing")
-        return
-    replaced = sum(len(paths) for paths in findings.values())
-    console.print(
-        f"[yellow]Remote state:        {replaced} file(s) in {len(findings)} repositories are "
-        "on main only; the release replaces them[/yellow]"
-    )
-    for repository, paths in sorted(findings.items()):
-        console.print(f"  {repository}")
-        for path in paths:
-            console.print(f"    {path}")
+        console.print("Preflight:           every precondition settled")
+    else:
+        console.print(
+            f"Preflight:           {len(failures)} blocking, {len(warnings)} advisory")
+    for finding in warnings:
+        console.print(f"  [yellow]{finding.check}: {finding.message}[/yellow]")
+    for finding in failures:
+        console.print(f"  [red]{finding.check}: {finding.message}[/red]")
+        if finding.remedy:
+            console.print(f"    {finding.remedy}")
+    if failures:
+        console.print(
+            f"[red]{len(failures)} precondition(s) block this release. Nothing was changed."
+            "[/red]")
+        raise typer.Exit(1)
+
+
+ACCEPT_RED_DEVELOP_HELP = (
+    "Accept one repository's red develop by naming the exact run, as <repository>=<run-id>"
+)
 
 
 @app.command("plan")
@@ -3060,11 +3521,13 @@ def plan(
     next_version: str = typer.Option(..., "--next-version", help="Explicit next SNAPSHOT version"),
     from_train: str = typer.Option(..., "--from-train", help="Completed development build train"),
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
+    accept_red_develop: list[str] = typer.Option(
+        None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
 ):
-    """Validate explicit release inputs without changing release state."""
+    """Settle every release precondition without changing release state."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
-    _render_remote_survey(manifest)
+    _preflight_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
     console.print("No changes made.")
 
 
@@ -3074,9 +3537,13 @@ def start(
     next_version: str = typer.Option(..., "--next-version", help="Explicit next SNAPSHOT version"),
     from_train: str = typer.Option(..., "--from-train", help="Completed development build train"),
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
+    accept_red_develop: list[str] = typer.Option(
+        None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
 ):
     """Run a manifest-owned train release through verified Git and publication stages."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
+    _render_plan(manifest)
+    _preflight_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
     state = ReleaseState()
     try:
         path = state.start(manifest)
@@ -3086,7 +3553,6 @@ def start(
         if state.current_path.exists():
             console.print("Release state and the failed attempt were retained; use cedarcli release resume.")
         raise typer.Exit(1) from error
-    _render_plan(active)
     console.print(f"Phase:               {active['phase']}")
     console.print(f"Internal state:      {path}")
 
