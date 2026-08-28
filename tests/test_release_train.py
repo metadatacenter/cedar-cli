@@ -199,14 +199,29 @@ class CeePromotionTest(unittest.TestCase):
         )
 
     def test_changed_javascript_is_not_a_promotion(self):
+        dev = package_tarball(
+            DEV_CEE_NAME,
+            DEV_VERSION,
+            development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
         changed = package_tarball(
             PUBLIC_CEE_NAME,
             PUBLIC_VERSION,
             development=False,
-            bundle=b"different CEE bundle",
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09", suffix="different",
+            ),
+            changelog=PUBLIC_CHANGELOG,
         )
-        with self.assertRaisesRegex(ReleaseError, "incomplete release-provenance set"):
-            compare_cee_packages(self.dev, DEV_VERSION, changed, PUBLIC_VERSION)
+        with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+            compare_cee_packages(dev, DEV_VERSION, changed, PUBLIC_VERSION)
 
     def test_declared_release_provenance_is_normalized(self):
         dev_bundle = provenance_bundle(
@@ -297,9 +312,57 @@ class CeePromotionTest(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "exactly one model package identity"):
             compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
 
-    def test_explicit_public_version_must_match_the_dev_stable_base(self):
-        with self.assertRaisesRegex(ReleaseError, "cannot be promoted"):
-            compare_cee_packages(self.dev, DEV_VERSION, self.public, "2.0.4")
+    def test_public_version_need_not_match_the_dev_stable_base(self):
+        dev_version = "2.0.4-dev.20260828.0224.g83014569a7fa"
+        dev = package_tarball(
+            DEV_CEE_NAME,
+            dev_version,
+            development=True,
+            bundle=provenance_bundle(
+                dev_version,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260828.0209.g9261381c1fb4",
+                "2026-08-28 02:24 83014569a7fa",
+            ),
+            changelog=BASE_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME,
+            PUBLIC_VERSION,
+            development=False,
+            bundle=provenance_bundle(PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09"),
+            changelog=PUBLIC_CHANGELOG,
+        )
+
+        proof = compare_cee_packages(dev, dev_version, public, PUBLIC_VERSION)
+
+        self.assertRegex(proof["normalizedPayloadSha256"], r"^[0-9a-f]{64}$")
+
+    def test_identical_existing_release_changelog_does_not_block_proof(self):
+        dev_version = "2.0.4-dev.20260828.0224.g83014569a7fa"
+        dev = package_tarball(
+            DEV_CEE_NAME,
+            dev_version,
+            development=True,
+            bundle=provenance_bundle(
+                dev_version,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260828.0209.g9261381c1fb4",
+                "2026-08-28 02:24 83014569a7fa",
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME,
+            PUBLIC_VERSION,
+            development=False,
+            bundle=provenance_bundle(PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09"),
+            changelog=PUBLIC_CHANGELOG,
+        )
+
+        proof = compare_cee_packages(dev, dev_version, public, PUBLIC_VERSION)
+
+        self.assertRegex(proof["normalizedPayloadSha256"], r"^[0-9a-f]{64}$")
 
     def test_unexpected_public_publish_config_is_rejected(self):
         incorrectly_scoped = package_tarball(

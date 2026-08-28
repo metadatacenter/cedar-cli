@@ -432,10 +432,6 @@ def compare_cee_packages(
 ) -> dict:
     """Prove that a public CEE package is a metadata-only promotion of a train package."""
 
-    if dev_version.split("-dev.", 1)[0] != public_version:
-        raise ReleaseError(
-            f"train CEE {dev_version} cannot be promoted as public CEE {public_version}"
-        )
     dev_identity = f"{DEV_CEE_NAME}@{dev_version}"
     public_identity = f"{PUBLIC_CEE_NAME}@{public_version}"
     dev_files = _tarball_files(dev_identity, dev_tarball)
@@ -477,37 +473,53 @@ def compare_cee_packages(
                 "CEE promotion changes package content outside allowed channel metadata: "
                 + ", ".join(unexpected)
             )
-        if set(changed) != allowed:
+        changed_set = set(changed)
+        bundle_changed = "cedar-embeddable-editor.js" in changed_set
+        manifest_changed = "bundle-manifest.json" in changed_set
+        if bundle_changed != manifest_changed:
             raise ReleaseError(
-                "CEE promotion changes an incomplete release-provenance set: "
+                "CEE promotion changes an incomplete bundle-provenance pair: "
                 + ", ".join(changed)
             )
-        normalized_changelog, public_model_version = _public_release_changelog(
-            public_identity, public_files["CHANGELOG.md"], public_version,
-        )
-        if normalized_changelog != dev_files["CHANGELOG.md"]:
-            raise ReleaseError(
-                "CEE promotion changes CHANGELOG.md outside the one current-release entry"
+
+        public_model_version = None
+        if "CHANGELOG.md" in changed_set:
+            normalized_changelog, public_model_version = _public_release_changelog(
+                public_identity, public_files["CHANGELOG.md"], public_version,
             )
-        dev_bundle, public_bundle = _normalize_bundle_provenance(
-            dev_identity,
-            dev_files["cedar-embeddable-editor.js"],
-            dev_version,
-            public_identity,
-            public_files["cedar-embeddable-editor.js"],
-            public_version,
-            public_model_version,
-        )
-        if dev_bundle != public_bundle:
-            raise ReleaseError(
-                "CEE promotion changes executable JavaScript outside declared release provenance"
+            if normalized_changelog != dev_files["CHANGELOG.md"]:
+                raise ReleaseError(
+                    "CEE promotion changes CHANGELOG.md outside the one current-release entry"
+                )
+            normalized_dev["CHANGELOG.md"] = normalized_changelog
+            normalized_public["CHANGELOG.md"] = normalized_changelog
+        elif bundle_changed:
+            # The train may have captured develop after the public release entry was merged. In
+            # that case the changelogs are already byte-identical, but the entry still declares
+            # which public model identity replaces the scoped train identity in the bundle.
+            _, public_model_version = _public_release_changelog(
+                public_identity, public_files["CHANGELOG.md"], public_version,
             )
-        normalized_dev["cedar-embeddable-editor.js"] = dev_bundle
-        normalized_public["cedar-embeddable-editor.js"] = public_bundle
-        normalized_dev["bundle-manifest.json"] = _normalized_bundle_manifest(dev_bundle)
-        normalized_public["bundle-manifest.json"] = _normalized_bundle_manifest(public_bundle)
-        normalized_dev["CHANGELOG.md"] = normalized_changelog
-        normalized_public["CHANGELOG.md"] = normalized_changelog
+
+        if bundle_changed:
+            assert public_model_version is not None
+            dev_bundle, public_bundle = _normalize_bundle_provenance(
+                dev_identity,
+                dev_files["cedar-embeddable-editor.js"],
+                dev_version,
+                public_identity,
+                public_files["cedar-embeddable-editor.js"],
+                public_version,
+                public_model_version,
+            )
+            if dev_bundle != public_bundle:
+                raise ReleaseError(
+                    "CEE promotion changes executable JavaScript outside declared release provenance"
+                )
+            normalized_dev["cedar-embeddable-editor.js"] = dev_bundle
+            normalized_public["cedar-embeddable-editor.js"] = public_bundle
+            normalized_dev["bundle-manifest.json"] = _normalized_bundle_manifest(dev_bundle)
+            normalized_public["bundle-manifest.json"] = _normalized_bundle_manifest(public_bundle)
         changed = [
             name for name in sorted(normalized_dev)
             if normalized_dev[name] != normalized_public[name]
@@ -789,10 +801,6 @@ class ReleasePlanner:
         dev_version = planned_cee.get("version")
         if planned_cee.get("name") != DEV_CEE_NAME or not isinstance(dev_version, str):
             raise ReleaseError(f"npm plan has no {DEV_CEE_NAME} development package")
-        if dev_version.split("-dev.", 1)[0] != cee_version:
-            raise ReleaseError(
-                f"explicit CEE {cee_version} does not promote train CEE {dev_version}"
-            )
         dev_record = next(
             (
                 package for package in npm_completion.get("packages", [])
@@ -2885,7 +2893,7 @@ def _render_plan(manifest: dict) -> None:
     console.print(f"Next development:    {manifest['nextDevelopmentVersion']}")
     console.print(f"Source train:        {manifest['train']}")
     console.print(
-        "CEE promotion:       "
+        "CEE equivalence:     "
         f"{cee['development']['version']} -> {cee['public']['version']}"
     )
     console.print(f"CEE payload SHA-256: {cee['promotionProof']['normalizedPayloadSha256']}")
