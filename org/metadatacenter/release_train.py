@@ -3376,7 +3376,11 @@ class ReleasePreflight:
                     "working-tree", "fail", f"{repository} is on {branch} rather than develop",
                     f"git -C {root} switch develop",
                 ))
-            _, dirty, _ = self._capture(["git", "-C", str(root), "status", "--porcelain"])
+            # Untracked files are ordinary in a development tree, and the release builds from
+            # the train's commits rather than from this one. A modified tracked file is the
+            # signal worth blocking on: it is work someone may believe is in the release.
+            _, dirty, _ = self._capture([
+                "git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"])
             if dirty:
                 count = len(dirty.splitlines())
                 findings.append(PreflightFinding(

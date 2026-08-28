@@ -2201,6 +2201,24 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertIn("1 uncommitted change", findings[0].message)
 
+    def test_untracked_files_do_not_block_a_release(self):
+        """Build output is ordinary in a development tree, and the release builds from commits."""
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            root = str(Path(directory) / "repo-one")
+            commands = FakeCommands({
+                ("git", "-C", root, "rev-parse"): FakeCompletedProcess(stdout="develop"),
+                ("git", "-C", root, "status"): FakeCompletedProcess(stdout=""),
+                ("git", "-C", root, "rev-list"): FakeCompletedProcess(stdout="0"),
+            })
+            findings = self._preflight(
+                commands=commands, manifest=self._release_of("repo-one"),
+                root=directory).check_working_trees()
+
+        self.assertEqual([], findings)
+        status = next(call for call in commands.calls if "status" in call)
+        self.assertIn("--untracked-files=no", status)
+
     def test_unpushed_develop_commits_block_the_release(self):
         with tempfile.TemporaryDirectory() as directory:
             self._checked_out(directory, "repo-one")
