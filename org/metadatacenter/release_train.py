@@ -37,6 +37,14 @@ STABLE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 NEXT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+-SNAPSHOT$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DEV_MODEL_SPEC_RE = re.compile(
+    rb"npm:@org\.metadatacenter/cedar-model-typescript-library@"
+    rb"[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9A-Za-z.-]+"
+)
+LOAD_TRACE_RE = re.compile(
+    rb"20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}"
+    rb"(?: [0-9a-f]{7,40})?"
+)
 REQUIRED_CEE_FILES = {
     "bundle-manifest.json",
     "cedar-embeddable-editor.d.ts",
@@ -274,6 +282,103 @@ def _tree_digest(files: dict[str, bytes]) -> str:
     return digest.hexdigest()
 
 
+def _public_release_changelog(
+    identity: str,
+    changelog: bytes,
+    public_version: str,
+) -> tuple[bytes, str]:
+    """Remove one current-release entry and return its declared public model version."""
+
+    try:
+        text = changelog.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReleaseError(f"{identity} CHANGELOG.md is not UTF-8") from error
+    heading = re.compile(
+        rf"^## \[{re.escape(public_version)}\] - \d{{4}}-\d{{2}}-\d{{2}}\n"
+        rf".*?(?=^## \[|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    entries = list(heading.finditer(text))
+    if len(entries) != 1:
+        raise ReleaseError(
+            f"{identity} must contain exactly one dated CHANGELOG.md entry for "
+            f"{public_version}"
+        )
+    entry = entries[0]
+    model_versions = set(re.findall(
+        r"cedar-model-typescript-library@(\d+\.\d+\.\d+)", entry.group(0)
+    ))
+    if len(model_versions) != 1:
+        raise ReleaseError(
+            f"{identity} {public_version} changelog entry must declare exactly one "
+            "public cedar-model-typescript-library version"
+        )
+    without_entry = text[:entry.start()] + text[entry.end():]
+    return without_entry.encode("utf-8"), model_versions.pop()
+
+
+def _one_match(identity: str, label: str, pattern: re.Pattern[bytes], content: bytes) -> bytes:
+    matches = pattern.findall(content)
+    if len(matches) != 1:
+        raise ReleaseError(f"{identity} bundle must contain exactly one {label}; found {len(matches)}")
+    return matches[0]
+
+
+def _replace_once(identity: str, label: str, content: bytes, old: bytes, new: bytes) -> bytes:
+    count = content.count(old)
+    if count != 1:
+        raise ReleaseError(f"{identity} bundle must contain exactly one {label}; found {count}")
+    return content.replace(old, new, 1)
+
+
+def _normalize_bundle_provenance(
+    dev_identity: str,
+    dev_bundle: bytes,
+    dev_version: str,
+    public_identity: str,
+    public_bundle: bytes,
+    public_version: str,
+    public_model_version: str,
+) -> tuple[bytes, bytes]:
+    """Normalize only the three provenance literals deliberately changed for npmjs."""
+
+    normalized_dev = dev_bundle
+    normalized_public = public_bundle
+    substitutions = (
+        (
+            "CEE version",
+            dev_version.encode(),
+            public_version.encode(),
+            b"<cee-version>",
+        ),
+        (
+            "model package identity",
+            _one_match(dev_identity, "development model package identity", DEV_MODEL_SPEC_RE,
+                       dev_bundle),
+            public_model_version.encode(),
+            b"<model-package-identity>",
+        ),
+        (
+            "load trace",
+            _one_match(dev_identity, "load trace", LOAD_TRACE_RE, dev_bundle),
+            _one_match(public_identity, "load trace", LOAD_TRACE_RE, public_bundle),
+            b"<cee-load-trace>",
+        ),
+    )
+    for label, dev_value, public_value, placeholder in substitutions:
+        normalized_dev = _replace_once(
+            dev_identity, label, normalized_dev, dev_value, placeholder,
+        )
+        normalized_public = _replace_once(
+            public_identity, label, normalized_public, public_value, placeholder,
+        )
+    return normalized_dev, normalized_public
+
+
+def _normalized_bundle_manifest(bundle: bytes) -> bytes:
+    return _json_bytes({"bytes": len(bundle), "sha256": _sha256(bundle)})
+
+
 def compare_cee_packages(
     dev_tarball: bytes,
     dev_version: str,
@@ -318,6 +423,51 @@ def compare_cee_packages(
         if normalized_dev[name] != normalized_public[name]
     ]
     if changed:
+        allowed = {
+            "CHANGELOG.md", "bundle-manifest.json", "cedar-embeddable-editor.js",
+        }
+        unexpected = sorted(set(changed) - allowed)
+        if unexpected:
+            raise ReleaseError(
+                "CEE promotion changes package content outside allowed channel metadata: "
+                + ", ".join(unexpected)
+            )
+        if set(changed) != allowed:
+            raise ReleaseError(
+                "CEE promotion changes an incomplete release-provenance set: "
+                + ", ".join(changed)
+            )
+        normalized_changelog, public_model_version = _public_release_changelog(
+            public_identity, public_files["CHANGELOG.md"], public_version,
+        )
+        if normalized_changelog != dev_files["CHANGELOG.md"]:
+            raise ReleaseError(
+                "CEE promotion changes CHANGELOG.md outside the one current-release entry"
+            )
+        dev_bundle, public_bundle = _normalize_bundle_provenance(
+            dev_identity,
+            dev_files["cedar-embeddable-editor.js"],
+            dev_version,
+            public_identity,
+            public_files["cedar-embeddable-editor.js"],
+            public_version,
+            public_model_version,
+        )
+        if dev_bundle != public_bundle:
+            raise ReleaseError(
+                "CEE promotion changes executable JavaScript outside declared release provenance"
+            )
+        normalized_dev["cedar-embeddable-editor.js"] = dev_bundle
+        normalized_public["cedar-embeddable-editor.js"] = public_bundle
+        normalized_dev["bundle-manifest.json"] = _normalized_bundle_manifest(dev_bundle)
+        normalized_public["bundle-manifest.json"] = _normalized_bundle_manifest(public_bundle)
+        normalized_dev["CHANGELOG.md"] = normalized_changelog
+        normalized_public["CHANGELOG.md"] = normalized_changelog
+        changed = [
+            name for name in sorted(normalized_dev)
+            if normalized_dev[name] != normalized_public[name]
+        ]
+    if changed:
         raise ReleaseError(
             "CEE promotion changes package content outside allowed channel metadata: "
             + ", ".join(changed)
@@ -328,6 +478,8 @@ def compare_cee_packages(
         "normalizedPayloadSha256": digest,
         "fileCount": len(normalized_dev),
         "bundleSha256": _sha256(dev_files["cedar-embeddable-editor.js"]),
+        "publicBundleSha256": _sha256(public_files["cedar-embeddable-editor.js"]),
+        "normalizedBundleSha256": _sha256(normalized_dev["cedar-embeddable-editor.js"]),
         "allowedMetadataChanges": [
             "package.json:name",
             "package.json:version",
@@ -336,6 +488,11 @@ def compare_cee_packages(
             "package-lock.json:version",
             "package-lock.json:packages['']:name",
             "package-lock.json:packages['']:version",
+            "cedar-embeddable-editor.js:CEE version",
+            "cedar-embeddable-editor.js:model package identity",
+            "cedar-embeddable-editor.js:load trace",
+            "bundle-manifest.json:derived bundle bytes and sha256",
+            f"CHANGELOG.md:{public_version} release entry",
         ],
     }
 
@@ -1762,7 +1919,7 @@ def _render_plan(manifest: dict) -> None:
         f"{cee['development']['version']} -> {cee['public']['version']}"
     )
     console.print(f"CEE payload SHA-256: {cee['promotionProof']['normalizedPayloadSha256']}")
-    console.print("CEE package content: identical after the declared npm channel metadata change")
+    console.print("CEE executable:      identical after declared release-provenance changes")
 
 
 def _build_or_exit(

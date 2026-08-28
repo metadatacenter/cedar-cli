@@ -41,7 +41,14 @@ def integrity(content):
     return "sha512-" + base64.b64encode(hashlib.sha512(content).digest()).decode()
 
 
-def package_tarball(name, version, *, development, bundle=b"tested CEE bundle"):
+def package_tarball(
+    name,
+    version,
+    *,
+    development,
+    bundle=b"tested CEE bundle",
+    changelog=b"Changes\n",
+):
     package = {
         "name": name,
         "version": version,
@@ -69,7 +76,7 @@ def package_tarball(name, version, *, development, bundle=b"tested CEE bundle"):
             "sha256": hashlib.sha256(bundle).hexdigest(),
         }, indent=2) + "\n").encode(),
         "README.md": b"CEE\n",
-        "CHANGELOG.md": b"Changes\n",
+        "CHANGELOG.md": changelog,
         "license.txt": b"BSD\n",
     }
     stream = io.BytesIO()
@@ -79,6 +86,37 @@ def package_tarball(name, version, *, development, bundle=b"tested CEE bundle"):
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
     return stream.getvalue()
+
+
+def provenance_bundle(cee_version, model_identity, load_trace, suffix=""):
+    return (
+        f"code-before|{cee_version}|code-middle|{model_identity}|"
+        f"code-after|{load_trace}|{suffix}"
+    ).encode()
+
+
+BASE_CHANGELOG = b"""# Changelog
+
+## [Unreleased]
+
+## [2.0.2] - 2026-08-20
+
+Previous release.
+"""
+
+
+PUBLIC_CHANGELOG = b"""# Changelog
+
+## [Unreleased]
+
+## [2.0.3] - 2026-08-27
+
+CEE embeds `cedar-model-typescript-library@1.0.4`.
+
+## [2.0.2] - 2026-08-20
+
+Previous release.
+"""
 
 
 def manifest_fixture():
@@ -163,8 +201,97 @@ class CeePromotionTest(unittest.TestCase):
             development=False,
             bundle=b"different CEE bundle",
         )
-        with self.assertRaisesRegex(ReleaseError, "outside allowed channel metadata"):
+        with self.assertRaisesRegex(ReleaseError, "incomplete release-provenance set"):
             compare_cee_packages(self.dev, DEV_VERSION, changed, PUBLIC_VERSION)
+
+    def test_declared_release_provenance_is_normalized(self):
+        dev_bundle = provenance_bundle(
+            DEV_VERSION,
+            "npm:@org.metadatacenter/cedar-model-typescript-library@"
+            "1.0.5-dev.20260827.2030.g9261381c1fb4",
+            "2026-08-27 12:23 10212094",
+        )
+        public_bundle = provenance_bundle(
+            PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09",
+        )
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            bundle=dev_bundle, changelog=BASE_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=public_bundle, changelog=PUBLIC_CHANGELOG,
+        )
+
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+        self.assertNotEqual(proof["bundleSha256"], proof["publicBundleSha256"])
+        self.assertRegex(proof["normalizedBundleSha256"], r"^[0-9a-f]{64}$")
+        self.assertIn(
+            "cedar-embeddable-editor.js:model package identity",
+            proof["allowedMetadataChanges"],
+        )
+
+    def test_code_change_beside_release_provenance_is_rejected(self):
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+            ),
+            changelog=BASE_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09", suffix="changed-code",
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_change_to_older_changelog_content_is_rejected(self):
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+            ),
+            changelog=BASE_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=provenance_bundle(PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09"),
+            changelog=PUBLIC_CHANGELOG.replace(b"Previous release.", b"Rewritten history."),
+        )
+        with self.assertRaisesRegex(ReleaseError, "outside the one current-release entry"):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_duplicate_provenance_literal_is_rejected(self):
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+            ),
+            changelog=BASE_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09", suffix="1.0.4",
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        with self.assertRaisesRegex(ReleaseError, "exactly one model package identity"):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
 
     def test_explicit_public_version_must_match_the_dev_stable_base(self):
         with self.assertRaisesRegex(ReleaseError, "cannot be promoted"):
