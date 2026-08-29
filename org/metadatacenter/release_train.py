@@ -3728,6 +3728,15 @@ class ReleasePreflight:
                     continue
                 if conclusion in {"success", "skipped", "neutral"}:
                     continue
+                if conclusion == "cancelled":
+                    # Somebody stopped this run. That is an action taken about the workflow,
+                    # never a result about the code, so it is reported and not blocked on.
+                    findings.append(PreflightFinding(
+                        "ci", "warn",
+                        f"{repository} {name or 'CI'} was cancelled for the train source "
+                        f"{source[:8]} in run {run_id}",
+                    ))
+                    continue
                 if self.accepted_red_develop.get(repository) == run_id:
                     findings.append(PreflightFinding(
                         "ci", "warn",

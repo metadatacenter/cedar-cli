@@ -2097,6 +2097,19 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertFalse(findings[0].fatal)
         self.assertIn("still in_progress", findings[0].message)
 
+    def test_a_cancelled_run_is_advisory_rather_than_blocking(self):
+        """Cancelling is something done to a workflow, not something learned about the code."""
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(
+                stdout="cancelled\tcompleted\t33226052977\tBuild train"),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal)
+        self.assertIn("was cancelled", findings[0].message)
+
     def test_a_red_develop_blocks_the_release(self):
         manifest = self._release_of("repo-one")
         commands = FakeCommands({
