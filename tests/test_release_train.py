@@ -2629,5 +2629,82 @@ class ReleaseSnapshotOrderingTest(unittest.TestCase):
             self.assertLess(names.index(stage.name), names.index("remotes"))
 
 
+class ReleaseConclusionTest(unittest.TestCase):
+    """A finished release must stop being the active one, or it blocks the next."""
+
+    def _finished(self, directory, phase):
+        state = ReleaseState(root=Path(directory))
+        state.start(manifest_fixture())
+        state.update_current_manifest({"phase": phase})
+        return state
+
+    def test_acceptance_releases_the_active_slot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "artifacts-published")
+            acceptance = ReleaseAcceptanceTest._acceptance(state, tagged=set())
+            accept_active_release(state, acceptance)
+
+            self.assertTrue(state.read_current().get("concludedAt"),
+                            "a finished release must be marked concluded")
+            self.assertTrue(state.manifest_path("2.9.3").exists(),
+                            "the record must survive concluding")
+
+    def test_a_second_release_can_start_once_the_first_concluded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "artifacts-published")
+            acceptance = ReleaseAcceptanceTest._acceptance(state, tagged=set())
+            accept_active_release(state, acceptance)
+
+            later = manifest_fixture()
+            later["releaseVersion"] = "2.9.4"
+            state.start(later)
+
+            self.assertEqual("2.9.4", state.read_current()["releaseVersion"])
+
+    def test_conclude_refuses_a_release_that_has_not_finished(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "integrating-remotes")
+            runner = CliRunner()
+            with patch.dict(os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False):
+                result = runner.invoke(release_train.app, ["conclude"])
+
+            self.assertEqual(1, result.exit_code, result.output)
+            self.assertIn("has not finished", result.output)
+            self.assertTrue(state.current_path.exists())
+
+    def test_conclude_accepts_a_release_that_predates_the_acceptance_phase(self):
+        """artifacts-published was terminal under the layout that wrote such a ledger."""
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "artifacts-published")
+            runner = CliRunner()
+            with patch.dict(os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False):
+                result = runner.invoke(release_train.app, ["conclude"])
+
+            self.assertEqual(0, result.exit_code, result.output)
+            self.assertTrue(state.read_current().get("concludedAt"))
+
+    def test_preflight_reports_an_unfinished_release_rather_than_letting_start_refuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "integrating-remotes")
+            preflight = ReleasePreflight(
+                {"releaseVersion": "2.9.4", "releaseRepositories": []},
+                state=state, environment=dict(PREFLIGHT_ENVIRONMENT),
+            )
+            findings = preflight.check_no_release_in_progress()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("2.9.3", findings[0].message)
+
+    def test_preflight_passes_when_no_release_holds_the_slot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            preflight = ReleasePreflight(
+                {"releaseVersion": "2.9.4", "releaseRepositories": []},
+                state=ReleaseState(root=Path(directory)),
+                environment=dict(PREFLIGHT_ENVIRONMENT),
+            )
+            self.assertEqual([], preflight.check_no_release_in_progress())
+
+
 if __name__ == "__main__":
     unittest.main()

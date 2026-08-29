@@ -951,9 +951,11 @@ class ReleaseState:
     def start(self, manifest: dict) -> Path:
         if self.current_path.exists():
             current = self.read_current()
-            raise ReleaseError(
-                f"release {current['releaseVersion']} is already active; use cedarcli release status"
-            )
+            if not current.get("concludedAt"):
+                raise ReleaseError(
+                    f"release {current['releaseVersion']} is already active; "
+                    "use cedarcli release status"
+                )
         path = self.manifest_path(manifest["releaseVersion"])
         if path.exists():
             raise ReleaseError(f"release state already exists at {path}")
@@ -968,6 +970,18 @@ class ReleaseState:
             "startedAt": active["startedAt"],
         })
         return path
+
+    def conclude(self) -> None:
+        """Record that the active release has finished, so it no longer holds the slot.
+
+        Nothing used to mark a release finished, so the pointer at current.json kept naming
+        it forever and the next release could not start. The pointer stays where it is,
+        stamped rather than deleted, so status still has the last release to show; what
+        changes is that start no longer treats it as in progress.
+        """
+        current = self.read_current()
+        current["concludedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        self._write(self.current_path, current)
 
     def read_current(self) -> dict:
         if not self.current_path.exists():
@@ -3209,6 +3223,7 @@ def accept_active_release(
         "acceptance": evidence,
         "failure": None,
     })
+    state.conclude()
     return completed_manifest
 
 
@@ -3393,6 +3408,7 @@ class ReleasePreflight:
     """
 
     CHECKS = (
+        "check_no_release_in_progress",
         "check_toolchain",
         "check_profile",
         "check_disk_space",
@@ -3458,6 +3474,27 @@ class ReleasePreflight:
         for name in self.CHECKS:
             findings.extend(getattr(self, name)())
         return findings
+
+    def check_no_release_in_progress(self) -> list[PreflightFinding]:
+        """A release already holds the slot, and start would refuse only after planning."""
+        try:
+            current = self.state.read_current()
+        except ReleaseError:
+            return []
+        if current.get("concludedAt"):
+            return []
+        active = current.get("releaseVersion")
+        if active == self.manifest.get("releaseVersion"):
+            return [PreflightFinding(
+                "state", "fail", f"release {active} is already active",
+                "cedarcli release resume, or cedarcli release status",
+            )]
+        return [PreflightFinding(
+            "state", "fail",
+            f"release {active} is still the active release and has not concluded",
+            f"finish it with cedarcli release resume, or release the slot with "
+            f"cedarcli release conclude once it has reached its terminal phase",
+        )]
 
     def check_toolchain(self) -> list[PreflightFinding]:
         findings = []
@@ -3926,8 +3963,8 @@ def resume(
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
     try:
-        manifest = _drive_release(state, unattended=unattended)
         _, path = state.read_current_manifest()
+        manifest = _drive_release(state, unattended=unattended)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
@@ -3956,6 +3993,29 @@ def _status_summary(manifest: dict, path: Path) -> dict:
         "acceptance": manifest.get("acceptance", {}).get("checks", []),
         "statePath": str(path),
     }
+
+
+@app.command("conclude")
+def conclude():
+    """Release the active slot held by a release that has already reached its end."""
+    state = ReleaseState()
+    try:
+        manifest, path = state.read_current_manifest()
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    phase = manifest.get("phase")
+    # A release that predates the acceptance phase ended at artifacts-published, and that was
+    # terminal under the layout that wrote it. Both count as finished; nothing else does.
+    if phase not in {RELEASE_TERMINAL_PHASE, "artifacts-published"}:
+        console.print(
+            f"[red]release {manifest.get('releaseVersion')} is {phase} and has not finished; "
+            "use cedarcli release resume[/red]"
+        )
+        raise typer.Exit(1)
+    state.conclude()
+    console.print(f"Concluded:           {manifest.get('releaseVersion')} at {phase}")
+    console.print(f"Record retained:     {path}")
 
 
 @app.command("status")
