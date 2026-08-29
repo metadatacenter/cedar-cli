@@ -27,7 +27,10 @@ import urllib.parse
 import urllib.request
 
 import typer
+from rich import box
 from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 from org.metadatacenter.util.BuildTrain import BuildTrain
 
@@ -164,11 +167,59 @@ class ReleaseError(RuntimeError):
 class RetryableReleaseError(ReleaseError):
     """A release step failed for a reason that may not hold a moment later.
 
-    An unattended release must survive a network fault without surviving a guard, so the
-    two are different exceptions rather than the same one read for its wording. Only the
-    transport raises this: a refusal carrying an HTTP status, a changed tree or a failed
-    verification is never retryable, however transient it looks.
+    A release must survive a network fault without surviving a guard, so the two are
+    different exceptions rather than the same one read for its wording. Direct
+    transports and idempotent subprocesses may raise this for a narrow set of connection
+    failures. A changed tree, authentication failure, registry byte mismatch, protected-ref
+    refusal, or Nexus HTTP 500 is never retryable.
     """
+
+
+RETRYABLE_TRANSPORT_TEXT = (
+    "connection reset",
+    "connection refused",
+    "connection timed out",
+    "operation timed out",
+    "temporary failure in name resolution",
+    "could not resolve host",
+    "remote end hung up unexpectedly",
+    "unexpected disconnect",
+    "tls connection was non-properly terminated",
+    "ssl_error_syscall",
+    "stream error in the http/2 framing layer",
+    "rpc failed; curl 92",
+)
+
+
+def _command_failure_is_retryable(command: list[str], detail: str) -> bool:
+    """Classify only transport failures from commands whose release work is resumable.
+
+    Maven/npm HTTP 500 is deliberately excluded: Nexus uses it when the Community Edition
+    request budget is exhausted, and retrying that condition makes it worse. Gateway/service
+    availability failures are bounded retries. Git pushes additionally retry a server-side 5xx;
+    their ref guards make a response lost after a successful push safe to reconcile.
+    """
+    if not command:
+        return False
+    tool = Path(command[0]).name
+    text = detail.lower()
+    if any(token in text for token in RETRYABLE_TRANSPORT_TEXT):
+        return tool in {"git", "mvn", "mvnw", "npm"} or tool.endswith("mvnw")
+    if re.search(r"(?:http|status code:?)[^0-9]*(502|503|504)\b", text):
+        return tool in {"git", "mvn", "mvnw", "npm"} or tool.endswith("mvnw")
+    if tool == "git" and re.search(r"(?:http|status code:?)[^0-9]*5\d\d\b", text):
+        return True
+    return False
+
+
+def _raise_command_failure(command: list[str], message: str, detail: str = "") -> None:
+    exception = (
+        RetryableReleaseError
+        if _command_failure_is_retryable(command, detail)
+        else ReleaseError
+    )
+    suffix = f": {detail}" if detail else ""
+    raise exception(f"{message}{suffix}")
 
 
 def _json_bytes(value: dict) -> bytes:
@@ -1060,8 +1111,8 @@ class ReleaseWorkspacePreparer:
             raise ReleaseError(f"cannot run {args[0]}: {error}") from error
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
-            suffix = f": {detail}" if detail else ""
-            raise ReleaseError(f"command failed ({' '.join(args)}){suffix}")
+            _raise_command_failure(
+                args, f"command failed ({' '.join(args)})", detail)
         return (result.stdout or "").strip()
 
     def _clone(self, repository: str, revision: str, destination: Path) -> None:
@@ -1619,8 +1670,14 @@ class ReleaseBuildValidator:
         except OSError as error:
             raise ReleaseError(f"cannot run {command[0]}: {error}") from error
         if returncode:
-            raise ReleaseError(
-                f"build command exited {returncode}: {' '.join(command)}; log: {log}"
+            try:
+                detail = "\n".join(log.read_text(encoding="utf-8").splitlines()[-80:])
+            except OSError:
+                detail = ""
+            _raise_command_failure(
+                command,
+                f"build command exited {returncode}: {' '.join(command)}; log: {log}",
+                detail,
             )
 
     def run_task(self, manifest: dict, task: dict) -> dict:
@@ -2227,12 +2284,19 @@ class ReleaseArtifactPublisher:
         environment=None,
         executor=None,
         sleeper=None,
+        nexus_guard=None,
     ):
         self.state = state
         self.environment = dict(os.environ if environment is None else environment)
         self.http = http or HttpClient(environment=self.environment)
         self.executor = executor
         self.sleeper = sleeper or time.sleep
+        self.nexus_guard = nexus_guard or NexusCircuitBreaker(
+            self.http, self.environment)
+
+    def ensure_nexus_ready(self, purpose: str) -> None:
+        """Refuse a request-heavy registry phase unless Nexus can serve real content."""
+        self.nexus_guard.require(purpose)
 
     @staticmethod
     def _integration_record(manifest: dict, repository: str) -> dict:
@@ -2412,8 +2476,6 @@ class ReleaseArtifactPublisher:
             raise ReleaseError(f"cannot publish {destination}: HTTP {error.code}") from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise RetryableReleaseError(f"cannot publish {destination}: {error}") from error
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise ReleaseError(f"cannot publish {destination}: {error}") from error
 
     def _publish_maven_release(self, task: dict) -> dict:
         local_repository = Path(task["localRepository"])
@@ -2663,11 +2725,23 @@ class ReleaseArtifactPublisher:
                 Path(task["workspace"]).parent / "publication-cache" / "npm"
             )
             try:
-                result = subprocess.run(command, check=False, text=True, env=npm_environment)
+                result = subprocess.run(
+                    command, check=False, text=True, capture_output=True,
+                    env=npm_environment)
             except OSError as error:
-                raise ReleaseError(f"cannot run npm publish for {evidence['name']}: {error}") from error
+                raise ReleaseError(
+                    f"cannot run npm publish for {evidence['name']}: {error}"
+                ) from error
+            output = "\n".join(
+                part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
+            if output:
+                console.print(output, markup=False)
             if result.returncode:
-                raise ReleaseError(f"npm publish exited {result.returncode}: {evidence['name']}")
+                _raise_command_failure(
+                    command,
+                    f"npm publish exited {result.returncode}: {evidence['name']}",
+                    output,
+                )
         verified = self._verify_npm_package(task, evidence, wait=True)
         return {**task, **verified, "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
 
@@ -2929,6 +3003,7 @@ def publish_active_release_snapshots(
     }:
         raise ReleaseError(f"cannot publish snapshots while release is {manifest.get('phase')}")
     publisher = publisher or ReleaseArtifactPublisher(state)
+    publisher.ensure_nexus_ready("snapshot publication")
     tasks = publisher.snapshot_tasks(manifest)
     task_ids = {task["id"] for task in tasks}
     evidence = copy.deepcopy(manifest.get("snapshotPublication") or {
@@ -2988,24 +3063,33 @@ def publish_active_release(
         "remote-integrated", "publishing-artifacts", "artifact-publication-failed",
     }:
         raise ReleaseError(f"cannot publish artifacts while release is {manifest.get('phase')}")
+    publisher = publisher or ReleaseArtifactPublisher(state)
+    publisher.ensure_nexus_ready("artifact publication")
     remote_integrator = remote_integrator or ReleaseRemoteIntegrator(state)
     for record in manifest.get("remoteIntegration", {}).get("completedTasks", {}).values():
         remote_integrator.verify_record(manifest, record)
     build_validator = build_validator or ReleaseBuildValidator(state)
     for record in manifest.get("buildValidation", {}).get("completedTasks", {}).values():
         build_validator.verify_completed_task(record)
-    publisher = publisher or ReleaseArtifactPublisher(state)
     tasks = publisher.tasks(manifest)
+    snapshot_tasks = publisher.snapshot_tasks(manifest)
     task_ids = {task["id"] for task in tasks}
+    snapshot_task_ids = {task["id"] for task in snapshot_tasks}
     evidence = copy.deepcopy(manifest.get("artifactPublication") or {
         "startedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
         "completedTasks": {},
     })
     completed = evidence.get("completedTasks")
-    if not isinstance(completed, dict) or not set(completed).issubset(task_ids):
+    if not isinstance(completed, dict) or not set(completed).issubset(
+        task_ids | snapshot_task_ids
+    ):
         raise ReleaseError("recorded artifact publication does not match the release plan")
     for record in completed.values():
-        publisher.verify_record(manifest, record)
+        publisher.verify_record(
+            manifest,
+            record,
+            snapshot_tasks if record.get("id") in snapshot_task_ids else tasks,
+        )
     state.update_current_manifest({
         "phase": "publishing-artifacts",
         "artifactPublication": evidence,
@@ -3102,6 +3186,56 @@ def prepare_active_release_versions(
     return completed
 
 
+def _publication_evidence_by_plan(
+    manifest: dict,
+    publisher: ReleaseArtifactPublisher,
+    *,
+    require_complete: bool,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Split publication evidence by task plan, including pre-split release ledgers.
+
+    Early ledgers stored the next-development snapshot tasks in ``artifactPublication``.
+    The phase was later split so snapshots could precede remote integration. Task identity,
+    rather than the containing field, is therefore the durable way to interpret evidence.
+    """
+    release_tasks = publisher.tasks(manifest)
+    snapshot_tasks = publisher.snapshot_tasks(manifest)
+    release_ids = {task["id"] for task in release_tasks}
+    snapshot_ids = {task["id"] for task in snapshot_tasks}
+    if release_ids & snapshot_ids:
+        raise ReleaseError("release and snapshot publication plans overlap")
+    records: dict[str, dict] = {}
+    for field in ("artifactPublication", "snapshotPublication"):
+        section = manifest.get(field) or {}
+        if not isinstance(section, dict):
+            raise ReleaseError(f"{field} is not an object")
+        completed = section.get("completedTasks", {})
+        if not isinstance(completed, dict):
+            raise ReleaseError(f"{field} completedTasks is not an object")
+        for key, record in completed.items():
+            if not isinstance(record, dict):
+                raise ReleaseError(f"recorded publication task {key} is not an object")
+            identifier = record.get("id", key)
+            if identifier != key:
+                raise ReleaseError(f"recorded publication task key differs from {identifier}")
+            if identifier in records:
+                raise ReleaseError(f"recorded publication task appears twice: {identifier}")
+            records[identifier] = record
+    unknown = set(records) - release_ids - snapshot_ids
+    if unknown:
+        raise ReleaseError(
+            "recorded publication tasks no longer exist: " + ", ".join(sorted(unknown)))
+    if require_complete:
+        missing_release = release_ids - set(records)
+        missing_snapshots = snapshot_ids - set(records)
+        if missing_release or missing_snapshots:
+            missing = sorted(missing_release | missing_snapshots)
+            raise ReleaseError("release publication evidence is incomplete: " + ", ".join(missing))
+    release_records = [records[task["id"]] for task in release_tasks if task["id"] in records]
+    snapshot_records = [records[task["id"]] for task in snapshot_tasks if task["id"] in records]
+    return release_tasks, release_records, snapshot_tasks, snapshot_records
+
+
 class ReleaseAcceptance:
     """Prove a finished release from outside the ledger that recorded it.
 
@@ -3122,56 +3256,49 @@ class ReleaseAcceptance:
         self.environment = dict(os.environ if environment is None else environment)
         self.remote_integrator = remote_integrator or ReleaseRemoteIntegrator(
             state, environment=self.environment)
-        self.publisher = publisher or ReleaseArtifactPublisher(state)
+        self.publisher = publisher or ReleaseArtifactPublisher(
+            state, environment=self.environment)
 
     def _check(self, name: str, detail: str) -> dict:
         return {"check": name, "detail": detail}
 
     def _remote_state_still_holds(self, manifest: dict) -> list[dict]:
         records = manifest.get("remoteIntegration", {}).get("completedTasks", {})
+        expected = {task["id"] for task in self.remote_integrator.tasks(manifest)}
+        if not isinstance(records, dict) or set(records) != expected:
+            missing = expected - set(records) if isinstance(records, dict) else expected
+            extra = set(records) - expected if isinstance(records, dict) else set()
+            detail = []
+            if missing:
+                detail.append("missing " + ", ".join(sorted(missing)))
+            if extra:
+                detail.append("unknown " + ", ".join(sorted(extra)))
+            raise ReleaseError("remote integration evidence is incomplete: " + "; ".join(detail))
         for record in records.values():
             self.remote_integrator.verify_record(manifest, record)
-        return [self._check(
-            "remote-integration",
-            f"{len(records)} repositories still carry the integrated refs")]
+        tag = f"release-{manifest['releaseVersion']}"
+        return [
+            self._check(
+                "remote-integration",
+                f"{len(records)} repositories still carry their exact integrated refs",
+            ),
+            self._check(
+                "release-tag",
+                f"{tag} present at the recorded commit in all {len(records)} repositories",
+            ),
+        ]
 
     def _published_artifacts_still_hold(self, manifest: dict) -> list[dict]:
-        records = manifest.get("artifactPublication", {}).get("completedTasks", {})
-        for record in records.values():
-            self.publisher.verify_record(manifest, record)
-        snapshots = manifest.get("snapshotPublication", {}).get("completedTasks", {})
-        snapshot_tasks = self.publisher.snapshot_tasks(manifest) if snapshots else []
-        for record in snapshots.values():
+        release_tasks, records, snapshot_tasks, snapshots = _publication_evidence_by_plan(
+            manifest, self.publisher, require_complete=True)
+        for record in records:
+            self.publisher.verify_record(manifest, record, release_tasks)
+        for record in snapshots:
             self.publisher.verify_record(manifest, record, snapshot_tasks)
         return [self._check(
             "artifact-publication",
             f"{len(records)} release and {len(snapshots)} snapshot publication tasks still "
             "match their published bytes")]
-
-    def _every_repository_carries_the_tag(self, manifest: dict) -> list[dict]:
-        """Ask each remote directly, rather than trusting the tasks that wrote the tags.
-
-        A repository absent from the integration set would otherwise leave the release
-        looking complete while carrying no tag at all.
-        """
-        tag = f"release-{manifest['releaseVersion']}"
-        cedar_home = self.environment.get("CEDAR_HOME")
-        if not cedar_home:
-            raise ReleaseError("CEDAR_HOME is not set")
-        untagged = []
-        for repository in manifest.get("releaseRepositories", []):
-            root = Path(cedar_home) / repository
-            remote = self.remote_integrator.remote_resolver(repository)
-            references = self.remote_integrator._remote_refs(
-                root, remote, [f"refs/tags/{tag}"])
-            if not references.get(f"refs/tags/{tag}"):
-                untagged.append(repository)
-        if untagged:
-            raise ReleaseError(
-                f"{tag} is absent from " + ", ".join(sorted(untagged)))
-        return [self._check(
-            "release-tag",
-            f"{tag} present in all {len(manifest.get('releaseRepositories', []))} repositories")]
 
     def _consumers_pin_the_proven_cee(self, manifest: dict) -> list[dict]:
         cee = manifest["cee"]
@@ -3189,10 +3316,10 @@ class ReleaseAcceptance:
             f"{len(consumers)} consumer(s) pin the proven public CEE {expected}")]
 
     def run(self, manifest: dict) -> dict:
+        self.publisher.ensure_nexus_ready("release acceptance")
         checks = []
         checks.extend(self._remote_state_still_holds(manifest))
         checks.extend(self._published_artifacts_still_hold(manifest))
-        checks.extend(self._every_repository_carries_the_tag(manifest))
         checks.extend(self._consumers_pin_the_proven_cee(manifest))
         return {
             "acceptedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -3312,6 +3439,26 @@ RELEASE_STAGES = (
 RELEASE_TERMINAL_PHASE = RELEASE_STAGES[-1].done_phase
 
 
+def _next_release_stage(manifest: dict) -> str | None:
+    phase = manifest.get("phase")
+    if phase == RELEASE_TERMINAL_PHASE:
+        return None
+    if phase in REWIND_TO_FRONTENDS:
+        return RELEASE_STAGES[0].name
+    for stage in RELEASE_STAGES:
+        if phase in stage.entry_phases:
+            return stage.name
+    raise ReleaseError(f"a release in {phase} has no stage that can continue it")
+
+
+def _release_stage_has_finished(manifest: dict, name: str) -> bool:
+    next_name = _next_release_stage(manifest)
+    if next_name is None:
+        return True
+    order = [stage.name for stage in RELEASE_STAGES]
+    return order.index(name) < order.index(next_name)
+
+
 def advance_active_release(
     state: ReleaseState | None = None,
     workspace_preparer: ReleaseWorkspacePreparer | None = None,
@@ -3379,6 +3526,53 @@ NEXUS_WRITABLE_ENDPOINT = f"{NEXUS_HOST}/service/rest/v1/status/writable"
 NEXUS_REPOSITORY_PROBE = (
     f"{NEXUS_HOST}/repository/snapshots/org/metadatacenter/cedar-parent/maven-metadata.xml"
 )
+
+
+class NexusCircuitBreaker:
+    """One cheap health gate before a phase that would otherwise make many Nexus calls.
+
+    A direct connection failure may clear and is safe to retry after backoff. An HTTP
+    response is an explicit refusal. In particular, a healthy writable
+    endpoint followed by a failing repository read is the observed request-budget failure;
+    retrying it immediately only spends more of the same budget.
+    """
+
+    def __init__(self, http: HttpClient, environment=None):
+        self.http = http
+        self.environment = dict(os.environ if environment is None else environment)
+
+    def _read(self, url: str, label: str, purpose: str) -> None:
+        try:
+            self.http.read(url)
+        except RetryableReleaseError as error:
+            raise RetryableReleaseError(
+                f"Nexus circuit breaker could not reach {label} before {purpose}: {error}"
+            ) from error
+        except ReleaseError as error:
+            raise ReleaseError(
+                f"Nexus circuit breaker is open before {purpose}: {label} failed ({error})"
+            ) from error
+
+    def require(self, purpose: str) -> None:
+        if not self.environment.get("BMIR_NEXUS_USERNAME") or not self.environment.get(
+            "BMIR_NEXUS_PASSWORD"
+        ):
+            raise ReleaseError(
+                f"Nexus circuit breaker is open before {purpose}: "
+                "BMIR_NEXUS_USERNAME and BMIR_NEXUS_PASSWORD are required"
+            )
+        self._read(NEXUS_WRITABLE_ENDPOINT, "writable status", purpose)
+        try:
+            self._read(NEXUS_REPOSITORY_PROBE, "repository read", purpose)
+        except RetryableReleaseError:
+            raise
+        except ReleaseError as error:
+            raise ReleaseError(
+                f"{error}. Nexus status is writable but repository content is unavailable; "
+                "this is consistent with the daily request budget being exhausted. Refusing "
+                "bulk publication/verification until Nexus recovers"
+            ) from error
+
 
 # Files a Maven build regenerates with the project version inside. Every match must be
 # declared in MAVEN_GENERATED_VERSION_FILES, or the prepared-file guard trips mid-build.
@@ -3498,9 +3692,8 @@ class ReleasePreflight:
             )]
         return [PreflightFinding(
             "state", "fail",
-            f"release {active} is still the active release and has not concluded",
-            f"finish it with cedarcli release resume, or release the slot with "
-            f"cedarcli release conclude once it has reached its terminal phase",
+            f"release {active} is still active and has not reached acceptance",
+            "finish it with cedarcli release resume; acceptance releases the slot",
         )]
 
     def check_toolchain(self) -> list[PreflightFinding]:
@@ -3860,6 +4053,105 @@ def _render_plan(manifest: dict) -> None:
     console.print("CEE executable:      identical after declared release-provenance changes")
 
 
+def _publication_progress(manifest: dict) -> tuple[int, int]:
+    records = {}
+    for field in ("artifactPublication", "snapshotPublication"):
+        section = manifest.get(field) or {}
+        value = section.get("completedTasks", {}) if isinstance(section, dict) else {}
+        if isinstance(value, dict):
+            records.update(value)
+    snapshot = sum(identifier.startswith("maven:nextDevelopment:") for identifier in records)
+    return len(records) - snapshot, snapshot
+
+
+def _release_progress(manifest: dict) -> list[dict]:
+    """Build the compact phase model used by both human and JSON status."""
+    state = ReleaseState()
+    completed_release, completed_snapshots = _publication_progress(manifest)
+    completed = {
+        "frontends": int(bool(manifest.get("frontendPreparation"))),
+        "versions": int(bool(manifest.get("versionPreparation"))),
+        "builds": len(manifest.get("buildValidation", {}).get("completedTasks", {})),
+        "local-refs": len(manifest.get("localRefs", {}).get("completedTasks", {})),
+        "snapshots": completed_snapshots,
+        "remotes": len(manifest.get("remoteIntegration", {}).get("completedTasks", {})),
+        "artifacts": completed_release,
+        "acceptance": int(manifest.get("phase") == RELEASE_TERMINAL_PHASE),
+    }
+    release_repositories = list(manifest.get("releaseRepositories", []))
+    release_ref_repositories = set(release_repositories)
+    for consumer in manifest.get("cee", {}).get("consumers", []):
+        repository = consumer.get("repository")
+        if repository:
+            release_ref_repositories.add(repository)
+    plan = manifest.get("publicationPlan", {})
+    totals = {
+        "frontends": 1,
+        "versions": 1,
+        "builds": completed["builds"],
+        "local-refs": len(release_ref_repositories) + len(release_repositories),
+        "snapshots": len(manifest.get("mavenPhases", [])) + 1,
+        "remotes": len(release_ref_repositories),
+        "artifacts": 2 + len(plan.get("npm", {}).get("surfaces", [])),
+        "acceptance": 1,
+    }
+    try:
+        totals["builds"] = len(ReleaseBuildValidator(state).tasks(manifest))
+    except ReleaseError:
+        # Before the isolated workspaces exist, the future build surface is not yet
+        # inspectable. Preserve an honest lower bound instead of making status fail.
+        pass
+    next_stage = _next_release_stage(manifest)
+    rows = []
+    for stage in RELEASE_STAGES:
+        if _release_stage_has_finished(manifest, stage.name):
+            phase_state = "complete"
+        elif stage.name == next_stage:
+            phase_state = "failed" if manifest.get("failure") else "next"
+        else:
+            phase_state = "pending"
+        rows.append({
+            "phase": stage.name,
+            "state": phase_state,
+            "completed": completed[stage.name],
+            "total": max(totals[stage.name], completed[stage.name]),
+        })
+    return rows
+
+
+def _render_release_status(manifest: dict, path: Path) -> None:
+    complete = manifest.get("phase") == RELEASE_TERMINAL_PHASE
+    heading = Text(f"Release {manifest.get('releaseVersion')} — ")
+    heading.append(
+        "COMPLETE" if complete else "INCOMPLETE",
+        style="green" if complete else "yellow",
+    )
+    console.print(heading)
+    console.print(f"Ledger: {manifest.get('phase')}")
+    if manifest.get("lastAttempt"):
+        console.print(f"Attempt: {manifest['lastAttempt']}")
+    table = Table(box=box.SIMPLE_HEAVY, show_header=True, pad_edge=False)
+    table.add_column("Phase")
+    table.add_column("State")
+    table.add_column("Progress", justify="right")
+    for row in _release_progress(manifest):
+        style = {"complete": "green", "failed": "red", "next": "yellow"}.get(
+            row["state"], "dim")
+        table.add_row(
+            row["phase"],
+            Text(row["state"], style=style),
+            f"{row['completed']}/{row['total']}",
+        )
+    console.print(table)
+    if manifest.get("failure"):
+        console.print(f"[red]Failure: {manifest['failure']}[/red]")
+    next_stage = _next_release_stage(manifest)
+    if next_stage:
+        console.print(f"Next: {next_stage}")
+        console.print("Run:  cedarcli release resume")
+    console.print(f"State: {path}")
+
+
 def _build_or_exit(
     release_version: str,
     next_version: str,
@@ -3878,30 +4170,29 @@ def _build_or_exit(
         raise typer.Exit(1) from error
 
 
-UNATTENDED_ATTEMPTS = 5
-UNATTENDED_BACKOFF_SECONDS = (30, 60, 120, 300)
+TRANSIENT_RETRY_ATTEMPTS = 5
+TRANSIENT_RETRY_BACKOFF_SECONDS = (30, 60, 120, 300)
 
 
-def _drive_release(state: ReleaseState, *, unattended: bool, sleeper=time.sleep) -> dict:
-    """Advance the release, absorbing transport faults when nobody is watching.
+def _drive_release(state: ReleaseState, *, sleeper=time.sleep) -> dict:
+    """Advance the release, absorbing narrowly classified transport faults.
 
-    A release runs for hours across two registries and forty remotes, so an unattended one
-    that stopped at the first refused connection would not be unattended at all. Only
-    RetryableReleaseError is retried, and only a transport raises it, so a guard still
-    stops the release on its first refusal.
+    A release runs for hours across two registries and forty remotes. Only
+    RetryableReleaseError is retried, and only a safe transport condition raises it, so a
+    guard still stops the release on its first refusal.
     """
-    for attempt in range(1, UNATTENDED_ATTEMPTS + 1):
+    for attempt in range(1, TRANSIENT_RETRY_ATTEMPTS + 1):
         try:
             return advance_active_release(state)
         except RetryableReleaseError:
-            if not unattended or attempt == UNATTENDED_ATTEMPTS:
+            if attempt == TRANSIENT_RETRY_ATTEMPTS:
                 raise
-            delay = UNATTENDED_BACKOFF_SECONDS[
-                min(attempt - 1, len(UNATTENDED_BACKOFF_SECONDS) - 1)]
+            delay = TRANSIENT_RETRY_BACKOFF_SECONDS[
+                min(attempt - 1, len(TRANSIENT_RETRY_BACKOFF_SECONDS) - 1)]
             console.print(
                 f"[yellow]Transient failure on attempt {attempt}; retrying in {delay}s[/yellow]")
             sleeper(delay)
-    raise ReleaseError("unattended release exhausted its retries")
+    raise ReleaseError("release exhausted its transient retries")
 
 
 def _parse_accepted_red_develop(values: list[str] | None) -> dict[str, str]:
@@ -3916,7 +4207,7 @@ def _parse_accepted_red_develop(values: list[str] | None) -> dict[str, str]:
     return accepted
 
 
-def _preflight_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> None:
+def _release_gate_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> None:
     """Report every settled precondition, and stop before any state changes if one failed."""
     try:
         findings = ReleasePreflight(
@@ -3928,10 +4219,10 @@ def _preflight_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> 
     failures = [finding for finding in findings if finding.fatal]
     warnings = [finding for finding in findings if not finding.fatal]
     if not findings:
-        console.print("Preflight:           every precondition settled")
+        console.print("Release checks:      every precondition settled")
     else:
         console.print(
-            f"Preflight:           {len(failures)} blocking, {len(warnings)} advisory")
+            f"Release checks:      {len(failures)} blocking, {len(warnings)} advisory")
     for finding in warnings:
         console.print(f"  [yellow]{finding.check}: {finding.message}[/yellow]")
     for finding in failures:
@@ -3945,78 +4236,9 @@ def _preflight_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> 
         raise typer.Exit(1)
 
 
-UNATTENDED_HELP = (
-    "Retry transport faults with backoff so a long release survives a network blip"
-)
 ACCEPT_RED_DEVELOP_HELP = (
     "Accept one repository's red develop by naming the exact run, as <repository>=<run-id>"
 )
-
-
-def _estate_manifest(release_version: str, next_version: str) -> dict:
-    """Describe the estate a release would be cut from, without building a train first.
-
-    Every check but the CEE proof and the train inventory asks about the estate rather than
-    about a train: whether the trees are clean, the credentials work, the remotes will take
-    the writes, and the source is green. Those answers cost a minute, and a train costs
-    half an hour, so they are worth having in that order. The repository set is the one the
-    next train will use, read from the build configuration it will be built from.
-    """
-    cedar_home = os.environ.get("CEDAR_HOME")
-    if not cedar_home:
-        raise ReleaseError("CEDAR_HOME is not set")
-    config_path = Path(cedar_home) / "cedar-development" / "ops" / "build-train.json"
-    try:
-        config = json.loads(config_path.read_bytes())
-    except (OSError, json.JSONDecodeError) as error:
-        raise ReleaseError(f"cannot read the train build configuration: {error}") from error
-    configured = config.get("repositories")
-    if not isinstance(configured, list) or not configured:
-        raise ReleaseError("train build configuration has no repositories")
-    repositories = [
-        repository for repository in configured
-        if repository not in INDEPENDENT_RELEASE_REPOSITORIES
-    ]
-    sources = {}
-    for repository in repositories:
-        root = Path(cedar_home) / repository
-        if not root.is_dir():
-            continue
-        result = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "refs/heads/develop"],
-            capture_output=True, text=True, check=False,
-        )
-        if result.returncode == 0:
-            sources[repository] = result.stdout.strip()
-    return {
-        "releaseVersion": release_version,
-        "nextDevelopmentVersion": next_version,
-        "releaseRepositories": repositories,
-        "sourceRepositories": sources,
-    }
-
-
-@app.command("preflight")
-def preflight(
-    release_version: str = typer.Option(..., "--version", help="Release version being planned"),
-    next_version: str = typer.Option(..., "--next-version", help="Explicit next SNAPSHOT version"),
-    accept_red_develop: list[str] = typer.Option(
-        None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
-):
-    """Settle every precondition that does not need a train, before one is built."""
-    try:
-        manifest = _estate_manifest(release_version, next_version)
-    except ReleaseError as error:
-        console.print(f"[red]{error}[/red]")
-        raise typer.Exit(1) from error
-    console.print(f"Release:             {release_version}")
-    console.print(f"Next development:    {next_version}")
-    console.print(
-        f"Estate:              {len(manifest['releaseRepositories'])} release repositories, "
-        f"{len(manifest['sourceRepositories'])} checked out"
-    )
-    _preflight_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
-    console.print("No changes made. Build a train when this is clean.")
 
 
 @app.command("plan")
@@ -4031,7 +4253,7 @@ def plan(
     """Settle every release precondition without changing release state."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
-    _preflight_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
+    _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
     console.print("No changes made.")
 
 
@@ -4043,17 +4265,15 @@ def start(
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
     accept_red_develop: list[str] = typer.Option(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
-    unattended: bool = typer.Option(
-        False, "--unattended", help=UNATTENDED_HELP),
 ):
     """Run a manifest-owned train release through verified Git and publication stages."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
-    _preflight_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
+    _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
     state = ReleaseState()
     try:
         path = state.start(manifest)
-        active = _drive_release(state, unattended=unattended)
+        active = _drive_release(state)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         if state.current_path.exists():
@@ -4064,14 +4284,12 @@ def start(
 
 
 @app.command("resume")
-def resume(
-    unattended: bool = typer.Option(False, "--unattended", help=UNATTENDED_HELP),
-):
+def resume():
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
     try:
         _, path = state.read_current_manifest()
-        manifest = _drive_release(state, unattended=unattended)
+        manifest = _drive_release(state)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
@@ -4080,84 +4298,16 @@ def resume(
     console.print(f"Internal state:      {path}")
 
 
-def _status_summary(manifest: dict, path: Path) -> dict:
-    """Reduce the ledger to the fields a monitor polls, leaving evidence in the ledger."""
-    return {
-        "release": manifest.get("releaseVersion"),
-        "nextDevelopment": manifest.get("nextDevelopmentVersion"),
-        "train": manifest.get("train"),
-        "phase": manifest.get("phase"),
-        "complete": manifest.get("phase") == "accepted",
-        "failure": manifest.get("failure"),
-        "lastAttempt": manifest.get("lastAttempt"),
-        "localRefs": len(manifest.get("localRefs", {}).get("completedTasks", {})),
-        "remoteIntegration": len(
-            manifest.get("remoteIntegration", {}).get("completedTasks", {})),
-        "snapshotPublication": len(
-            manifest.get("snapshotPublication", {}).get("completedTasks", {})),
-        "artifactPublication": len(
-            manifest.get("artifactPublication", {}).get("completedTasks", {})),
-        "acceptance": manifest.get("acceptance", {}).get("checks", []),
-        "statePath": str(path),
-    }
-
-
-@app.command("conclude")
-def conclude():
-    """Release the active slot held by a release that has already reached its end."""
-    state = ReleaseState()
-    try:
-        manifest, path = state.read_current_manifest()
-    except ReleaseError as error:
-        console.print(f"[red]{error}[/red]")
-        raise typer.Exit(1) from error
-    phase = manifest.get("phase")
-    # A release that predates the acceptance phase ended at artifacts-published, and that was
-    # terminal under the layout that wrote it. Both count as finished; nothing else does.
-    if phase not in {RELEASE_TERMINAL_PHASE, "artifacts-published"}:
-        console.print(
-            f"[red]release {manifest.get('releaseVersion')} is {phase} and has not finished; "
-            "use cedarcli release resume[/red]"
-        )
-        raise typer.Exit(1)
-    state.conclude()
-    console.print(f"Concluded:           {manifest.get('releaseVersion')} at {phase}")
-    console.print(f"Record retained:     {path}")
-
-
 @app.command("status")
-def status(
-    as_json: bool = typer.Option(
-        False, "--json", help="Emit the release state as JSON for monitoring"),
-):
+def status():
     """Show the active train-backed release and its immutable CEE proof."""
     try:
         manifest, path = ReleaseState().read_current_manifest()
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
-    if as_json:
-        print(json.dumps(_status_summary(manifest, path), indent=2))
-        return
     _render_plan(manifest)
-    console.print(f"Phase:               {manifest['phase']}")
-    if manifest.get("lastAttempt"):
-        console.print(f"Last attempt:        {manifest['lastAttempt']}")
-    if manifest.get("failure"):
-        console.print(f"Failure:             {manifest['failure']}")
-    if manifest.get("localRefs"):
-        completed = manifest["localRefs"].get("completedTasks", {})
-        console.print(f"Local refs:          {len(completed)} prepared refs")
-    if manifest.get("remoteIntegration"):
-        completed = manifest["remoteIntegration"].get("completedTasks", {})
-        console.print(f"Remote integration:  {len(completed)} repositories")
-    if manifest.get("snapshotPublication"):
-        completed = manifest["snapshotPublication"].get("completedTasks", {})
-        console.print(f"Snapshot publication:{len(completed):>3} verified tasks")
-    if manifest.get("artifactPublication"):
-        completed = manifest["artifactPublication"].get("completedTasks", {})
-        console.print(f"Artifact publication:{len(completed):>3} verified tasks")
     if manifest.get("acceptance"):
         for check in manifest["acceptance"]["checks"]:
             console.print(f"Accepted:            {check['detail']}")
-    console.print(f"Internal state:      {path}")
+    _render_release_status(manifest, path)

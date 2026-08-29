@@ -35,7 +35,6 @@ class ServerWorker(Worker):
         native_rows = ServerWorker.parse_native_status(native_status_lines)
         server_status_map = {}
         ServerWorker.check_status_of(ServerTag.INFRASTRUCTURE, server_status_map)
-        ServerWorker.check_status_of(ServerTag.FRONTEND_NON_ESSENTIAL, server_status_map)
 
         table = Table(
             "Service", "PID", "Port", "Health", "Binary", "Log errors",
@@ -60,16 +59,8 @@ class ServerWorker(Worker):
             table, "Infrastructure", infrastructure, server_status_map)
         ServerWorker.add_native_section(table, "Frontends", frontends)
 
-        optional_frontends = [
-            server for server in Util.get_servers()
-            if server.tag == ServerTag.FRONTEND_NON_ESSENTIAL
-            and server.name not in {"workspace", "designer"}]
-        ServerWorker.add_host_section(
-            table, "Optional frontends", optional_frontends, server_status_map)
-
         console.print(table)
-        ServerWorker.print_summary(native_rows, infrastructure, optional_frontends,
-                                   server_status_map)
+        ServerWorker.print_summary(native_rows, infrastructure, server_status_map)
 
     @staticmethod
     def parse_native_status(lines):
@@ -180,21 +171,16 @@ class ServerWorker(Worker):
         return Text(value, style=style)
 
     @staticmethod
-    def print_summary(native_rows, infrastructure, optional_frontends, server_status_map):
+    def print_summary(native_rows, infrastructure, server_status_map):
         docker_rows = [row for row in native_rows if row["health"] == "docker"]
         native_rows_only = [row for row in native_rows if row["health"] != "docker"]
         healthy = sum(row["health"] == "healthy" for row in native_rows_only)
         infra_healthy = sum(
             server_status_map[server.name].status == ServerStatus.OK
             for server in infrastructure)
-        optional_healthy = sum(
-            server_status_map[server.name].status == ServerStatus.OK
-            for server in optional_frontends)
         summary = Text("Summary  ", style="bold")
         summary.append(f"native {healthy}/{len(native_rows_only)} healthy")
         summary.append(f"  •  infrastructure {infra_healthy}/{len(infrastructure)} available")
-        if optional_frontends:
-            summary.append(f"  •  optional frontends {optional_healthy}/{len(optional_frontends)} available")
         console.print(summary)
 
         warnings = []

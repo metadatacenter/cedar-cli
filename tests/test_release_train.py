@@ -584,8 +584,21 @@ class ReleaseStateAndCliTest(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         for command in ("plan", "start", "resume", "status"):
             self.assertIn(command, result.output)
-        for retired in ("all-in-one", "prepare", "commit", "cleanup", "rollback", "check-tools"):
+        for retired in (
+            "preflight", "conclude", "all-in-one", "prepare", "commit", "cleanup",
+            "rollback", "check-tools",
+        ):
             self.assertNotIn(retired, result.output)
+
+    def test_transient_retry_is_default_not_a_flag(self):
+        for command in ("start", "resume"):
+            result = self.runner.invoke(release_train.app, [command, "--help"])
+            self.assertEqual(0, result.exit_code, result.output)
+            self.assertNotIn("--unattended", result.output)
+            self.assertNotIn("--check", result.output)
+        result = self.runner.invoke(release_train.app, ["status", "--help"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn("--json", result.output)
 
     def test_state_owns_the_manifest_and_refuses_a_second_active_release(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -615,6 +628,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             self.assertEqual([], list(Path(directory).iterdir()))
         build.assert_called_once()
 
+    @patch.object(ReleaseArtifactPublisher, "ensure_nexus_ready", return_value=None)
     @patch.object(ReleaseArtifactPublisher, "snapshot_tasks", return_value=[])
     @patch.object(ReleaseArtifactPublisher, "tasks", return_value=[])
     @patch.object(ReleaseRemoteIntegrator, "tasks", return_value=[])
@@ -626,7 +640,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
     @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
     def test_start_persists_internal_state_and_status_finds_it(
         self, _build, _preflight, _workspace_prepare, _version_prepare, _build_tasks,
-        _ref_tasks, _remote_tasks, _artifact_tasks, _snapshot_tasks,
+        _ref_tasks, _remote_tasks, _artifact_tasks, _snapshot_tasks, _nexus,
     ):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -642,10 +656,27 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             self.assertIn("Phase:               accepted", start.output)
             status = self.runner.invoke(release_train.app, ["status"])
             self.assertEqual(0, status.exit_code, status.output)
-            self.assertIn("Phase:               accepted", status.output)
-            self.assertIn("Local refs:          0 prepared refs", status.output)
-            self.assertIn("Remote integration:  0 repositories", status.output)
-            self.assertIn("Artifact publication:  0 verified tasks", status.output)
+            self.assertIn("Release 2.9.3 — COMPLETE", status.output)
+            self.assertIn("local-refs", status.output)
+            self.assertIn("artifacts", status.output)
+            self.assertIn("acceptance", status.output)
+
+    def test_status_separates_legacy_snapshots_from_release_artifacts(self):
+        manifest = manifest_fixture()
+        manifest.update({
+            "phase": "artifacts-published",
+            "artifactPublication": {"completedTasks": {
+                "maven:nextDevelopment:verify": {
+                    "id": "maven:nextDevelopment:verify"},
+                "maven:release:verify": {"id": "maven:release:verify"},
+            }},
+        })
+
+        release_publications, snapshot_publications = release_train._publication_progress(manifest)
+
+        self.assertEqual(1, snapshot_publications)
+        self.assertEqual(1, release_publications)
+        self.assertEqual("acceptance", release_train._next_release_stage(manifest))
 
 
 class ReleaseWorkspaceTest(unittest.TestCase):
@@ -1721,12 +1752,20 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
 
             class FakePublisher:
                 @staticmethod
+                def ensure_nexus_ready(_purpose):
+                    return None
+
+                @staticmethod
                 def tasks(_manifest):
                     return [
                         {"id": "one", "kind": "fake"},
                         {"id": "two", "kind": "fake"},
                         {"id": "three", "kind": "fake"},
                     ]
+
+                @staticmethod
+                def snapshot_tasks(_manifest):
+                    return []
 
                 def run_task(self, _manifest, task):
                     calls.append(task["id"])
@@ -1735,7 +1774,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                     return {**task, "proof": task["id"]}
 
                 @staticmethod
-                def verify_record(_manifest, record):
+                def verify_record(_manifest, record, _tasks=None):
                     if record.get("proof") != record.get("id"):
                         raise ReleaseError("publication proof changed")
 
@@ -1753,6 +1792,55 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             )
             self.assertEqual("artifacts-published", completed["phase"])
             self.assertEqual(["one", "two", "two", "three"], calls)
+
+    def test_old_ledger_snapshot_records_are_classified_by_task_identity(self):
+        class FakePublisher:
+            @staticmethod
+            def tasks(_manifest):
+                return [{"id": "stable", "kind": "fake"}]
+
+            @staticmethod
+            def snapshot_tasks(_manifest):
+                return [{"id": "maven:nextDevelopment:verify", "kind": "fake"}]
+
+        manifest = {
+            "artifactPublication": {
+                "completedTasks": {
+                    "stable": {"id": "stable", "kind": "fake"},
+                    "maven:nextDevelopment:verify": {
+                        "id": "maven:nextDevelopment:verify", "kind": "fake"},
+                },
+            },
+        }
+
+        _release_tasks, releases, _snapshot_tasks, snapshots = (
+            release_train._publication_evidence_by_plan(
+                manifest, FakePublisher(), require_complete=True))
+
+        self.assertEqual(["stable"], [record["id"] for record in releases])
+        self.assertEqual(
+            ["maven:nextDevelopment:verify"],
+            [record["id"] for record in snapshots],
+        )
+
+    def test_nexus_guard_opens_before_publication_changes_the_ledger(self):
+        class OpenCircuit:
+            @staticmethod
+            def ensure_nexus_ready(_purpose):
+                raise ReleaseError("Nexus circuit breaker is open")
+
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, _remotes, _manifest = self.make_release(directory)
+            before, path = state.read_current_manifest()
+            before_bytes = path.read_bytes()
+
+            with self.assertRaisesRegex(ReleaseError, "circuit breaker is open"):
+                publish_active_release(
+                    state, OpenCircuit(), remote_integrator=integrator)
+
+            after, _ = state.read_current_manifest()
+            self.assertEqual(before, after)
+            self.assertEqual(before_bytes, path.read_bytes())
 
     def test_maven_release_upload_accepts_only_identical_existing_bytes(self):
         class ExistingHttp:
@@ -1888,6 +1976,40 @@ class FakeNexus:
 
     def read_json(self, url, *, missing_ok=False):
         return {}, b"{}"
+
+
+class NexusCircuitBreakerTest(unittest.TestCase):
+    def test_healthy_gate_uses_only_status_and_one_real_repository_read(self):
+        http = FakeNexus()
+        guard = release_train.NexusCircuitBreaker(http, PREFLIGHT_ENVIRONMENT)
+
+        guard.require("artifact publication")
+
+        self.assertEqual([
+            release_train.NEXUS_WRITABLE_ENDPOINT,
+            release_train.NEXUS_REPOSITORY_PROBE,
+        ], http.reads)
+
+    def test_repository_http_failure_opens_without_becoming_retryable(self):
+        http = FakeNexus(
+            failing={release_train.NEXUS_REPOSITORY_PROBE}, status=500)
+        guard = release_train.NexusCircuitBreaker(http, PREFLIGHT_ENVIRONMENT)
+
+        with self.assertRaisesRegex(ReleaseError, "daily request budget") as raised:
+            guard.require("release acceptance")
+
+        self.assertNotIsInstance(raised.exception, RetryableReleaseError)
+        self.assertEqual(2, len(http.reads))
+
+    def test_direct_connection_failure_remains_bounded_retry_material(self):
+        class OfflineNexus(FakeNexus):
+            def read(self, url, *, missing_ok=False):
+                self.reads.append(url)
+                raise RetryableReleaseError("connection reset")
+
+        with self.assertRaises(RetryableReleaseError):
+            release_train.NexusCircuitBreaker(
+                OfflineNexus(), PREFLIGHT_ENVIRONMENT).require("snapshot publication")
 
 
 class FakeCompletedProcess:
@@ -2298,8 +2420,8 @@ class ReleasePreflightTest(unittest.TestCase):
         """A release must not be startable from a state that plan would have refused."""
         for command in (release_train.plan, release_train.start):
             self.assertIn(
-                "_preflight_or_exit", inspect.getsource(command),
-                f"{command.__name__} does not run preflight")
+                "_release_gate_or_exit", inspect.getsource(command),
+                f"{command.__name__} does not run the complete release gate")
 
 
 class ReleaseLicenseStampingTest(unittest.TestCase):
@@ -2382,18 +2504,61 @@ class ReleaseAcceptanceTest(unittest.TestCase):
         manifest = manifest_fixture()
         manifest["releaseRepositories"] = ["repo-one", "repo-two"]
         state.start(manifest)
-        state.update_current_manifest({"phase": "artifacts-published"})
+        state.update_current_manifest({
+            "phase": "artifacts-published",
+            "remoteIntegration": {
+                "completedTasks": {
+                    repository: {"id": repository, "repository": repository}
+                    for repository in manifest["releaseRepositories"]
+                },
+            },
+        })
         return state
 
     @staticmethod
     def _acceptance(state, *, tagged):
-        acceptance = ReleaseAcceptance(
-            state, environment={"CEDAR_HOME": "/tmp/cedar-acceptance"})
-        acceptance.remote_integrator.remote_resolver = lambda repository: "origin"
-        acceptance.remote_integrator._remote_refs = (
-            lambda root, remote, refs: {ref: "a" * 40 for ref in refs}
-            if root.name in tagged else {})
-        return acceptance
+        class FakeRemoteIntegrator:
+            def __init__(self):
+                self.verified = []
+
+            @staticmethod
+            def tasks(manifest):
+                return [
+                    {"id": repository, "repository": repository}
+                    for repository in manifest.get("releaseRepositories", [])
+                ]
+
+            def verify_record(self, manifest, record):
+                self.verified.append(record["repository"])
+                if record["repository"] not in tagged:
+                    raise ReleaseError(
+                        f"release-{manifest['releaseVersion']} is absent from "
+                        f"{record['repository']}")
+
+        class FakePublisher:
+            def __init__(self):
+                self.guard_calls = []
+                self.verified = []
+
+            def ensure_nexus_ready(self, purpose):
+                self.guard_calls.append(purpose)
+
+            @staticmethod
+            def tasks(_manifest):
+                return []
+
+            @staticmethod
+            def snapshot_tasks(_manifest):
+                return []
+
+            def verify_record(self, _manifest, record, _tasks=None):
+                self.verified.append(record["id"])
+
+        return ReleaseAcceptance(
+            state,
+            remote_integrator=FakeRemoteIntegrator(),
+            publisher=FakePublisher(),
+        )
 
     def test_a_repository_without_the_release_tag_fails_acceptance(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2416,8 +2581,12 @@ class ReleaseAcceptanceTest(unittest.TestCase):
 
         self.assertEqual("accepted", manifest["phase"])
         details = [check["detail"] for check in manifest["acceptance"]["checks"]]
-        self.assertTrue(any("release-2.9.3 present in all 2" in detail for detail in details))
+        self.assertTrue(any(
+            "release-2.9.3 present at the recorded commit" in detail
+            for detail in details))
         self.assertIsNotNone(manifest["acceptance"]["acceptedAt"])
+        self.assertEqual(["repo-one", "repo-two"], acceptance.remote_integrator.verified)
+        self.assertEqual(["release acceptance"], acceptance.publisher.guard_calls)
 
     def test_acceptance_is_reached_from_a_published_release(self):
         """Publication is no longer the end of the route."""
@@ -2439,7 +2608,7 @@ class ReleaseAcceptanceTest(unittest.TestCase):
         self.assertEqual("accepted", manifest["phase"])
 
 
-class UnattendedReleaseTest(unittest.TestCase):
+class TransientRetryTest(unittest.TestCase):
     """A network blip must not end a release; a guard must still end it at once."""
 
     def _state(self, directory):
@@ -2464,12 +2633,12 @@ class UnattendedReleaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(release_train, "advance_active_release", advance):
             manifest = release_train._drive_release(
-                self._state(directory), unattended=True, sleeper=slept.append)
+                self._state(directory), sleeper=slept.append)
 
         self.assertEqual("accepted", manifest["phase"])
         self.assertEqual([30, 60], slept)
 
-    def test_a_guard_failure_stops_immediately_even_when_unattended(self):
+    def test_a_guard_failure_stops_immediately(self):
         slept = []
 
         def advance(_state):
@@ -2479,23 +2648,9 @@ class UnattendedReleaseTest(unittest.TestCase):
                 patch.object(release_train, "advance_active_release", advance):
             with self.assertRaisesRegex(ReleaseError, "changed the prepared tree"):
                 release_train._drive_release(
-                    self._state(directory), unattended=True, sleeper=slept.append)
+                    self._state(directory), sleeper=slept.append)
 
         self.assertEqual([], slept, "a guard failure must not be retried")
-
-    def test_an_attended_release_does_not_retry(self):
-        slept = []
-
-        def advance(_state):
-            raise RetryableReleaseError("connection reset")
-
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "advance_active_release", advance):
-            with self.assertRaises(RetryableReleaseError):
-                release_train._drive_release(
-                    self._state(directory), unattended=False, sleeper=slept.append)
-
-        self.assertEqual([], slept)
 
     def test_retries_are_bounded(self):
         slept = []
@@ -2507,9 +2662,19 @@ class UnattendedReleaseTest(unittest.TestCase):
                 patch.object(release_train, "advance_active_release", advance):
             with self.assertRaises(RetryableReleaseError):
                 release_train._drive_release(
-                    self._state(directory), unattended=True, sleeper=slept.append)
+                    self._state(directory), sleeper=slept.append)
 
-        self.assertEqual(release_train.UNATTENDED_ATTEMPTS - 1, len(slept))
+        self.assertEqual(release_train.TRANSIENT_RETRY_ATTEMPTS - 1, len(slept))
+
+    def test_subprocess_transport_classification_is_narrow(self):
+        self.assertTrue(release_train._command_failure_is_retryable(
+            ["mvn", "deploy"], "server returned HTTP 503"))
+        self.assertTrue(release_train._command_failure_is_retryable(
+            ["git", "push"], "RPC failed; curl 92 HTTP/2 stream was not closed"))
+        self.assertFalse(release_train._command_failure_is_retryable(
+            ["mvn", "deploy"], "server returned HTTP 500"))
+        self.assertFalse(release_train._command_failure_is_retryable(
+            ["git", "push"], "protected branch update failed"))
 
 
 class ReleaseStageOrderTest(unittest.TestCase):
@@ -2674,7 +2839,7 @@ class ReleaseSnapshotOrderingTest(unittest.TestCase):
             self.assertLess(names.index(stage.name), names.index("remotes"))
 
 
-class ReleaseConclusionTest(unittest.TestCase):
+class ReleaseCompletionTest(unittest.TestCase):
     """A finished release must stop being the active one, or it blocks the next."""
 
     def _finished(self, directory, phase):
@@ -2706,28 +2871,6 @@ class ReleaseConclusionTest(unittest.TestCase):
 
             self.assertEqual("2.9.4", state.read_current()["releaseVersion"])
 
-    def test_conclude_refuses_a_release_that_has_not_finished(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = self._finished(directory, "integrating-remotes")
-            runner = CliRunner()
-            with patch.dict(os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False):
-                result = runner.invoke(release_train.app, ["conclude"])
-
-            self.assertEqual(1, result.exit_code, result.output)
-            self.assertIn("has not finished", result.output)
-            self.assertTrue(state.current_path.exists())
-
-    def test_conclude_accepts_a_release_that_predates_the_acceptance_phase(self):
-        """artifacts-published was terminal under the layout that wrote such a ledger."""
-        with tempfile.TemporaryDirectory() as directory:
-            state = self._finished(directory, "artifacts-published")
-            runner = CliRunner()
-            with patch.dict(os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False):
-                result = runner.invoke(release_train.app, ["conclude"])
-
-            self.assertEqual(0, result.exit_code, result.output)
-            self.assertTrue(state.read_current().get("concludedAt"))
-
     def test_preflight_reports_an_unfinished_release_rather_than_letting_start_refuse(self):
         with tempfile.TemporaryDirectory() as directory:
             state = self._finished(directory, "integrating-remotes")
@@ -2749,66 +2892,6 @@ class ReleaseConclusionTest(unittest.TestCase):
                 environment=dict(PREFLIGHT_ENVIRONMENT),
             )
             self.assertEqual([], preflight.check_no_release_in_progress())
-
-
-class ReleasePreflightWithoutATrainTest(unittest.TestCase):
-    """A train costs half an hour; the questions it does not answer cost a minute."""
-
-    def _estate(self, directory, repositories):
-        home = Path(directory)
-        (home / "cedar-development" / "ops").mkdir(parents=True)
-        (home / "cedar-development" / "ops" / "build-train.json").write_text(
-            json.dumps({"repositories": repositories + ["cedar-embeddable-editor"]}),
-            encoding="utf-8")
-        return home
-
-    def test_the_repository_set_excludes_the_independently_released_ones(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = self._estate(directory, ["repo-one", "repo-two"])
-            with patch.dict(os.environ, {"CEDAR_HOME": str(home)}, clear=False):
-                manifest = release_train._estate_manifest("2.9.4", "2.9.5-SNAPSHOT")
-
-        self.assertEqual(["repo-one", "repo-two"], manifest["releaseRepositories"])
-        self.assertNotIn("cedar-embeddable-editor", manifest["releaseRepositories"])
-        self.assertEqual("2.9.4", manifest["releaseVersion"])
-
-    def test_it_records_the_develop_head_of_each_checked_out_repository(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = self._estate(directory, ["repo-one"])
-            root = home / "repo-one"
-            root.mkdir()
-            ReleaseLocalRefsTest._git(root, "init", "--initial-branch=develop")
-            ReleaseLocalRefsTest._git(root, "config", "user.email", "t@example.org")
-            ReleaseLocalRefsTest._git(root, "config", "user.name", "T")
-            (root / "a.txt").write_text("a\n", encoding="utf-8")
-            ReleaseLocalRefsTest._git(root, "add", "a.txt")
-            ReleaseLocalRefsTest._git(root, "commit", "--quiet", "-m", "first")
-            head = ReleaseLocalRefsTest._git(root, "rev-parse", "refs/heads/develop")
-            with patch.dict(os.environ, {"CEDAR_HOME": str(home)}, clear=False):
-                manifest = release_train._estate_manifest("2.9.4", "2.9.5-SNAPSHOT")
-
-        self.assertEqual({"repo-one": head}, manifest["sourceRepositories"])
-
-    def test_it_runs_the_same_checks_the_release_runs(self):
-        """A separate check list would drift from the one that gates a release."""
-        source = inspect.getsource(release_train.preflight)
-        self.assertIn("_preflight_or_exit", source)
-
-    def test_preflight_changes_nothing(self):
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.object(ReleasePreflight, "run", return_value=[]):
-            home = self._estate(directory, ["repo-one"])
-            with patch.dict(os.environ, {"CEDAR_HOME": str(home)}, clear=False):
-                result = CliRunner().invoke(
-                    release_train.app,
-                    ["preflight", "--version", "2.9.4", "--next-version", "2.9.5-SNAPSHOT"])
-
-            self.assertEqual(0, result.exit_code, result.output)
-            self.assertIn("No changes made", result.output)
-            self.assertEqual(
-                {"cedar-development", "repo-one"} & set(p.name for p in home.iterdir()),
-                {"cedar-development"},
-                "preflight must not create anything")
 
 
 if __name__ == "__main__":
