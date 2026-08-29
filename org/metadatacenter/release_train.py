@@ -3108,6 +3108,81 @@ def accept_active_release(
     return completed_manifest
 
 
+@dataclasses.dataclass(frozen=True)
+class ReleaseStage:
+    """One step of the release: where it may start from, and what it records when it finishes.
+
+    The stages were a chain of conditionals, each branch repeating the tail of the one below
+    it, so adding a step meant editing every branch and forgetting one stranded a resumed
+    release at that step. Ordering them instead makes resumption a search for the first stage
+    that can still take the recorded phase, and adding a step a single entry in this list.
+    """
+
+    name: str
+    entry_phases: frozenset[str]
+    done_phase: str
+    run: object
+
+    def __call__(self, state: "ReleaseState", dependencies: dict) -> dict:
+        return self.run(state, dependencies)
+
+
+# A partial stamping attempt is evidence, not a state to resume into: the version preparer
+# rewrites files across every repository, and continuing from half of that would stamp some
+# twice. Both phases therefore rewind to the frontend stage, which starts a fresh attempt.
+REWIND_TO_FRONTENDS = frozenset({"preparing-versions", "version-preparation-failed"})
+
+RELEASE_STAGES = (
+    ReleaseStage(
+        "frontends",
+        frozenset({"started", "preparing-frontends", "frontend-preparation-failed"}),
+        "frontends-prepared",
+        lambda state, deps: prepare_active_release(state, deps["workspace_preparer"]),
+    ),
+    ReleaseStage(
+        "versions",
+        frozenset({"frontends-prepared"}),
+        "versions-prepared",
+        lambda state, deps: prepare_active_release_versions(state, deps["version_preparer"]),
+    ),
+    ReleaseStage(
+        "builds",
+        frozenset({"versions-prepared", "validating-builds", "build-validation-failed"}),
+        "builds-validated",
+        lambda state, deps: validate_active_release_builds(state, deps["build_validator"]),
+    ),
+    ReleaseStage(
+        "local-refs",
+        frozenset({"builds-validated", "creating-local-refs", "local-ref-creation-failed"}),
+        "local-refs-created",
+        lambda state, deps: create_active_release_refs(state, deps["ref_creator"]),
+    ),
+    ReleaseStage(
+        "remotes",
+        frozenset({"local-refs-created", "integrating-remotes", "remote-integration-failed"}),
+        "remote-integrated",
+        lambda state, deps: integrate_active_release(state, deps["remote_integrator"]),
+    ),
+    ReleaseStage(
+        "artifacts",
+        frozenset({"remote-integrated", "publishing-artifacts", "artifact-publication-failed"}),
+        "artifacts-published",
+        lambda state, deps: publish_active_release(
+            state, deps["artifact_publisher"], deps["remote_integrator"],
+            deps["build_validator"],
+        ),
+    ),
+    ReleaseStage(
+        "acceptance",
+        frozenset({"artifacts-published", "acceptance-failed"}),
+        "accepted",
+        lambda state, deps: accept_active_release(state, deps["acceptance"]),
+    ),
+)
+
+RELEASE_TERMINAL_PHASE = RELEASE_STAGES[-1].done_phase
+
+
 def advance_active_release(
     state: ReleaseState | None = None,
     workspace_preparer: ReleaseWorkspacePreparer | None = None,
@@ -3118,66 +3193,32 @@ def advance_active_release(
     artifact_publisher: ReleaseArtifactPublisher | None = None,
     acceptance: ReleaseAcceptance | None = None,
 ) -> dict:
+    """Run the release from the first stage that can still take its recorded phase."""
     state = state or ReleaseState()
+    dependencies = {
+        "workspace_preparer": workspace_preparer,
+        "version_preparer": version_preparer,
+        "build_validator": build_validator,
+        "ref_creator": ref_creator,
+        "remote_integrator": remote_integrator,
+        "artifact_publisher": artifact_publisher,
+        "acceptance": acceptance,
+    }
     manifest, _ = state.read_current_manifest()
-    if manifest.get("phase") == "accepted":
+    if manifest.get("phase") in REWIND_TO_FRONTENDS:
+        manifest, _ = state.update_current_manifest({"phase": "frontend-preparation-failed"})
+    phase = manifest.get("phase")
+    if phase == RELEASE_TERMINAL_PHASE:
         return manifest
-    if manifest.get("phase") in {"artifacts-published", "acceptance-failed"}:
-        return accept_active_release(state, acceptance)
-    if manifest.get("phase") in {
-        "remote-integrated", "publishing-artifacts", "artifact-publication-failed",
-    }:
-        publish_active_release(
-            state, artifact_publisher, remote_integrator, build_validator,
-        )
-        return accept_active_release(state, acceptance)
-    if manifest.get("phase") in {
-        "local-refs-created", "integrating-remotes", "remote-integration-failed",
-    }:
-        integrate_active_release(state, remote_integrator)
-        publish_active_release(
-            state, artifact_publisher, remote_integrator, build_validator,
-        )
-        return accept_active_release(state, acceptance)
-    if manifest.get("phase") in {"creating-local-refs", "local-ref-creation-failed"}:
-        create_active_release_refs(state, ref_creator)
-        integrate_active_release(state, remote_integrator)
-        publish_active_release(
-            state, artifact_publisher, remote_integrator, build_validator,
-        )
-        return accept_active_release(state, acceptance)
-    if manifest.get("phase") in {
-        "builds-validated",
-    }:
-        create_active_release_refs(state, ref_creator)
-        integrate_active_release(state, remote_integrator)
-        publish_active_release(
-            state, artifact_publisher, remote_integrator, build_validator,
-        )
-        return accept_active_release(state, acceptance)
-    if manifest.get("phase") in {
-        "versions-prepared", "validating-builds", "build-validation-failed",
-    }:
-        validate_active_release_builds(state, build_validator)
-        create_active_release_refs(state, ref_creator)
-        integrate_active_release(state, remote_integrator)
-        publish_active_release(
-            state, artifact_publisher, remote_integrator, build_validator,
-        )
-        return accept_active_release(state, acceptance)
-    if manifest.get("phase") == "version-preparation-failed":
-        # A partial stamping attempt remains as evidence. Re-run the frontend stage into a new
-        # attempt so resume never needs a destructive reset of CLI-owned release state.
-        state.update_current_manifest({"phase": "frontend-preparation-failed"})
-    prepare_active_release(state, workspace_preparer)
-    prepare_active_release_versions(state, version_preparer)
-    validate_active_release_builds(state, build_validator)
-    create_active_release_refs(state, ref_creator)
-    integrate_active_release(state, remote_integrator)
-    publish_active_release(
-        state, artifact_publisher, remote_integrator, build_validator,
+    start = next(
+        (index for index, stage in enumerate(RELEASE_STAGES) if phase in stage.entry_phases),
+        None,
     )
-    return accept_active_release(state, acceptance)
+    if start is None:
+        raise ReleaseError(f"a release in {phase} has no stage that can continue it")
+    for stage in RELEASE_STAGES[start:]:
+        manifest = stage(state, dependencies)
+    return manifest
 
 
 # Variables the CEDAR profile defines and the Maven suites read. A build started without

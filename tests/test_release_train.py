@@ -7,7 +7,9 @@ import os
 import subprocess
 import tarfile
 import tempfile
+import dataclasses
 import inspect
+import re
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -2452,6 +2454,107 @@ class UnattendedReleaseTest(unittest.TestCase):
                     self._state(directory), unattended=True, sleeper=slept.append)
 
         self.assertEqual(release_train.UNATTENDED_ATTEMPTS - 1, len(slept))
+
+
+class ReleaseStageOrderTest(unittest.TestCase):
+    """The stage list is the release's control flow, so its shape is worth asserting."""
+
+    def test_each_stage_hands_its_done_phase_to_the_next(self):
+        """A gap here would strand a release at the phase the previous stage recorded."""
+        for earlier, later in zip(release_train.RELEASE_STAGES,
+                                  release_train.RELEASE_STAGES[1:]):
+            self.assertIn(
+                earlier.done_phase, later.entry_phases,
+                f"{later.name} cannot continue a release that {earlier.name} finished")
+
+    def test_no_phase_belongs_to_two_stages(self):
+        seen = {}
+        for stage in release_train.RELEASE_STAGES:
+            for phase in stage.entry_phases:
+                self.assertNotIn(
+                    phase, seen, f"{phase} starts both {seen.get(phase)} and {stage.name}")
+                seen[phase] = stage.name
+
+    def test_every_phase_a_stage_records_can_be_resumed_from(self):
+        """A phase no stage accepts is a release that resume cannot move."""
+        recorded = set()
+        for stage in release_train.RELEASE_STAGES:
+            recorded.add(stage.done_phase)
+        recorded.update(release_train.REWIND_TO_FRONTENDS)
+        source = inspect.getsource(release_train)
+        for match in re.finditer(r'"phase": "([a-z-]+)"', source):
+            recorded.add(match.group(1))
+        # The planner stamps "validated" on a manifest that is not yet an active release;
+        # ReleaseState.start replaces it with "started" before any stage sees it.
+        recorded.discard("validated")
+        accepted = set(release_train.REWIND_TO_FRONTENDS)
+        accepted.add(release_train.RELEASE_TERMINAL_PHASE)
+        for stage in release_train.RELEASE_STAGES:
+            accepted |= stage.entry_phases
+        self.assertEqual(
+            set(), recorded - accepted,
+            "these phases can be recorded but no stage or rewind accepts them")
+
+
+class ReleaseResumptionTest(unittest.TestCase):
+    def _state(self, directory, phase):
+        state = ReleaseState(root=Path(directory))
+        state.start(manifest_fixture())
+        state.update_current_manifest({"phase": phase})
+        return state
+
+    def _run(self, phase):
+        """Advance from one phase with every stage stubbed, reporting which ones ran."""
+        ran = []
+
+        def stub(stage):
+            def run(state, _deps):
+                ran.append(stage.name)
+                manifest, _ = state.update_current_manifest({"phase": stage.done_phase})
+                return manifest
+            return dataclasses.replace(stage, run=run)
+
+        stages = tuple(stub(stage) for stage in release_train.RELEASE_STAGES)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(release_train, "RELEASE_STAGES", stages), \
+                patch.object(release_train, "RELEASE_TERMINAL_PHASE", stages[-1].done_phase):
+            manifest = advance_active_release(self._state(directory, phase))
+        return ran, manifest
+
+    def test_a_failed_stage_reruns_only_itself_and_what_follows(self):
+        ran, manifest = self._run("remote-integration-failed")
+
+        self.assertEqual(["remotes", "artifacts", "acceptance"], ran)
+        self.assertEqual("accepted", manifest["phase"])
+
+    def test_a_finished_stage_hands_over_to_the_next(self):
+        ran, _ = self._run("builds-validated")
+
+        self.assertEqual(["local-refs", "remotes", "artifacts", "acceptance"], ran)
+
+    def test_a_fresh_release_runs_every_stage(self):
+        ran, _ = self._run("started")
+
+        self.assertEqual([stage.name for stage in release_train.RELEASE_STAGES], ran)
+
+    def test_an_accepted_release_runs_nothing(self):
+        ran, manifest = self._run("accepted")
+
+        self.assertEqual([], ran)
+        self.assertEqual("accepted", manifest["phase"])
+
+    def test_a_release_stopped_while_stamping_versions_can_still_resume(self):
+        """Nothing accepted this phase before, so such a release could not be moved at all."""
+        ran, manifest = self._run("preparing-versions")
+
+        self.assertEqual([stage.name for stage in release_train.RELEASE_STAGES], ran)
+        self.assertEqual("accepted", manifest["phase"])
+
+    def test_an_unrecognised_phase_says_so_rather_than_running_the_wrong_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._state(directory, "not-a-phase")
+            with self.assertRaisesRegex(ReleaseError, "no stage that can continue it"):
+                advance_active_release(state)
 
 
 if __name__ == "__main__":
