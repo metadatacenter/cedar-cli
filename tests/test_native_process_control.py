@@ -167,11 +167,14 @@ class NativeProcessControlTest(unittest.TestCase):
     @patch("org.metadatacenter.worker.NativeWorker.ServerWorker.status")
     @patch("org.metadatacenter.worker.NativeWorker.Worker.execute_generic_shell_commands")
     def test_native_status_includes_process_and_host_port_checks(self, execute, host_status):
+        execute.return_value.returncode = 0
         result = NativeWorker.status()
 
         command = execute.call_args.args[0][0]
-        self.assertIn("cedar-services.sh status", command)
-        host_status.assert_called_once_with()
+        self.assertIn("cedar-services.sh status-tsv", command)
+        self.assertFalse(execute.call_args.kwargs["show_command"])
+        self.assertFalse(execute.call_args.kwargs["echo_streams"])
+        host_status.assert_called_once_with(execute.return_value)
         self.assertIs(result, execute.return_value)
 
     @unittest.skipUnless(

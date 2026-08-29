@@ -26,11 +26,15 @@ class NativeWorker(Worker):
         return os.path.join(cedar_home, "cedar-development", "ops", "cedar-services.sh")
 
     @classmethod
-    def execute(cls, action: str, services: Iterable[str] = (), title: str = None):
+    def execute(cls, action: str, services: Iterable[str] = (), title: str = None,
+                show_command: bool = True, echo_streams: bool = True,
+                show_title: bool = True):
         arguments = [cls.controller_path(), action, *services]
         command = " ".join(shlex.quote(argument) for argument in arguments)
         return Worker.execute_generic_shell_commands(
-            [command], title=title or f"Native CEDAR: {action}")
+            [command], title=title or f"Native CEDAR: {action}",
+            show_command=show_command, echo_streams=echo_streams,
+            show_title=show_title)
 
     @classmethod
     def start(cls, services: Iterable[str] = ()):
@@ -46,8 +50,14 @@ class NativeWorker(Worker):
 
     @classmethod
     def status(cls):
-        result = cls.execute("status", title="Native CEDAR process status")
-        ServerWorker.status()
+        result = cls.execute(
+            "status-tsv", title="Native CEDAR process status",
+            show_command=False, echo_streams=False, show_title=False)
+        if result.returncode:
+            for line in result:
+                print(line)
+            return result
+        ServerWorker.status(result)
         return result
 
     @classmethod
