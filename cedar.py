@@ -10,7 +10,7 @@ except ModeError as error:
     typer.echo(str(error), err=True)
     raise SystemExit(1)
 
-from org.metadatacenter import git, build, publish, maven, repo, env, release, release_train, check, docker, dev, cert, prod, native, mode
+from org.metadatacenter import git, build, publish, repo, env, release, release_train, check, docker, dev, cert, prod, native, mode
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.CheatWorker import CheatWorker
 
@@ -21,7 +21,6 @@ app.add_typer(repo.app, name="repo", help="Configured repo info...")
 app.add_typer(git.app, name="git", help="Git operations on all repos...")
 app.add_typer(build.app, name="build", help="Build various components...")
 app.add_typer(publish.app, name="publish", help="Publish build artifacts...")
-app.add_typer(maven.app, name="maven", help="Maven operations...")
 app.add_typer(env.app, name="env", help="Inspect the effective CEDAR environment safely...")
 app.add_typer(release.app, name="release", help="Create a CEDAR release...")
 release.app.add_typer(release_train.app)

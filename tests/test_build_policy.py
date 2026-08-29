@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 from typer.testing import CliRunner
 
 from CedarCliSettings import CedarCliSettings
-from org.metadatacenter import build
+from org.metadatacenter import build, clean_maven
 from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
@@ -80,6 +80,26 @@ class BuildPolicyTest(unittest.TestCase):
             result = self.runner.invoke(build.app, [command, "--help"])
             self.assertEqual(0, result.exit_code, result.output)
             self.assertNotIn("--skip-tests", self.plain_output(result.output))
+
+    @patch.object(clean_maven.CleanMavenWorker, "all")
+    @patch.object(clean_maven.CleanMavenWorker, "cedar")
+    def test_maven_cache_cleaning_is_nested_under_build(self, clean_cedar, clean_all):
+        cedar_result = self.runner.invoke(build.app, ["maven", "clean", "cedar"])
+        all_result = self.runner.invoke(build.app, ["maven", "clean", "all"])
+
+        self.assertEqual(0, cedar_result.exit_code, cedar_result.output)
+        self.assertEqual(0, all_result.exit_code, all_result.output)
+        clean_cedar.assert_called_once_with()
+        clean_all.assert_called_once_with()
+
+    def test_maven_is_not_a_top_level_command(self):
+        import cedar
+
+        build_help = self.runner.invoke(cedar.app, ["build", "maven", "clean", "--help"])
+        top_level = self.runner.invoke(cedar.app, ["maven", "--help"])
+
+        self.assertEqual(0, build_help.exit_code, build_help.output)
+        self.assertEqual(2, top_level.exit_code, top_level.output)
 
     def test_openview_build_runs_its_production_asset_gate(self):
         repos = ReposFactory.build_repos()

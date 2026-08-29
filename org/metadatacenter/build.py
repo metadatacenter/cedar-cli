@@ -1,5 +1,6 @@
 import typer
 
+from org.metadatacenter import maven
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
@@ -7,6 +8,7 @@ from org.metadatacenter.planner.BuildPlanner import BuildPlanner
 from org.metadatacenter.util.GlobalContext import GlobalContext
 
 app = typer.Typer(no_args_is_help=True)
+app.add_typer(maven.app, name="maven", help="Maven cache operations...")
 
 plan_executor = PlanExecutor()
 
