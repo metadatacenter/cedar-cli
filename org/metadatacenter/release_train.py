@@ -123,7 +123,7 @@ FRONTEND_BUILD_SURFACES = [
     {"id": "cee-demo-angular", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-angular-src", "install": ["--legacy-peer-deps"],
      "build": ["npm", "run", "build"],
-     "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src"},
+     "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src/browser"},
     {"id": "cee-demo-ember", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-ember-src", "install": [],
      "build": ["npm", "run", "build"]},
@@ -152,7 +152,7 @@ NPM_RELEASE_SURFACES = [
     {
         "id": "cee-demo-angular", "repository": "cedar-component-demo",
         "directory": "cedar-cee-demo-angular-dist",
-        "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src",
+        "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src/browser",
     },
 ]
 
