@@ -615,6 +615,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             self.assertEqual([], list(Path(directory).iterdir()))
         build.assert_called_once()
 
+    @patch.object(ReleaseArtifactPublisher, "snapshot_tasks", return_value=[])
     @patch.object(ReleaseArtifactPublisher, "tasks", return_value=[])
     @patch.object(ReleaseRemoteIntegrator, "tasks", return_value=[])
     @patch.object(ReleaseRefCreator, "tasks", return_value=[])
@@ -625,7 +626,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
     @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
     def test_start_persists_internal_state_and_status_finds_it(
         self, _build, _preflight, _workspace_prepare, _version_prepare, _build_tasks,
-        _ref_tasks, _remote_tasks, _artifact_tasks,
+        _ref_tasks, _remote_tasks, _artifact_tasks, _snapshot_tasks,
     ):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -1424,6 +1425,10 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
             ReleaseLocalRefsTest().make_release(directory)
         )
         create_active_release_refs(state, creator)
+        # Snapshot publication now sits between the local refs and the remotes; this test
+        # is about what integration writes, so it stands in for that stage rather than
+        # deploying to a registry.
+        state.update_current_manifest({"phase": "snapshots-published"})
         manifest, _ = state.read_current_manifest()
         remotes = {
             repository: self._bare_remote(
@@ -1496,6 +1501,7 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
                 ReleaseLocalRefsTest().make_release(directory)
             )
             create_active_release_refs(state, creator)
+            state.update_current_manifest({"phase": "snapshots-published"})
             manifest, _ = state.read_current_manifest()
             remotes = {
                 repository: self._bare_remote(
@@ -1689,15 +1695,20 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
     def test_publication_plan_uses_release_git_provenance_and_only_stable_npm(self):
         with tempfile.TemporaryDirectory() as directory:
             state, _integrator, _remotes, manifest = self.make_release(directory)
-            tasks = ReleaseArtifactPublisher(state, executor=lambda *_args: {}).tasks(manifest)
+            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+            tasks = publisher.tasks(manifest)
             identifiers = [task["id"] for task in tasks]
             self.assertEqual([
                 "maven:release:publish",
                 "maven:release:verify",
                 "npm:release:main",
+            ], identifiers)
+            # The snapshots are their own plan because they are deployed before the remotes
+            # are integrated, so they cannot be bound to the integration record.
+            self.assertEqual([
                 "maven:nextDevelopment:main",
                 "maven:nextDevelopment:verify",
-            ], identifiers)
+            ], [task["id"] for task in publisher.snapshot_tasks(manifest)])
             npm_task = tasks[2]
             integration = manifest["remoteIntegration"]["completedTasks"]["repo-main"]
             self.assertEqual(integration["main"]["commit"], npm_task["expectedCommit"])
@@ -2530,7 +2541,8 @@ class ReleaseResumptionTest(unittest.TestCase):
     def test_a_finished_stage_hands_over_to_the_next(self):
         ran, _ = self._run("builds-validated")
 
-        self.assertEqual(["local-refs", "remotes", "artifacts", "acceptance"], ran)
+        self.assertEqual(
+            ["local-refs", "snapshots", "remotes", "artifacts", "acceptance"], ran)
 
     def test_a_fresh_release_runs_every_stage(self):
         ran, _ = self._run("started")
@@ -2555,6 +2567,66 @@ class ReleaseResumptionTest(unittest.TestCase):
             state = self._state(directory, "not-a-phase")
             with self.assertRaisesRegex(ReleaseError, "no stage that can continue it"):
                 advance_active_release(state)
+
+
+class ReleaseSnapshotOrderingTest(unittest.TestCase):
+    """Snapshots must reach Nexus before any develop push tells CI to look for them."""
+
+    def test_snapshots_are_deployed_before_the_remotes_are_integrated(self):
+        names = [stage.name for stage in release_train.RELEASE_STAGES]
+
+        self.assertLess(
+            names.index("snapshots"), names.index("remotes"),
+            "a develop push whose snapshots are not yet published sends CI looking for them")
+
+    def test_the_snapshot_plan_does_not_need_the_remotes_to_have_been_integrated(self):
+        """This is what lets the stage run first: it binds to the verified local ref."""
+        with tempfile.TemporaryDirectory() as directory:
+            state, _integrator, _remotes, manifest = (
+                ReleaseArtifactPublicationTest().make_release(directory)
+            )
+            without_integration = copy.deepcopy(manifest)
+            without_integration.pop("remoteIntegration")
+            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+
+            snapshots = publisher.snapshot_tasks(without_integration)
+
+            self.assertTrue(snapshots)
+            with self.assertRaisesRegex(ReleaseError, "no verified remote integration"):
+                publisher.tasks(without_integration)
+
+    def test_a_snapshot_task_carries_the_prepared_tree_the_integration_will_push(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _integrator, _remotes, manifest = (
+                ReleaseArtifactPublicationTest().make_release(directory)
+            )
+            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+            deploy = next(task for task in publisher.snapshot_tasks(manifest)
+                          if task["kind"] == "maven-snapshot-deploy")
+            integration = manifest["remoteIntegration"]["completedTasks"][deploy["repository"]]
+
+            self.assertEqual(integration["develop"]["tree"], deploy["expectedTree"])
+
+    def test_integration_refuses_to_run_before_the_snapshots_are_published(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            state.update_current_manifest({"phase": "local-refs-created"})
+
+            with self.assertRaisesRegex(ReleaseError, "cannot integrate remotes"):
+                integrate_active_release(state, None)
+
+    def test_a_failed_snapshot_deploy_is_resumable_without_touching_a_remote(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            state.update_current_manifest({"phase": "snapshot-publication-failed"})
+            names = [stage.name for stage in release_train.RELEASE_STAGES]
+            phase = "snapshot-publication-failed"
+            stage = next(s for s in release_train.RELEASE_STAGES if phase in s.entry_phases)
+
+            self.assertEqual("snapshots", stage.name)
+            self.assertLess(names.index(stage.name), names.index("remotes"))
 
 
 if __name__ == "__main__":

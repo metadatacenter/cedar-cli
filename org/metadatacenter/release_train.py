@@ -2271,8 +2271,50 @@ class ReleaseArtifactPublisher:
             if surface.get("buildOutput"):
                 task["buildEvidenceId"] = f"release:npm:{surface['id']}:build"
             tasks.append(task)
+        return self._checked(tasks)
+
+    @staticmethod
+    def _checked(tasks: list[dict]) -> list[dict]:
+        identifiers = [task["id"] for task in tasks]
+        if len(identifiers) != len(set(identifiers)):
+            raise ReleaseError("artifact publication plan contains duplicate tasks")
+        return tasks
+
+    @staticmethod
+    def _local_ref_record(manifest: dict, variant: str, repository: str) -> dict:
+        record = manifest.get("localRefs", {}).get(
+            "completedTasks", {}).get(f"{variant}:{repository}")
+        if not isinstance(record, dict):
+            raise ReleaseError(f"release has no verified {variant} ref for {repository}")
+        return record
+
+    def snapshot_tasks(self, manifest: dict) -> list[dict]:
+        """Deploy the next-development snapshots, in dependency order, from the prepared trees.
+
+        These run before the remotes are integrated, because integrating them is what makes
+        every repository's develop declare the next version, and the CI that each of those
+        pushes triggers resolves the parent and libraries at that version from Nexus. Deployed
+        afterwards, as they once were, the snapshots arrived minutes too late and left a tail
+        of red develop builds that said nothing about the code.
+
+        Running first costs nothing in verification. The trees are the same either way: an
+        integration commit is written from the prepared tree and refuses to exist if the
+        result differs, so binding to the verified local ref binds to identical bytes.
+        """
+        plan = manifest.get("publicationPlan")
+        if not isinstance(plan, dict):
+            raise ReleaseError("release manifest has no artifact publication plan")
+        maven = plan.get("maven", {})
+        phases = manifest.get("mavenPhases")
+        if not isinstance(phases, list) or not phases:
+            raise ReleaseError("release manifest has no Maven publication phases")
+        next_workspace = Path(
+            manifest["versionPreparation"]["nextDevelopment"]["workspace"]
+        )
+        attempt = Path(manifest["frontendPreparation"]["workspace"]).parent
+        tasks = []
         for phase in phases:
-            integration = self._integration_record(manifest, phase["repository"])
+            prepared = self._local_ref_record(manifest, "nextDevelopment", phase["repository"])
             root = next_workspace / phase["repository"]
             tasks.append({
                 "id": f"maven:nextDevelopment:{phase['name']}",
@@ -2282,8 +2324,8 @@ class ReleaseArtifactPublisher:
                 "repository": phase["repository"],
                 "workspace": str(next_workspace),
                 "cwd": str(root),
-                "expectedCommit": integration["develop"]["commit"],
-                "expectedTree": integration["develop"]["tree"],
+                "expectedCommit": prepared["commit"],
+                "expectedTree": prepared["tree"],
                 "command": [
                     str(root / "mvnw"), "--batch-mode", "--no-transfer-progress",
                     f"-Dmaven.repo.local={attempt / 'publication-cache' / 'm2' / 'repository'}",
@@ -2298,10 +2340,7 @@ class ReleaseArtifactPublisher:
             "repository": maven.get("nextDevelopmentRepository"),
             "requiredArtifacts": maven.get("requiredArtifacts"),
         })
-        identifiers = [task["id"] for task in tasks]
-        if len(identifiers) != len(set(identifiers)):
-            raise ReleaseError("artifact publication plan contains duplicate tasks")
-        return tasks
+        return self._checked(tasks)
 
     @staticmethod
     def _verify_workspace(task: dict) -> None:
@@ -2646,8 +2685,9 @@ class ReleaseArtifactPublisher:
             return self._deploy_snapshot(manifest, task)
         raise ReleaseError(f"unknown artifact publication task {task['kind']}")
 
-    def verify_record(self, manifest: dict, record: dict) -> None:
-        task = next((item for item in self.tasks(manifest) if item["id"] == record.get("id")), None)
+    def verify_record(self, manifest: dict, record: dict, tasks: list[dict] | None = None) -> None:
+        available = self.tasks(manifest) if tasks is None else tasks
+        task = next((item for item in available if item["id"] == record.get("id")), None)
         if task is None or task.get("kind") != record.get("kind"):
             raise ReleaseError(f"recorded publication task no longer exists: {record.get('id')}")
         if self.executor is not None:
@@ -2811,7 +2851,7 @@ def integrate_active_release(
     if manifest.get("phase") == "remote-integrated":
         return manifest
     if manifest.get("phase") not in {
-        "local-refs-created", "integrating-remotes", "remote-integration-failed",
+        "snapshots-published", "integrating-remotes", "remote-integration-failed",
     }:
         raise ReleaseError(f"cannot integrate remotes while release is {manifest.get('phase')}")
     integrator = integrator or ReleaseRemoteIntegrator(state)
@@ -2855,6 +2895,65 @@ def integrate_active_release(
     completed_manifest, _ = state.update_current_manifest({
         "phase": "remote-integrated",
         "remoteIntegration": evidence,
+        "failure": None,
+    })
+    return completed_manifest
+
+
+def publish_active_release_snapshots(
+    state: ReleaseState | None = None,
+    publisher: ReleaseArtifactPublisher | None = None,
+) -> dict:
+    """Deploy the next-development snapshots before any remote learns the new version."""
+    state = state or ReleaseState()
+    manifest, _ = state.read_current_manifest()
+    if manifest.get("phase") == "snapshots-published":
+        return manifest
+    if manifest.get("phase") not in {
+        "local-refs-created", "publishing-snapshots", "snapshot-publication-failed",
+    }:
+        raise ReleaseError(f"cannot publish snapshots while release is {manifest.get('phase')}")
+    publisher = publisher or ReleaseArtifactPublisher(state)
+    tasks = publisher.snapshot_tasks(manifest)
+    task_ids = {task["id"] for task in tasks}
+    evidence = copy.deepcopy(manifest.get("snapshotPublication") or {
+        "startedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "completedTasks": {},
+    })
+    completed = evidence.get("completedTasks")
+    if not isinstance(completed, dict) or not set(completed).issubset(task_ids):
+        raise ReleaseError("recorded snapshot publication does not match the release plan")
+    for record in completed.values():
+        publisher.verify_record(manifest, record, tasks)
+    state.update_current_manifest({
+        "phase": "publishing-snapshots",
+        "snapshotPublication": evidence,
+        "failure": None,
+    })
+    for task in tasks:
+        if task["id"] in completed:
+            continue
+        try:
+            record = publisher.run_task(manifest, task)
+        except ReleaseError as error:
+            evidence["failedTask"] = task["id"]
+            state.update_current_manifest({
+                "phase": "snapshot-publication-failed",
+                "snapshotPublication": evidence,
+                "failure": str(error),
+            })
+            raise
+        completed[task["id"]] = record
+        evidence.pop("failedTask", None)
+        state.update_current_manifest({
+            "phase": "publishing-snapshots",
+            "snapshotPublication": evidence,
+            "failure": None,
+        })
+    evidence["completedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    completed_manifest, _ = state.update_current_manifest({
+        "phase": "snapshots-published",
+        "snapshotPublication": evidence,
         "failure": None,
     })
     return completed_manifest
@@ -3025,9 +3124,14 @@ class ReleaseAcceptance:
         records = manifest.get("artifactPublication", {}).get("completedTasks", {})
         for record in records.values():
             self.publisher.verify_record(manifest, record)
+        snapshots = manifest.get("snapshotPublication", {}).get("completedTasks", {})
+        snapshot_tasks = self.publisher.snapshot_tasks(manifest) if snapshots else []
+        for record in snapshots.values():
+            self.publisher.verify_record(manifest, record, snapshot_tasks)
         return [self._check(
             "artifact-publication",
-            f"{len(records)} publication tasks still match their published bytes")]
+            f"{len(records)} release and {len(snapshots)} snapshot publication tasks still "
+            "match their published bytes")]
 
     def _every_repository_carries_the_tag(self, manifest: dict) -> list[dict]:
         """Ask each remote directly, rather than trusting the tasks that wrote the tags.
@@ -3158,8 +3262,17 @@ RELEASE_STAGES = (
         lambda state, deps: create_active_release_refs(state, deps["ref_creator"]),
     ),
     ReleaseStage(
+        "snapshots",
+        frozenset({
+            "local-refs-created", "publishing-snapshots", "snapshot-publication-failed",
+        }),
+        "snapshots-published",
+        lambda state, deps: publish_active_release_snapshots(
+            state, deps["artifact_publisher"]),
+    ),
+    ReleaseStage(
         "remotes",
-        frozenset({"local-refs-created", "integrating-remotes", "remote-integration-failed"}),
+        frozenset({"snapshots-published", "integrating-remotes", "remote-integration-failed"}),
         "remote-integrated",
         lambda state, deps: integrate_active_release(state, deps["remote_integrator"]),
     ),
@@ -3836,6 +3949,8 @@ def _status_summary(manifest: dict, path: Path) -> dict:
         "localRefs": len(manifest.get("localRefs", {}).get("completedTasks", {})),
         "remoteIntegration": len(
             manifest.get("remoteIntegration", {}).get("completedTasks", {})),
+        "snapshotPublication": len(
+            manifest.get("snapshotPublication", {}).get("completedTasks", {})),
         "artifactPublication": len(
             manifest.get("artifactPublication", {}).get("completedTasks", {})),
         "acceptance": manifest.get("acceptance", {}).get("checks", []),
@@ -3869,6 +3984,9 @@ def status(
     if manifest.get("remoteIntegration"):
         completed = manifest["remoteIntegration"].get("completedTasks", {})
         console.print(f"Remote integration:  {len(completed)} repositories")
+    if manifest.get("snapshotPublication"):
+        completed = manifest["snapshotPublication"].get("completedTasks", {})
+        console.print(f"Snapshot publication:{len(completed):>3} verified tasks")
     if manifest.get("artifactPublication"):
         completed = manifest["artifactPublication"].get("completedTasks", {})
         console.print(f"Artifact publication:{len(completed):>3} verified tasks")
