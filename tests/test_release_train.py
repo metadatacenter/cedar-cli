@@ -1875,14 +1875,15 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
 class FakeNexus:
     """Stand in for HttpClient, failing only the URLs a test names."""
 
-    def __init__(self, failing=frozenset()):
+    def __init__(self, failing=frozenset(), status=500):
         self.failing = set(failing)
+        self.status = status
         self.reads = []
 
     def read(self, url, *, missing_ok=False):
         self.reads.append(url)
         if url in self.failing:
-            raise ReleaseError(f"cannot read {url}: HTTP 401")
+            raise ReleaseError(f"cannot read {url}: HTTP {self.status}")
         return b"{}"
 
     def read_json(self, url, *, missing_ok=False):
@@ -1992,13 +1993,44 @@ class ReleasePreflightTest(unittest.TestCase):
 
     def test_nexus_credentials_that_do_not_authenticate_fail(self):
         findings = self._preflight(
-            http=FakeNexus(failing={NEXUS_AUTHENTICATED_ENDPOINT})).check_nexus_authorization()
+            http=FakeNexus(failing={NEXUS_AUTHENTICATED_ENDPOINT}, status=401),
+        ).check_nexus_authorization()
 
         self.assertEqual(1, len(findings))
         self.assertIn("does not authenticate", findings[0].message)
 
     def test_authenticated_writable_nexus_passes(self):
         self.assertEqual([], self._preflight().check_nexus_authorization())
+
+    def test_a_healthy_nexus_passes(self):
+        self.assertEqual([], self._preflight().check_nexus_authorization())
+
+    def test_repositories_failing_while_status_holds_is_named_as_the_request_budget(self):
+        """This is the failure that gets worse the harder a release tries, so it is named."""
+        findings = self._preflight(
+            http=FakeNexus(failing={release_train.NEXUS_REPOSITORY_PROBE}),
+        ).check_nexus_authorization()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("daily request budget", findings[0].message)
+        self.assertIn("Usage Center", findings[0].remedy)
+
+    def test_a_repository_that_cannot_be_read_blocks_even_when_status_also_fails(self):
+        findings = self._preflight(http=FakeNexus(failing={
+            release_train.NEXUS_REPOSITORY_PROBE,
+            release_train.NEXUS_WRITABLE_ENDPOINT,
+            release_train.NEXUS_AUTHENTICATED_ENDPOINT,
+        })).check_nexus_authorization()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("cannot serve a repository read", findings[0].message)
+
+    def test_status_endpoints_alone_no_longer_decide_the_check(self):
+        """They stayed green through a total outage, so they cannot be the whole answer."""
+        source = inspect.getsource(ReleasePreflight.check_nexus_authorization)
+        self.assertIn("NEXUS_REPOSITORY_PROBE", source)
 
     def test_npm_without_a_registry_identity_fails(self):
         commands = FakeCommands({
@@ -2717,6 +2749,66 @@ class ReleaseConclusionTest(unittest.TestCase):
                 environment=dict(PREFLIGHT_ENVIRONMENT),
             )
             self.assertEqual([], preflight.check_no_release_in_progress())
+
+
+class ReleasePreflightWithoutATrainTest(unittest.TestCase):
+    """A train costs half an hour; the questions it does not answer cost a minute."""
+
+    def _estate(self, directory, repositories):
+        home = Path(directory)
+        (home / "cedar-development" / "ops").mkdir(parents=True)
+        (home / "cedar-development" / "ops" / "build-train.json").write_text(
+            json.dumps({"repositories": repositories + ["cedar-embeddable-editor"]}),
+            encoding="utf-8")
+        return home
+
+    def test_the_repository_set_excludes_the_independently_released_ones(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._estate(directory, ["repo-one", "repo-two"])
+            with patch.dict(os.environ, {"CEDAR_HOME": str(home)}, clear=False):
+                manifest = release_train._estate_manifest("2.9.4", "2.9.5-SNAPSHOT")
+
+        self.assertEqual(["repo-one", "repo-two"], manifest["releaseRepositories"])
+        self.assertNotIn("cedar-embeddable-editor", manifest["releaseRepositories"])
+        self.assertEqual("2.9.4", manifest["releaseVersion"])
+
+    def test_it_records_the_develop_head_of_each_checked_out_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._estate(directory, ["repo-one"])
+            root = home / "repo-one"
+            root.mkdir()
+            ReleaseLocalRefsTest._git(root, "init", "--initial-branch=develop")
+            ReleaseLocalRefsTest._git(root, "config", "user.email", "t@example.org")
+            ReleaseLocalRefsTest._git(root, "config", "user.name", "T")
+            (root / "a.txt").write_text("a\n", encoding="utf-8")
+            ReleaseLocalRefsTest._git(root, "add", "a.txt")
+            ReleaseLocalRefsTest._git(root, "commit", "--quiet", "-m", "first")
+            head = ReleaseLocalRefsTest._git(root, "rev-parse", "refs/heads/develop")
+            with patch.dict(os.environ, {"CEDAR_HOME": str(home)}, clear=False):
+                manifest = release_train._estate_manifest("2.9.4", "2.9.5-SNAPSHOT")
+
+        self.assertEqual({"repo-one": head}, manifest["sourceRepositories"])
+
+    def test_it_runs_the_same_checks_the_release_runs(self):
+        """A separate check list would drift from the one that gates a release."""
+        source = inspect.getsource(release_train.preflight)
+        self.assertIn("_preflight_or_exit", source)
+
+    def test_preflight_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(ReleasePreflight, "run", return_value=[]):
+            home = self._estate(directory, ["repo-one"])
+            with patch.dict(os.environ, {"CEDAR_HOME": str(home)}, clear=False):
+                result = CliRunner().invoke(
+                    release_train.app,
+                    ["preflight", "--version", "2.9.4", "--next-version", "2.9.5-SNAPSHOT"])
+
+            self.assertEqual(0, result.exit_code, result.output)
+            self.assertIn("No changes made", result.output)
+            self.assertEqual(
+                {"cedar-development", "repo-one"} & set(p.name for p in home.iterdir()),
+                {"cedar-development"},
+                "preflight must not create anything")
 
 
 if __name__ == "__main__":

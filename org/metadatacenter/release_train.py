@@ -3372,6 +3372,12 @@ NEXUS_NPM_REGISTRY = f"{NEXUS_HOST}/repository/npm-cedar/"
 # repository, which only a write can establish.
 NEXUS_AUTHENTICATED_ENDPOINT = f"{NEXUS_HOST}/service/rest/v1/status/check"
 NEXUS_WRITABLE_ENDPOINT = f"{NEXUS_HOST}/service/rest/v1/status/writable"
+# The status endpoints answer from the web tier and stay green while every repository
+# behind them fails, so the check that decides whether a release can publish reads
+# something a release actually reads.
+NEXUS_REPOSITORY_PROBE = (
+    f"{NEXUS_HOST}/repository/snapshots/org/metadatacenter/cedar-parent/maven-metadata.xml"
+)
 
 # Files a Maven build regenerates with the project version inside. Every match must be
 # declared in MAVEN_GENERATED_VERSION_FILES, or the prepared-file guard trips mid-build.
@@ -3601,23 +3607,48 @@ class ReleasePreflight:
                 "export both from the bmir-nexus-releases server in ~/.m2/settings.xml",
             )]
         findings = []
-        try:
-            self.http.read(NEXUS_AUTHENTICATED_ENDPOINT)
-        except ReleaseError as error:
+        authenticated = self._reachable(NEXUS_AUTHENTICATED_ENDPOINT)
+        writable = self._reachable(NEXUS_WRITABLE_ENDPOINT)
+        repository = self._reachable(NEXUS_REPOSITORY_PROBE)
+        if authenticated is not None and not authenticated.startswith("HTTP 5"):
+            return [PreflightFinding(
+                "nexus", "fail",
+                f"BMIR_NEXUS_USERNAME does not authenticate against Nexus: {authenticated}",
+                "check the credentials against the bmir-nexus-releases server entry",
+            )]
+        # A registry over its request budget serves its status endpoints and fails every
+        # repository path, which reads as an outage until someone finds the usage page. It
+        # is the one failure that gets worse the harder a release tries, so it is named.
+        if repository is not None and writable is None:
+            return [PreflightFinding(
+                "nexus", "fail",
+                f"Nexus serves its status endpoints but not its repositories ({repository}), "
+                "which is what an instance over its daily request budget looks like",
+                "check the Usage Center for requests per day, and let the 24-hour window "
+                "roll off before releasing",
+            )]
+        if repository is not None:
             findings.append(PreflightFinding(
                 "nexus", "fail",
-                f"BMIR_NEXUS_USERNAME does not authenticate against Nexus: {error}",
-                "check the credentials against the bmir-nexus-releases server entry",
+                f"Nexus cannot serve a repository read: {repository}",
+                "wait for Nexus to recover before releasing",
             ))
-            return findings
-        try:
-            self.http.read(NEXUS_WRITABLE_ENDPOINT)
-        except ReleaseError as error:
+        elif authenticated is not None:
             findings.append(PreflightFinding(
-                "nexus", "fail", f"Nexus does not report itself writable: {error}",
-                "wait for Nexus to return to a writable state",
+                "nexus", "fail", f"Nexus is not healthy: {authenticated}",
+                "wait for Nexus to recover before releasing",
             ))
         return findings
+
+    def _reachable(self, url: str) -> str | None:
+        """Return None when the URL reads cleanly, or a short description of the failure."""
+        try:
+            self.http.read(url)
+        except ReleaseError as error:
+            text = str(error)
+            code = re.search(r"HTTP (\d{3})", text)
+            return f"HTTP {code.group(1)}" if code else text
+        return None
 
     def check_npm_authorization(self) -> list[PreflightFinding]:
         code, _, stderr = self._capture(
@@ -3919,6 +3950,72 @@ UNATTENDED_HELP = (
 ACCEPT_RED_DEVELOP_HELP = (
     "Accept one repository's red develop by naming the exact run, as <repository>=<run-id>"
 )
+
+
+def _estate_manifest(release_version: str, next_version: str) -> dict:
+    """Describe the estate a release would be cut from, without building a train first.
+
+    Every check but the CEE proof and the train inventory asks about the estate rather than
+    about a train: whether the trees are clean, the credentials work, the remotes will take
+    the writes, and the source is green. Those answers cost a minute, and a train costs
+    half an hour, so they are worth having in that order. The repository set is the one the
+    next train will use, read from the build configuration it will be built from.
+    """
+    cedar_home = os.environ.get("CEDAR_HOME")
+    if not cedar_home:
+        raise ReleaseError("CEDAR_HOME is not set")
+    config_path = Path(cedar_home) / "cedar-development" / "ops" / "build-train.json"
+    try:
+        config = json.loads(config_path.read_bytes())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleaseError(f"cannot read the train build configuration: {error}") from error
+    configured = config.get("repositories")
+    if not isinstance(configured, list) or not configured:
+        raise ReleaseError("train build configuration has no repositories")
+    repositories = [
+        repository for repository in configured
+        if repository not in INDEPENDENT_RELEASE_REPOSITORIES
+    ]
+    sources = {}
+    for repository in repositories:
+        root = Path(cedar_home) / repository
+        if not root.is_dir():
+            continue
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "refs/heads/develop"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode == 0:
+            sources[repository] = result.stdout.strip()
+    return {
+        "releaseVersion": release_version,
+        "nextDevelopmentVersion": next_version,
+        "releaseRepositories": repositories,
+        "sourceRepositories": sources,
+    }
+
+
+@app.command("preflight")
+def preflight(
+    release_version: str = typer.Option(..., "--version", help="Release version being planned"),
+    next_version: str = typer.Option(..., "--next-version", help="Explicit next SNAPSHOT version"),
+    accept_red_develop: list[str] = typer.Option(
+        None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
+):
+    """Settle every precondition that does not need a train, before one is built."""
+    try:
+        manifest = _estate_manifest(release_version, next_version)
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    console.print(f"Release:             {release_version}")
+    console.print(f"Next development:    {next_version}")
+    console.print(
+        f"Estate:              {len(manifest['releaseRepositories'])} release repositories, "
+        f"{len(manifest['sourceRepositories'])} checked out"
+    )
+    _preflight_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
+    console.print("No changes made. Build a train when this is clean.")
 
 
 @app.command("plan")
