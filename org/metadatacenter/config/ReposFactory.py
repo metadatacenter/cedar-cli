@@ -127,6 +127,8 @@ class ReposFactory:
                                      [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         cee_demo_ember_src = Repo("cedar-cee-demo-ember-src", RepoType.EMBER,
                                     [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
+        cee_demo_react = Repo("cedar-cee-demo-react", RepoType.REACT,
+                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
         cee_component_demo_multi.add_sub_repo(cee_demo_angular_src)
         cee_component_demo_multi.add_sub_repo(cee_demo_angular_dist)
@@ -134,6 +136,7 @@ class ReposFactory:
         repos.add_relation(cee_demo_angular_src_dist_relation)
 
         cee_component_demo_multi.add_sub_repo(cee_demo_ember_src)
+        cee_component_demo_multi.add_sub_repo(cee_demo_react)
 
         repos.add_repo(cee_component_demo_multi)
 

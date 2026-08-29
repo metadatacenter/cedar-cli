@@ -72,6 +72,7 @@ NPM_VERSION_SURFACES = {
         "cedar-cee-demo-angular-src",
         "cedar-cee-demo-angular-dist",
         "cedar-cee-demo-ember-src",
+        "cedar-cee-demo-react",
     ],
 }
 LICENSE_FILE_NAME = "license.txt"
