@@ -16,7 +16,7 @@ class ServerStatusTableTest(unittest.TestCase):
             "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors",
             "resource\t33871\t9007\tup\thealthy\tSTALE\t3318",
             "worker\t~33967\t9011\tup\tUNHEALTHY\tcurrent\t7",
-            "frontend\t-\t4200\tdown\tdown\t-\t0",
+            "ui-main\t-\t4200\tdown\tdown\t-\t0",
         ]
 
         with patch.object(Util, "get_servers", return_value=[]), patch(

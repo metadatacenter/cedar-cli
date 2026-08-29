@@ -16,7 +16,7 @@ class NativeWorker(Worker):
         "openview", "monitor", "impex", "bridge",
     )
     FRONTENDS = (
-        "frontend", "workspace", "designer", "ui-openview", "ui-content",
+        "ui-main", "ui-workspace", "ui-designer", "ui-openview", "ui-content",
         "ui-monitoring", "ui-bridging",
     )
 

@@ -227,7 +227,7 @@ class ModeGateTest(unittest.TestCase):
 class ModeRuntimeSafetyTest(unittest.TestCase):
 
     @patch.object(
-        ModeManager, "running_native_services", return_value={"group", "workspace"})
+        ModeManager, "running_native_services", return_value={"group", "ui-workspace"})
     def test_native_mode_cannot_be_cleared_while_applications_run(self, _native):
         with self.assertRaisesRegex(ModeError, "native stop all"):
             ModeManager.require_selected_services_stopped(CedarMode.NATIVE)
@@ -242,7 +242,7 @@ class ModeRuntimeSafetyTest(unittest.TestCase):
             ModeManager.require_selected_services_stopped(CedarMode.NATIVE)
 
     @patch.object(
-        ModeManager, "running_native_services", return_value={"workspace", "resource"})
+        ModeManager, "running_native_services", return_value={"ui-workspace", "resource"})
     def test_hybrid_mode_cannot_be_cleared_while_native_frontends_run(self, _native):
         with self.assertRaisesRegex(ModeError, "native stop frontends"):
             ModeManager.require_selected_services_stopped(CedarMode.HYBRID)
@@ -294,14 +294,14 @@ class ModeRuntimeSafetyTest(unittest.TestCase):
             ModeManager.require_runtime_compatible(CedarMode.NATIVE)
 
     @patch.object(
-        ModeManager, "running_native_services", return_value={"group", "workspace"})
+        ModeManager, "running_native_services", return_value={"group", "ui-workspace"})
     @patch.object(ModeManager, "host_infrastructure_listeners", return_value=set())
     def test_docker_rejects_running_native_services(self, _infra, _native):
-        with self.assertRaisesRegex(ModeError, "group, workspace"):
+        with self.assertRaisesRegex(ModeError, "group, ui-workspace"):
             ModeManager.require_docker_start_compatible(CedarMode.DOCKER)
 
     @patch.object(
-        ModeManager, "running_native_services", return_value={"workspace", "designer"})
+        ModeManager, "running_native_services", return_value={"ui-workspace", "ui-designer"})
     @patch.object(ModeManager, "host_infrastructure_listeners", return_value=set())
     def test_hybrid_allows_running_native_frontends(self, _infra, _native):
         self.assertEqual(
@@ -310,7 +310,7 @@ class ModeRuntimeSafetyTest(unittest.TestCase):
         )
 
     @patch.object(
-        ModeManager, "running_native_services", return_value={"workspace", "resource"})
+        ModeManager, "running_native_services", return_value={"ui-workspace", "resource"})
     @patch.object(ModeManager, "host_infrastructure_listeners", return_value=set())
     def test_hybrid_rejects_a_running_native_backend(self, _infra, _native):
         with self.assertRaisesRegex(ModeError, "resource"):
