@@ -3,15 +3,15 @@ CEDAR_CLI_CWD=$PWD
 pushd $CEDAR_HOME/cedar-cli > /dev/null
 source .venv/bin/activate;
 if [ "$1" = 'build' ] && [ "$2" = 'this' ]; then
-  python "$CEDAR_HOME/cedar-cli/cedar.py" "$@" --wd="$CEDAR_CLI_CWD"
+  python3 "$CEDAR_HOME/cedar-cli/cedar.py" "$@" --wd="$CEDAR_CLI_CWD"
 elif [ "$1" = 'publish' ] && [ "$2" = 'this' ]; then
-  python "$CEDAR_HOME/cedar-cli/cedar.py" "$@" --wd="$CEDAR_CLI_CWD"
+  python3 "$CEDAR_HOME/cedar-cli/cedar.py" "$@" --wd="$CEDAR_CLI_CWD"
 else
-  python "$CEDAR_HOME/cedar-cli/cedar.py" "$@"
+  python3 "$CEDAR_HOME/cedar-cli/cedar.py" "$@"
 fi
 # Capture the CLI's exit code before popd / next-git handling clobber $?.
 # This file is *sourced* by the `cedarcli` alias, so its exit status is that of
-# its last command; without this, python's failure code was discarded and every
+# its last command; without this, python3's failure code was discarded and every
 # invocation returned 0 (a failed `build java` looked green). See below.
 CEDAR_CLI_RC=$?
 popd > /dev/null
