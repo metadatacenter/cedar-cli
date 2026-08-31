@@ -184,7 +184,6 @@ class ReposFactory:
 
 
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, []))
-        repos.add_repo(Repo("cedar-mkdocs-developer", RepoType.MKDOCS, [], is_private=True))
 
         repos.add_repo(Repo("cedar-shared-data", RepoType.CONTENT_DELIVERY, []))
         repos.add_repo(Repo("cedar-swagger-ui", RepoType.CONTENT_DELIVERY, []))
