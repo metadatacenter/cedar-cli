@@ -25,7 +25,19 @@ class DevSanityTest(unittest.TestCase):
             self.assertTrue(Path(temp_dir, "log", "run").is_dir())
             self.assertTrue(Path(temp_dir, "log", "frontend-workspace").is_dir())
             self.assertTrue(Path(temp_dir, "log", "frontend-designer").is_dir())
-            self.assertTrue(Path(temp_dir, "cache", "terminology").is_dir())
+
+    def test_create_directories_leaves_out_the_terminology_cache(self):
+        """
+        Nothing reads `cache/terminology`: the configuration property and the constants
+        naming its files are gone, so bring-up stopped creating it. An empty directory
+        that looks like part of a running system is worse than no directory, and this
+        is here so it does not come back with the next reader who finds one on an old
+        machine and assumes it is missing.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(Util, "cedar_home", temp_dir):
+            self.assertEqual(0, DevWorker.create_directories())
+
+            self.assertFalse(Path(temp_dir, "cache").exists())
 
     @patch("org.metadatacenter.worker.DevWorker.console")
     def test_api_key_output_does_not_disclose_salt(self, dev_console):
