@@ -18,6 +18,7 @@ from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.BuildTrain import DockerTrain
 from org.metadatacenter.util.DockerImages import DockerImages
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.CertificateWorker import CertificateError, CertificateWorker
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -935,26 +936,30 @@ docker volume create cedar_ca
 
     @staticmethod
     def copy_certificates():
+        try:
+            returncode = CertificateWorker.ensure_ca_and_domains()
+        except CertificateError as error:
+            console.print(f'[red]{error}[/red]')
+            return 1
+        if returncode:
+            return returncode
+
         output = Worker.execute_generic_shell_commands([
             """
 set -e
 docker rm -f cedar-cert-helper cedar-ca-helper > /dev/null 2>&1 || true
-echo "Copying self-signed certificates into the cedar_cert volume..."
+echo "Copying locally generated certificates into the cedar_cert volume..."
 docker run -v cedar_cert:/data --name cedar-cert-helper busybox:1.36.0 true
-export CEDAR_CUSTOM_CERT=false
-if [[ -e "${CEDAR_HOME}/CEDAR_CA/certs/-${CEDAR_HOST}/${CEDAR_HOST}.crt" ]]; then export CEDAR_CUSTOM_CERT=true; fi
-if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp "${CEDAR_HOME}/CEDAR_CA/certs" cedar-cert-helper:/data; fi
-if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp "${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/cert/certs" cedar-cert-helper:/data; fi
+docker cp "${CEDAR_CA_HOME}/certs" cedar-cert-helper:/data
 docker rm cedar-cert-helper
 
 echo "Copying CA certificate into the cedar_ca volume..."
 docker run -v cedar_ca:/data --name cedar-ca-helper busybox:1.36.0 true
-if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp "${CEDAR_HOME}/CEDAR_CA/ca.crt" cedar-ca-helper:/data; fi
-if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp "${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/ca/ca.crt" cedar-ca-helper:/data; fi
+docker cp "${CEDAR_CA_HOME}/ca.crt" cedar-ca-helper:/data
 docker rm cedar-ca-helper
 """
         ],
-            title="Copy CEDAR self-signed certificates",
+            title="Copy locally generated CEDAR certificates",
         )
         return output.returncode
 
