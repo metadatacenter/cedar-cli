@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 import cedar
 from org.metadatacenter import docker, native
 from org.metadatacenter.model.CedarMode import CedarMode
+from org.metadatacenter.model.CedarProfile import CedarProfile
 from org.metadatacenter.util.ModeManager import ModeError, ModeManager
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.worker.DockerWorker import DockerWorker
@@ -49,20 +50,60 @@ class ModeCommandTest(unittest.TestCase):
 
     @patch.object(ModeManager, "validate_mode", return_value={})
     def test_mode_is_recorded_once_and_can_be_cleared(self, validate):
-        configured = self.runner.invoke(cedar.app, ["mode", "native"])
+        configured = self.runner.invoke(
+            cedar.app, ["mode", "native", "--profile", "develop"])
         recorded = json.loads(self.state_path.read_text())
-        repeated = self.runner.invoke(cedar.app, ["mode", "hybrid"])
+        repeated = self.runner.invoke(cedar.app, ["mode", "hybrid", "--profile", "develop"])
         shown = self.runner.invoke(cedar.app, ["mode"])
         cleared = self.runner.invoke(cedar.app, ["mode", "--clear"])
 
         self.assertEqual(0, configured.exit_code, configured.output)
-        self.assertEqual({"mode": "native"}, recorded)
+        self.assertEqual({"mode": "native", "profile": "develop"}, recorded)
         self.assertEqual(1, repeated.exit_code, repeated.output)
         self.assertIn("already set to native", repeated.output)
-        self.assertIn("CEDAR mode: native", shown.output)
+        self.assertIn("CEDAR mode: native, profile develop", shown.output)
         self.assertEqual(0, cleared.exit_code, cleared.output)
         self.assertFalse(self.state_path.exists())
-        validate.assert_called_once_with(CedarMode.NATIVE)
+        validate.assert_called_once_with(CedarMode.NATIVE, CedarProfile.DEVELOP)
+
+    @patch.object(ModeManager, "validate_mode", return_value={})
+    def test_a_native_mode_must_name_its_environment(self, validate):
+        result = self.runner.invoke(cedar.app, ["mode", "native"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("name the environment with", result.output)
+        self.assertFalse(self.state_path.exists())
+        validate.assert_not_called()
+
+    @patch.object(ModeManager, "validate_mode", return_value={})
+    def test_a_host_recorded_before_profiles_can_name_its_environment_in_place(self, validate):
+        """Adding the missing fact must not require stopping a running host's applications."""
+        self.state_path.write_text('{"mode": "native"}\n', encoding="utf-8")
+
+        adopted = self.runner.invoke(cedar.app, ["mode", "native", "--profile", "server"])
+
+        self.assertEqual(0, adopted.exit_code, adopted.output)
+        self.assertEqual({"mode": "native", "profile": "server"},
+                         json.loads(self.state_path.read_text()))
+        validate.assert_called_once_with(CedarMode.NATIVE, CedarProfile.SERVER)
+
+    @patch.object(ModeManager, "validate_mode", return_value={})
+    def test_a_recorded_profile_is_not_changed_in_place(self, _validate):
+        self.state_path.write_text('{"mode": "native", "profile": "server"}\n', encoding="utf-8")
+
+        result = self.runner.invoke(cedar.app, ["mode", "native", "--profile", "develop"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("already set to native", result.output)
+        self.assertEqual({"mode": "native", "profile": "server"},
+                         json.loads(self.state_path.read_text()))
+
+    def test_docker_mode_takes_no_native_profile(self):
+        result = self.runner.invoke(cedar.app, ["mode", "docker", "--profile", "server"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("runs no native applications", result.output)
+        self.assertFalse(self.state_path.exists())
 
     def test_mode_query_reports_unconfigured_state(self):
         result = self.runner.invoke(cedar.app, ["mode"])
@@ -361,3 +402,75 @@ class ModeRuntimeSafetyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeProfileTest(unittest.TestCase):
+    """What the recorded profile promises, and what refuses a host that took the wrong one."""
+
+    DEVELOP_ENVIRONMENT = {
+        "CEDAR_KEYCLOAK_ALLOW_INSECURE_TLS": "true",
+        "CEDAR_FRONTEND_TARGET": "local",
+        "CEDAR_FRONTEND_local_UI_HOST": "metadatacenter.orgx",
+        "CEDAR_FRONTEND_local_REST_HOST": "metadatacenter.orgx",
+        "CEDAR_FRONTEND_local_USER1_LOGIN": "test1@test.com",
+        "CEDAR_FRONTEND_local_USER2_LOGIN": "test2@test.com",
+    }
+    SERVER_ENVIRONMENT = {
+        "CEDAR_KEYCLOAK_ALLOW_INSECURE_TLS": "false",
+        "CEDAR_FRONTEND_TARGET": "server",
+        "CEDAR_FRONTEND_server_UI_HOST": "metadatacenter.org",
+        "CEDAR_FRONTEND_server_REST_HOST": "metadatacenter.org",
+        "CEDAR_FRONTEND_server_USER1_LOGIN": "-",
+        "CEDAR_FRONTEND_server_USER2_LOGIN": "-",
+    }
+
+    def test_each_profile_accepts_the_environment_it_produces(self):
+        self.assertIs(CedarProfile.DEVELOP, ModeManager.require_profile_invariants(
+            self.DEVELOP_ENVIRONMENT, CedarProfile.DEVELOP))
+        self.assertIs(CedarProfile.SERVER, ModeManager.require_profile_invariants(
+            self.SERVER_ENVIRONMENT, CedarProfile.SERVER))
+
+    def test_a_server_may_not_bypass_keycloak_tls_verification(self):
+        """The failure that put the workstation profile on a staging host, caught at mode time."""
+        with self.assertRaises(ModeError) as refused:
+            ModeManager.require_profile_invariants(
+                self.DEVELOP_ENVIRONMENT, CedarProfile.SERVER)
+
+        self.assertIn("bypasses Keycloak TLS verification", str(refused.exception))
+
+    def test_a_workstation_needs_the_bypass_its_local_leaves_require(self):
+        with self.assertRaises(ModeError) as refused:
+            ModeManager.require_profile_invariants(
+                self.SERVER_ENVIRONMENT, CedarProfile.DEVELOP)
+
+        self.assertIn("not in any truststore", str(refused.exception))
+
+    def test_the_frontend_settings_the_builds_require_must_all_be_present(self):
+        incomplete = dict(self.SERVER_ENVIRONMENT)
+        del incomplete["CEDAR_FRONTEND_server_USER2_LOGIN"]
+
+        with self.assertRaises(ModeError) as refused:
+            ModeManager.require_profile_invariants(incomplete, CedarProfile.SERVER)
+
+        self.assertIn("CEDAR_FRONTEND_server_USER2_LOGIN", str(refused.exception))
+
+    def test_a_server_may_not_run_on_template_placeholders(self):
+        placeholder = dict(self.SERVER_ENVIRONMENT, CEDAR_NEO4J_USER_PASSWORD="changeme")
+
+        with self.assertRaises(ModeError) as refused:
+            ModeManager.require_profile_invariants(placeholder, CedarProfile.SERVER)
+
+        self.assertIn("CEDAR_NEO4J_USER_PASSWORD", str(refused.exception))
+
+    def test_a_workstation_may_carry_credentials_it_has_no_use_for(self):
+        placeholder = dict(self.DEVELOP_ENVIRONMENT, CEDAR_NEO4J_USER_PASSWORD="changeme")
+
+        self.assertIs(CedarProfile.DEVELOP, ModeManager.require_profile_invariants(
+            placeholder, CedarProfile.DEVELOP))
+
+    def test_a_host_recorded_before_profiles_existed_is_not_given_one(self):
+        with patch.object(ModeManager, "state", return_value={"mode": CedarMode.NATIVE}):
+            with self.assertRaises(ModeError) as refused:
+                ModeManager.require_profile()
+
+        self.assertIn("mode native --profile develop|server", str(refused.exception))

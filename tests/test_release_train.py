@@ -2103,7 +2103,7 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertIn("CEDAR_DEVELOP_HOME", findings[0].message)
         self.assertIn("CEDAR_NET_GATEWAY", findings[0].message)
-        self.assertIn("cedar-profile-native-develop.sh", findings[0].remedy)
+        self.assertIn("cedar-profile-native.sh", findings[0].remedy)
 
     def test_absent_nexus_credentials_fail_before_any_build(self):
         findings = self._preflight(

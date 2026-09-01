@@ -3506,7 +3506,8 @@ PROFILE_REQUIRED_VARIABLES = (
     "CEDAR_NET_GATEWAY",
     "CEDAR_FRONTEND_TARGET",
 )
-PROFILE_COMMAND = "source $CEDAR_HOME/cedar-profile-native-develop.sh"
+PROFILE_COMMAND = ("CEDAR_PROFILE=develop source "
+                   "$CEDAR_HOME/cedar-development/bin/templates/cedar-profile-native.sh")
 
 REQUIRED_TOOLS = ("git", "mvn", "node", "npm")
 REQUIRED_JAVA_MAJOR = 17

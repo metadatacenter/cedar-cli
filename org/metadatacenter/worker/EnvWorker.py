@@ -95,6 +95,9 @@ class EnvWorker(Worker):
         mode = ModeManager.current()
         table = Table("Setting", "Value", title="CEDAR environment status")
         table.add_row("Mode", mode.value if mode else "not set")
+        profile = ModeManager.current_profile() if mode else None
+        if mode is not None and CedarMode.DOCKER is not mode:
+            table.add_row("Native profile", profile.value if profile else "not recorded")
         table.add_row("Mode state", str(ModeManager.state_path()))
         if mode is not None:
             for surface in EnvWorker._allowed_surfaces(mode):

@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from org.metadatacenter.model.CedarMode import CedarMode
+from org.metadatacenter.model.CedarProfile import CedarProfile
 
 
 class ModeError(ValueError):
@@ -14,7 +15,7 @@ class ModeManager:
     """Persist the selected CEDAR topology and prepare commands for a bare shell."""
 
     STATE_FILE = "mode.json"
-    NATIVE_PROFILE = "cedar-profile-native-develop.sh"
+    NATIVE_PROFILE = "cedar-development/bin/templates/cedar-profile-native.sh"
     DOCKER_PROFILE = "cedar-development/bin/templates/cedar-profile-docker.sh"
     FRONTEND_NAMES = (
         "EDITOR",
@@ -51,6 +52,8 @@ class ModeManager:
             with cls.state_path().open("r", encoding="utf-8") as state_file:
                 state = json.load(state_file)
             state["mode"] = CedarMode(state["mode"])
+            if state.get("profile") is not None:
+                state["profile"] = CedarProfile(state["profile"])
             return state
         except FileNotFoundError:
             return None
@@ -65,7 +68,27 @@ class ModeManager:
         return None if state is None else state["mode"]
 
     @classmethod
-    def record(cls, mode: CedarMode, environment=None):
+    def current_profile(cls):
+        state = cls.state()
+        return None if state is None else state.get("profile")
+
+    @classmethod
+    def require_profile(cls):
+        """The native environment this host runs, which nothing may guess on its behalf.
+
+        A host recorded before profiles existed has none, and defaulting it would hand a server
+        the workstation profile, whose TLS-verification bypass belongs on no server.
+        """
+        profile = cls.current_profile()
+        if profile is None:
+            raise ModeError(
+                "CEDAR native profile is not recorded; run cedarcli mode --clear and then "
+                "cedarcli mode native --profile develop|server"
+            )
+        return profile
+
+    @classmethod
+    def record(cls, mode: CedarMode, environment=None, profile: CedarProfile = None):
         existing = cls.current()
         if existing is not None:
             raise ModeError(
@@ -77,6 +100,8 @@ class ModeManager:
         temporary = path.with_suffix(path.suffix + ".tmp")
         with temporary.open("w", encoding="utf-8") as state_file:
             state = {"mode": mode.value}
+            if profile is not None:
+                state["profile"] = profile.value
             persisted = {
                 name: environment[name]
                 for name in cls.PERSISTED_ENVIRONMENT
@@ -156,14 +181,20 @@ class ModeManager:
         return mode
 
     @classmethod
-    def profile_environment(cls, surface: str, mode: CedarMode = None):
+    def profile_environment(cls, surface: str, mode: CedarMode = None,
+                            profile: CedarProfile = None):
         mode = mode or cls.require_surface(surface)
         relative = cls.NATIVE_PROFILE if surface == "native" else cls.DOCKER_PROFILE
-        profile = cls.cedar_home() / relative
-        if not profile.is_file():
-            raise ModeError(f"CEDAR {surface} profile does not exist: {profile}")
+        profile_path = cls.cedar_home() / relative
+        if not profile_path.is_file():
+            raise ModeError(
+                f"CEDAR {surface} profile does not exist: {profile_path}; the checkout of "
+                "cedar-development at CEDAR_HOME is incomplete"
+            )
 
         base_environment = {**os.environ, "CEDAR_HOME": str(cls.cedar_home())}
+        if surface == "native":
+            base_environment["CEDAR_PROFILE"] = (profile or cls.require_profile()).value
         state = cls.state()
         if state:
             base_environment.update(state.get("environment") or {})
@@ -174,7 +205,7 @@ class ModeManager:
                 "-c",
                 'source "$1" >/dev/null && env -0',
                 "cedarcli-profile",
-                str(profile),
+                str(profile_path),
             ],
             env=base_environment,
             capture_output=True,
@@ -183,7 +214,7 @@ class ModeManager:
         if result.returncode:
             detail = result.stderr.decode("utf-8", errors="replace").strip()
             raise ModeError(
-                f"Could not load CEDAR {surface} profile {profile}"
+                f"Could not load CEDAR {surface} profile {profile_path}"
                 + (f": {detail}" if detail else "")
             )
 
@@ -198,19 +229,9 @@ class ModeManager:
             environment.update(state.get("environment") or {})
 
         if surface == "native":
-            java_home_tool = Path("/usr/libexec/java_home")
-            if java_home_tool.is_file():
-                java = subprocess.run(
-                    [str(java_home_tool), "-v", "17"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if java.returncode or not java.stdout.strip():
-                    raise ModeError("Java 17 is required for CEDAR native mode")
-                java_home = java.stdout.strip()
-                environment["JAVA_HOME"] = java_home
-                environment["PATH"] = f"{java_home}/bin:{environment.get('PATH', '')}"
+            java_home = cls.java_17_home(environment)
+            environment["JAVA_HOME"] = java_home
+            environment["PATH"] = f"{java_home}/bin:{environment.get('PATH', '')}"
 
         if mode is CedarMode.HYBRID and surface == "native":
             host = environment.get("CEDAR_HOST")
@@ -232,6 +253,37 @@ class ModeManager:
                 "hybrid" if mode is CedarMode.HYBRID else "full"
             )
         return environment
+
+    @classmethod
+    def java_17_home(cls, environment):
+        """Where JDK 17 lives on this host, which every native CEDAR process is built and run on.
+
+        macOS answers through java_home. Elsewhere the host's own login environment is the
+        authority, and a JDK is looked for only when it said nothing, so a deliberate choice is
+        never overridden by a guess.
+        """
+        java_home_tool = Path("/usr/libexec/java_home")
+        if java_home_tool.is_file():
+            java = subprocess.run(
+                [str(java_home_tool), "-v", "17"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if java.returncode or not java.stdout.strip():
+                raise ModeError("Java 17 is required for CEDAR native mode")
+            return java.stdout.strip()
+
+        configured = environment.get("JAVA_HOME")
+        if configured and Path(configured, "bin", "java").is_file():
+            return configured
+        for candidate in sorted(Path("/usr/lib/jvm").glob("java-17-*")):
+            if Path(candidate, "bin", "java").is_file():
+                return str(candidate)
+        raise ModeError(
+            "Java 17 is required for CEDAR native mode, and no JDK 17 was found; export "
+            "JAVA_HOME for it before running cedarcli"
+        )
 
     @classmethod
     def apply_profile(cls, surface: str, check_runtime=True):
@@ -426,7 +478,7 @@ class ModeManager:
         )
 
     @classmethod
-    def validate_mode(cls, mode: CedarMode):
+    def validate_mode(cls, mode: CedarMode, profile: CedarProfile = None):
         surfaces = ("native", "docker") if mode is CedarMode.HYBRID else (mode.value,)
         environments = {}
         required = {
@@ -434,12 +486,14 @@ class ModeManager:
             "docker": ("CEDAR_HOME", "CEDAR_HOST", "CEDAR_NGINX_HOST"),
         }
         for surface in surfaces:
-            environment = cls.profile_environment(surface, mode)
+            environment = cls.profile_environment(surface, mode, profile)
             missing = [name for name in required[surface] if not environment.get(name)]
             if missing:
                 raise ModeError(
                     f"CEDAR {surface} profile is incomplete: {', '.join(missing)}"
                 )
+            if surface == "native":
+                cls.require_profile_invariants(environment, profile or cls.require_profile())
             environments[surface] = environment
 
         native_controller = cls.cedar_home() / "cedar-development" / "ops" / "cedar-services.sh"
@@ -453,14 +507,101 @@ class ModeManager:
                 raise ModeError("CEDAR Docker Compose validation failed")
         return environments
 
+    # Secrets that ship as "changeme" and stop a server that never had them replaced. Checked for
+    # a server, where a placeholder is a misconfiguration, and left alone for a workstation, which
+    # may legitimately run parts of the estate it has no credentials for.
+    SERVER_SECRETS = (
+        "CEDAR_KEYCLOAK_ADMIN_PASSWORD",
+        "CEDAR_MONGO_APP_USER_PASSWORD",
+        "CEDAR_MYSQL_ROOT_PASSWORD",
+        "CEDAR_NEO4J_USER_PASSWORD",
+        "CEDAR_SALT_API_KEY",
+    )
+
     @classmethod
-    def configure(cls, mode: CedarMode):
+    def require_profile_invariants(cls, environment, profile: CedarProfile):
+        """What the recorded profile promises about the environment it produced.
+
+        The workstation profile bypasses Keycloak's TLS verification, which is safe only against
+        the locally issued .orgx leaves a workstation talks to. A host that took that profile by
+        accident reaches its real Keycloak with verification off, and nothing else would say so.
+        """
+        insecure_tls = environment.get("CEDAR_KEYCLOAK_ALLOW_INSECURE_TLS", "")
+        if profile is CedarProfile.SERVER and insecure_tls.lower() == "true":
+            raise ModeError(
+                "CEDAR profile is server, but the environment bypasses Keycloak TLS "
+                "verification; CEDAR_KEYCLOAK_ALLOW_INSECURE_TLS must be false off a workstation"
+            )
+        if profile is CedarProfile.DEVELOP and insecure_tls.lower() != "true":
+            raise ModeError(
+                "CEDAR profile is develop, but CEDAR_KEYCLOAK_ALLOW_INSECURE_TLS is "
+                f"{insecure_tls or 'unset'}; the local .orgx leaves are not in any truststore"
+            )
+
+        target = environment.get("CEDAR_FRONTEND_TARGET")
+        if not target:
+            raise ModeError("CEDAR native profile set no CEDAR_FRONTEND_TARGET")
+        frontend_missing = [
+            f"CEDAR_FRONTEND_{target}_{suffix}"
+            for suffix in ("UI_HOST", "REST_HOST", "USER1_LOGIN", "USER2_LOGIN")
+            if not environment.get(f"CEDAR_FRONTEND_{target}_{suffix}")
+        ]
+        if frontend_missing:
+            raise ModeError(
+                "CEDAR frontend settings are incomplete, and the frontend builds require every "
+                f"one of them: {', '.join(frontend_missing)}"
+            )
+
+        if profile is CedarProfile.SERVER:
+            placeholders = [
+                name for name in cls.SERVER_SECRETS
+                if "changeme" in environment.get(name, "").lower()
+            ]
+            if placeholders:
+                raise ModeError(
+                    "CEDAR set-env-internal.sh still holds template placeholders: "
+                    f"{', '.join(placeholders)}"
+                )
+        return profile
+
+    @classmethod
+    def adopt_profile(cls, profile: CedarProfile):
+        """Record the environment of a host that selected its mode before profiles existed.
+
+        Clearing the mode would mean stopping the applications first, which is too much to ask of
+        a running host for a fact it can state without touching them.
+        """
+        state = cls.state()
+        cls.validate_mode(state["mode"], profile)
+        path = cls.state_path()
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        recorded = {"mode": state["mode"].value, "profile": profile.value}
+        if state.get("environment"):
+            recorded["environment"] = state["environment"]
+        with temporary.open("w", encoding="utf-8") as state_file:
+            json.dump(recorded, state_file, indent=2)
+            state_file.write("\n")
+        os.replace(temporary, path)
+        return profile
+
+    @classmethod
+    def configure(cls, mode: CedarMode, profile: CedarProfile = None):
         existing = cls.current()
+        if existing is mode and profile is not None and cls.current_profile() is None:
+            return cls.adopt_profile(profile)
         if existing is not None:
             raise ModeError(
                 f"CEDAR mode is already set to {existing.value}; "
                 "run cedarcli mode --clear before selecting another mode"
             )
+        native = mode in (CedarMode.NATIVE, CedarMode.HYBRID)
+        if native and profile is None:
+            raise ModeError(
+                f"CEDAR mode {mode.value} runs native applications; name the environment with "
+                "--profile develop|server"
+            )
+        if not native and profile is not None:
+            raise ModeError("CEDAR mode docker runs no native applications; --profile is not used")
         cls.require_runtime_compatible(mode)
         if mode in (CedarMode.HYBRID, CedarMode.DOCKER):
             cls.require_docker_start_compatible(mode)
@@ -469,10 +610,10 @@ class ModeManager:
             for name in cls.PERSISTED_ENVIRONMENT
             if name in os.environ
         }
-        environments = cls.validate_mode(mode)
+        environments = cls.validate_mode(mode, profile)
         persisted_environment = environments.get("docker", {})
         persisted_environment.update(requested_environment)
-        cls.record(mode, persisted_environment)
+        cls.record(mode, persisted_environment, profile)
 
     @classmethod
     def bootstrap(cls, arguments):
