@@ -34,6 +34,7 @@ from org.metadatacenter.release_train import (
     ReleaseAcceptance,
     RetryableReleaseError,
     accept_active_release,
+    abandon_active_release,
     ReleaseVersionPreparer,
     ReleaseWorkspacePreparer,
     advance_active_release,
@@ -582,7 +583,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
         result = self.runner.invoke(group, ["release", "--help"])
 
         self.assertEqual(0, result.exit_code, result.output)
-        for command in ("plan", "start", "resume", "status"):
+        for command in ("plan", "start", "resume", "status", "abandon"):
             self.assertIn(command, result.output)
         for retired in (
             "preflight", "conclude", "all-in-one", "prepare", "commit", "cleanup",
@@ -677,6 +678,28 @@ class ReleaseStateAndCliTest(unittest.TestCase):
         self.assertEqual(1, snapshot_publications)
         self.assertEqual(1, release_publications)
         self.assertEqual("acceptance", release_train._next_release_stage(manifest))
+
+    def test_abandon_command_records_the_operator_reason(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
+        ):
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            state.update_current_manifest({"phase": "local-ref-creation-failed"})
+
+            result = self.runner.invoke(release_train.app, [
+                "abandon",
+                "--version", "2.9.3",
+                "--reason", "superseded by a corrected train",
+            ])
+
+            self.assertEqual(0, result.exit_code, result.output)
+            self.assertIn("Abandoned release:   2.9.3", result.output)
+            manifest, _ = state.read_current_manifest()
+            self.assertEqual(
+                "superseded by a corrected train",
+                manifest["abandonment"]["reason"],
+            )
 
 
 class ReleaseWorkspaceTest(unittest.TestCase):
@@ -1261,6 +1284,51 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseError, "build output changed"):
                 ReleaseBuildValidator.verify_completed_task(record)
 
+    def test_openview_runtime_must_be_the_normalized_proven_public_cee(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "node_modules" / "cee" / "cee.js"
+            served = root / "dist" / "node_modules" / "cee" / "cee.js"
+            source.parent.mkdir(parents=True)
+            served.parent.mkdir(parents=True)
+            public = (
+                b"const terminology='https://terminology.metadatacenter.orgx/';"
+                b"const bridge='https://bridge.metadatacenter.orgx/';"
+            )
+            normalized = public.replace(
+                b"https://terminology.metadatacenter.orgx/",
+                b"https://terminology.metadatacenter.org/",
+            ).replace(
+                b"https://bridge.metadatacenter.orgx/",
+                b"https://bridge.metadatacenter.org/",
+            )
+            source.write_bytes(public)
+            served.write_bytes(normalized)
+            manifest = manifest_fixture()
+            manifest["cee"]["promotionProof"]["publicBundleSha256"] = hashlib.sha256(
+                public).hexdigest()
+            task = {"ceeRuntime": {
+                "source": "src/node_modules/cee/cee.js",
+                "distribution": "node_modules/cee/cee.js",
+                "replacements": [
+                    ["https://terminology.metadatacenter.orgx/",
+                     "https://terminology.metadatacenter.org/"],
+                    ["https://bridge.metadatacenter.orgx/",
+                     "https://bridge.metadatacenter.org/"],
+                ],
+            }}
+
+            evidence = release_train.ReleaseDistributionMaterializer._cee_evidence(
+                manifest, root, root / "dist", task)
+
+            self.assertEqual(PUBLIC_VERSION, evidence["version"])
+            self.assertEqual(hashlib.sha256(normalized).hexdigest(),
+                             evidence["servedBundleSha256"])
+            served.write_bytes(b"stale CEE")
+            with self.assertRaisesRegex(ReleaseError, "does not serve the proven public CEE"):
+                release_train.ReleaseDistributionMaterializer._cee_evidence(
+                    manifest, root, root / "dist", task)
+
 
 class ReleaseLocalRefsTest(unittest.TestCase):
     @staticmethod
@@ -1436,6 +1504,117 @@ class ReleaseLocalRefsTest(unittest.TestCase):
                 create_active_release_refs(state, creator)
             failed, _ = state.read_current_manifest()
             self.assertEqual("local-ref-creation-failed", failed["phase"])
+
+    def test_validated_distribution_replaces_stale_tracked_build_before_refs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            cedar_home = base / "CEDAR"
+            source = cedar_home / "frontend"
+            source.mkdir(parents=True)
+            (source / ".gitignore").write_text("/src/dist/\n", encoding="utf-8")
+            dist = source / "dist"
+            dist.mkdir()
+            for name, content in {
+                "package.json": '{"name":"frontend","version":"2.9.2"}\n',
+                "package-lock.json": '{"name":"frontend","version":"2.9.2"}\n',
+                "README.md": "frontend\n",
+                "license.txt": "BSD\n",
+                "main.old.js": "stale\n",
+            }.items():
+                (dist / name).write_text(content, encoding="utf-8")
+            revision = ReleaseWorkspaceTest._commit_repository(source)
+            state = ReleaseState(root=base / "state")
+            cloner = ReleaseWorkspacePreparer(
+                state, environment={"CEDAR_HOME": str(cedar_home)},
+            )
+            workspaces = {
+                "release": base / "attempt" / "workspace",
+                "nextDevelopment": base / "attempt" / "next-workspace",
+            }
+            versions = {"release": "2.9.3", "nextDevelopment": "2.9.4-SNAPSHOT"}
+            version_preparation = {}
+            build_records = {}
+            for variant, workspace in workspaces.items():
+                root = workspace / "frontend"
+                cloner._clone("frontend", revision, root)
+                for filename in ("package.json", "package-lock.json"):
+                    path = root / "dist" / filename
+                    value = json.loads(path.read_text(encoding="utf-8"))
+                    value["version"] = versions[variant]
+                    path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+                output = root / "src" / "dist" / "app"
+                output.mkdir(parents=True)
+                (output / "index.html").write_text(
+                    '<script src="main.new.js"></script>\n', encoding="utf-8")
+                (output / "main.new.js").write_text(
+                    f"built {variant}\n", encoding="utf-8")
+                log = base / "attempt" / f"{variant}.log"
+                log.write_text("built\n", encoding="utf-8")
+                build_id = f"{variant}:npm:frontend:build"
+                build_records[build_id] = {
+                    "id": build_id,
+                    "buildOutput": str(output),
+                    "outputFiles": release_train._directory_file_hashes(output),
+                    "log": str(log),
+                    "logSha256": release_train._file_sha256(log),
+                }
+                version_preparation[variant] = {
+                    "workspace": str(workspace),
+                    "repositories": {"frontend": {"fileSha256": {
+                        f"dist/{filename}": release_train._file_sha256(root / "dist" / filename)
+                        for filename in ("package.json", "package-lock.json")
+                    }}},
+                }
+            manifest = manifest_fixture()
+            manifest.update({
+                "phase": "builds-validated",
+                "sourceRepositories": {"frontend": revision},
+                "releaseRepositories": ["frontend"],
+                "frontendPreparation": {"workspace": str(workspaces["release"]), "consumers": []},
+                "versionPreparation": version_preparation,
+                "buildValidation": {"completedTasks": build_records},
+                "publicationPlan": {"npm": {"surfaces": [{
+                    "id": "frontend",
+                    "repository": "frontend",
+                    "directory": "dist",
+                    "buildOutput": "src/dist/app",
+                    "preserveFiles": [
+                        "README.md", "license.txt", "package-lock.json", "package.json",
+                    ],
+                }]}},
+            })
+            manifest["cee"]["consumers"] = []
+            state.start(manifest)
+            state.update_current_manifest({"phase": "builds-validated"})
+            creator = ReleaseRefCreator(state, environment={
+                "CEDAR_RELEASE_GIT_NAME": "CEDAR Release Test",
+                "CEDAR_RELEASE_GIT_EMAIL": "release-test@example.org",
+            })
+
+            completed = create_active_release_refs(state, creator)
+
+            self.assertEqual("local-refs-created", completed["phase"])
+            for variant, workspace in workspaces.items():
+                root = workspace / "frontend"
+                self.assertFalse((root / "dist" / "main.old.js").exists())
+                self.assertEqual(
+                    f"built {variant}\n",
+                    (root / "dist" / "main.new.js").read_text(encoding="utf-8"),
+                )
+                expected = completed["versionPreparation"][variant][
+                    "repositories"]["frontend"]["fileSha256"]
+                self.assertIsNone(expected["dist/main.old.js"])
+                self.assertEqual(
+                    release_train._file_sha256(root / "dist" / "main.new.js"),
+                    expected["dist/main.new.js"],
+                )
+                commit = completed["localRefs"]["completedTasks"][
+                    f"{variant}:frontend"]["commit"]
+                changed = set(self._git(
+                    root, "diff", "--name-only", revision, commit, "--",
+                ).splitlines())
+                self.assertIn("dist/main.old.js", changed)
+                self.assertIn("dist/main.new.js", changed)
 
 
 class ReleaseRemoteIntegrationTest(unittest.TestCase):
@@ -1937,6 +2116,9 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 "publishConfig": {"registry": "https://nexus.example/repository/npm/"},
             }) + "\n", encoding="utf-8")
             (root / "README.md").write_text("frontend\n", encoding="utf-8")
+            runtime = root / "node_modules" / "cedar-runtime" / "runtime.js"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_text("runtime bytes\n", encoding="utf-8")
             commit = ReleaseWorkspaceTest._commit_repository(root)
             tree = ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}")
             task = {
@@ -1949,6 +2131,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 "workspace": str(workspace),
                 "expectedCommit": commit,
                 "expectedTree": tree,
+                "packedRuntimeDirectories": ["node_modules"],
             }
             publisher = ReleaseArtifactPublisher(
                 ReleaseState(root=Path(directory) / "state"),
@@ -1958,6 +2141,13 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             self.assertEqual("cedar-frontend", evidence["name"])
             self.assertEqual(commit, package["gitHead"])
             self.assertEqual("2.9.3", package["version"])
+            self.assertEqual(
+                release_train._file_sha256(runtime),
+                evidence["runtimeFiles"]["node_modules/cedar-runtime/runtime.js"],
+            )
+            publisher._verify_npm_tarball_files(
+                "packed frontend", tarball.read_bytes(), evidence["runtimeFiles"],
+            )
 
 
 class FakeNexus:
@@ -2709,7 +2899,7 @@ class ReleaseStageOrderTest(unittest.TestCase):
         # ReleaseState.start replaces it with "started" before any stage sees it.
         recorded.discard("validated")
         accepted = set(release_train.REWIND_TO_FRONTENDS)
-        accepted.add(release_train.RELEASE_TERMINAL_PHASE)
+        accepted.update(release_train.RELEASE_FINAL_PHASES)
         for stage in release_train.RELEASE_STAGES:
             accepted |= stage.entry_phases
         self.assertEqual(
@@ -2782,6 +2972,16 @@ class ReleaseResumptionTest(unittest.TestCase):
 class ReleaseSnapshotOrderingTest(unittest.TestCase):
     """Snapshots must reach Nexus before any develop push tells CI to look for them."""
 
+    @staticmethod
+    def _snapshot_record(directory, task):
+        log = Path(directory) / "snapshot-publication.log"
+        log.write_text("snapshot deployed\n", encoding="utf-8")
+        return {
+            **task,
+            "log": str(log),
+            "logSha256": release_train._file_sha256(log),
+        }
+
     def test_snapshots_are_deployed_before_the_remotes_are_integrated(self):
         names = [stage.name for stage in release_train.RELEASE_STAGES]
 
@@ -2816,6 +3016,54 @@ class ReleaseSnapshotOrderingTest(unittest.TestCase):
             integration = manifest["remoteIntegration"]["completedTasks"][deploy["repository"]]
 
             self.assertEqual(integration["develop"]["tree"], deploy["expectedTree"])
+
+    def test_snapshot_evidence_accepts_the_recorded_develop_integration_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _integrator, _remotes, manifest = (
+                ReleaseArtifactPublicationTest().make_release(directory)
+            )
+            publisher = ReleaseArtifactPublisher(state)
+            tasks = publisher.snapshot_tasks(manifest)
+            deploy = next(task for task in tasks
+                          if task["kind"] == "maven-snapshot-deploy")
+            integration = manifest["remoteIntegration"]["completedTasks"][deploy["repository"]]
+            root = Path(deploy["workspace"]) / deploy["repository"]
+
+            self.assertEqual(
+                integration["develop"]["commit"],
+                ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD"),
+            )
+            self.assertNotEqual(deploy["expectedCommit"], integration["develop"]["commit"])
+
+            publisher.verify_record(
+                manifest, self._snapshot_record(directory, deploy), tasks,
+            )
+
+    def test_snapshot_evidence_rejects_an_unrecorded_same_tree_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _integrator, _remotes, manifest = (
+                ReleaseArtifactPublicationTest().make_release(directory)
+            )
+            publisher = ReleaseArtifactPublisher(state)
+            tasks = publisher.snapshot_tasks(manifest)
+            deploy = next(task for task in tasks
+                          if task["kind"] == "maven-snapshot-deploy")
+            integration = manifest["remoteIntegration"]["completedTasks"][deploy["repository"]]
+            root = Path(deploy["workspace"]) / deploy["repository"]
+            unrecorded = subprocess.run([
+                "git", "-c", "user.name=Release Test",
+                "-c", "user.email=release-test@metadatacenter.org",
+                "-C", str(root), "commit-tree", deploy["expectedTree"],
+                "-p", integration["develop"]["commit"], "-m", "Unrecorded commit",
+            ], check=True, text=True, capture_output=True).stdout.strip()
+            subprocess.run([
+                "git", "-C", str(root), "switch", "--quiet", "--detach", unrecorded,
+            ], check=True)
+
+            with self.assertRaisesRegex(ReleaseError, "publication workspace changed"):
+                publisher.verify_record(
+                    manifest, self._snapshot_record(directory, deploy), tasks,
+                )
 
     def test_integration_refuses_to_run_before_the_snapshots_are_published(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2870,6 +3118,92 @@ class ReleaseCompletionTest(unittest.TestCase):
             state.start(later)
 
             self.assertEqual("2.9.4", state.read_current()["releaseVersion"])
+
+    def test_resume_repairs_an_accepted_manifest_whose_pointer_was_not_concluded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "accepted")
+
+            advance_active_release(state)
+
+            self.assertEqual("accepted", state.read_current()["conclusion"])
+            self.assertTrue(state.read_current()["concludedAt"])
+
+    def test_acceptance_repairs_an_accepted_manifest_whose_pointer_was_not_concluded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "accepted")
+
+            accept_active_release(state)
+
+            self.assertEqual("accepted", state.read_current()["conclusion"])
+            self.assertTrue(state.read_current()["concludedAt"])
+
+    def test_abandon_retains_the_failed_attempt_and_allows_the_same_version_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "local-ref-creation-failed")
+            original_path = state.read_current_manifest()[1]
+            state.update_current_manifest({
+                "failure": "generated file changed",
+                "localRefs": {"pushed": False, "completedTasks": {}},
+            })
+
+            abandoned, retained_path = abandon_active_release(
+                "2.9.3", "superseded by a corrected train", state,
+            )
+
+            self.assertEqual(original_path, retained_path)
+            self.assertTrue(retained_path.is_file())
+            self.assertEqual("abandoned", abandoned["phase"])
+            self.assertEqual(
+                "local-ref-creation-failed",
+                abandoned["abandonment"]["previousPhase"],
+            )
+            self.assertEqual("abandoned", state.read_current()["conclusion"])
+
+            with self.assertRaisesRegex(ReleaseError, "was abandoned and cannot be resumed"):
+                advance_active_release(state)
+
+            replacement_path = state.start(manifest_fixture())
+            self.assertNotEqual(retained_path, replacement_path)
+            self.assertTrue(retained_path.is_file())
+            self.assertTrue(replacement_path.is_file())
+
+    def test_abandon_refuses_once_snapshot_publication_may_have_started(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "snapshot-publication-failed")
+            state.update_current_manifest({
+                "snapshotPublication": {
+                    "startedAt": "2026-09-01T00:00:00+00:00",
+                    "completedTasks": {},
+                },
+            })
+
+            with self.assertRaisesRegex(ReleaseError, "may already have changed external state"):
+                abandon_active_release("2.9.3", "use another train", state)
+
+            self.assertFalse(state.read_current().get("concludedAt"))
+
+    def test_abandon_requires_the_exact_active_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "local-ref-creation-failed")
+
+            with self.assertRaisesRegex(ReleaseError, "active release is 2.9.3"):
+                abandon_active_release("2.9.4", "wrong release", state)
+
+    def test_abandoned_status_names_the_reason_without_calling_it_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._finished(directory, "local-ref-creation-failed")
+            _manifest, path = abandon_active_release(
+                "2.9.3", "superseded by a corrected train", state,
+            )
+            manifest, _ = state.read_current_manifest()
+
+            with release_train.console.capture() as capture:
+                release_train._render_release_status(manifest, path)
+
+            output = capture.get()
+            self.assertIn("ABANDONED", output)
+            self.assertIn("superseded by a corrected train", output)
+            self.assertNotIn("COMPLETE", output)
 
     def test_preflight_reports_an_unfinished_release_rather_than_letting_start_refuse(self):
         with tempfile.TemporaryDirectory() as directory:
