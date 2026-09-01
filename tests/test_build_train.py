@@ -108,9 +108,9 @@ class BuildTrainTest(unittest.TestCase):
         )
 
     @patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847')
-    @patch.object(BuildTrainWorker, '_open_work', return_value=[])
+    @patch.object(BuildTrainWorker, '_preflight', return_value=((44, 'model', 'cee', 7, 3), None))
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
-    def test_cli_allocates_and_dispatches_a_new_train(self, run, allocate, _open_work):
+    def test_cli_allocates_and_dispatches_a_new_train(self, run, preflight, allocate):
         run.return_value.returncode = 0
         run.return_value.stdout = (
             'https://github.com/metadatacenter/cedar-development/actions/runs/33097135798\n'
@@ -119,6 +119,7 @@ class BuildTrainTest(unittest.TestCase):
         result = self.runner.invoke(publish.app, ['train'])
         self.assertEqual(0, result.exit_code, result.output)
         allocate.assert_called_once_with()
+        preflight.assert_called_once_with('2.9.3-dev.20260824.1847', None)
         self.assertIn('version=2.9.3-dev.20260824.1847', run.call_args.args[0])
         self.assertIn('resume=false', run.call_args.args[0])
         self.assertIn('develop', run.call_args.args[0])
@@ -135,9 +136,9 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotIn('Detailed live output: gh run list', result.output)
 
     @patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847')
-    @patch.object(BuildTrainWorker, '_open_work', return_value=[])
+    @patch.object(BuildTrainWorker, '_preflight', return_value=((44, 'model', 'cee', 7, 3), None))
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
-    def test_cli_does_not_call_a_run_listing_a_follow_command(self, run, _allocate, _open_work):
+    def test_cli_does_not_call_a_run_listing_a_follow_command(self, run, _allocate, _preflight):
         run.return_value.returncode = 0
         run.return_value.stdout = ''
         run.return_value.stderr = ''
@@ -154,9 +155,9 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotEqual(0, result.exit_code)
         self.assertIn('No such option', result.output)
 
-    @patch.object(BuildTrainWorker, '_open_work', return_value=[])
+    @patch.object(BuildTrainWorker, '_preflight', return_value=((44, 'model', 'cee', 7, 3), None))
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
-    def test_cli_resume_uses_recorded_id(self, run, _open_work):
+    def test_cli_resume_uses_recorded_id(self, run, _preflight):
         run.return_value.returncode = 0
         result = self.runner.invoke(publish.app, [
             'train', '--resume', '2.9.3-dev.20260824.1847',
@@ -180,6 +181,7 @@ class BuildTrainTest(unittest.TestCase):
                 return_value=(44, 'cedar-model-typescript-library',
                               'cedar-embeddable-editor', 7, 3),
             ),
+            patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
         ):
@@ -190,7 +192,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('7 frontends', result.output)
         self.assertIn('Would dispatch:', result.output)
         self.assertIn('No changes made.', result.output)
-        self.assertEqual(2, run.call_count)
+        self.assertEqual(3, run.call_count)
         self.assertFalse(any(call.args[0][1:3] == ['workflow', 'run'] for call in run.call_args_list))
 
     def test_cli_dry_run_refuses_a_train_id_collision(self):
@@ -226,6 +228,7 @@ class BuildTrainTest(unittest.TestCase):
                 return_value=(44, 'cedar-model-typescript-library',
                               'cedar-embeddable-editor', 7, 3),
             ),
+            patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
         ):
@@ -246,6 +249,9 @@ class BuildTrainTest(unittest.TestCase):
                 'organization': 'metadatacenter',
                 'sourceBranch': 'develop',
                 'repositories': ['model', 'cee', 'frontend', 'demo'],
+                'mavenRepositories': ['model'],
+                'phases': [{'name': 'model', 'repository': 'model'}],
+                'requiredArtifacts': ['model'],
             }), encoding='utf-8')
             (ops / 'frontend-train.json').write_text(json.dumps({
                 'model': {'repository': 'model'},
@@ -255,6 +261,15 @@ class BuildTrainTest(unittest.TestCase):
                     'repository': 'frontend', 'npmVersionVariable': 'MAIN_VERSION',
                 }],
                 'additionalCeeConsumers': [{'repository': 'demo'}],
+            }), encoding='utf-8')
+            (ops / 'docker-train.json').write_text(json.dumps({
+                'groups': {
+                    'javaBase': ['java'],
+                    'microserviceBase': ['microservice'],
+                    'infrastructure': [f'infra-{index}' for index in range(7)],
+                    'microservices': [f'server-{index}' for index in range(21)],
+                    'frontends': ['frontend-main'],
+                },
             }), encoding='utf-8')
             self.assertEqual(
                 (4, 'model', 'cee', 1, 1),
@@ -363,8 +378,43 @@ class OpenWorkRefusalTest(unittest.TestCase):
             with patch.object(Util, 'cedar_home', directory):
                 self.assertEqual([], BuildTrainWorker._open_work())
 
+    def test_source_alignment_requires_develop_and_the_live_remote_head(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-a'])
+
+            def git(_root, *arguments):
+                if arguments[:2] == ('rev-parse', '--abbrev-ref'):
+                    return 0, 'feature', ''
+                if arguments[:2] == ('rev-parse', 'refs/heads/develop'):
+                    return 0, 'a' * 40, ''
+                if arguments[0] == 'ls-remote':
+                    return 0, f"{'b' * 40}\trefs/heads/develop", ''
+                return 0, '', ''
+
+            with patch.object(Util, 'cedar_home', directory), \
+                    patch.object(BuildTrainWorker, '_git', side_effect=git):
+                findings = BuildTrainWorker._source_alignment()
+
+        self.assertEqual(2, len(findings))
+        self.assertIn('not develop', findings[0])
+        self.assertIn('local develop is', findings[1])
+
+    def test_an_active_train_blocks_a_second_dispatch(self):
+        result = type('Result', (), {
+            'returncode': 0,
+            'stdout': '123\tin_progress\tBuild train 2.9.5-dev.20260901.1200\n',
+            'stderr': '',
+        })()
+        with patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
+                   return_value=result):
+            active = BuildTrainWorker._active_workflow_runs()
+
+        self.assertEqual(1, len(active))
+        self.assertIn('in_progress', active[0])
+
     def test_dispatch_refuses_and_runs_no_workflow(self):
-        with patch.object(BuildTrainWorker, '_open_work', return_value=['cedar-a has 1 uncommitted change(s)']), \
+        with patch.object(BuildTrainWorker, '_preflight', side_effect=ValueError(
+                'source repositories hold work the train cannot see')), \
                 patch.object(BuildTrain, 'allocate', return_value='2.9.4-dev.20260901.0400'), \
                 patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run') as run:
             self.assertEqual(1, BuildTrainWorker.dispatch())

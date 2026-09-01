@@ -481,11 +481,39 @@ class ReleasePlannerTest(unittest.TestCase):
                 "tarballSha256": hashlib.sha256(dev).hexdigest(),
             }],
         }
+        docker_images = [
+            {
+                "image": f"cedar-image-{index:02d}",
+                "reference": f"nexus.example/cedar-image-{index:02d}:{TRAIN}",
+            }
+            for index in range(31)
+        ]
+        docker_plan = {
+            "version": TRAIN,
+            "sourceManifestSha256": hashlib.sha256(source_content).hexdigest(),
+            "npmPlanSha256": hashlib.sha256(npm_plan_content).hexdigest(),
+            "images": docker_images,
+        }
+        docker_plan_content = (
+            json.dumps(docker_plan, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        docker_completion = {
+            "version": TRAIN,
+            "plan": f"docker/trains/{TRAIN}.json",
+            "sourceManifestSha256": hashlib.sha256(source_content).hexdigest(),
+            "npmPlanSha256": hashlib.sha256(npm_plan_content).hexdigest(),
+            "images": [
+                {**item, "digest": "sha256:" + f"{index:064x}"}
+                for index, item in enumerate(docker_images, start=1)
+            ],
+        }
         state = FakeState({
             f"trains/{TRAIN}.json": (source, source_content),
             f"completed/{TRAIN}.json": ({"version": TRAIN}, b"{}\n"),
             f"npm/trains/{TRAIN}.json": (npm_plan, npm_plan_content),
             f"npm/completed/{TRAIN}.json": (npm_completion, b"{}\n"),
+            f"docker/trains/{TRAIN}.json": (docker_plan, docker_plan_content),
+            f"docker/completed/{TRAIN}.json": (docker_completion, b"{}\n"),
         })
         metadata = {
             "versions": {
@@ -521,6 +549,21 @@ class ReleasePlannerTest(unittest.TestCase):
             manifest["sourceRepositories"]["cedar-development"],
         )
         self.assertIn("cedar-development", manifest["releaseRepositories"])
+        self.assertEqual(
+            f"docker/completed/{TRAIN}.json",
+            manifest["trainState"]["dockerCompletion"],
+        )
+
+    def test_plan_refuses_a_train_without_complete_docker_evidence(self):
+        planner = self.make_planner()
+        planner.state.values[f"docker/completed/{TRAIN}.json"][0]["images"].pop()
+        with self.assertRaisesRegex(ReleaseError, "31 planned images"):
+            planner.build(
+                release_version="2.9.3",
+                next_version="2.9.4-SNAPSHOT",
+                train=TRAIN,
+                cee_version=PUBLIC_VERSION,
+            )
 
     def test_independent_packages_are_not_platform_release_repositories(self):
         source = {"repositories": {
@@ -2013,6 +2056,60 @@ class ReleaseNexusInventorySearchTest(unittest.TestCase):
         self.assertNotIn("maven.baseVersion", http.urls[0])
 
 
+class ReleaseMavenSettingsCredentialsTest(unittest.TestCase):
+    @staticmethod
+    def _write_settings(directory, username="settings-user", password="settings-secret"):
+        settings = Path(directory) / ".m2" / "settings.xml"
+        settings.parent.mkdir()
+        settings.write_text(
+            """<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <servers>
+    <server>
+      <id>unrelated</id><username>wrong</username><password>wrong</password>
+    </server>
+    <server>
+      <id>bmir-nexus-releases</id>
+      <username>{username}</username><password>{password}</password>
+    </server>
+  </servers>
+</settings>
+""".format(username=username, password=password),
+            encoding="utf-8",
+        )
+
+    def test_namespaced_maven_settings_supply_nexus_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._write_settings(directory)
+            environment = release_train._environment_with_nexus_credentials({
+                "HOME": directory,
+            })
+
+        self.assertEqual("settings-user", environment["BMIR_NEXUS_USERNAME"])
+        self.assertEqual("settings-secret", environment["BMIR_NEXUS_PASSWORD"])
+
+    def test_explicit_environment_credentials_take_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._write_settings(directory)
+            environment = release_train._environment_with_nexus_credentials({
+                "HOME": directory,
+                "BMIR_NEXUS_USERNAME": "environment-user",
+                "BMIR_NEXUS_PASSWORD": "environment-secret",
+            })
+
+        self.assertEqual("environment-user", environment["BMIR_NEXUS_USERNAME"])
+        self.assertEqual("environment-secret", environment["BMIR_NEXUS_PASSWORD"])
+
+    def test_http_authentication_uses_maven_settings_without_exposing_the_password(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._write_settings(directory)
+            client = release_train.HttpClient(environment={"HOME": directory})
+            headers = client._headers(
+                "https://nexus.bmir.stanford.edu/repository/releases/artifact.jar")
+
+        expected = base64.b64encode(b"settings-user:settings-secret").decode()
+        self.assertEqual({"Authorization": f"Basic {expected}"}, headers)
+
+
 class ReleaseArtifactPublicationTest(unittest.TestCase):
     @staticmethod
     def _publication_plan():
@@ -2193,6 +2290,104 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             publisher.http = ExistingHttp(b"different")
             with self.assertRaisesRegex(ReleaseError, "different bytes"):
                 publisher._publish_maven_release(task)
+
+    def test_maven_release_upload_reports_every_file_and_its_disposition(self):
+        class MixedHttp:
+            @staticmethod
+            def read(url, missing_ok=False):
+                return b"first" if url.endswith("repo-main-2.9.3.jar") else None
+
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / "repository"
+            version = local / "org/metadatacenter/repo-main/2.9.3"
+            version.mkdir(parents=True)
+            (version / "repo-main-2.9.3.jar").write_bytes(b"first")
+            (version / "repo-main-2.9.3.pom").write_bytes(b"second")
+            task = {
+                "id": "maven:release:publish",
+                "kind": "maven-release-upload",
+                "variant": "release",
+                "version": "2.9.3",
+                "repository": "https://nexus.example/repository/releases/",
+                "localRepository": str(local),
+            }
+            progress = []
+            uploads = []
+            publisher = ReleaseArtifactPublisher(
+                ReleaseState(root=Path(directory) / "state"),
+                http=MixedHttp(), progress_reporter=progress.append,
+            )
+            publisher._upload = lambda destination, content: uploads.append(
+                (destination, content))
+
+            with release_train.console.capture() as capture:
+                record = publisher._publish_maven_release(task)
+
+        self.assertEqual([0, 1, 2], [item["completedFiles"] for item in progress])
+        self.assertEqual(2, progress[-1]["totalFiles"])
+        self.assertEqual(1, progress[-1]["uploadedFiles"])
+        self.assertEqual(1, progress[-1]["existingFiles"])
+        self.assertEqual(1, record["uploadedFiles"])
+        self.assertEqual(1, record["existingFiles"])
+        self.assertEqual(1, len(uploads))
+        self.assertIn("2/2 files", capture.get())
+
+    def test_in_progress_maven_file_count_is_checkpointed_and_rendered(self):
+        class ProgressThenFailure:
+            progress_reporter = None
+
+            @staticmethod
+            def ensure_nexus_ready(_purpose):
+                return None
+
+            @staticmethod
+            def tasks(_manifest):
+                return [{
+                    "id": "maven:release:publish",
+                    "kind": "maven-release-upload",
+                }]
+
+            @staticmethod
+            def snapshot_tasks(_manifest):
+                return []
+
+            @staticmethod
+            def verify_record(_manifest, _record, _tasks=None):
+                return None
+
+            def run_task(self, _manifest, _task):
+                self.progress_reporter({
+                    "id": "maven:release:publish",
+                    "kind": "maven-release-upload",
+                    "completedFiles": 47,
+                    "totalFiles": 126,
+                    "uploadedFiles": 40,
+                    "existingFiles": 7,
+                    "currentFile": "org/metadatacenter/cedar-parent/2.9.3/cedar-parent.pom",
+                    "updatedAt": "2026-09-01T12:00:00+00:00",
+                })
+                raise ReleaseError("connection reset")
+
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, _remotes, _manifest = self.make_release(directory)
+            external_progress = []
+            publisher = ProgressThenFailure()
+            publisher.progress_reporter = external_progress.append
+            for _attempt in range(2):
+                with self.assertRaisesRegex(ReleaseError, "connection reset"):
+                    publish_active_release(
+                        state, publisher, remote_integrator=integrator,
+                    )
+            manifest, path = state.read_current_manifest()
+            with release_train.console.capture() as capture:
+                release_train._render_release_status(manifest, path)
+
+        self.assertEqual(2, len(external_progress))
+        progress = manifest["artifactPublication"]["inProgressTask"]
+        self.assertEqual(47, progress["completedFiles"])
+        self.assertIn("Maven files 47/126", capture.get())
+        self.assertIn("Current Maven file", capture.get())
+        self.assertIn("uploaded 40, already present 7", capture.get())
 
     def test_npm_registry_verification_requires_exact_tarball_and_git_commit(self):
         package = {
@@ -2422,8 +2617,20 @@ class ReleasePreflightTest(unittest.TestCase):
         commands = FakeCommands({
             ("java", "-version"): FakeCompletedProcess(
                 stderr='openjdk version "17.0.13" 2024-10-15'),
+            ("node", "--version"): FakeCompletedProcess(stdout="v24.19.0"),
         })
         self.assertEqual([], self._preflight(commands=commands).check_toolchain())
+
+    def test_node_other_than_the_release_pin_is_refused(self):
+        commands = FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(
+                stderr='openjdk version "17.0.13" 2024-10-15'),
+            ("node", "--version"): FakeCompletedProcess(stdout="v22.22.0"),
+        })
+        findings = self._preflight(commands=commands).check_toolchain()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("v24.19.0", findings[0].message)
 
     def test_an_unsourced_profile_is_named_variable_by_variable(self):
         findings = self._preflight(
@@ -2434,6 +2641,29 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertIn("CEDAR_NET_GATEWAY", findings[0].message)
         self.assertIn("cedar-profile-native.sh", findings[0].remedy)
 
+    def test_preflight_covers_independent_cee_consumers_that_receive_refs(self):
+        manifest = self._release_of("repo-one")
+        manifest["cee"]["consumers"] = [{
+            "repository": "repo-two", "manifest": "package.json", "lock": "package-lock.json",
+        }]
+
+        self.assertEqual(
+            ["repo-one", "repo-two"],
+            self._preflight(manifest=manifest).repositories,
+        )
+
+    def test_missing_git_author_identity_blocks_before_builds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = self._release_of("repo-one")
+            findings = self._preflight(
+                manifest=manifest, root=directory,
+                commands=FakeCommands(),
+            ).check_git_identity()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("Git author", findings[0].message)
+
     def test_absent_nexus_credentials_fail_before_any_build(self):
         findings = self._preflight(
             environment={"BMIR_NEXUS_PASSWORD": ""}).check_nexus_authorization()
@@ -2441,6 +2671,20 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertTrue(findings[0].fatal)
         self.assertIn("anonymous", findings[0].message)
+
+    def test_maven_settings_credentials_satisfy_preflight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ReleaseMavenSettingsCredentialsTest._write_settings(directory)
+            preflight = self._preflight(environment={
+                "HOME": directory,
+                "BMIR_NEXUS_USERNAME": "",
+                "BMIR_NEXUS_PASSWORD": "",
+            })
+            findings = preflight.check_nexus_authorization()
+
+        self.assertEqual([], findings)
+        self.assertEqual("settings-user", preflight.environment["BMIR_NEXUS_USERNAME"])
+        self.assertEqual("settings-secret", preflight.environment["BMIR_NEXUS_PASSWORD"])
 
     def test_nexus_credentials_that_do_not_authenticate_fail(self):
         findings = self._preflight(
@@ -2452,6 +2696,14 @@ class ReleasePreflightTest(unittest.TestCase):
 
     def test_authenticated_writable_nexus_passes(self):
         self.assertEqual([], self._preflight().check_nexus_authorization())
+
+    def test_a_non_writable_nexus_blocks_even_when_repository_reads_work(self):
+        findings = self._preflight(http=FakeNexus(
+            failing={release_train.NEXUS_WRITABLE_ENDPOINT}, status=503,
+        )).check_nexus_authorization()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("not writable", findings[0].message)
 
     def test_a_healthy_nexus_passes(self):
         self.assertEqual([], self._preflight().check_nexus_authorization())
@@ -2524,6 +2776,9 @@ class ReleasePreflightTest(unittest.TestCase):
         pushed = commands.calls[0]
         self.assertIn("--dry-run", pushed)
         self.assertIn("a" * 40 + ":refs/heads/main", pushed)
+        self.assertIn("a" * 40 + ":refs/heads/develop", pushed)
+        self.assertIn("a" * 40 + ":refs/heads/release/pre-2.9.3", pushed)
+        self.assertIn("a" * 40 + ":refs/heads/release/post-2.9.4-SNAPSHOT", pushed)
         self.assertIn("a" * 40 + ":refs/tags/release-2.9.3", pushed)
 
     def test_an_already_used_release_tag_is_refused(self):
@@ -2541,6 +2796,60 @@ class ReleasePreflightTest(unittest.TestCase):
 
         self.assertEqual(1, len(findings))
         self.assertIn("already carries release-2.9.3", findings[0].message)
+
+    def test_existing_maven_and_npm_release_versions_are_refused(self):
+        class OccupiedRegistry(FakeNexus):
+            def read_json(self, url, *, missing_ok=False):
+                if "/service/rest/v1/search?" in url:
+                    return {"items": [{"name": "cedar-parent"}]}, b"{}"
+                return {"versions": {"2.9.3": {"name": "cedar-ui"}}}, b"{}"
+
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = self._release_of("repo-one")
+            manifest["publicationPlan"] = {"npm": {
+                "registry": release_train.NEXUS_NPM_REGISTRY,
+                "surfaces": [{"repository": "repo-one", "directory": "."}],
+            }}
+            commands = FakeCommands({
+                ("git", "-C"): FakeCompletedProcess(
+                    stdout=json.dumps({"name": "cedar-ui"})),
+            })
+            findings = self._preflight(
+                manifest=manifest, root=directory, commands=commands,
+                http=OccupiedRegistry(),
+            ).check_target_artifacts_unused()
+
+        self.assertEqual(2, len(findings))
+        self.assertIn("Maven releases already contains", findings[0].message)
+        self.assertIn("cedar-ui@2.9.3", findings[1].message)
+
+    def test_missing_preserved_distribution_input_fails_source_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            manifest = self._release_of("repo-one")
+            manifest["publicationPlan"] = {"npm": {
+                "registry": release_train.NEXUS_NPM_REGISTRY,
+                "surfaces": [{
+                    "repository": "repo-one", "directory": "dist",
+                    "preserveFiles": ["README.md", "package.json", "package-lock.json"],
+                }],
+            }}
+            commands = FakeCommands({
+                ("git", "-C", str(Path(directory) / "repo-one"), "ls-tree"):
+                    FakeCompletedProcess(stdout="dist/package.json\ndist/package-lock.json\n"),
+                ("git", "-C", str(Path(directory) / "repo-one"), "show"):
+                    FakeCompletedProcess(stdout=json.dumps({
+                        "name": "repo-one", "publishConfig": {
+                            "registry": release_train.NEXUS_NPM_REGISTRY,
+                        },
+                    })),
+            })
+            findings = self._preflight(
+                manifest=manifest, root=directory, commands=commands,
+            ).check_source_contract()
+
+        self.assertTrue(any("dist/README.md" in finding.message for finding in findings))
 
     @staticmethod
     def _release_of(*repositories):
@@ -2560,16 +2869,28 @@ class ReleasePreflightTest(unittest.TestCase):
 
         self.assertIn(f"head_sha={'a' * 40}", commands.calls[0][2])
 
-    def test_a_source_commit_with_no_ci_run_is_advisory(self):
+    def test_a_source_commit_with_no_ci_run_blocks(self):
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(stdout=""),
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("no CI run", findings[0].message)
+
+    def test_a_repository_without_a_ci_workflow_is_advisory(self):
         commands = FakeCommands({("gh", "api"): FakeCompletedProcess(stdout="")})
         findings = self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
 
         self.assertEqual(1, len(findings))
         self.assertFalse(findings[0].fatal)
-        self.assertIn("no CI run", findings[0].message)
+        self.assertIn("no CI workflow contract", findings[0].message)
 
-    def test_a_still_running_workflow_is_advisory(self):
+    def test_a_still_running_workflow_blocks(self):
         commands = FakeCommands({
             ("gh", "api"): FakeCompletedProcess(stdout="pending\tin_progress\t7\tCI"),
         })
@@ -2577,7 +2898,7 @@ class ReleasePreflightTest(unittest.TestCase):
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
 
         self.assertEqual(1, len(findings))
-        self.assertFalse(findings[0].fatal)
+        self.assertTrue(findings[0].fatal)
         self.assertIn("still in_progress", findings[0].message)
 
     def test_a_cancelled_run_is_advisory_rather_than_blocking(self):
@@ -2751,6 +3072,29 @@ class ReleasePreflightTest(unittest.TestCase):
             self.assertIn(
                 "_release_gate_or_exit", inspect.getsource(command),
                 f"{command.__name__} does not run the complete release gate")
+
+    def test_resume_rechecks_conditions_for_its_recorded_stage(self):
+        manifest = manifest_fixture()
+        manifest["phase"] = "snapshot-publication-failed"
+        preflight = self._preflight(manifest=manifest)
+        called = []
+
+        def check(name):
+            def run():
+                called.append(name)
+                return []
+            return run
+
+        names = {
+            "check_toolchain", "check_profile", "check_disk_space",
+            "check_nexus_authorization", "check_npm_authorization",
+            "check_push_permission", "check_target_version_unused",
+            "check_target_artifacts_unused", "check_remote_survey",
+        }
+        with patch.multiple(preflight, **{name: check(name) for name in names}):
+            self.assertEqual([], preflight.run_resume())
+
+        self.assertEqual(names, set(called))
 
 
 class ReleaseLicenseStampingTest(unittest.TestCase):

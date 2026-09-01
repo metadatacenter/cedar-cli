@@ -63,6 +63,46 @@ class BuildTrainWorker:
                     'which the train cannot see')
         return findings
 
+    @classmethod
+    def _source_alignment(cls):
+        """Require every local source checkout to describe the remote train source exactly."""
+        cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        if not cedar_home:
+            raise ValueError('CEDAR_HOME is not set')
+        ops = Path(cedar_home) / 'cedar-development' / 'ops'
+        try:
+            build = json.loads((ops / 'build-train.json').read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f'cannot read build-train configuration: {error}') from error
+
+        findings = []
+        for repository in build.get('repositories', []):
+            root = Path(cedar_home) / repository
+            if not (root / '.git').exists():
+                continue
+            code, branch, _ = cls._git(root, 'rev-parse', '--abbrev-ref', 'HEAD')
+            if code != 0:
+                continue
+            if branch != 'develop':
+                findings.append(f'{repository} is on {branch}, not develop')
+            code, local, _ = cls._git(root, 'rev-parse', 'refs/heads/develop')
+            if code != 0:
+                findings.append(f'{repository} has no local develop branch')
+                continue
+            code, remote, detail = cls._git(
+                root, 'ls-remote', '--heads', 'origin', 'refs/heads/develop')
+            if code != 0 or not remote:
+                findings.append(
+                    f'{repository} cannot read origin/develop'
+                    + (f': {detail.splitlines()[-1]}' if detail else ''))
+                continue
+            remote_sha = remote.split()[0]
+            if local != remote_sha:
+                findings.append(
+                    f'{repository} local develop is {local[:8]}, but GitHub develop is '
+                    f'{remote_sha[:8]}')
+        return findings
+
     @staticmethod
     def _git(root, *arguments):
         completed = subprocess.run(
@@ -142,6 +182,7 @@ class BuildTrainWorker:
         try:
             build = json.loads((ops / 'build-train.json').read_text(encoding='utf-8'))
             frontend = json.loads((ops / 'frontend-train.json').read_text(encoding='utf-8'))
+            docker = json.loads((ops / 'docker-train.json').read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f'cannot read build-train configuration: {error}') from error
 
@@ -150,6 +191,28 @@ class BuildTrainWorker:
             raise ValueError('build-train repositories must be a non-empty unique list')
         if build.get('organization') != 'metadatacenter' or build.get('sourceBranch') != 'develop':
             raise ValueError('build-train source must be metadatacenter develop')
+        maven = build.get('mavenRepositories', [])
+        if (
+            not maven or len(maven) != len(set(maven))
+            or not set(maven).issubset(repositories)
+        ):
+            raise ValueError('Maven repositories must be a non-empty unique source subset')
+        phases = build.get('phases', [])
+        phase_names = [item.get('name') for item in phases if isinstance(item, dict)]
+        phase_repositories = [item.get('repository') for item in phases if isinstance(item, dict)]
+        if (
+            not phases or len(phase_names) != len(phases)
+            or any(not name for name in phase_names)
+            or len(phase_names) != len(set(phase_names))
+            or any(repository not in maven for repository in phase_repositories)
+        ):
+            raise ValueError('build-train Maven phases must be named, unique, and use Maven repositories')
+        required_artifacts = build.get('requiredArtifacts', [])
+        if (
+            not required_artifacts or len(required_artifacts) != len(set(required_artifacts))
+            or any(not isinstance(item, str) or not item for item in required_artifacts)
+        ):
+            raise ValueError('required Maven artifacts must be a non-empty unique list')
 
         model = frontend.get('model', {}).get('repository')
         cee = frontend.get('cee', {}).get('repository')
@@ -170,6 +233,17 @@ class BuildTrainWorker:
             values = [item.get(key) for item in frontends]
             if not values or any(not value for value in values) or len(values) != len(set(values)):
                 raise ValueError(f'frontend train {key} values must be present and unique')
+        groups = docker.get('groups', {})
+        ordered_images = []
+        for group in ('javaBase', 'microserviceBase', 'infrastructure', 'microservices', 'frontends'):
+            images = groups.get(group, [])
+            if not images or len(images) != len(set(images)) or any(not image for image in images):
+                raise ValueError(f'Docker train {group} images must be present and unique')
+            ordered_images.extend(images)
+        if len(ordered_images) != 31 or len(set(ordered_images)) != 31:
+            raise ValueError('Docker train must contain 31 unique core images')
+        if {item['image'] for item in frontends} != set(groups['frontends']):
+            raise ValueError('frontend and Docker train image sets differ')
         return len(repositories), model, cee, len(frontends), len(additional)
 
     @classmethod
@@ -205,46 +279,74 @@ class BuildTrainWorker:
             console.print(f'  [green]OK[/green] {description}')
 
     @classmethod
-    def _dry_run(cls, selected, resume, command):
+    def _active_workflow_runs(cls):
+        command = [
+            'gh', 'run', 'list', '--repo', cls.REPOSITORY,
+            '--workflow', cls.WORKFLOW, '--limit', '20',
+            '--json', 'databaseId,status,displayTitle',
+            '--jq', '.[] | select(.status == "queued" or .status == "in_progress")'
+                    ' | [.databaseId, .status, .displayTitle] | @tsv',
+        ]
+        try:
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+        except OSError as error:
+            raise ValueError(f'cannot inspect active build trains: {error}') from error
+        if result.returncode:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            raise ValueError(
+                'cannot inspect active build trains'
+                + (f': {detail[-1]}' if detail else ''))
+        return [line for line in result.stdout.splitlines() if line.strip()]
+
+    @classmethod
+    def _preflight(cls, selected, resume):
         source_path = f'trains/{selected}.json'
         try:
             source = BuildTrain._read(source_path)
             source_exists = True
         except ValueError as error:
             if 'does not exist' not in str(error):
-                console.print(f'[red]{error}[/red]')
-                return 1
+                raise
             source = None
             source_exists = False
-
         if resume:
             if not source_exists:
-                console.print(f'[red]train {selected} has no recorded source manifest[/red]')
-                return 1
+                raise ValueError(f'train {selected} has no recorded source manifest')
             if source.get('version') != selected:
-                console.print(f'[red]source manifest does not describe {selected}[/red]')
-                return 1
+                raise ValueError(f'source manifest does not describe {selected}')
         elif source_exists:
-            console.print(f'[red]train {selected} already exists; use --resume {selected}[/red]')
-            return 1
+            raise ValueError(f'train {selected} already exists; use --resume {selected}')
 
+        summary = cls._configuration_summary()
+        cls._github_preflight()
+        active = cls._active_workflow_runs()
+        if active:
+            raise ValueError(
+                'another build train is queued or running: ' + '; '.join(active))
+        open_work = cls._open_work()
+        if open_work:
+            raise ValueError(
+                'source repositories hold work the train cannot see: ' + '; '.join(open_work))
+        alignment = cls._source_alignment()
+        if alignment:
+            raise ValueError(
+                'local source checkouts do not match GitHub develop: ' + '; '.join(alignment))
+        return summary, source
+
+    @classmethod
+    def _dry_run(cls, selected, resume, command):
         try:
-            repository_count, model, cee, frontend_count, additional_count = (
-                cls._configuration_summary()
-            )
+            summary, _source = cls._preflight(selected, resume)
         except ValueError as error:
             console.print(f'[red]{error}[/red]')
             return 1
+        repository_count, model, cee, frontend_count, additional_count = summary
 
         console.print('[bold]DRY RUN — no workflow will be dispatched[/bold]')
         console.print(f'Train: {selected}')
         console.print(f'Mode: {"resume" if resume else "new"}')
         console.print('Preflight:')
-        try:
-            cls._github_preflight()
-        except ValueError as error:
-            console.print(f'  [red]FAIL[/red] {error}')
-            return 1
+        console.print('  [green]OK[/green] GitHub authentication, workflow, and idle slot')
         console.print(
             f'  [green]OK[/green] source capture configuration: '
             f'{repository_count} repositories from develop',
@@ -259,18 +361,9 @@ class BuildTrainWorker:
             f'  [green]OK[/green] train ID is '
             f'{"recorded for resume" if resume else "available"}'
         )
-        try:
-            open_work = cls._open_work()
-        except ValueError as error:
-            console.print(f'  [red]FAIL[/red] {error}')
-            return 1
-        if open_work:
-            console.print('  [red]FAIL[/red] source repositories hold work the train cannot see:')
-            for finding in open_work:
-                console.print(f'    {finding}')
-            return 1
         console.print(
-            '  [green]OK[/green] every source repository is committed and pushed'
+            '  [green]OK[/green] every local source repository is on synchronized develop, '
+            'committed, and pushed'
         )
 
         if resume:
@@ -312,12 +405,9 @@ class BuildTrainWorker:
             return cls._dry_run(selected, resume, command)
 
         try:
-            open_work = cls._open_work()
+            cls._preflight(selected, resume)
         except ValueError as error:
-            console.print(f'[red]{error}[/red]')
-            return 1
-        if open_work:
-            cls._report_open_work(open_work)
+            console.print(f'[red]Build-train preflight failed: {error}[/red]')
             return 1
 
         try:

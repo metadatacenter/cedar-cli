@@ -11,6 +11,7 @@ import base64
 import copy
 import dataclasses
 import datetime as dt
+import fnmatch
 import gzip
 import hashlib
 import io
@@ -26,6 +27,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 import typer
 from rich import box
@@ -66,6 +68,7 @@ INDEPENDENT_RELEASE_REPOSITORIES = {
     "cedar-template-designer",
     "cedar-workspace",
 }
+REQUIRED_NODE_VERSION = "v24.19.0"
 NPM_VERSION_SURFACES = {
     "cedar-template-editor": ["."],
     "cedar-openview": ["cedar-openview-src", "cedar-openview-dist"],
@@ -81,6 +84,7 @@ NPM_VERSION_SURFACES = {
 }
 LICENSE_FILE_NAME = "license.txt"
 LICENSE_COPYRIGHT_RE = re.compile(r"^Copyright \(c\) (\d{4}),", re.MULTILINE)
+MAVEN_RELEASE_SERVER_ID = "bmir-nexus-releases"
 
 MAVEN_GENERATED_VERSION_FILES = {
     "cedar-artifact-server": {
@@ -288,6 +292,16 @@ class RetryableReleaseError(ReleaseError):
     """
 
 
+def _integration_repositories(manifest: dict) -> list[str]:
+    """Repositories whose remote refs the release actually changes."""
+    repositories = list(manifest.get("releaseRepositories", []))
+    for consumer in manifest.get("cee", {}).get("consumers", []):
+        repository = consumer.get("repository") if isinstance(consumer, dict) else None
+        if isinstance(repository, str) and repository not in repositories:
+            repositories.append(repository)
+    return repositories
+
+
 RETRYABLE_TRANSPORT_TEXT = (
     "connection reset",
     "connection refused",
@@ -367,12 +381,65 @@ def _stable_version_key(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in value.split("."))
 
 
+def _maven_settings_credentials(environment: dict) -> tuple[str, str] | None:
+    """Read the release server without assuming Maven's optional XML namespace.
+
+    An explicitly supplied environment is deliberately hermetic: if it has no HOME,
+    do not fall through to the process user's settings and make tests or automation
+    depend on an unrelated account.
+    """
+    home = environment.get("HOME")
+    if not home:
+        return None
+    settings = Path(home).expanduser() / ".m2" / "settings.xml"
+    if not settings.is_file():
+        return None
+    try:
+        root = ET.parse(settings).getroot()
+    except (OSError, ET.ParseError) as error:
+        raise ReleaseError(f"cannot read Maven settings {settings}: {error}") from error
+
+    def local_name(element: ET.Element) -> str:
+        return element.tag.rsplit("}", 1)[-1]
+
+    for server in root.iter():
+        if local_name(server) != "server":
+            continue
+        values = {
+            local_name(child): (child.text or "").strip()
+            for child in server
+        }
+        if values.get("id") != MAVEN_RELEASE_SERVER_ID:
+            continue
+        username = values.get("username", "")
+        password = values.get("password", "")
+        if username and password:
+            return username, password
+        return None
+    return None
+
+
+def _environment_with_nexus_credentials(environment=None) -> dict:
+    """Prefer explicit credentials and fill only missing values from Maven settings."""
+    values = dict(os.environ if environment is None else environment)
+    if values.get("BMIR_NEXUS_USERNAME") and values.get("BMIR_NEXUS_PASSWORD"):
+        return values
+    credentials = _maven_settings_credentials(values)
+    if credentials is not None:
+        username, password = credentials
+        if not values.get("BMIR_NEXUS_USERNAME"):
+            values["BMIR_NEXUS_USERNAME"] = username
+        if not values.get("BMIR_NEXUS_PASSWORD"):
+            values["BMIR_NEXUS_PASSWORD"] = password
+    return values
+
+
 class HttpClient:
     """Small authenticated reader used for state and npm registry artifacts."""
 
     def __init__(self, opener=None, environment=None):
         self.opener = opener or urllib.request.urlopen
-        self.environment = os.environ if environment is None else environment
+        self.environment = _environment_with_nexus_credentials(environment)
 
     def _headers(self, url: str) -> dict[str, str]:
         if not url.startswith("https://nexus.bmir.stanford.edu/"):
@@ -937,6 +1004,41 @@ class ReleasePlanner:
             raise ReleaseError(f"{identity} has no tarball and integrity metadata")
         return tarball_url, integrity
 
+    @staticmethod
+    def _validate_docker_completion(
+        train: str,
+        source_sha256: str,
+        npm_plan_sha256: str,
+        plan: dict,
+        completion: dict,
+    ) -> None:
+        for label, value in (("Docker plan", plan), ("Docker completion", completion)):
+            if value.get("version") != train:
+                raise ReleaseError(f"{label} does not describe train {train}")
+        if plan.get("sourceManifestSha256") != source_sha256 \
+                or completion.get("sourceManifestSha256") != source_sha256:
+            raise ReleaseError("Docker train does not match the source manifest")
+        if plan.get("npmPlanSha256") != npm_plan_sha256 \
+                or completion.get("npmPlanSha256") != npm_plan_sha256:
+            raise ReleaseError("Docker train does not match the npm plan")
+        if completion.get("plan") != f"docker/trains/{train}.json":
+            raise ReleaseError("Docker completion does not name its immutable plan")
+        planned = plan.get("images")
+        verified = completion.get("images")
+        if not isinstance(planned, list) or not isinstance(verified, list):
+            raise ReleaseError("Docker train has no image inventory")
+        planned_names = [item.get("image") for item in planned if isinstance(item, dict)]
+        verified_names = [item.get("image") for item in verified if isinstance(item, dict)]
+        if (
+            len(planned_names) != 31 or len(set(planned_names)) != 31
+            or verified_names != planned_names
+        ):
+            raise ReleaseError("Docker train is not complete for all 31 planned images")
+        for item in verified:
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", item.get("digest", "")):
+                raise ReleaseError(
+                    f"Docker completion has no immutable digest for {item.get('image')}")
+
     def build(
         self,
         *,
@@ -974,6 +1076,8 @@ class ReleasePlanner:
         completion, _ = self.state.read_json(f"completed/{train}.json")
         npm_plan, npm_plan_content = self.state.read_json(f"npm/trains/{train}.json")
         npm_completion, _ = self.state.read_json(f"npm/completed/{train}.json")
+        docker_plan, docker_plan_content = self.state.read_json(f"docker/trains/{train}.json")
+        docker_completion, _ = self.state.read_json(f"docker/completed/{train}.json")
         for label, value in (
             ("source manifest", source),
             ("completion record", completion),
@@ -990,6 +1094,9 @@ class ReleasePlanner:
         npm_plan_sha256 = _sha256(npm_plan_content)
         if npm_completion.get("planSha256") != npm_plan_sha256:
             raise ReleaseError("npm completion does not match the npm plan")
+        self._validate_docker_completion(
+            train, source_sha256, npm_plan_sha256, docker_plan, docker_completion,
+        )
         frontend_config, frontend_config_url, frontend_config_sha256 = self._development_config(
             source, "frontend-train.json"
         )
@@ -1056,6 +1163,9 @@ class ReleasePlanner:
                 "npmPlan": f"npm/trains/{train}.json",
                 "npmPlanSha256": npm_plan_sha256,
                 "npmCompletion": f"npm/completed/{train}.json",
+                "dockerPlan": f"docker/trains/{train}.json",
+                "dockerPlanSha256": _sha256(docker_plan_content),
+                "dockerCompletion": f"docker/completed/{train}.json",
                 "frontendConfig": frontend_config_url,
                 "frontendConfigSha256": frontend_config_sha256,
                 "buildConfig": build_config_url,
@@ -2422,7 +2532,7 @@ class ReleaseRemoteIntegrator:
         if not cedar_home:
             raise ReleaseError("CEDAR_HOME is not set")
         findings: dict[str, list[str]] = {}
-        for repository in manifest.get("releaseRepositories", []):
+        for repository in _integration_repositories(manifest):
             source = manifest.get("sourceRepositories", {}).get(repository)
             if not source:
                 raise ReleaseError(f"{repository} has no recorded train source")
@@ -2680,12 +2790,14 @@ class ReleaseArtifactPublisher:
         executor=None,
         sleeper=None,
         nexus_guard=None,
+        progress_reporter=None,
     ):
         self.state = state
-        self.environment = dict(os.environ if environment is None else environment)
+        self.environment = _environment_with_nexus_credentials(environment)
         self.http = http or HttpClient(environment=self.environment)
         self.executor = executor
         self.sleeper = sleeper or time.sleep
+        self.progress_reporter = progress_reporter
         self.nexus_guard = nexus_guard or NexusCircuitBreaker(
             self.http, self.environment)
 
@@ -2921,22 +3033,67 @@ class ReleaseArtifactPublisher:
 
     def _publish_maven_release(self, task: dict) -> dict:
         local_repository = Path(task["localRepository"])
+        candidates = self._maven_candidates(local_repository, task["version"])
         files = {}
-        for source in self._maven_candidates(local_repository, task["version"]):
+        uploaded = 0
+        existing = 0
+        self._report_maven_progress(task, 0, len(candidates), uploaded, existing, None, None)
+        for completed, source in enumerate(candidates, start=1):
             relative = source.relative_to(local_repository).as_posix()
             content = source.read_bytes()
             destination = task["repository"].rstrip("/") + "/" + relative
-            existing = self.http.read(destination, missing_ok=True)
-            if existing is None:
+            remote = self.http.read(destination, missing_ok=True)
+            if remote is None:
                 self._upload(destination, content)
-            elif existing != content:
+                uploaded += 1
+                action = "uploaded"
+            elif remote != content:
                 raise ReleaseError(f"immutable Maven release path contains different bytes: {destination}")
+            else:
+                existing += 1
+                action = "already present"
             files[relative] = _sha256(content)
+            self._report_maven_progress(
+                task, completed, len(candidates), uploaded, existing, relative, action,
+            )
         return {
             **task,
             "files": files,
+            "uploadedFiles": uploaded,
+            "existingFiles": existing,
             "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
+
+    def _report_maven_progress(
+        self,
+        task: dict,
+        completed: int,
+        total: int,
+        uploaded: int,
+        existing: int,
+        current: str | None,
+        action: str | None,
+    ) -> None:
+        progress = {
+            "id": task["id"],
+            "kind": task["kind"],
+            "completedFiles": completed,
+            "totalFiles": total,
+            "uploadedFiles": uploaded,
+            "existingFiles": existing,
+            "currentFile": current,
+            "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        if self.progress_reporter is not None:
+            self.progress_reporter(progress)
+        if current is None:
+            console.print(f"Maven release publication: 0/{total} files")
+        else:
+            console.print(
+                f"Maven release publication: {completed}/{total} files; "
+                f"{action}: {current}",
+                markup=False,
+            )
 
     def _nexus_artifacts(self, repository_url: str, version: str) -> set[str]:
         if not isinstance(repository_url, str) or "/repository/" not in repository_url:
@@ -3624,6 +3781,24 @@ def publish_active_release(
             record,
             snapshot_tasks if record.get("id") in snapshot_task_ids else tasks,
         )
+
+    if hasattr(publisher, "_publication_base_progress_reporter"):
+        previous_reporter = publisher._publication_base_progress_reporter
+    else:
+        previous_reporter = getattr(publisher, "progress_reporter", None)
+        publisher._publication_base_progress_reporter = previous_reporter
+
+    def record_progress(progress: dict) -> None:
+        if previous_reporter is not None:
+            previous_reporter(progress)
+        evidence["inProgressTask"] = copy.deepcopy(progress)
+        state.update_current_manifest({
+            "phase": "publishing-artifacts",
+            "artifactPublication": evidence,
+            "failure": None,
+        })
+
+    publisher.progress_reporter = record_progress
     state.update_current_manifest({
         "phase": "publishing-artifacts",
         "artifactPublication": evidence,
@@ -3644,6 +3819,7 @@ def publish_active_release(
             raise
         completed[task["id"]] = record
         evidence.pop("failedTask", None)
+        evidence.pop("inProgressTask", None)
         state.update_current_manifest({
             "phase": "publishing-artifacts",
             "artifactPublication": evidence,
@@ -4167,7 +4343,7 @@ class NexusCircuitBreaker:
 
     def __init__(self, http: HttpClient, environment=None):
         self.http = http
-        self.environment = dict(os.environ if environment is None else environment)
+        self.environment = _environment_with_nexus_credentials(environment)
 
     def _read(self, url: str, label: str, purpose: str) -> None:
         try:
@@ -4242,11 +4418,14 @@ class ReleasePreflight:
         "check_profile",
         "check_disk_space",
         "check_working_trees",
+        "check_git_identity",
         "check_nexus_authorization",
         "check_npm_authorization",
         "check_push_permission",
         "check_target_version_unused",
+        "check_target_artifacts_unused",
         "check_develop_is_green",
+        "check_source_contract",
         "check_generated_version_files",
         "check_license_files",
         "check_remote_survey",
@@ -4263,15 +4442,16 @@ class ReleasePreflight:
         accepted_red_develop: dict[str, str] | None = None,
     ):
         self.manifest = manifest
-        self.environment = dict(os.environ if environment is None else environment)
+        self.environment = _environment_with_nexus_credentials(environment)
         self.state = state or ReleaseState()
         self.command_runner = command_runner or subprocess.run
         self.http = http or HttpClient(environment=self.environment)
         self.accepted_red_develop = dict(accepted_red_develop or {})
+        self._source_path_cache: dict[str, list[str]] = {}
 
     @property
     def repositories(self) -> list[str]:
-        return list(self.manifest.get("releaseRepositories", []))
+        return _integration_repositories(self.manifest)
 
     def _root(self, repository: str) -> Path:
         cedar_home = self.environment.get("CEDAR_HOME")
@@ -4301,6 +4481,46 @@ class ReleasePreflight:
     def run(self) -> list[PreflightFinding]:
         findings: list[PreflightFinding] = []
         for name in self.CHECKS:
+            findings.extend(getattr(self, name)())
+        return findings
+
+    def run_resume(self) -> list[PreflightFinding]:
+        """Recheck only conditions still relevant to the recorded next stage."""
+        stage = _next_release_stage(self.manifest)
+        checks = ["check_toolchain", "check_profile", "check_disk_space"]
+        if stage in {"frontends", "versions", "builds"}:
+            checks.extend([
+                "check_working_trees", "check_git_identity",
+                "check_nexus_authorization", "check_npm_authorization",
+                "check_push_permission", "check_target_version_unused",
+                "check_target_artifacts_unused", "check_source_contract",
+                "check_generated_version_files", "check_license_files",
+                "check_remote_survey",
+            ])
+        elif stage == "local-refs":
+            checks.extend([
+                "check_git_identity", "check_nexus_authorization",
+                "check_npm_authorization", "check_push_permission",
+                "check_target_version_unused", "check_target_artifacts_unused",
+                "check_remote_survey",
+            ])
+        elif stage == "snapshots":
+            checks.extend([
+                "check_nexus_authorization", "check_npm_authorization",
+                "check_push_permission", "check_target_version_unused",
+                "check_target_artifacts_unused", "check_remote_survey",
+            ])
+        elif stage == "remotes":
+            checks.extend([
+                "check_nexus_authorization", "check_npm_authorization",
+                "check_push_permission", "check_target_artifacts_unused",
+            ])
+        elif stage == "artifacts":
+            checks.extend(["check_nexus_authorization", "check_npm_authorization"])
+        elif stage == "acceptance":
+            checks.append("check_nexus_authorization")
+        findings = []
+        for name in checks:
             findings.extend(getattr(self, name)())
         return findings
 
@@ -4347,6 +4567,14 @@ class ReleasePreflight:
                 f"Java {major or 'of unknown version'} is active, and CEDAR builds require "
                 f"Java {REQUIRED_JAVA_MAJOR}",
                 'export JAVA_HOME=$(/usr/libexec/java_home -v 17)',
+            ))
+        code, node, stderr = self._capture(["node", "--version"])
+        if code != 0 or node != REQUIRED_NODE_VERSION:
+            findings.append(PreflightFinding(
+                "toolchain", "fail",
+                f"Node {node or 'of unknown version'} is active, and release builds require "
+                f"{REQUIRED_NODE_VERSION}",
+                f"activate Node {REQUIRED_NODE_VERSION.removeprefix('v')}",
             ))
         return findings
 
@@ -4417,6 +4645,28 @@ class ReleasePreflight:
                 ))
         return findings
 
+    def check_git_identity(self) -> list[PreflightFinding]:
+        if (
+            self.environment.get("CEDAR_RELEASE_GIT_NAME")
+            and self.environment.get("CEDAR_RELEASE_GIT_EMAIL")
+        ):
+            return []
+        findings = []
+        for repository in self.repositories:
+            root = self._root(repository)
+            if not root.is_dir():
+                continue
+            _, name, _ = self._capture(["git", "-C", str(root), "config", "user.name"])
+            _, email, _ = self._capture(["git", "-C", str(root), "config", "user.email"])
+            if not name or not email:
+                findings.append(PreflightFinding(
+                    "git-identity", "fail",
+                    f"{repository} has no Git author name and email for release commits",
+                    "configure git user.name/user.email, or CEDAR_RELEASE_GIT_NAME and "
+                    "CEDAR_RELEASE_GIT_EMAIL",
+                ))
+        return findings
+
     def check_nexus_authorization(self) -> list[PreflightFinding]:
         username = self.environment.get("BMIR_NEXUS_USERNAME")
         password = self.environment.get("BMIR_NEXUS_PASSWORD")
@@ -4426,7 +4676,7 @@ class ReleasePreflight:
                 "BMIR_NEXUS_USERNAME and BMIR_NEXUS_PASSWORD are not both set, and Nexus "
                 "reads fall back to anonymous, so nothing else reveals this until the "
                 "first upload",
-                "export both from the bmir-nexus-releases server in ~/.m2/settings.xml",
+                "add both to the bmir-nexus-releases server in ~/.m2/settings.xml or export them",
             )]
         findings = []
         authenticated = self._reachable(NEXUS_AUTHENTICATED_ENDPOINT)
@@ -4449,6 +4699,19 @@ class ReleasePreflight:
                 "check the Usage Center for requests per day, and let the 24-hour window "
                 "roll off before releasing",
             )]
+        if writable is not None and repository is not None:
+            return [PreflightFinding(
+                "nexus", "fail",
+                f"Nexus is not writable ({writable}) and cannot serve a repository read "
+                f"({repository})",
+                "restore Nexus repository and write availability before releasing",
+            )]
+        if writable is not None:
+            findings.append(PreflightFinding(
+                "nexus", "fail",
+                f"Nexus is not writable: {writable}",
+                "restore Nexus write availability before releasing",
+            ))
         if repository is not None:
             findings.append(PreflightFinding(
                 "nexus", "fail",
@@ -4491,42 +4754,146 @@ class ReleasePreflight:
         run, so the question is asked here with a push that transmits nothing.
         """
         findings = []
-        tag = f"release-{self.manifest.get('releaseVersion')}"
+        version = self.manifest.get("releaseVersion")
+        next_version = self.manifest.get("nextDevelopmentVersion")
+        tag = f"release-{version}"
+        completed = self.manifest.get("remoteIntegration", {}).get("completedTasks", {})
         for repository in self.repositories:
+            if isinstance(completed, dict) and repository in completed:
+                continue
             root = self._root(repository)
             if not root.is_dir():
                 continue
             source = self.manifest.get("sourceRepositories", {}).get(repository)
             if not source:
                 continue
+            targets = [
+                f"{source}:refs/heads/main",
+                f"{source}:refs/heads/develop",
+                f"{source}:refs/heads/release/pre-{version}",
+                f"{source}:refs/tags/{tag}",
+            ]
+            if repository in self.manifest.get("releaseRepositories", []):
+                targets.append(f"{source}:refs/heads/release/post-{next_version}")
             code, _, stderr = self._capture([
                 "git", "-C", str(root), "push", "--dry-run", "--force", "origin",
-                f"{source}:refs/heads/main", f"{source}:refs/tags/{tag}",
+                *targets,
             ])
             if code != 0:
                 detail = stderr.splitlines()[-1] if stderr else "push refused"
                 findings.append(PreflightFinding(
                     "push", "fail",
-                    f"{repository} refuses the release's writes to main and {tag}: {detail}",
-                    "grant push access, or lift the branch protection on main",
+                    f"{repository} refuses one or more release ref writes: {detail}",
+                    "grant push access or adjust branch protection for main, develop, release/*, "
+                    "and tags",
                 ))
         return findings
 
     def check_target_version_unused(self) -> list[PreflightFinding]:
         version = self.manifest.get("releaseVersion")
-        tag = f"release-{version}"
+        next_version = self.manifest.get("nextDevelopmentVersion")
         findings = []
         for repository in self.repositories:
             root = self._root(repository)
             if not root.is_dir():
                 continue
-            code, output, _ = self._capture(
-                ["git", "-C", str(root), "ls-remote", "--tags", "origin", f"refs/tags/{tag}"])
+            references = [
+                f"refs/tags/release-{version}",
+                f"refs/heads/release/pre-{version}",
+            ]
+            if repository in self.manifest.get("releaseRepositories", []):
+                references.append(f"refs/heads/release/post-{next_version}")
+            code, output, _ = self._capture([
+                "git", "-C", str(root), "ls-remote", "--refs", "origin", *references])
             if code == 0 and output:
                 findings.append(PreflightFinding(
                     "version", "fail",
-                    f"{repository} already carries {tag}",
-                    f"choose an unused release version, or delete {tag} deliberately",
+                    f"{repository} already carries release-{version} target ref(s): "
+                    + ", ".join(line.split("\t", 1)[-1] for line in output.splitlines()),
+                    "choose unused release/next versions, or remove the stale refs deliberately",
+                ))
+        return findings
+
+    def _source_paths(self, repository: str) -> list[str]:
+        if repository in self._source_path_cache:
+            return self._source_path_cache[repository]
+        source = self.manifest.get("sourceRepositories", {}).get(repository)
+        if not source:
+            self._source_path_cache[repository] = []
+            return []
+        root = self._root(repository)
+        code, output, _ = self._capture([
+            "git", "-C", str(root), "ls-tree", "-r", "--name-only", source])
+        paths = output.splitlines() if code == 0 else []
+        self._source_path_cache[repository] = paths
+        return paths
+
+    def _source_content(self, repository: str, relative: str) -> str | None:
+        source = self.manifest.get("sourceRepositories", {}).get(repository)
+        if not source:
+            return None
+        code, output, _ = self._capture([
+            "git", "-C", str(self._root(repository)), "show", f"{source}:{relative}"])
+        return output if code == 0 else None
+
+    def _source_mode(self, repository: str, relative: str) -> str | None:
+        source = self.manifest.get("sourceRepositories", {}).get(repository)
+        if not source:
+            return None
+        code, output, _ = self._capture([
+            "git", "-C", str(self._root(repository)), "ls-tree", source, "--", relative])
+        return output.split()[0] if code == 0 and output.split() else None
+
+    def _source_json(self, repository: str, relative: str) -> dict | None:
+        content = self._source_content(repository, relative)
+        if content is None:
+            return None
+        try:
+            value = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def check_target_artifacts_unused(self) -> list[PreflightFinding]:
+        version = self.manifest.get("releaseVersion")
+        findings = []
+        query = urllib.parse.urlencode({"repository": "releases", "version": version})
+        try:
+            result = self.http.read_json(f"{NEXUS_HOST}/service/rest/v1/search?{query}")
+        except ReleaseError as error:
+            findings.append(PreflightFinding("version", "fail", str(error)))
+            result = None
+        if result is not None:
+            payload, _ = result
+            items = payload.get("items", [])
+            if isinstance(items, list) and items:
+                findings.append(PreflightFinding(
+                    "version", "fail",
+                    f"Maven releases already contains {len(items)} artifact record(s) for {version}",
+                    "choose an unused release version",
+                ))
+        registry = self.manifest.get("publicationPlan", {}).get("npm", {}).get(
+            "registry", NEXUS_NPM_REGISTRY)
+        for surface in self.manifest.get("publicationPlan", {}).get("npm", {}).get("surfaces", []):
+            repository = surface.get("repository")
+            directory = surface.get("directory", ".")
+            relative = "package.json" if directory == "." else f"{directory}/package.json"
+            package = self._source_json(repository, relative)
+            name = package.get("name") if isinstance(package, dict) else None
+            if not isinstance(name, str) or not name:
+                findings.append(PreflightFinding(
+                    "source", "fail", f"cannot determine npm identity from {repository}:{relative}"))
+                continue
+            url = registry.rstrip("/") + "/" + urllib.parse.quote(name, safe="")
+            try:
+                record = self.http.read_json(url, missing_ok=True)
+            except ReleaseError as error:
+                findings.append(PreflightFinding("version", "fail", str(error)))
+                continue
+            if record is not None and isinstance(record[0].get("versions", {}).get(version), dict):
+                findings.append(PreflightFinding(
+                    "version", "fail", f"npm registry already contains {name}@{version}",
+                    "choose an unused release version",
                 ))
         return findings
 
@@ -4560,22 +4927,30 @@ class ReleasePreflight:
             ])
             if code != 0:
                 findings.append(PreflightFinding(
-                    "ci", "warn",
+                    "ci", "fail",
                     f"{repository} CI state is unreadable: "
                     f"{stderr.splitlines()[-1] if stderr else code}",
                 ))
                 continue
             if not output:
+                has_workflow = any(
+                    path.startswith(".github/workflows/")
+                    for path in self._source_paths(repository)
+                )
                 findings.append(PreflightFinding(
-                    "ci", "warn",
-                    f"{repository} has no CI run for the train source {source[:8]}",
+                    "ci", "fail" if has_workflow else "warn",
+                    (
+                        f"{repository} has no CI run for the train source {source[:8]}"
+                        if has_workflow else
+                        f"{repository} has no CI workflow contract; release validation builds it"
+                    ),
                 ))
                 continue
             for line in output.splitlines():
                 conclusion, status, run_id, name = (line.split("\t") + ["", "", "", ""])[:4]
                 if status != "completed":
                     findings.append(PreflightFinding(
-                        "ci", "warn",
+                        "ci", "fail",
                         f"{repository} {name or 'CI'} is still {status} for {source[:8]}",
                     ))
                     continue
@@ -4605,6 +4980,131 @@ class ReleasePreflight:
                 ))
         return findings
 
+    def check_source_contract(self) -> list[PreflightFinding]:
+        """Validate build and publication topology in the exact immutable train commits."""
+        findings = []
+        source_version = self.manifest.get("sourceVersion")
+        required: dict[str, set[str]] = {}
+        for phase in self.manifest.get("mavenPhases", []):
+            required.setdefault(phase.get("repository"), set()).add("mvnw")
+        for surface in FRONTEND_BUILD_SURFACES:
+            repository = surface["repository"]
+            if repository not in self.repositories:
+                continue
+            prefix = "" if surface["directory"] == "." else f"{surface['directory']}/"
+            required.setdefault(repository, set()).update({
+                f"{prefix}package.json", f"{prefix}package-lock.json",
+            })
+        registry = self.manifest.get("publicationPlan", {}).get("npm", {}).get("registry")
+        for surface in self.manifest.get("publicationPlan", {}).get("npm", {}).get("surfaces", []):
+            repository = surface.get("repository")
+            directory = surface.get("directory", ".")
+            prefix = "" if directory == "." else f"{directory}/"
+            paths = required.setdefault(repository, set())
+            paths.update({f"{prefix}package.json", f"{prefix}package-lock.json"})
+            for relative in surface.get("preserveFiles", []):
+                target = f"{prefix}{relative}"
+                paths.add(target)
+        for consumer in self.manifest.get("cee", {}).get("consumers", []):
+            required.setdefault(consumer.get("repository"), set()).update({
+                consumer.get("manifest"), consumer.get("lock"),
+            })
+
+        for repository, paths in sorted(required.items()):
+            if not isinstance(repository, str):
+                continue
+            inventory = set(self._source_paths(repository))
+            for relative in sorted(item for item in paths if isinstance(item, str)):
+                if relative in inventory:
+                    continue
+                if relative.endswith("/license.txt") and "license.txt" in inventory:
+                    continue
+                findings.append(PreflightFinding(
+                    "source", "fail",
+                    f"train source {repository} is missing required release input {relative}",
+                ))
+        for phase in self.manifest.get("mavenPhases", []):
+            repository = phase.get("repository")
+            mode = self._source_mode(repository, "mvnw")
+            if mode is not None and mode != "100755":
+                findings.append(PreflightFinding(
+                    "source", "fail",
+                    f"train source {repository}:mvnw is not executable (Git mode {mode})",
+                ))
+
+        for repository, surfaces in NPM_VERSION_SURFACES.items():
+            if repository not in self.manifest.get("releaseRepositories", []):
+                continue
+            for directory in surfaces:
+                prefix = "" if directory == "." else f"{directory}/"
+                package = self._source_json(repository, f"{prefix}package.json")
+                lock = self._source_json(repository, f"{prefix}package-lock.json")
+                root = lock.get("packages", {}).get("") if isinstance(lock, dict) else None
+                if (
+                    not isinstance(package, dict) or package.get("version") != source_version
+                    or not isinstance(lock, dict) or lock.get("version") != source_version
+                    or not isinstance(root, dict) or root.get("version") != source_version
+                ):
+                    findings.append(PreflightFinding(
+                        "source", "fail",
+                        f"{repository}:{directory} does not carry train source version {source_version} "
+                        "in package.json and package-lock.json",
+                    ))
+        for repository in self.manifest.get("mavenRepositories", []):
+            source = self.manifest.get("sourceRepositories", {}).get(repository)
+            if not source:
+                continue
+            code, _, _ = self._capture([
+                "git", "-C", str(self._root(repository)), "grep", "-q", "--fixed-strings",
+                source_version, source, "--", "*pom.xml",
+            ])
+            if code != 0:
+                findings.append(PreflightFinding(
+                    "source", "fail",
+                    f"train source {repository} has no Maven version {source_version} to stamp",
+                ))
+        special_markers = {
+            "cedar-development": (
+                "bin/util/set-env-generic.sh", f"export CEDAR_VERSION={source_version}"),
+            "cedar-docker-build": (
+                "bin/cedar-images-base.sh", f"export IMAGE_VERSION={source_version}"),
+        }
+        for repository, (relative, marker) in special_markers.items():
+            if repository not in self.manifest.get("releaseRepositories", []):
+                continue
+            content = self._source_content(repository, relative)
+            if content is None or marker not in content:
+                findings.append(PreflightFinding(
+                    "source", "fail",
+                    f"train source {repository}:{relative} does not contain {marker!r}",
+                ))
+        if "cedar-docker-deploy" in self.manifest.get("releaseRepositories", []):
+            matches = 0
+            for relative in self._source_paths("cedar-docker-deploy"):
+                if not relative.endswith(".env"):
+                    continue
+                content = self._source_content("cedar-docker-deploy", relative)
+                matches += int(content is not None and f"CEDAR_DOCKER_VERSION={source_version}" in content)
+            if not matches:
+                findings.append(PreflightFinding(
+                    "source", "fail",
+                    "train source cedar-docker-deploy has no deployment version "
+                    f"{source_version} to stamp",
+                ))
+        for surface in self.manifest.get("publicationPlan", {}).get("npm", {}).get("surfaces", []):
+            repository = surface.get("repository")
+            directory = surface.get("directory", ".")
+            relative = "package.json" if directory == "." else f"{directory}/package.json"
+            package = self._source_json(repository, relative)
+            configured = package.get("publishConfig", {}).get("registry") \
+                if isinstance(package, dict) else None
+            if registry and configured != registry:
+                findings.append(PreflightFinding(
+                    "source", "fail",
+                    f"{repository}:{relative} publishes to {configured!r}, expected {registry}",
+                ))
+        return findings
+
     def check_generated_version_files(self) -> list[PreflightFinding]:
         """Find version-bearing generated files the stamping table does not declare.
 
@@ -4618,17 +5118,24 @@ class ReleasePreflight:
             if not root.is_dir():
                 continue
             declared = set(MAVEN_GENERATED_VERSION_FILES.get(repository, {}))
-            for glob in GENERATED_VERSION_FILE_GLOBS:
-                for path in sorted(root.glob(glob)):
-                    relative = path.relative_to(root).as_posix()
-                    if relative in declared:
-                        continue
-                    findings.append(PreflightFinding(
-                        "generated-files", "fail",
-                        f"{repository} regenerates {relative}, which carries the version and "
-                        "is not declared",
-                        f"add {relative} to MAVEN_GENERATED_VERSION_FILES[{repository!r}]",
-                    ))
+            source = self.manifest.get("sourceRepositories", {}).get(repository)
+            candidates = (
+                self._source_paths(repository) if source else [
+                    path.relative_to(root).as_posix()
+                    for glob in GENERATED_VERSION_FILE_GLOBS for path in root.glob(glob)
+                ]
+            )
+            for relative in sorted(set(candidates)):
+                if not any(fnmatch.fnmatch(relative, glob) for glob in GENERATED_VERSION_FILE_GLOBS):
+                    continue
+                if relative in declared:
+                    continue
+                findings.append(PreflightFinding(
+                    "generated-files", "fail",
+                    f"{repository} regenerates {relative}, which carries the version and "
+                    "is not declared",
+                    f"add {relative} to MAVEN_GENERATED_VERSION_FILES[{repository!r}]",
+                ))
         return findings
 
     def check_license_files(self) -> list[PreflightFinding]:
@@ -4637,14 +5144,18 @@ class ReleasePreflight:
             root = self._root(repository)
             if not root.is_dir():
                 continue
+            source = self.manifest.get("sourceRepositories", {}).get(repository)
+            content = self._source_content(repository, LICENSE_FILE_NAME) if source else None
             path = root / LICENSE_FILE_NAME
-            if not path.is_file():
+            if content is None and not source and path.is_file():
+                content = path.read_text(encoding="utf-8", errors="replace")
+            if content is None:
                 findings.append(PreflightFinding(
                     "license", "warn",
                     f"{repository} has no {LICENSE_FILE_NAME}, so its copyright year is not stamped",
                 ))
                 continue
-            if not LICENSE_COPYRIGHT_RE.search(path.read_text(encoding="utf-8", errors="replace")):
+            if not LICENSE_COPYRIGHT_RE.search(content):
                 findings.append(PreflightFinding(
                     "license", "fail",
                     f"{repository} has a {LICENSE_FILE_NAME} with no recognisable copyright year",
@@ -4731,6 +5242,10 @@ def _release_progress(manifest: dict) -> list[dict]:
             # bound instead of making status fail.
             pass
     next_stage = _next_release_stage(manifest)
+    publication = manifest.get("artifactPublication") or {}
+    file_progress = (
+        publication.get("inProgressTask") if isinstance(publication, dict) else None
+    )
     rows = []
     for stage in RELEASE_STAGES:
         if _release_stage_has_finished(manifest, stage.name):
@@ -4739,12 +5254,22 @@ def _release_progress(manifest: dict) -> list[dict]:
             phase_state = "failed" if manifest.get("failure") else "next"
         else:
             phase_state = "pending"
-        rows.append({
+        row = {
             "phase": stage.name,
             "state": phase_state,
             "completed": completed[stage.name],
             "total": max(totals[stage.name], completed[stage.name]),
-        })
+        }
+        if (
+            stage.name == "artifacts"
+            and isinstance(file_progress, dict)
+            and file_progress.get("kind") == "maven-release-upload"
+        ):
+            row["detail"] = (
+                f"Maven files {file_progress.get('completedFiles', 0)}/"
+                f"{file_progress.get('totalFiles', '?')}"
+            )
+        rows.append(row)
     return rows
 
 
@@ -4779,12 +5304,27 @@ def _render_release_status(manifest: dict, path: Path) -> None:
     for row in _release_progress(manifest):
         style = {"complete": "green", "failed": "red", "next": "yellow"}.get(
             row["state"], "dim")
+        progress = f"{row['completed']}/{row['total']}"
+        if row.get("detail"):
+            progress += f" · {row['detail']}"
         table.add_row(
             row["phase"],
             Text(row["state"], style=style),
-            f"{row['completed']}/{row['total']}",
+            progress,
         )
     console.print(table)
+    publication = manifest.get("artifactPublication") or {}
+    file_progress = (
+        publication.get("inProgressTask") if isinstance(publication, dict) else None
+    )
+    if isinstance(file_progress, dict) and file_progress.get("currentFile"):
+        console.print(
+            "Current Maven file: "
+            f"{file_progress['currentFile']} "
+            f"(uploaded {file_progress.get('uploadedFiles', 0)}, "
+            f"already present {file_progress.get('existingFiles', 0)})",
+            markup=False,
+        )
     if manifest.get("failure"):
         console.print(f"[red]Failure: {manifest['failure']}[/red]")
     next_stage = _next_release_stage(manifest)
@@ -4849,15 +5389,7 @@ def _parse_accepted_red_develop(values: list[str] | None) -> dict[str, str]:
     return accepted
 
 
-def _release_gate_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> None:
-    """Report every settled precondition, and stop before any state changes if one failed."""
-    try:
-        findings = ReleasePreflight(
-            manifest, accepted_red_develop=accepted_red_develop,
-        ).run()
-    except ReleaseError as error:
-        console.print(f"[red]{error}[/red]")
-        raise typer.Exit(1) from error
+def _render_preflight_findings(findings: list[PreflightFinding]) -> None:
     failures = [finding for finding in findings if finding.fatal]
     warnings = [finding for finding in findings if not finding.fatal]
     if not findings:
@@ -4876,6 +5408,27 @@ def _release_gate_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) 
             f"[red]{len(failures)} precondition(s) block this release. Nothing was changed."
             "[/red]")
         raise typer.Exit(1)
+
+
+def _release_gate_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> None:
+    """Report every settled precondition, and stop before any state changes if one failed."""
+    try:
+        findings = ReleasePreflight(
+            manifest, accepted_red_develop=accepted_red_develop,
+        ).run()
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    _render_preflight_findings(findings)
+
+
+def _release_resume_gate_or_exit(manifest: dict) -> None:
+    try:
+        findings = ReleasePreflight(manifest).run_resume()
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    _render_preflight_findings(findings)
 
 
 ACCEPT_RED_DEVELOP_HELP = (
@@ -4930,7 +5483,8 @@ def resume():
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
     try:
-        _, path = state.read_current_manifest()
+        active, path = state.read_current_manifest()
+        _release_resume_gate_or_exit(active)
         manifest = _drive_release(state)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
