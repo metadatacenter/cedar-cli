@@ -11,6 +11,7 @@ import base64
 import copy
 import dataclasses
 import datetime as dt
+import gzip
 import hashlib
 import io
 import json
@@ -229,21 +230,45 @@ NPM_RELEASE_SURFACES = [
     {
         "id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-dist",
         "buildOutput": "cedar-openview-src/dist/cedar-openview",
+        "preserveFiles": ["README.md", "license.txt", "package-lock.json", "package.json"],
+        "packedRuntimeDirectories": ["node_modules"],
+        "ceeRuntime": {
+            "source": (
+                "cedar-openview-src/node_modules/cedar-embeddable-editor/"
+                "cedar-embeddable-editor.js"
+            ),
+            "distribution": (
+                "node_modules/cedar-embeddable-editor/cedar-embeddable-editor.js"
+            ),
+            "replacements": [
+                [
+                    "https://terminology.metadatacenter.orgx/",
+                    "https://terminology.metadatacenter.org/",
+                ],
+                [
+                    "https://bridge.metadatacenter.orgx/",
+                    "https://bridge.metadatacenter.org/",
+                ],
+            ],
+        },
     },
     {"id": "content", "repository": "cedar-content-distribution", "directory": "."},
     {
         "id": "monitoring", "repository": "cedar-monitoring",
         "directory": "cedar-monitoring-dist",
         "buildOutput": "cedar-monitoring-src/dist/cedar-monitoring",
+        "preserveFiles": ["README.md", "license.txt", "package-lock.json", "package.json"],
     },
     {
         "id": "bridging", "repository": "cedar-bridging", "directory": "cedar-bridging-dist",
         "buildOutput": "cedar-bridging-src/dist/cedar-bridging",
+        "preserveFiles": ["README.md", "license.txt", "package-lock.json", "package.json"],
     },
     {
         "id": "cee-demo-angular", "repository": "cedar-component-demo",
         "directory": "cedar-cee-demo-angular-dist",
         "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src/browser",
+        "preserveFiles": ["README.md", "license.txt", "package-lock.json", "package.json"],
     },
 ]
 
@@ -1081,6 +1106,24 @@ class ReleaseState:
     def manifest_path(self, release_version: str) -> Path:
         return self.root / "releases" / f"{release_version}.json"
 
+    def _next_manifest_path(self, release_version: str) -> Path:
+        path = self.manifest_path(release_version)
+        if not path.exists():
+            return path
+        current = self.read_current()
+        if (
+            current.get("releaseVersion") != release_version
+            or current.get("conclusion") != "abandoned"
+            or not current.get("concludedAt")
+        ):
+            raise ReleaseError(f"release state already exists at {path}")
+        attempt = 2
+        while True:
+            candidate = path.with_name(f"{release_version}-attempt-{attempt:03d}.json")
+            if not candidate.exists():
+                return candidate
+            attempt += 1
+
     @staticmethod
     def _write(path: Path, value: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1096,9 +1139,7 @@ class ReleaseState:
                     f"release {current['releaseVersion']} is already active; "
                     "use cedarcli release status"
                 )
-        path = self.manifest_path(manifest["releaseVersion"])
-        if path.exists():
-            raise ReleaseError(f"release state already exists at {path}")
+        path = self._next_manifest_path(manifest["releaseVersion"])
         active = copy.deepcopy(manifest)
         active["phase"] = "started"
         active["startedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -1111,7 +1152,7 @@ class ReleaseState:
         })
         return path
 
-    def conclude(self) -> None:
+    def conclude(self, outcome: str = "accepted") -> None:
         """Record that the active release has finished, so it no longer holds the slot.
 
         Nothing used to mark a release finished, so the pointer at current.json kept naming
@@ -1120,8 +1161,19 @@ class ReleaseState:
         changes is that start no longer treats it as in progress.
         """
         current = self.read_current()
-        current["concludedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
-        self._write(self.current_path, current)
+        changed = False
+        if not current.get("concludedAt"):
+            current["concludedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            changed = True
+        if not current.get("conclusion"):
+            current["conclusion"] = outcome
+            changed = True
+        elif current["conclusion"] != outcome:
+            raise ReleaseError(
+                f"release is already concluded as {current['conclusion']}, not {outcome}"
+            )
+        if changed:
+            self._write(self.current_path, current)
 
     def read_current(self) -> dict:
         if not self.current_path.exists():
@@ -1826,6 +1878,234 @@ class ReleaseBuildValidator:
                 raise ReleaseError(f"completed build output changed for {record.get('id')}")
 
 
+class ReleaseDistributionMaterializer:
+    """Make validated frontend builds the distributions committed by the release refs."""
+
+    def __init__(self, state: ReleaseState, git_runner=None, environment=None):
+        self.state = state
+        self.environment = dict(os.environ if environment is None else environment)
+        self.git = git_runner or ReleaseWorkspacePreparer(
+            state, environment=self.environment,
+        )
+
+    @staticmethod
+    def _under(relative: str, directory: str) -> bool:
+        path = PurePosixPath(relative)
+        parent = PurePosixPath(directory)
+        return path == parent or parent in path.parents
+
+    def _working_changes(self, root: Path) -> set[str]:
+        changed = set(filter(None, self.git._run([
+            "git", "-C", str(root), "diff", "--name-only", "HEAD", "--",
+        ]).splitlines()))
+        untracked = set(filter(None, self.git._run([
+            "git", "-C", str(root), "ls-files", "--others", "--exclude-standard",
+        ]).splitlines()))
+        return changed | untracked
+
+    @staticmethod
+    def _verify_expected_files(root: Path, expected: dict[str, str | None]) -> None:
+        for relative, digest in expected.items():
+            path = root / relative
+            if digest is None:
+                if path.exists() or path.is_symlink():
+                    raise ReleaseError(f"prepared deleted release file returned: {path}")
+            elif _file_sha256(path) != digest:
+                raise ReleaseError(f"prepared release file changed after validation: {path}")
+
+    @staticmethod
+    def _copy_exact_build(source: Path, destination: Path, preserve: list[str]) -> None:
+        if not source.is_dir() or not destination.is_dir():
+            raise ReleaseError(f"frontend distribution path is missing: {source} -> {destination}")
+        preserved = {}
+        for relative in preserve:
+            safe = PurePosixPath(relative)
+            if safe.is_absolute() or ".." in safe.parts:
+                raise ReleaseError(f"unsafe preserved distribution path: {relative}")
+            path = destination / relative
+            if not path.is_file() or path.is_symlink():
+                raise ReleaseError(f"preserved distribution file is missing: {path}")
+            preserved[relative] = path.read_bytes()
+        collisions = set(preserved) & set(_directory_file_hashes(source))
+        if collisions:
+            raise ReleaseError(
+                "frontend build overwrites preserved package metadata: "
+                + ", ".join(sorted(collisions))
+            )
+        for child in destination.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        for relative, content in preserved.items():
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        for child in source.iterdir():
+            target = destination / child.name
+            if child.is_dir():
+                shutil.copytree(child, target)
+            else:
+                shutil.copy2(child, target)
+
+    @staticmethod
+    def _cee_evidence(manifest: dict, root: Path, destination: Path, task: dict) -> dict | None:
+        config = task.get("ceeRuntime")
+        if not isinstance(config, dict):
+            return None
+        source = root / config.get("source", "")
+        relative = config.get("distribution")
+        if not isinstance(relative, str) or not relative:
+            raise ReleaseError("OpenView CEE runtime distribution path is invalid")
+        served = destination / relative
+        source_bytes = source.read_bytes() if source.is_file() else None
+        if source_bytes is None:
+            raise ReleaseError(f"installed public CEE bundle is missing: {source}")
+        expected_public = manifest.get("cee", {}).get(
+            "promotionProof", {}).get("publicBundleSha256")
+        if not isinstance(expected_public, str) or _sha256(source_bytes) != expected_public:
+            raise ReleaseError("installed OpenView CEE does not match the proven public bundle")
+        expected_served = source_bytes
+        replacements = config.get("replacements", [])
+        if not isinstance(replacements, list):
+            raise ReleaseError("OpenView CEE production replacement plan is invalid")
+        for replacement in replacements:
+            if (
+                not isinstance(replacement, list) or len(replacement) != 2
+                or not all(isinstance(item, str) for item in replacement)
+            ):
+                raise ReleaseError("OpenView CEE production replacement is invalid")
+            expected_served = expected_served.replace(
+                replacement[0].encode(), replacement[1].encode())
+        if not served.is_file() or served.read_bytes() != expected_served:
+            raise ReleaseError(
+                "OpenView build does not serve the proven public CEE after production normalization"
+            )
+        return {
+            "version": manifest["cee"]["public"]["version"],
+            "source": config["source"],
+            "distribution": relative,
+            "publicBundleSha256": expected_public,
+            "servedBundleSha256": _sha256(expected_served),
+        }
+
+    def tasks(self, manifest: dict) -> list[dict]:
+        surfaces = manifest.get("publicationPlan", {}).get("npm", {}).get("surfaces", [])
+        if not isinstance(surfaces, list):
+            raise ReleaseError("release manifest has no npm distribution plan")
+        build_surfaces = [surface for surface in surfaces if surface.get("buildOutput")]
+        if not build_surfaces:
+            return []
+        tasks = []
+        for variant in ("release", "nextDevelopment"):
+            workspace = Path(manifest["versionPreparation"][variant]["workspace"])
+            for surface in build_surfaces:
+                task = copy.deepcopy(surface)
+                task.update({
+                    "id": f"{variant}:npm:{surface['id']}:distribution",
+                    "variant": variant,
+                    "workspace": str(workspace),
+                    "buildEvidenceId": f"{variant}:npm:{surface['id']}:build",
+                })
+                tasks.append(task)
+        return tasks
+
+    def verify_record(self, manifest: dict, record: dict) -> None:
+        task = next((item for item in self.tasks(manifest) if item["id"] == record.get("id")), None)
+        if task is None:
+            raise ReleaseError(f"recorded distribution task no longer exists: {record.get('id')}")
+        build = manifest.get("buildValidation", {}).get(
+            "completedTasks", {}).get(task["buildEvidenceId"])
+        if not isinstance(build, dict):
+            raise ReleaseError(f"release has no build proof for {task['id']}")
+        ReleaseBuildValidator.verify_completed_task(build)
+        root = Path(task["workspace"]) / task["repository"]
+        destination = root / task["directory"]
+        if _directory_file_hashes(destination) != record.get("destinationFiles"):
+            raise ReleaseError(f"materialized distribution changed for {task['id']}")
+        cee = self._cee_evidence(manifest, root, destination, task)
+        if cee != record.get("ceeRuntime"):
+            raise ReleaseError(f"materialized CEE evidence changed for {task['id']}")
+
+    def materialize(self, manifest: dict) -> dict:
+        tasks = self.tasks(manifest)
+        existing = manifest.get("distributionMaterialization")
+        if isinstance(existing, dict) and existing.get("completedAt"):
+            records = existing.get("completedTasks", {})
+            if not isinstance(records, dict) or set(records) != {task["id"] for task in tasks}:
+                raise ReleaseError("recorded distributions do not match the current build plan")
+            for record in records.values():
+                self.verify_record(manifest, record)
+            return manifest
+        completed_refs = manifest.get("localRefs", {}).get("completedTasks", {})
+        if completed_refs:
+            raise ReleaseError("cannot materialize frontend distributions after local refs exist")
+
+        versions = copy.deepcopy(manifest["versionPreparation"])
+        build_records = manifest.get("buildValidation", {}).get("completedTasks", {})
+        grouped: dict[tuple[str, str], list[dict]] = {}
+        for task in tasks:
+            grouped.setdefault((task["variant"], task["repository"]), []).append(task)
+        records = {}
+        for (variant, repository), repository_tasks in grouped.items():
+            root = Path(repository_tasks[0]["workspace"]) / repository
+            prepared = versions[variant]["repositories"].get(repository)
+            if not isinstance(prepared, dict) or not isinstance(prepared.get("fileSha256"), dict):
+                raise ReleaseError(f"release has no prepared version record for {variant}:{repository}")
+            before = prepared["fileSha256"]
+            self._verify_expected_files(root, before)
+            prefixes = [task["directory"] for task in repository_tasks]
+            outside = {
+                relative for relative in self._working_changes(root)
+                if not any(self._under(relative, prefix) for prefix in prefixes)
+            }
+            expected_outside = {
+                relative for relative in before
+                if not any(self._under(relative, prefix) for prefix in prefixes)
+            }
+            if outside != expected_outside:
+                raise ReleaseError(
+                    f"unexpected prepared files before distribution materialization in {repository}"
+                )
+            for task in repository_tasks:
+                build = build_records.get(task["buildEvidenceId"])
+                expected_output = str(root / task["buildOutput"])
+                if not isinstance(build, dict) or build.get("buildOutput") != expected_output:
+                    raise ReleaseError(f"release has no build-output proof for {task['id']}")
+                ReleaseBuildValidator.verify_completed_task(build)
+                destination = root / task["directory"]
+                self._copy_exact_build(
+                    Path(build["buildOutput"]), destination, task.get("preserveFiles", []),
+                )
+                record = {
+                    **task,
+                    "buildOutputFiles": build["outputFiles"],
+                    "destinationFiles": _directory_file_hashes(destination),
+                    "ceeRuntime": self._cee_evidence(
+                        manifest, root, destination, task),
+                    "materializedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+                }
+                records[task["id"]] = record
+            actual = self._working_changes(root)
+            expected_files = {
+                relative: (_file_sha256(root / relative) if (root / relative).is_file() else None)
+                for relative in sorted(actual)
+            }
+            self._verify_expected_files(root, expected_files)
+            prepared["changedFiles"] = sorted(actual)
+            prepared["fileSha256"] = expected_files
+
+        evidence = {
+            "completedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "completedTasks": records,
+        }
+        updated, _ = self.state.update_current_manifest({
+            "versionPreparation": versions,
+            "distributionMaterialization": evidence,
+        })
+        return updated
+
+
 class ReleaseRefCreator:
     """Create verified local release refs without pushing them to any remote."""
 
@@ -1927,9 +2207,13 @@ class ReleaseRefCreator:
         return changed | untracked
 
     @staticmethod
-    def _verify_file_hashes(root: Path, expected: dict[str, str]) -> None:
+    def _verify_file_hashes(root: Path, expected: dict[str, str | None]) -> None:
         for relative, digest in expected.items():
-            if _file_sha256(root / relative) != digest:
+            path = root / relative
+            if digest is None:
+                if path.exists() or path.is_symlink():
+                    raise ReleaseError(f"prepared deleted release file returned: {path}")
+            elif _file_sha256(path) != digest:
                 raise ReleaseError(f"prepared release file changed after validation: {root / relative}")
 
     def _verify_commit(self, root: Path, task: dict, commit: str) -> dict:
@@ -2437,6 +2721,9 @@ class ReleaseArtifactPublisher:
             }
             if surface.get("buildOutput"):
                 task["buildEvidenceId"] = f"release:npm:{surface['id']}:build"
+                task["distributionEvidenceId"] = (
+                    f"release:npm:{surface['id']}:distribution"
+                )
             tasks.append(task)
         return self._checked(tasks)
 
@@ -2510,7 +2797,7 @@ class ReleaseArtifactPublisher:
         return self._checked(tasks)
 
     @staticmethod
-    def _verify_workspace(task: dict) -> None:
+    def _workspace_revision(task: dict) -> tuple[str, str]:
         root = Path(task["workspace"]) / task["repository"]
         try:
             commit = subprocess.run(
@@ -2523,8 +2810,52 @@ class ReleaseArtifactPublisher:
             ).stdout.strip()
         except (OSError, subprocess.CalledProcessError) as error:
             raise ReleaseError(f"cannot verify publication workspace {root}: {error}") from error
-        if commit != task["expectedCommit"] or tree != task["expectedTree"]:
+        return commit, tree
+
+    @classmethod
+    def _verify_workspace(
+        cls,
+        task: dict,
+        *,
+        allowed_commits: set[str] | None = None,
+    ) -> None:
+        commit, tree = cls._workspace_revision(task)
+        expected_commits = (
+            {task["expectedCommit"]} if allowed_commits is None else allowed_commits
+        )
+        if commit not in expected_commits or tree != task["expectedTree"]:
             raise ReleaseError(f"publication workspace changed for {task['repository']}")
+
+    @classmethod
+    def _verify_snapshot_workspace(cls, manifest: dict, task: dict) -> None:
+        """Accept the prepared snapshot commit or its recorded develop integration.
+
+        Snapshot publication precedes remote integration and is therefore bound to the
+        prepared local ref. Integration subsequently checks out a new develop commit whose
+        tree is exactly that prepared tree. Once that repository has integration evidence,
+        either checkout is valid evidence for the already-published snapshot; no other
+        same-tree commit is.
+        """
+        completed = manifest.get("remoteIntegration", {}).get("completedTasks", {})
+        integration = completed.get(task["repository"]) if isinstance(completed, dict) else None
+        if not isinstance(integration, dict):
+            cls._verify_workspace(task)
+            return
+        develop = integration.get("develop")
+        if (
+            integration.get("repository") != task["repository"]
+            or not isinstance(develop, dict)
+            or not isinstance(develop.get("commit"), str)
+            or develop.get("tree") != task["expectedTree"]
+        ):
+            raise ReleaseError(
+                "remote integration does not preserve the published snapshot tree for "
+                f"{task['repository']}"
+            )
+        cls._verify_workspace(
+            task,
+            allowed_commits={task["expectedCommit"], develop["commit"]},
+        )
 
     @staticmethod
     def _maven_candidates(local_repository: Path, version: str) -> list[Path]:
@@ -2641,16 +2972,93 @@ class ReleaseArtifactPublisher:
             "verifiedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
 
+    def _verify_materialized_distribution(self, task: dict) -> None:
+        manifest, _ = self.state.read_current_manifest()
+        record = manifest.get("distributionMaterialization", {}).get(
+            "completedTasks", {}).get(task.get("distributionEvidenceId"))
+        if not isinstance(record, dict):
+            raise ReleaseError(f"release has no materialized distribution proof for {task['id']}")
+        ReleaseDistributionMaterializer(self.state).verify_record(manifest, record)
+
     @staticmethod
-    def _copy_build_output(source: Path, destination: Path) -> None:
-        if not source.is_dir() or not destination.is_dir():
-            raise ReleaseError(f"frontend build output is missing: {source}")
-        for child in source.iterdir():
-            target = destination / child.name
-            if child.is_dir():
-                shutil.copytree(child, target, dirs_exist_ok=True)
-            else:
-                shutil.copy2(child, target)
+    def _runtime_file_hashes(root: Path, directories: list[str]) -> dict[str, str]:
+        files = {}
+        for relative in directories:
+            safe = PurePosixPath(relative)
+            if safe.is_absolute() or ".." in safe.parts:
+                raise ReleaseError(f"unsafe npm runtime directory: {relative}")
+            directory = root / relative
+            if not directory.is_dir() or directory.is_symlink():
+                raise ReleaseError(f"npm runtime directory is missing: {directory}")
+            for path in sorted(directory.rglob("*")):
+                if path.is_symlink():
+                    raise ReleaseError(f"npm runtime assets contain a symbolic link: {path}")
+                if path.is_file():
+                    files[path.relative_to(root).as_posix()] = _file_sha256(path)
+        if directories and not files:
+            raise ReleaseError("npm runtime asset plan contains no files")
+        return files
+
+    @classmethod
+    def _include_runtime_assets(
+        cls, tarball: Path, package_root: Path, directories: list[str],
+    ) -> dict[str, str]:
+        runtime_files = cls._runtime_file_hashes(package_root, directories)
+        if not runtime_files:
+            return {}
+        replacement = tarball.with_name(tarball.name + ".runtime")
+        try:
+            with tarfile.open(tarball, mode="r:gz") as source, replacement.open("wb") as raw:
+                existing = {PurePosixPath(member.name) for member in source.getmembers()}
+                additions = {
+                    PurePosixPath("package") / relative for relative in runtime_files
+                }
+                duplicates = existing & additions
+                if duplicates:
+                    raise ReleaseError(
+                        "npm pack unexpectedly included runtime assets: "
+                        + ", ".join(str(path) for path in sorted(duplicates))
+                    )
+                with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
+                    with tarfile.open(fileobj=compressed, mode="w:") as target:
+                        for member in source.getmembers():
+                            stream = source.extractfile(member) if member.isfile() else None
+                            target.addfile(member, stream)
+                        for relative in sorted(runtime_files):
+                            path = package_root / relative
+                            content = path.read_bytes()
+                            member = tarfile.TarInfo(f"package/{relative}")
+                            member.size = len(content)
+                            member.mode = path.stat().st_mode & 0o777
+                            member.mtime = 0
+                            member.uid = member.gid = 0
+                            member.uname = member.gname = ""
+                            target.addfile(member, io.BytesIO(content))
+            replacement.replace(tarball)
+        except (OSError, tarfile.TarError) as error:
+            raise ReleaseError(f"cannot retain npm runtime assets in {tarball}: {error}") from error
+        return runtime_files
+
+    @staticmethod
+    def _verify_npm_tarball_files(
+        identity: str, content: bytes, expected: dict[str, str],
+    ) -> None:
+        actual = {}
+        try:
+            with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
+                for relative, digest in expected.items():
+                    name = f"package/{relative}"
+                    members = [member for member in archive.getmembers() if member.name == name]
+                    if len(members) != 1 or not members[0].isfile():
+                        raise ReleaseError(f"{identity} is missing runtime asset {relative}")
+                    stream = archive.extractfile(members[0])
+                    if stream is None:
+                        raise ReleaseError(f"{identity} runtime asset is unreadable: {relative}")
+                    actual[relative] = _sha256(stream.read())
+        except tarfile.TarError as error:
+            raise ReleaseError(f"{identity} is not a readable npm tarball") from error
+        if actual != expected:
+            raise ReleaseError(f"{identity} runtime assets differ from the validated distribution")
 
     def _npm_version_record(self, registry: str, name: str, version: str) -> dict | None:
         url = registry.rstrip("/") + "/" + urllib.parse.quote(name, safe="")
@@ -2711,6 +3119,13 @@ class ReleaseArtifactPublisher:
             or package.get("gitHead") != task["expectedCommit"]
         ):
             raise ReleaseError(f"npm package provenance differs for {evidence['name']}@{task['version']}")
+        runtime_files = evidence.get("runtimeFiles")
+        if task.get("packedRuntimeDirectories"):
+            if not isinstance(runtime_files, dict) or not runtime_files:
+                raise ReleaseError(f"npm package has no runtime asset evidence for {task['id']}")
+            self._verify_npm_tarball_files(
+                f"{evidence['name']}@{task['version']}", tarball, runtime_files,
+            )
         return {**evidence, "tarball": tarball_url, "verifiedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
 
     def _pack_npm(self, task: dict) -> tuple[Path, dict]:
@@ -2731,6 +3146,7 @@ class ReleaseArtifactPublisher:
             ):
                 raise ReleaseError(f"release has no build-output proof for {task['id']}")
             ReleaseBuildValidator.verify_completed_task(build_record)
+            self._verify_materialized_distribution(task)
         attempt = Path(workspace).parent
         publication_root = attempt / "publication-packages"
         publication_root.mkdir(parents=True, exist_ok=True)
@@ -2754,8 +3170,6 @@ class ReleaseArtifactPublisher:
         except (OSError, tarfile.TarError) as error:
             raise ReleaseError(f"cannot extract {task['repository']} release source") from error
         package_root = source_root if task["directory"] == "." else source_root / task["directory"]
-        if task.get("buildOutput"):
-            self._copy_build_output(root / task["buildOutput"], package_root)
         package_path = package_root / "package.json"
         try:
             package = json.loads(package_path.read_bytes())
@@ -2789,6 +3203,9 @@ class ReleaseArtifactPublisher:
             tarball_path = stage / filename
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as error:
             raise ReleaseError(f"npm pack returned invalid evidence for {task['id']}") from error
+        runtime_files = self._include_runtime_assets(
+            tarball_path, package_root, task.get("packedRuntimeDirectories", []),
+        )
         try:
             content = tarball_path.read_bytes()
         except OSError as error:
@@ -2798,6 +3215,7 @@ class ReleaseArtifactPublisher:
             "integrity": "sha512-" + base64.b64encode(hashlib.sha512(content).digest()).decode(),
             "tarballSha256": _sha256(content),
             "packedTarball": str(tarball_path),
+            "runtimeFiles": runtime_files,
         }
 
     def _publish_npm(self, task: dict) -> dict:
@@ -2887,7 +3305,7 @@ class ReleaseArtifactPublisher:
             self._verify_workspace(task)
             self._verify_npm_package(task, record, wait=False)
         elif task["kind"] == "maven-snapshot-deploy":
-            self._verify_workspace(task)
+            self._verify_snapshot_workspace(manifest, task)
             log = Path(record.get("log", ""))
             if not log.is_file() or _file_sha256(log) != record.get("logSha256"):
                 raise ReleaseError(f"recorded publication log changed for {task['id']}")
@@ -2961,6 +3379,7 @@ def validate_active_release_builds(
 def create_active_release_refs(
     state: ReleaseState | None = None,
     creator: ReleaseRefCreator | None = None,
+    materializer: ReleaseDistributionMaterializer | None = None,
 ) -> dict:
     state = state or ReleaseState()
     manifest, _ = state.read_current_manifest()
@@ -2971,6 +3390,10 @@ def create_active_release_refs(
     }:
         raise ReleaseError(f"cannot create local refs while release is {manifest.get('phase')}")
     creator = creator or ReleaseRefCreator(state)
+    materializer = materializer or ReleaseDistributionMaterializer(
+        state, git_runner=creator.git, environment=creator.environment,
+    )
+    manifest = materializer.materialize(manifest)
     tasks = creator.tasks(manifest)
     task_ids = {task["id"] for task in tasks}
     evidence = copy.deepcopy(manifest.get("localRefs") or {
@@ -3399,9 +3822,36 @@ class ReleaseAcceptance:
             record = manifest.get("remoteIntegration", {}).get("completedTasks", {})
             if not any(item.get("repository") == repository for item in record.values()):
                 raise ReleaseError(f"{repository} was never integrated, so its CEE pin is unproven")
-        return [self._check(
+        checks = [self._check(
             "cee-pin",
             f"{len(consumers)} consumer(s) pin the proven public CEE {expected}")]
+        surfaces = manifest.get("publicationPlan", {}).get("npm", {}).get("surfaces", [])
+        openview = next((
+            surface for surface in surfaces
+            if surface.get("id") == "openview" and isinstance(surface.get("ceeRuntime"), dict)
+        ), None)
+        if openview is None:
+            return checks
+        distribution_id = "release:npm:openview:distribution"
+        distribution = manifest.get("distributionMaterialization", {}).get(
+            "completedTasks", {}).get(distribution_id)
+        cee_runtime = distribution.get("ceeRuntime") if isinstance(distribution, dict) else None
+        if not isinstance(cee_runtime, dict) or cee_runtime.get("version") != expected:
+            raise ReleaseError("OpenView has no proven runtime CEE distribution")
+        publication = manifest.get("artifactPublication", {}).get(
+            "completedTasks", {}).get("npm:release:openview")
+        runtime_files = publication.get("runtimeFiles") if isinstance(publication, dict) else None
+        relative = openview["ceeRuntime"].get("distribution")
+        if (
+            not isinstance(runtime_files, dict)
+            or runtime_files.get(relative) != cee_runtime.get("servedBundleSha256")
+        ):
+            raise ReleaseError("published OpenView artifact does not contain its proven runtime CEE")
+        checks.append(self._check(
+            "openview-cee-runtime",
+            f"OpenView distribution and npm artifact contain the normalized CEE {expected}",
+        ))
+        return checks
 
     def run(self, manifest: dict) -> dict:
         self.publisher.ensure_nexus_ready("release acceptance")
@@ -3422,6 +3872,7 @@ def accept_active_release(
     state = state or ReleaseState()
     manifest, _ = state.read_current_manifest()
     if manifest.get("phase") == "accepted":
+        state.conclude()
         return manifest
     if manifest.get("phase") not in {"artifacts-published", "acceptance-failed"}:
         raise ReleaseError(f"cannot accept a release that is {manifest.get('phase')}")
@@ -3441,6 +3892,63 @@ def accept_active_release(
     })
     state.conclude()
     return completed_manifest
+
+
+ABANDONABLE_RELEASE_PHASES = frozenset({
+    "started",
+    "preparing-frontends", "frontend-preparation-failed", "frontends-prepared",
+    "preparing-versions", "version-preparation-failed", "versions-prepared",
+    "validating-builds", "build-validation-failed", "builds-validated",
+    "creating-local-refs", "local-ref-creation-failed", "local-refs-created",
+})
+
+
+def abandon_active_release(
+    release_version: str,
+    reason: str,
+    state: ReleaseState | None = None,
+) -> tuple[dict, Path]:
+    """Conclude a local-only attempt while retaining its ledger and workspaces."""
+    state = state or ReleaseState()
+    current = state.read_current()
+    if current.get("concludedAt"):
+        raise ReleaseError(
+            f"release {current.get('releaseVersion')} is already concluded as "
+            f"{current.get('conclusion', 'accepted')}"
+        )
+    manifest, path = state.read_current_manifest()
+    active = manifest.get("releaseVersion")
+    if active != release_version:
+        raise ReleaseError(
+            f"active release is {active}, not the requested {release_version}"
+        )
+    reason = reason.strip()
+    if not reason:
+        raise ReleaseError("release abandonment requires a non-empty reason")
+    phase = manifest.get("phase")
+    external_evidence = any(
+        manifest.get(section) is not None
+        for section in ("snapshotPublication", "remoteIntegration", "artifactPublication")
+    )
+    local_refs = manifest.get("localRefs")
+    pushed_local_refs = isinstance(local_refs, dict) and local_refs.get("pushed") is not False
+    if phase not in ABANDONABLE_RELEASE_PHASES or external_evidence or pushed_local_refs:
+        raise ReleaseError(
+            f"cannot abandon release {release_version} from {phase}: publication or remote "
+            "integration may already have changed external state; repair it and use "
+            "cedarcli release resume"
+        )
+    abandoned_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    abandoned, path = state.update_current_manifest({
+        "phase": "abandoned",
+        "abandonment": {
+            "abandonedAt": abandoned_at,
+            "previousPhase": phase,
+            "reason": reason,
+        },
+    })
+    state.conclude("abandoned")
+    return abandoned, path
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3525,6 +4033,7 @@ RELEASE_STAGES = (
 )
 
 RELEASE_TERMINAL_PHASE = RELEASE_STAGES[-1].done_phase
+RELEASE_FINAL_PHASES = frozenset({RELEASE_TERMINAL_PHASE, "abandoned"})
 
 
 def _next_release_stage(manifest: dict) -> str | None:
@@ -3572,7 +4081,14 @@ def advance_active_release(
     if manifest.get("phase") in REWIND_TO_FRONTENDS:
         manifest, _ = state.update_current_manifest({"phase": "frontend-preparation-failed"})
     phase = manifest.get("phase")
+    if phase == "abandoned":
+        raise ReleaseError(
+            f"release {manifest.get('releaseVersion')} was abandoned and cannot be resumed"
+        )
     if phase == RELEASE_TERMINAL_PHASE:
+        # Acceptance writes the terminal manifest before it releases the active slot. A
+        # process interruption between those two durable writes is repaired by resume.
+        state.conclude()
         return manifest
     start = next(
         (index for index, stage in enumerate(RELEASE_STAGES) if phase in stage.entry_phases),
@@ -4209,6 +4725,19 @@ def _release_progress(manifest: dict) -> list[dict]:
 
 
 def _render_release_status(manifest: dict, path: Path) -> None:
+    if manifest.get("phase") == "abandoned":
+        abandonment = manifest.get("abandonment", {})
+        heading = Text(
+            f"Release {manifest.get('releaseVersion')} — ABANDONED", style="yellow",
+        )
+        console.print(heading)
+        console.print(f"Ledger: {manifest.get('phase')}")
+        console.print(f"Previous phase: {abandonment.get('previousPhase', 'unknown')}")
+        console.print(f"Reason: {abandonment.get('reason', 'not recorded')}")
+        if manifest.get("failure"):
+            console.print(f"[red]Last failure: {manifest['failure']}[/red]")
+        console.print(f"State: {path}")
+        return
     complete = manifest.get("phase") == RELEASE_TERMINAL_PHASE
     heading = Text(f"Release {manifest.get('releaseVersion')} — ")
     heading.append(
@@ -4385,6 +4914,25 @@ def resume():
     _render_plan(manifest)
     console.print(f"Phase:               {manifest['phase']}")
     console.print(f"Internal state:      {path}")
+
+
+@app.command("abandon")
+def abandon(
+    release_version: str = typer.Option(
+        ..., "--version", help="Exact active release version to abandon"),
+    reason: str = typer.Option(
+        ..., "--reason", help="Why this local-only attempt cannot be resumed"),
+):
+    """Retain and close an attempt that has not begun external publication."""
+    try:
+        manifest, path = abandon_active_release(release_version, reason)
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    console.print(f"Abandoned release:   {manifest['releaseVersion']}")
+    console.print(f"Previous phase:      {manifest['abandonment']['previousPhase']}")
+    console.print(f"Reason:              {manifest['abandonment']['reason']}")
+    console.print(f"Retained state:      {path}")
 
 
 @app.command("status")
