@@ -35,7 +35,8 @@ class Worker:
     @staticmethod
     def execute_generic_shell_commands(
             command_list: List[str], title: str, cwd: str = None, env=None,
-            show_command: bool = True):
+            show_command: bool = True, echo_streams: bool = True,
+            show_title: bool = True):
         if show_command:
             panel = Panel(
                 "[yellow]" +
@@ -44,13 +45,13 @@ class Worker:
                 title=title,
                 title_align="left")
             console.print(panel, style=Style(color="yellow"))
-        else:
+        elif show_title:
             console.print(f"[yellow]{title}[/yellow]")
         proc = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
                                 executable=GlobalContext.get_shell(), env=env)
 
         stdout_parts = []
-        Worker.handle_shell_stdout(proc.stdout, stdout_parts)
+        Worker.handle_shell_stdout(proc.stdout, stdout_parts, echo_streams=echo_streams)
         returncode = proc.wait()
 
         return CommandOutput(stdout_parts, returncode)

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.util.DockerImages import DockerImages
+from org.metadatacenter.worker.CertificateWorker import CertificateError, CertificateWorker
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 from org.metadatacenter.worker.Worker import CommandOutput
 
@@ -145,6 +146,26 @@ class DockerCommandPathsTest(unittest.TestCase):
         command = execute.call_args.args[0][0]
         self.assertIn('docker volume create cedar_cert', command)
         self.assertIn('docker volume create cedar_ca', command)
+
+    @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
+    @patch.object(CertificateWorker, 'ensure_ca_and_domains', return_value=0)
+    def test_certificate_copy_uses_only_locally_generated_material(self, ensure_certificates, execute):
+        execute.return_value = CommandOutput([], 0)
+
+        self.assertEqual(0, DockerWorker.copy_certificates())
+
+        ensure_certificates.assert_called_once_with()
+        command = execute.call_args.args[0][0]
+        self.assertIn('docker cp "${CEDAR_CA_HOME}/certs"', command)
+        self.assertIn('docker cp "${CEDAR_CA_HOME}/ca.crt"', command)
+        self.assertNotIn('cedar-docker-deploy/cedar-assets', command)
+
+    @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
+    @patch.object(CertificateWorker, 'ensure_ca_and_domains',
+                  side_effect=CertificateError('incomplete certificate state'))
+    def test_certificate_copy_stops_before_docker_on_incomplete_state(self, _ensure_certificates, execute):
+        self.assertEqual(1, DockerWorker.copy_certificates())
+        execute.assert_not_called()
 
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     def test_volume_removal_includes_both_new_frontends(self, execute):

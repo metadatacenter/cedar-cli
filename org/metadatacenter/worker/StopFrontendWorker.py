@@ -3,19 +3,11 @@ from org.metadatacenter.worker.Worker import Worker
 
 
 class StopFrontendWorker(Worker):
-    TARGETS = {
-        "main": "frontend",
-        "openview": "ui-openview",
-        "monitoring": "ui-monitoring",
-        "bridging": "ui-bridging",
-        "content": "ui-content",
-        "workspace": "workspace",
-        "designer": "designer",
-    }
+    """The commands below take a frontend's bare name; the native controller names it ui-<name>."""
 
     @staticmethod
     def _stop(name: str):
-        return NativeWorker.stop((StopFrontendWorker.TARGETS[name],))
+        return NativeWorker.stop((f"ui-{name}",))
 
     @staticmethod
     def openview():
@@ -47,7 +39,7 @@ class StopFrontendWorker(Worker):
 
     @staticmethod
     def split_frontends():
-        return NativeWorker.stop(("workspace", "designer"))
+        return NativeWorker.stop(("ui-workspace", "ui-designer"))
 
     @staticmethod
     def all():

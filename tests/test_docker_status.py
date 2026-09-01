@@ -10,14 +10,19 @@ from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.DockerWorker import DockerWorker
 
 
-def container(service, state='running', health='healthy'):
+def container(service, state='running', health='healthy', image=None, ports=None, restarts=0):
     state_payload = {'Status': state}
     if health is not None:
         state_payload['Health'] = {'Status': health}
     return {
         'Name': f'/{service}',
         'Created': '2026-08-21T18:00:00Z',
-        'Config': {'Labels': {'com.docker.compose.service': service}},
+        'Config': {
+            'Image': image,
+            'Labels': {'com.docker.compose.service': service},
+        },
+        'NetworkSettings': {'Ports': ports or {}},
+        'RestartCount': restarts,
         'State': state_payload,
     }
 
@@ -117,6 +122,78 @@ class DockerStatusTest(unittest.TestCase):
         ]
         self.assertEqual(expected, first)
         self.assertEqual(expected, second)
+
+    @patch.object(DockerWorker, '_compose_containers')
+    @patch.object(DockerWorker, '_expected_compose_services')
+    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
+    def test_snapshot_reports_ports_restarts_and_current_image(self, _version, expected, actual):
+        expected.return_value = (['server-artifact'], None)
+        actual.return_value = {
+            'server-artifact': container(
+                'server-artifact',
+                image='metadatacenter/cedar-server-artifact:2.9.3-dev',
+                ports={'9001/tcp': None},
+                restarts=2,
+            )
+        }, None
+
+        snapshot = DockerWorker._container_snapshot(
+            ['microservices'],
+            environment={'CEDAR_DOCKER_VERSION': '2.9.3-dev'},
+        )
+
+        self.assertTrue(DockerWorker._snapshot_ready(snapshot))
+        row = snapshot['rows'][0]
+        self.assertEqual('current', row[5])
+        self.assertEqual('9001 int', row[6])
+        self.assertEqual('2', row[7])
+
+    @patch.object(DockerWorker, '_compose_containers')
+    @patch.object(DockerWorker, '_expected_compose_services')
+    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
+    def test_healthy_container_on_wrong_image_is_not_ready(self, _version, expected, actual):
+        expected.return_value = (['server-resource'], None)
+        actual.return_value = {
+            'server-resource': container(
+                'server-resource',
+                image='metadatacenter/cedar-server-resource:older',
+            )
+        }, None
+
+        snapshot = DockerWorker._container_snapshot(
+            ['microservices'],
+            environment={'CEDAR_DOCKER_VERSION': '2.9.3-dev'},
+        )
+
+        self.assertFalse(DockerWorker._snapshot_ready(snapshot))
+        self.assertEqual('MISMATCH', snapshot['rows'][0][5])
+        self.assertIn('expected metadatacenter/cedar-server-resource:2.9.3-dev', snapshot['rows'][0][4])
+
+    def test_compact_render_contains_operational_columns_and_named_warning(self):
+        snapshot = {
+            'server_version': '29.6.2',
+            'daemon_error': None,
+            'expected': 2,
+            'healthy': 1,
+            'rows': [
+                ('microservices', 'server-artifact', '✅', 'server-artifact',
+                 'healthy', 'current', '9001 int', '0'),
+                ('microservices', 'server-worker', '❌', 'server-worker',
+                 'unhealthy', 'current', '9011', '3'),
+            ],
+        }
+
+        DockerWorker._render_snapshot(snapshot, DockerDeploymentMode.FULL)
+
+        rendered = self.output.getvalue()
+        self.assertIn('Health', rendered)
+        self.assertIn('Image', rendered)
+        self.assertIn('Ports', rendered)
+        self.assertIn('Restarts', rendered)
+        self.assertIn('9001 int', rendered)
+        self.assertIn('WARNING  server-worker: unhealthy', rendered)
 
     @patch.object(DockerWorker, '_docker_command')
     def test_compose_container_inventory_uses_labels(self, command):

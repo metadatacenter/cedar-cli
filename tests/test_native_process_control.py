@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from org.metadatacenter import native, start, stop
+from org.metadatacenter import native, start, start_frontend, stop, stop_frontend
 from org.metadatacenter.model.CedarMode import CedarMode
 from org.metadatacenter.util.ModeManager import ModeManager
 from org.metadatacenter.worker.NativeWorker import NativeWorker
@@ -167,11 +167,14 @@ class NativeProcessControlTest(unittest.TestCase):
     @patch("org.metadatacenter.worker.NativeWorker.ServerWorker.status")
     @patch("org.metadatacenter.worker.NativeWorker.Worker.execute_generic_shell_commands")
     def test_native_status_includes_process_and_host_port_checks(self, execute, host_status):
+        execute.return_value.returncode = 0
         result = NativeWorker.status()
 
         command = execute.call_args.args[0][0]
-        self.assertIn("cedar-services.sh status", command)
-        host_status.assert_called_once_with()
+        self.assertIn("cedar-services.sh status-tsv", command)
+        self.assertFalse(execute.call_args.kwargs["show_command"])
+        self.assertFalse(execute.call_args.kwargs["echo_streams"])
+        host_status.assert_called_once_with(execute.return_value)
         self.assertIs(result, execute.return_value)
 
     @unittest.skipUnless(
@@ -229,3 +232,34 @@ running
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrontendNamingTest(unittest.TestCase):
+    """The frontend subcommands name a frontend bare; the native controller names it ui-<name>.
+
+    Nothing translates between the two any more, so the two vocabularies have to stay in step by
+    construction. These assertions are what the old TARGETS dictionary used to be: they fail when a
+    frontend is added to one side and forgotten on the other, and when a name loses the ui- prefix
+    that keeps it apart from the like-named microservice.
+    """
+
+    def command_names(self, app):
+        aggregates = ("all", "split-frontends")
+        return sorted(command.name for command in app.registered_commands
+                      if command.name not in aggregates)
+
+    def test_every_frontend_subcommand_names_a_native_frontend(self):
+        for app in (start_frontend.app, stop_frontend.app):
+            with self.subTest(app=app.info.name or "frontend"):
+                for name in self.command_names(app):
+                    self.assertIn("ui-" + name, NativeWorker.FRONTENDS)
+
+    def test_start_and_stop_expose_the_same_frontends(self):
+        names = self.command_names(start_frontend.app)
+        self.assertEqual(len(NativeWorker.FRONTENDS), len(names))
+        self.assertEqual(names, self.command_names(stop_frontend.app))
+
+    def test_every_native_frontend_is_prefixed_and_distinct_from_a_microservice(self):
+        for name in NativeWorker.FRONTENDS:
+            self.assertTrue(name.startswith("ui-"), name)
+            self.assertNotIn(name, NativeWorker.MICROSERVICES)

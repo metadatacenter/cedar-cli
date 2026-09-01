@@ -10,7 +10,7 @@ def exit_on_failure(returncode):
         raise typer.Exit(code=returncode)
 
 
-@app.command("one-time-setup", help="Recreate cedarnet, create certificate volumes, and populate them.")
+@app.command("one-time-setup", help="Recreate cedarnet, generate missing certificates, and populate their volumes.")
 def one_time_setup():
     """Perform every Docker host bootstrap operation in dependency order."""
     exit_on_failure(DockerWorker.create_network())
@@ -28,6 +28,6 @@ def create_certificates_volume():
     exit_on_failure(DockerWorker.create_certificates_volume())
 
 
-@app.command("copy-certificates", help="Copy configured or bundled certificates into Docker volumes.")
+@app.command("copy-certificates", help="Generate missing local certificates and copy them into Docker volumes.")
 def copy_certificates():
     exit_on_failure(DockerWorker.copy_certificates())

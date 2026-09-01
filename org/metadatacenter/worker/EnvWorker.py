@@ -14,14 +14,6 @@ from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
 
-release_list = [
-    Const.CEDAR_HOME,
-    Const.CEDAR_HOST,
-    Const.CEDAR_VERSION,
-    Const.CEDAR_RELEASE_VERSION,
-    Const.CEDAR_NEXT_DEVELOPMENT_VERSION,
-]
-
 CEDAR_ENV_PREFIX = 'CEDAR_'
 SENSITIVE_NAME_PARTS = (
     'PASSWORD',
@@ -103,6 +95,9 @@ class EnvWorker(Worker):
         mode = ModeManager.current()
         table = Table("Setting", "Value", title="CEDAR environment status")
         table.add_row("Mode", mode.value if mode else "not set")
+        profile = ModeManager.current_profile() if mode else None
+        if mode is not None and CedarMode.DOCKER is not mode:
+            table.add_row("Native profile", profile.value if profile else "not recorded")
         table.add_row("Mode state", str(ModeManager.state_path()))
         if mode is not None:
             for surface in EnvWorker._allowed_surfaces(mode):
@@ -147,16 +142,6 @@ class EnvWorker(Worker):
                     )
         table.style = Style(color="green")
         console.print(table)
-
-    @staticmethod
-    def release():
-        mode = ModeManager.current()
-        environment = os.environ
-        if mode is not None:
-            surface = 'docker' if mode is CedarMode.DOCKER else 'native'
-            environment = ModeManager.profile_environment(surface, mode)
-        table = Table("Name", "Value", title="CEDAR release environment variables")
-        EnvWorker.list_specific_vars(table, release_list, environment)
 
     @staticmethod
     def list_specific_vars(table: Table, var_names: List[str], environment=None):

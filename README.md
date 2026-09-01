@@ -33,9 +33,9 @@ The main implementation areas are:
 - `org/metadatacenter/util/` contains shared environment, mode, build-train, Docker, and process
   safeguards.
 - `tests/` exercises command paths without starting a real CEDAR deployment.
-- `cli.sh` and its `python3` variant `cli3.sh` are shell wrappers used by the `cedarcli` alias. They
-  activate the repository virtual environment, preserve the caller's working directory for
-  `build this` and `publish this`, and return the Python process's exit status.
+- `cli.sh` is the shell wrapper the `cedarcli` alias sources, and the only one. It activates the
+  repository virtual environment, preserves the caller's working directory for `build this` and
+  `publish this`, and returns the Python process's exit status.
 
 ## Contributor Setup
 

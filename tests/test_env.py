@@ -109,22 +109,6 @@ class EnvironmentCommandTest(unittest.TestCase):
         self.assertIn('2.9.3-dev.20260825.1700', output)
         self.assertEqual(2, profile.call_count)
 
-    @patch.object(ModeManager, 'profile_environment', return_value={
-        'CEDAR_HOME': '/tmp/CEDAR',
-        'CEDAR_HOST': 'metadatacenter.orgx',
-        'CEDAR_VERSION': '2.9.3-SNAPSHOT',
-        'CEDAR_RELEASE_VERSION': '2.9.3',
-        'CEDAR_NEXT_DEVELOPMENT_VERSION': '2.9.4-SNAPSHOT',
-    })
-    @patch.object(ModeManager, 'current', return_value=CedarMode.DOCKER)
-    def test_release_uses_the_selected_profile(self, _current, profile):
-        result = self.runner.invoke(env.app, ['release'])
-
-        self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn('CEDAR_RELEASE_VERSION', result.output)
-        self.assertIn('2.9.3', result.output)
-        profile.assert_called_once_with('docker', CedarMode.DOCKER)
-
     def test_bootstrap_does_not_preload_one_surface_for_env_commands(self):
         with patch.object(ModeManager, 'current') as current, \
                 patch.object(ModeManager, 'profile_environment') as profile, \

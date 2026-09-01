@@ -9,13 +9,16 @@ import time
 import urllib.error
 import urllib.request
 
+from rich import box
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.BuildTrain import DockerTrain
 from org.metadatacenter.util.DockerImages import DockerImages
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.CertificateWorker import CertificateError, CertificateWorker
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -406,6 +409,49 @@ exit ${failed}
         return '❌', name, detail
 
     @staticmethod
+    def _container_ports(container):
+        if container is None:
+            return '—'
+        bindings = (container.get('NetworkSettings') or {}).get('Ports') or {}
+        ports = []
+        for container_port, published in bindings.items():
+            internal = container_port.split('/', 1)[0]
+            if published:
+                for binding in published:
+                    host = binding.get('HostPort')
+                    if not host:
+                        continue
+                    ports.append(host if host == internal else f'{host}→{internal}')
+            else:
+                ports.append(f'{internal} int')
+        if not ports:
+            exposed = (container.get('Config') or {}).get('ExposedPorts') or {}
+            ports.extend(f"{port.split('/', 1)[0]} int" for port in exposed)
+        return ','.join(sorted(set(ports), key=DockerWorker._port_sort_key)) or '—'
+
+    @staticmethod
+    def _port_sort_key(value):
+        match = re.match(r'(\d+)', value)
+        return (int(match.group(1)) if match else 99999, value)
+
+    @staticmethod
+    def _container_image_status(stack_name, service, container, environment):
+        if container is None:
+            return '—', None
+        version = environment.get('CEDAR_DOCKER_VERSION') if environment else None
+        if not version:
+            return 'unknown', None
+        image_name = DockerWorker._train_image_names(stack_name, (service,))[0]
+        try:
+            expected = DockerImages.reference(image_name, version, environment)
+        except ValueError as error:
+            return 'unknown', f'could not determine the expected image: {error}'
+        actual = (container.get('Config') or {}).get('Image')
+        if actual == expected:
+            return 'current', None
+        return 'MISMATCH', f'running image {actual or "unknown"}; expected {expected}'
+
+    @staticmethod
     def _stack_names(mode):
         names = ['infrastructure', 'microservices']
         if mode.includes_frontend_containers:
@@ -537,26 +583,40 @@ exit ${failed}
 
             if compose_error:
                 snapshot['expected'] += 1
-                snapshot['rows'].append((stack_name, 'Compose project', '❌', '', compose_error))
+                snapshot['rows'].append(
+                    (stack_name, 'Compose project', '❌', '', compose_error, '—', '—', '—'))
                 continue
             if not services:
                 snapshot['expected'] += 1
-                snapshot['rows'].append((stack_name, 'Compose project', '❌', '', 'no services defined'))
+                snapshot['rows'].append(
+                    (stack_name, 'Compose project', '❌', '', 'no services defined', '—', '—', '—'))
                 continue
 
             containers, container_error = DockerWorker._compose_containers(directory)
             if container_error:
                 snapshot['expected'] += len(services)
                 for service in services:
-                    snapshot['rows'].append((stack_name, service, '❌', '', container_error))
+                    snapshot['rows'].append(
+                        (stack_name, service, '❌', '', container_error, '—', '—', '—'))
                 continue
 
             for service in services:
                 snapshot['expected'] += 1
-                indicator, container_name, detail = DockerWorker._container_report(containers.get(service))
+                container = containers.get(service)
+                indicator, container_name, detail = DockerWorker._container_report(container)
+                image_status, image_error = DockerWorker._container_image_status(
+                    stack_name, service, container, environment)
+                if image_error:
+                    detail = f'{detail}; {image_error}'
+                if image_status == 'MISMATCH':
+                    indicator = '❌'
                 if indicator == '✅':
                     snapshot['healthy'] += 1
-                snapshot['rows'].append((stack_name, service, indicator, container_name, detail))
+                snapshot['rows'].append((
+                    stack_name, service, indicator, container_name, detail,
+                    image_status, DockerWorker._container_ports(container),
+                    str(container.get('RestartCount', 0)) if container else '—',
+                ))
 
         return snapshot
 
@@ -588,13 +648,64 @@ exit ${failed}
             return
 
         table = Table(
-            'Stack', 'Service', 'Status', 'Container', 'Detail',
+            'Service', 'Health', 'Image', 'Ports', 'Restarts',
             title=(f"CEDAR Docker status: {DockerWorker._mode_label(mode)} "
                    f"(Engine {snapshot['server_version']})"),
+            box=box.SIMPLE_HEAVY, header_style='bold', show_edge=False,
+            pad_edge=False,
         )
-        for row in snapshot['rows']:
-            table.add_row(*row)
+        table.columns[4].justify = 'right'
+        previous_stack = None
+        labels = {
+            'infrastructure': 'Infrastructure',
+            'microservices': 'Microservices',
+            'frontends': 'Frontends',
+            'admin': 'Administration',
+        }
+        for stack, service, indicator, _container, detail, image, ports, restarts in snapshot['rows']:
+            if stack != previous_stack:
+                if table.row_count:
+                    table.add_section()
+                table.add_row(Text(labels.get(stack, stack.capitalize()), style='bold magenta'), '', '', '', '')
+                previous_stack = stack
+            table.add_row(
+                service,
+                DockerWorker._health_text(detail),
+                DockerWorker._image_text(image),
+                Text(ports, style='dim' if ports == '—' else ''),
+                Text(restarts, style='yellow' if restarts not in {'0', '—'} else 'dim'),
+            )
         console.print(table)
+        for _stack, service, indicator, _container, detail, _image, _ports, _restarts in snapshot['rows']:
+            if indicator != '✅':
+                console.print(Text(f'WARNING  {service}: {detail}', style='yellow'))
+
+    @staticmethod
+    def _health_text(detail):
+        if detail == 'healthy':
+            return Text('healthy', style='green')
+        if detail == 'running (no healthcheck)':
+            return Text('running', style='green')
+        if detail == 'healthcheck starting':
+            return Text('starting', style='yellow')
+        if detail.startswith('healthy;'):
+            return Text('healthy', style='green')
+        if detail.startswith('running (no healthcheck);'):
+            return Text('running', style='green')
+        if detail == 'missing':
+            return Text('missing', style='bold red')
+        state = detail.split(':', 1)[0].split(';', 1)[0]
+        return Text(state, style='bold red')
+
+    @staticmethod
+    def _image_text(value):
+        if value == 'current':
+            return Text(value, style='green')
+        if value == 'MISMATCH':
+            return Text(value, style='bold red')
+        if value in {'—', 'unknown'}:
+            return Text(value, style='dim' if value == '—' else 'yellow')
+        return Text(value)
 
     @staticmethod
     def _backend_auth_error(timeout=10):
@@ -664,11 +775,6 @@ exit ${failed}
                 console.print(f'[red]❌ {error}[/red]')
             return False
 
-        console.print(
-            f'Docker image set: {active_train}' if active_train
-            else 'Docker image set: local development tag'
-        )
-
         snapshot = DockerWorker._container_snapshot(
             DockerWorker._stack_names(mode),
             environment=environment,
@@ -676,22 +782,31 @@ exit ${failed}
         DockerWorker._render_snapshot(snapshot, mode)
         if snapshot['daemon_error']:
             return False
+        image_set = active_train or environment.get('CEDAR_DOCKER_VERSION') or 'unverified local tag'
         if not DockerWorker._snapshot_ready(snapshot):
             console.print(
-                f"[red]❌ {snapshot['healthy']}/{snapshot['expected']} selected Docker services are ready.[/red] "
-                'Use docker compose logs for the failing service.'
+                f"[red]Summary  {snapshot['healthy']}/{snapshot['expected']} containers ready"
+                f"  •  acceptance not run  •  image set {image_set}[/red]"
             )
+            console.print('[dim]Use docker compose logs for a failing service.[/dim]')
             return False
 
         acceptance_errors = DockerWorker._acceptance_errors(mode)
         if acceptance_errors:
             for error in acceptance_errors:
-                console.print(f'[red]❌ {error}[/red]')
+                console.print(f'[red]WARNING  {error}[/red]')
+            console.print(
+                f"[red]Summary  {snapshot['healthy']}/{snapshot['expected']} containers ready"
+                f"  •  acceptance failed  •  image set {image_set}[/red]"
+            )
             return False
 
+        acceptance_count = 1 + (
+            len(FRONTEND_PUBLIC_HOSTS) if mode.checks_frontend_routes else 0)
         console.print(
-            f"[green]✅ {snapshot['healthy']}/{snapshot['expected']} selected Docker services and "
-            f'{DockerWorker._mode_label(mode)} acceptance checks are ready.[/green]'
+            f"[green]Summary  {snapshot['healthy']}/{snapshot['expected']} containers ready"
+            f"  •  {acceptance_count}/{acceptance_count} acceptance checks ready"
+            f"  •  image set {image_set}[/green]"
         )
         return True
 
@@ -821,26 +936,30 @@ docker volume create cedar_ca
 
     @staticmethod
     def copy_certificates():
+        try:
+            returncode = CertificateWorker.ensure_ca_and_domains()
+        except CertificateError as error:
+            console.print(f'[red]{error}[/red]')
+            return 1
+        if returncode:
+            return returncode
+
         output = Worker.execute_generic_shell_commands([
             """
 set -e
 docker rm -f cedar-cert-helper cedar-ca-helper > /dev/null 2>&1 || true
-echo "Copying self-signed certificates into the cedar_cert volume..."
+echo "Copying locally generated certificates into the cedar_cert volume..."
 docker run -v cedar_cert:/data --name cedar-cert-helper busybox:1.36.0 true
-export CEDAR_CUSTOM_CERT=false
-if [[ -e "${CEDAR_HOME}/CEDAR_CA/certs/-${CEDAR_HOST}/${CEDAR_HOST}.crt" ]]; then export CEDAR_CUSTOM_CERT=true; fi
-if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp "${CEDAR_HOME}/CEDAR_CA/certs" cedar-cert-helper:/data; fi
-if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp "${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/cert/certs" cedar-cert-helper:/data; fi
+docker cp "${CEDAR_CA_HOME}/certs" cedar-cert-helper:/data
 docker rm cedar-cert-helper
 
 echo "Copying CA certificate into the cedar_ca volume..."
 docker run -v cedar_ca:/data --name cedar-ca-helper busybox:1.36.0 true
-if [[ $CEDAR_CUSTOM_CERT == 'true' ]]; then docker cp "${CEDAR_HOME}/CEDAR_CA/ca.crt" cedar-ca-helper:/data; fi
-if [[ $CEDAR_CUSTOM_CERT != 'true' ]]; then docker cp "${CEDAR_HOME}/cedar-docker-deploy/cedar-assets/ca/ca.crt" cedar-ca-helper:/data; fi
+docker cp "${CEDAR_CA_HOME}/ca.crt" cedar-ca-helper:/data
 docker rm cedar-ca-helper
 """
         ],
-            title="Copy CEDAR self-signed certificates",
+            title="Copy locally generated CEDAR certificates",
         )
         return output.returncode
 
@@ -1055,7 +1174,7 @@ exit ${failed}
     @staticmethod
     def _print_failure_logs(snapshot, environment):
         failures_by_stack = {}
-        for stack, service, indicator, _container, _detail in snapshot['rows']:
+        for stack, service, indicator, _container, _detail, _image, _ports, _restarts in snapshot['rows']:
             if indicator != '✅' and service != 'Compose project':
                 failures_by_stack.setdefault(stack, []).append(service)
         for stack, services in failures_by_stack.items():

@@ -125,6 +125,50 @@ class CertificateWorker(Worker):
         return 0
 
     @classmethod
+    def ensure_ca_and_domains(cls):
+        """Create the local CA and any missing runtime certificate pairs without rotating existing ones."""
+        returncode = cls.setup()
+        if returncode:
+            return returncode
+
+        ca_home = cls.set_paths()
+        ca_key = ca_home / 'ca.key'
+        ca_certificate = ca_home / 'ca.crt'
+        existing_ca = [path for path in (ca_key, ca_certificate) if path.exists()]
+        if not existing_ca:
+            returncode = cls.generate_ca()
+            if returncode:
+                return returncode
+        elif len(existing_ca) != 2:
+            missing = ca_certificate.name if ca_key.exists() else ca_key.name
+            raise CertificateError(
+                f"Certificate authority is incomplete ({missing} missing). Refusing to replace its other half."
+            )
+
+        missing_domains = []
+        incomplete_domains = []
+        for subdomain in cls.select_subdomains():
+            cert_dir = ca_home / 'certs' / subdomain.get_cert_directory_name()
+            fqdn = subdomain.get_fqdn()
+            key = cert_dir / f'{fqdn}.key'
+            request = cert_dir / f'{fqdn}.csr'
+            certificate = cert_dir / f'{fqdn}.crt'
+            existing = [path for path in (key, request, certificate) if path.exists()]
+            if not existing:
+                missing_domains.append(subdomain.name)
+            elif not key.is_file() or not certificate.is_file():
+                incomplete_domains.append(fqdn)
+
+        if incomplete_domains:
+            raise CertificateError(
+                "Certificate pairs are incomplete for: " + ", ".join(incomplete_domains)
+                + ". Refusing to overwrite partial local certificate state."
+            )
+        if missing_domains:
+            return cls.generate_domains(missing_domains)
+        return 0
+
+    @classmethod
     def generate_ca(cls, force=False):
         ca_home = cls.set_paths()
         cls.require_ca_environment()

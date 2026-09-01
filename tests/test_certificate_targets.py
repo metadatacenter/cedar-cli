@@ -79,6 +79,98 @@ class CertificateTargetsTest(unittest.TestCase):
             self.assertTrue((ca_home / "newcerts").is_dir())
             generate_domain_configs.assert_called_once_with()
 
+    @patch.object(CertificateWorker, "generate_domains", return_value=0)
+    @patch.object(CertificateWorker, "generate_ca", return_value=0)
+    @patch.object(CertificateWorker, "setup", return_value=0)
+    def test_ensure_ca_and_domains_creates_missing_material(self, setup, generate_ca, generate_domains):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            domains = [
+                SimpleNamespace(
+                    name="",
+                    get_fqdn=lambda: "metadatacenter.orgx",
+                    get_cert_directory_name=lambda: "-metadatacenter.orgx",
+                ),
+                SimpleNamespace(
+                    name="workspace",
+                    get_fqdn=lambda: "workspace.metadatacenter.orgx",
+                    get_cert_directory_name=lambda: "workspace.metadatacenter.orgx",
+                ),
+            ]
+            environment = {**self.CA_ENVIRONMENT, "CEDAR_CA_HOME": temp_dir}
+            with patch.dict(os.environ, environment), \
+                    patch.object(CertificateWorker, "select_subdomains", return_value=domains):
+                returncode = CertificateWorker.ensure_ca_and_domains()
+
+        self.assertEqual(0, returncode)
+        setup.assert_called_once_with()
+        generate_ca.assert_called_once_with()
+        generate_domains.assert_called_once_with(["", "workspace"])
+
+    @patch.object(CertificateWorker, "generate_domains", return_value=0)
+    @patch.object(CertificateWorker, "generate_ca", return_value=0)
+    @patch.object(CertificateWorker, "setup", return_value=0)
+    def test_ensure_ca_and_domains_preserves_complete_pairs(
+            self, _setup, generate_ca, generate_domains):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ca_home = Path(temp_dir)
+            (ca_home / "ca.key").write_text("key")
+            (ca_home / "ca.crt").write_text("certificate")
+            root_dir = ca_home / "certs" / "-metadatacenter.orgx"
+            root_dir.mkdir(parents=True)
+            (root_dir / "metadatacenter.orgx.key").write_text("key")
+            (root_dir / "metadatacenter.orgx.crt").write_text("certificate")
+            domains = [
+                SimpleNamespace(
+                    name="",
+                    get_fqdn=lambda: "metadatacenter.orgx",
+                    get_cert_directory_name=lambda: "-metadatacenter.orgx",
+                ),
+                SimpleNamespace(
+                    name="workspace",
+                    get_fqdn=lambda: "workspace.metadatacenter.orgx",
+                    get_cert_directory_name=lambda: "workspace.metadatacenter.orgx",
+                ),
+            ]
+            environment = {**self.CA_ENVIRONMENT, "CEDAR_CA_HOME": temp_dir}
+            with patch.dict(os.environ, environment), \
+                    patch.object(CertificateWorker, "select_subdomains", return_value=domains):
+                returncode = CertificateWorker.ensure_ca_and_domains()
+
+        self.assertEqual(0, returncode)
+        generate_ca.assert_not_called()
+        generate_domains.assert_called_once_with(["workspace"])
+
+    @patch.object(CertificateWorker, "setup", return_value=0)
+    def test_ensure_ca_and_domains_rejects_incomplete_ca(self, _setup):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, "ca.key").write_text("key")
+            environment = {**self.CA_ENVIRONMENT, "CEDAR_CA_HOME": temp_dir}
+
+            with patch.dict(os.environ, environment):
+                with self.assertRaisesRegex(CertificateError, "ca.crt missing"):
+                    CertificateWorker.ensure_ca_and_domains()
+
+    @patch.object(CertificateWorker, "setup", return_value=0)
+    def test_ensure_ca_and_domains_rejects_incomplete_leaf_pair(self, _setup):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ca_home = Path(temp_dir)
+            (ca_home / "ca.key").write_text("key")
+            (ca_home / "ca.crt").write_text("certificate")
+            cert_dir = ca_home / "certs" / "workspace.metadatacenter.orgx"
+            cert_dir.mkdir(parents=True)
+            (cert_dir / "workspace.metadatacenter.orgx.key").write_text("key")
+            domain = SimpleNamespace(
+                name="workspace",
+                get_fqdn=lambda: "workspace.metadatacenter.orgx",
+                get_cert_directory_name=lambda: "workspace.metadatacenter.orgx",
+            )
+            environment = {**self.CA_ENVIRONMENT, "CEDAR_CA_HOME": temp_dir}
+
+            with patch.dict(os.environ, environment), \
+                    patch.object(CertificateWorker, "select_subdomains", return_value=[domain]):
+                with self.assertRaisesRegex(CertificateError, "workspace.metadatacenter.orgx"):
+                    CertificateWorker.ensure_ca_and_domains()
+
     @patch("org.metadatacenter.worker.CertificateWorker.Worker.execute_generic_shell_commands")
     def test_ca_refuses_to_overwrite_without_force(self, execute):
         with tempfile.TemporaryDirectory() as temp_dir:

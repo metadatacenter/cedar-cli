@@ -6,10 +6,12 @@ from unittest.mock import Mock, patch
 from typer.testing import CliRunner
 
 from CedarCliSettings import CedarCliSettings
-from org.metadatacenter import build
+from org.metadatacenter import build, clean_maven
 from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
+from org.metadatacenter.model.PlanTask import PlanTask
+from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
 
@@ -81,6 +83,26 @@ class BuildPolicyTest(unittest.TestCase):
             self.assertEqual(0, result.exit_code, result.output)
             self.assertNotIn("--skip-tests", self.plain_output(result.output))
 
+    @patch.object(clean_maven.CleanMavenWorker, "all")
+    @patch.object(clean_maven.CleanMavenWorker, "cedar")
+    def test_maven_cache_cleaning_is_nested_under_build(self, clean_cedar, clean_all):
+        cedar_result = self.runner.invoke(build.app, ["maven", "clean", "cedar"])
+        all_result = self.runner.invoke(build.app, ["maven", "clean", "all"])
+
+        self.assertEqual(0, cedar_result.exit_code, cedar_result.output)
+        self.assertEqual(0, all_result.exit_code, all_result.output)
+        clean_cedar.assert_called_once_with()
+        clean_all.assert_called_once_with()
+
+    def test_maven_is_not_a_top_level_command(self):
+        import cedar
+
+        build_help = self.runner.invoke(cedar.app, ["build", "maven", "clean", "--help"])
+        top_level = self.runner.invoke(cedar.app, ["maven", "--help"])
+
+        self.assertEqual(0, build_help.exit_code, build_help.output)
+        self.assertEqual(2, top_level.exit_code, top_level.output)
+
     def test_openview_build_runs_its_production_asset_gate(self):
         repos = ReposFactory.build_repos()
         openview = repos.map["cedar-openview"]
@@ -112,6 +134,39 @@ class BuildPolicyTest(unittest.TestCase):
 
         self.assertEqual(7, return_code)
         self.assertEqual(2, execute.call_count)
+
+    def test_a_failing_task_halts_the_plan_nonzero(self):
+        """
+        The default. `fail_on_error` is on unless something turns it off, and
+        nothing does, so this is the path every failed build takes: a task
+        returns non-zero, the run stops where it stands, and the process says
+        so. The continue path below is pinned and this one was not, which is the
+        wrong way round — it is the one that runs.
+        """
+        repo = SimpleNamespace(name="cedar-example", pre_post_type=None)
+        task = PlanTask("Maven clean install", TaskType.SHELL, repo)
+        task.set_node_id(1)
+        executor = PlanExecutor()
+        failing = SimpleNamespace(execute=lambda *_: 1)
+
+        with patch.object(GlobalContext, "fail_on_error", return_value=True), \
+                patch.object(GlobalContext, "get_task_executor", return_value=failing), \
+                patch("org.metadatacenter.executor.PlanExecutor.console") as console:
+            with self.assertRaises(SystemExit) as raised:
+                executor.execute_recursively(
+                    task, 1, 0, [], Mock(), Mock(), Mock(),
+                    self.progress_stub(), self.progress_stub(), 0, dry_run=False)
+
+        self.assertEqual(1, raised.exception.code)
+        halt_panel = console.print.call_args_list[-1].args[0]
+        self.assertEqual("Execution halted", halt_panel.title)
+
+    @staticmethod
+    def progress_stub():
+        """Enough of a `rich` Progress for the walk to update as it goes."""
+        job = SimpleNamespace(description="", completed=0, total=100, finished=False, id=0)
+        return SimpleNamespace(tasks=[job], advance=lambda _id: None,
+                               update=lambda *_, **__: None, print=lambda *_, **__: None)
 
     def test_continued_failures_end_the_plan_nonzero(self):
         plan = Plan("Example")

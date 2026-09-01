@@ -6,6 +6,7 @@ class RepoType:
     ANGULAR_DIST = "angular-dist"
     TYPESCRIPT = "typescript"
     EMBER = "ember"
+    REACT = "react"
     MULTI = "multi"
     CONTENT_DELIVERY = "content-delivery"
     PYTHON = "python"

@@ -30,7 +30,7 @@ class DevWorker(Worker):
     def create_directories():
         cedar_home = Path(Util.cedar_home)
         relative_paths = [
-            'cache/terminology', 'CEDAR_CA', 'export', 'tmp', 'log/run',
+            'CEDAR_CA', 'export', 'tmp', 'log/run',
             'log/frontend-bridging', 'log/frontend-cedar', 'log/frontend-content',
             'log/frontend-cee-demo-angular', 'log/frontend-cee-demo-angular-dist',
             'log/frontend-monitoring', 'log/frontend-openview', 'log/frontend-shared',

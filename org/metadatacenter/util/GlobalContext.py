@@ -41,45 +41,21 @@ class GlobalContext(object):
     def init_task_operators(cls):
         from org.metadatacenter.operator.BuildOperator import BuildOperator
         from org.metadatacenter.operator.PublishOperator import PublishOperator
-        from org.metadatacenter.operator.ReleasePrepareOperator import ReleasePrepareOperator
-        from org.metadatacenter.operator.ReleasePrepareCreateBranchOperator import ReleasePrepareCreateBranchOperator
-        from org.metadatacenter.operator.ReleaseRollbackOperator import ReleaseRollbackOperator
-        from org.metadatacenter.operator.ReleaseCleanupOperator import ReleaseCleanupOperator
-        from org.metadatacenter.operator.ReleaseCommitOperator import ReleaseCommitOperator
-        from org.metadatacenter.operator.ReleaseBranchCheckoutOperator import ReleaseBranchCheckoutOperator
         cls.task_operators = {
             TaskType.BUILD: BuildOperator(),
             TaskType.PUBLISH: PublishOperator(),
-            TaskType.RELEASE_PREPARE: ReleasePrepareOperator(),
-            TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchOperator(),
-            TaskType.RELEASE_ROLLBACK: ReleaseRollbackOperator(),
-            TaskType.RELEASE_COMMIT: ReleaseCommitOperator(),
-            TaskType.RELEASE_CLEANUP: ReleaseCleanupOperator(),
-            TaskType.RELEASE_BRANCH_CHECKOUT: ReleaseBranchCheckoutOperator()
         }
 
     @classmethod
     def init_task_executors(cls):
         from org.metadatacenter.taskexecutor.BuildTaskExecutor import BuildTaskExecutor
         from org.metadatacenter.taskexecutor.PublishTaskExecutor import PublishTaskExecutor
-        from org.metadatacenter.taskexecutor.ReleasePrepareTaskExecutor import ReleasePrepareTaskExecutor
-        from org.metadatacenter.taskexecutor.ReleasePrepareCreateBranchTaskExecutor import ReleasePrepareCreateBranchTaskExecutor
         from org.metadatacenter.taskexecutor.ShellWrapperTaskExecutor import ShellWrapperTaskExecutor
         from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
         from org.metadatacenter.taskexecutor.NoopTaskExecutor import NoopTaskExecutor
-        from org.metadatacenter.taskexecutor.ReleaseRollbackTaskExecutor import ReleaseRollbackTaskExecutor
-        from org.metadatacenter.taskexecutor.ReleaseCleanupTaskExecutor import ReleaseCleanupTaskExecutor
-        from org.metadatacenter.taskexecutor.ReleaseCommitTaskExecutor import ReleaseCommitTaskExecutor
-        from org.metadatacenter.taskexecutor.ReleaseBranchCheckoutTaskExecutor import ReleaseBranchCheckoutTaskExecutor
         cls.task_executors = {
             TaskType.BUILD: BuildTaskExecutor(),
             TaskType.PUBLISH: PublishTaskExecutor(),
-            TaskType.RELEASE_PREPARE: ReleasePrepareTaskExecutor(),
-            TaskType.RELEASE_PREPARE_CREATE_BRANCH: ReleasePrepareCreateBranchTaskExecutor(),
-            TaskType.RELEASE_ROLLBACK: ReleaseRollbackTaskExecutor(),
-            TaskType.RELEASE_COMMIT: ReleaseCommitTaskExecutor(),
-            TaskType.RELEASE_CLEANUP: ReleaseCleanupTaskExecutor(),
-            TaskType.RELEASE_BRANCH_CHECKOUT: ReleaseBranchCheckoutTaskExecutor(),
             TaskType.SHELL_WRAPPER: ShellWrapperTaskExecutor(),
             TaskType.SHELL: ShellTaskExecutor(),
             TaskType.NOOP: NoopTaskExecutor()

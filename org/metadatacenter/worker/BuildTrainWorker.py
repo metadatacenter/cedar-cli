@@ -19,6 +19,67 @@ class BuildTrainWorker:
     REPOSITORY = 'metadatacenter/cedar-development'
 
     @classmethod
+    def _open_work(cls):
+        """Local work in a train source repository that GitHub has not got.
+
+        A train captures its sources from `metadatacenter/develop` on GitHub, so anything left
+        uncommitted, or committed and not pushed, is simply absent from it. Nothing says so: the
+        train reports success, its images are built and verified, and the change someone believed
+        they were shipping is not in any of them. Refusing costs a second; the alternative is found
+        later, if at all.
+
+        Untracked files do not count, for the reason the release preflight gives: they are ordinary
+        in a development tree. A modified tracked file is work someone may believe is in the train.
+
+        A repository that is not checked out here holds no local work by definition, so it is not a
+        finding — the train reads GitHub, not this machine.
+        """
+        cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        if not cedar_home:
+            raise ValueError('CEDAR_HOME is not set')
+        ops = Path(cedar_home) / 'cedar-development' / 'ops'
+        try:
+            build = json.loads((ops / 'build-train.json').read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f'cannot read build-train configuration: {error}') from error
+
+        findings = []
+        for repository in build.get('repositories', []):
+            root = Path(cedar_home) / repository
+            if not (root / '.git').exists():
+                continue
+            code, dirty, _ = cls._git(root, 'status', '--porcelain', '--untracked-files=no')
+            if code != 0:
+                findings.append(f'{repository} is not a readable git repository')
+                continue
+            if dirty:
+                count = len(dirty.splitlines())
+                findings.append(
+                    f'{repository} has {count} uncommitted change(s), which the train cannot see')
+            code, ahead, _ = cls._git(root, 'rev-list', '--count', 'origin/develop..develop')
+            if code == 0 and ahead.isdigit() and int(ahead) > 0:
+                findings.append(
+                    f'{repository} has {ahead} unpushed commit(s) on develop, '
+                    'which the train cannot see')
+        return findings
+
+    @staticmethod
+    def _git(root, *arguments):
+        completed = subprocess.run(
+            ['git', '-C', str(root), *arguments],
+            capture_output=True, text=True, check=False)
+        return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
+
+    @classmethod
+    def _report_open_work(cls, findings):
+        console.print('[red]The train would not contain all of your work.[/red]')
+        for finding in findings:
+            console.print(f'  {finding}')
+        console.print(
+            'A train is built from metadatacenter/develop on GitHub. Commit and push, or stash, '
+            'and dispatch again.')
+
+    @classmethod
     def _dispatched_run_id(cls, result):
         output = '\n'.join(
             value for value in (result.stdout, result.stderr)
@@ -198,6 +259,19 @@ class BuildTrainWorker:
             f'  [green]OK[/green] train ID is '
             f'{"recorded for resume" if resume else "available"}'
         )
+        try:
+            open_work = cls._open_work()
+        except ValueError as error:
+            console.print(f'  [red]FAIL[/red] {error}')
+            return 1
+        if open_work:
+            console.print('  [red]FAIL[/red] source repositories hold work the train cannot see:')
+            for finding in open_work:
+                console.print(f'    {finding}')
+            return 1
+        console.print(
+            '  [green]OK[/green] every source repository is committed and pushed'
+        )
 
         if resume:
             next_stage = None
@@ -236,6 +310,16 @@ class BuildTrainWorker:
         ]
         if dry_run:
             return cls._dry_run(selected, resume, command)
+
+        try:
+            open_work = cls._open_work()
+        except ValueError as error:
+            console.print(f'[red]{error}[/red]')
+            return 1
+        if open_work:
+            cls._report_open_work(open_work)
+            return 1
+
         try:
             result = subprocess.run(
                 command,

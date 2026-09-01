@@ -59,8 +59,8 @@ class VersionWorker(Worker):
             self.analyze_java_wrapper(repo, report)
         elif repo.repo_type == RepoType.ANGULAR_JS or repo.repo_type == RepoType.ANGULAR:
             self.analyze_angular_js(repo, report)
-        elif repo.repo_type == RepoType.EMBER:
-            self.analyze_ember(repo, report)
+        elif repo.repo_type == RepoType.EMBER or repo.repo_type == RepoType.REACT:
+            self.analyze_npm_package(repo, report)
         elif repo.repo_type == RepoType.ANGULAR_DIST:
             self.analyze_angular_dist(repo, report)
         elif repo.repo_type == RepoType.TYPESCRIPT:
@@ -177,7 +177,7 @@ class VersionWorker(Worker):
 
         self.analyze_package_and_lock(repo, report, root_dir, dir_suffix)
 
-    def analyze_ember(self, repo, report: VersionReport):
+    def analyze_npm_package(self, repo, report: VersionReport):
         root_dir = Util.get_wd(repo)
         dir_suffix = Util.get_repo_suffix(repo)
 
