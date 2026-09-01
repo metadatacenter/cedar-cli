@@ -4317,7 +4317,12 @@ PROFILE_REQUIRED_VARIABLES = (
 PROFILE_COMMAND = ("CEDAR_PROFILE=develop source "
                    "$CEDAR_HOME/cedar-development/bin/templates/cedar-profile-native.sh")
 
-REQUIRED_TOOLS = ("git", "mvn", "node", "npm")
+# javac earns its place beside java below: the version probe runs `java -version`, which a
+# JRE-only host satisfies while still being unable to compile anything. That is not hypothetical
+# - openjdk-*-jre-headless is exactly what apt offers when `java` is not found, so a reprovisioned
+# build host lands there by default and the absent compiler surfaces minutes into a release as a
+# Maven failure rather than as a missing toolchain.
+REQUIRED_TOOLS = ("git", "javac", "mvn", "node", "npm")
 REQUIRED_JAVA_MAJOR = 17
 # A train, its attempt tree and the archives of earlier attempts.
 REQUIRED_FREE_BYTES = 40 * 1024 ** 3
