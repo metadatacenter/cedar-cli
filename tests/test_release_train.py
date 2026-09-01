@@ -1013,7 +1013,11 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             "cedar-docker-build": {
                 "frontend/Dockerfile": f"ENV CEDAR_VERSION={source_version}\n",
                 "dynamic/Dockerfile": "ENV CEDAR_VERSION=${CEDAR_MAVEN_VERSION}\n",
-                "bin/cedar-images-base.sh": f"export IMAGE_VERSION={source_version}\n",
+                "bin/cedar-images-base.sh": (
+                    f"export IMAGE_VERSION={source_version}\n"
+                    f"export CEDAR_MAVEN_VERSION={source_version}\n"
+                    f"export CEDAR_APPLICATION_VERSION={source_version}\n"
+                ),
             },
             "cedar-docker-deploy": {
                 "stack/.env": f"CEDAR_DOCKER_VERSION={source_version}\n",
@@ -1191,6 +1195,17 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 "${CEDAR_MAVEN_VERSION}",
                 (release_workspace / "cedar-docker-build" / "dynamic" / "Dockerfile").read_text(),
             )
+            release_docker_versions = (
+                release_workspace / "cedar-docker-build" / "bin" / "cedar-images-base.sh"
+            ).read_text()
+            next_docker_versions = (
+                next_workspace / "cedar-docker-build" / "bin" / "cedar-images-base.sh"
+            ).read_text()
+            for variable in (
+                "IMAGE_VERSION", "CEDAR_MAVEN_VERSION", "CEDAR_APPLICATION_VERSION",
+            ):
+                self.assertIn(f"export {variable}=2.9.3", release_docker_versions)
+                self.assertIn(f"export {variable}=2.9.4-SNAPSHOT", next_docker_versions)
             original_package = json.loads(
                 (cedar_home / "cedar-template-editor" / "package.json").read_bytes()
             )

@@ -1609,11 +1609,16 @@ class ReleaseVersionPreparer:
             ):
                 changed.add(path.relative_to(root).as_posix())
         base = root / "bin" / "cedar-images-base.sh"
-        if cls._replace_exact(
-            base,
-            f"export IMAGE_VERSION={old}".encode(),
-            f"export IMAGE_VERSION={new}".encode(),
+        for variable in (
+            "IMAGE_VERSION", "CEDAR_MAVEN_VERSION", "CEDAR_APPLICATION_VERSION",
         ):
+            if not cls._replace_exact(
+                base,
+                f"export {variable}={old}".encode(),
+                f"export {variable}={new}".encode(),
+            ):
+                raise ReleaseError(
+                    f"{base} does not declare {variable} at train source version {old}")
             changed.add(base.relative_to(root).as_posix())
         if not changed:
             raise ReleaseError(f"{root.name} has no Docker version {old} to stamp")
@@ -5065,19 +5070,28 @@ class ReleasePreflight:
                 ))
         special_markers = {
             "cedar-development": (
-                "bin/util/set-env-generic.sh", f"export CEDAR_VERSION={source_version}"),
+                "bin/util/set-env-generic.sh",
+                [f"export CEDAR_VERSION={source_version}"],
+            ),
             "cedar-docker-build": (
-                "bin/cedar-images-base.sh", f"export IMAGE_VERSION={source_version}"),
+                "bin/cedar-images-base.sh",
+                [
+                    f"export IMAGE_VERSION={source_version}",
+                    f"export CEDAR_MAVEN_VERSION={source_version}",
+                    f"export CEDAR_APPLICATION_VERSION={source_version}",
+                ],
+            ),
         }
-        for repository, (relative, marker) in special_markers.items():
+        for repository, (relative, markers) in special_markers.items():
             if repository not in self.manifest.get("releaseRepositories", []):
                 continue
             content = self._source_content(repository, relative)
-            if content is None or marker not in content:
-                findings.append(PreflightFinding(
-                    "source", "fail",
-                    f"train source {repository}:{relative} does not contain {marker!r}",
-                ))
+            for marker in markers:
+                if content is None or marker not in content:
+                    findings.append(PreflightFinding(
+                        "source", "fail",
+                        f"train source {repository}:{relative} does not contain {marker!r}",
+                    ))
         if "cedar-docker-deploy" in self.manifest.get("releaseRepositories", []):
             matches = 0
             for relative in self._source_paths("cedar-docker-deploy"):
