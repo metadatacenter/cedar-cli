@@ -1386,12 +1386,6 @@ class ReleaseWorkspacePreparer:
                     f"CEE propagation changed unexpected files in {repository}: "
                     + ", ".join(unexpected)
                 )
-            if repository != "cedar-development" and actual != allowed:
-                missing = sorted(allowed - actual)
-                raise ReleaseError(
-                    f"CEE propagation did not update expected files in {repository}: "
-                    + ", ".join(missing)
-                )
             changes[repository] = sorted(actual)
         return {
             "attempt": attempt.name,
@@ -1923,6 +1917,14 @@ class ReleaseDistributionMaterializer:
             if safe.is_absolute() or ".." in safe.parts:
                 raise ReleaseError(f"unsafe preserved distribution path: {relative}")
             path = destination / relative
+            if (
+                relative == LICENSE_FILE_NAME
+                and not path.exists()
+                and not path.is_symlink()
+            ):
+                repository_license = destination.parent / LICENSE_FILE_NAME
+                if repository_license.is_file() and not repository_license.is_symlink():
+                    path = repository_license
             if not path.is_file() or path.is_symlink():
                 raise ReleaseError(f"preserved distribution file is missing: {path}")
             preserved[relative] = path.read_bytes()
@@ -2133,6 +2135,21 @@ class ReleaseRefCreator:
             raise ReleaseError(f"release has no prepared source record for {repository}")
         return expected
 
+    @staticmethod
+    def _expected_changed_files(
+        manifest: dict, variant: str, repository: str, expected_files: dict[str, str],
+    ) -> list[str]:
+        prepared = manifest["versionPreparation"][variant]["repositories"].get(repository)
+        if isinstance(prepared, dict) and isinstance(prepared.get("changedFiles"), list):
+            return list(prepared["changedFiles"])
+        if variant == "release":
+            frontend = manifest.get("frontendPreparation", {}).get(
+                "repositories", {}).get(repository)
+            if isinstance(frontend, dict) and isinstance(frontend.get("changedFiles"), list):
+                return list(frontend["changedFiles"])
+        # Compatibility for manifests created before changedFiles was recorded separately.
+        return list(expected_files)
+
     def tasks(self, manifest: dict) -> list[dict]:
         release_repositories = list(manifest["releaseRepositories"])
         for consumer in manifest["cee"]["consumers"]:
@@ -2157,6 +2174,7 @@ class ReleaseRefCreator:
         ):
             workspace = Path(variants[variant]["workspace"])
             for repository in repositories:
+                expected_files = self._expected_files(manifest, variant, repository)
                 tasks.append({
                     "id": f"{variant}:{repository}",
                     "variant": variant,
@@ -2165,7 +2183,9 @@ class ReleaseRefCreator:
                     "branch": branch,
                     "tag": tag,
                     "sourceRevision": manifest["sourceRepositories"][repository],
-                    "expectedFiles": self._expected_files(manifest, variant, repository),
+                    "expectedFiles": expected_files,
+                    "expectedChangedFiles": self._expected_changed_files(
+                        manifest, variant, repository, expected_files),
                 })
         return tasks
 
@@ -2224,9 +2244,10 @@ class ReleaseRefCreator:
                 f"local {task['variant']} commit for {task['repository']} is not based on {source}"
             )
         changed = set(filter(None, self.git._run([
-            "git", "-C", str(root), "diff", "--name-only", source, commit, "--",
+            "git", "-C", str(root), "diff", "--no-renames", "--name-only",
+            source, commit, "--",
         ]).splitlines()))
-        expected = set(task["expectedFiles"])
+        expected = set(task.get("expectedChangedFiles", task["expectedFiles"]))
         if changed != expected:
             raise ReleaseError(
                 f"local {task['variant']} commit for {task['repository']} has wrong files: "
@@ -2260,10 +2281,11 @@ class ReleaseRefCreator:
             if head != source:
                 raise ReleaseError(f"{root} is at {head}, expected source {source}")
             actual = self._working_changes(root)
-            if actual != set(task["expectedFiles"]):
+            expected_changes = set(task.get("expectedChangedFiles", task["expectedFiles"]))
+            if actual != expected_changes:
                 raise ReleaseError(
                     f"prepared files changed before local commit in {task['repository']}: "
-                    f"actual={sorted(actual)}, expected={sorted(task['expectedFiles'])}"
+                    f"actual={sorted(actual)}, expected={sorted(expected_changes)}"
                 )
             self._verify_file_hashes(root, task["expectedFiles"])
             self.git._run(["git", "-C", str(root), "switch", "--quiet", "-c", task["branch"]])
@@ -2273,14 +2295,15 @@ class ReleaseRefCreator:
 
         if branch_tip == source:
             actual = self._working_changes(root)
-            if actual != set(task["expectedFiles"]):
+            expected_changes = set(task.get("expectedChangedFiles", task["expectedFiles"]))
+            if actual != expected_changes:
                 raise ReleaseError(
                     f"local branch has wrong prepared files for {task['repository']}"
                 )
             self._verify_file_hashes(root, task["expectedFiles"])
-            if task["expectedFiles"]:
+            if expected_changes:
                 self.git._run([
-                    "git", "-C", str(root), "add", "--", *sorted(task["expectedFiles"]),
+                    "git", "-C", str(root), "add", "--", *sorted(expected_changes),
                 ])
             name, email = self._identity(root)
             message = (
@@ -4700,12 +4723,13 @@ def _release_progress(manifest: dict) -> list[dict]:
         "artifacts": 2 + len(plan.get("npm", {}).get("surfaces", [])),
         "acceptance": 1,
     }
-    try:
-        totals["builds"] = len(ReleaseBuildValidator(state).tasks(manifest))
-    except ReleaseError:
-        # Before the isolated workspaces exist, the future build surface is not yet
-        # inspectable. Preserve an honest lower bound instead of making status fail.
-        pass
+    if manifest.get("frontendPreparation"):
+        try:
+            totals["builds"] = len(ReleaseBuildValidator(state).tasks(manifest))
+        except ReleaseError:
+            # Before every isolated workspace is inspectable, preserve an honest lower
+            # bound instead of making status fail.
+            pass
     next_stage = _next_release_stage(manifest)
     rows = []
     for stage in RELEASE_STAGES:

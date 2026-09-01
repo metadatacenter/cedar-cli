@@ -679,6 +679,22 @@ class ReleaseStateAndCliTest(unittest.TestCase):
         self.assertEqual(1, release_publications)
         self.assertEqual("acceptance", release_train._next_release_stage(manifest))
 
+    def test_status_renders_a_frontend_preparation_failure_before_workspace_exists(self):
+        manifest = manifest_fixture()
+        manifest.update({
+            "phase": "frontend-preparation-failed",
+            "failure": "consumer preparation failed",
+            "lastAttempt": "/tmp/release-attempt",
+        })
+
+        with release_train.console.capture() as capture:
+            release_train._render_release_status(manifest, Path("/tmp/release.json"))
+
+        output = capture.get()
+        self.assertIn("INCOMPLETE", output)
+        self.assertIn("consumer preparation failed", output)
+        self.assertIn("Run:  cedarcli release resume", output)
+
     def test_abandon_command_records_the_operator_reason(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -834,6 +850,35 @@ class ReleaseWorkspaceTest(unittest.TestCase):
                 PUBLIC_VERSION,
                 json.loads(isolated.read_bytes())["dependencies"]["cedar-embeddable-editor"],
             )
+
+    def test_preparation_accepts_consumers_already_pinned_to_public_cee(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cedar_home, manifest = self.make_workspace(directory)
+            runner = self._successful_runner(manifest["cee"]["consumers"])
+            runner(
+                ["node", "propagate-cee-release.mjs", "--apply", PUBLIC_VERSION],
+                env={"CEDAR_HOME": str(cedar_home)},
+            )
+            repositories = {
+                consumer["repository"] for consumer in manifest["cee"]["consumers"]
+            }
+            for repository in repositories:
+                manifest["sourceRepositories"][repository] = self._commit_repository(
+                    cedar_home / repository
+                )
+
+            state = ReleaseState(root=Path(directory) / "state")
+            state.start(manifest)
+            preparer = ReleaseWorkspacePreparer(
+                state, command_runner=runner, environment={"CEDAR_HOME": str(cedar_home)},
+            )
+
+            completed = prepare_active_release(state, preparer)
+
+            self.assertEqual("frontends-prepared", completed["phase"])
+            prepared = completed["frontendPreparation"]["repositories"]
+            for repository in repositories:
+                self.assertEqual([], prepared[repository]["changedFiles"])
 
     def test_failed_attempt_is_retained_and_resume_uses_a_new_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1492,6 +1537,36 @@ class ReleaseLocalRefsTest(unittest.TestCase):
                 self._git(release_workspace / "repo-main", "rev-parse", "HEAD"),
             )
 
+    def test_already_correct_cee_consumer_gets_verified_empty_release_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, creator, _cedar_home, release_workspace, _next_workspace = (
+                self.make_release(directory)
+            )
+            root = release_workspace / "cedar-workspace"
+            self._git(root, "restore", "package.json", "package-lock.json")
+            manifest, _ = state.read_current_manifest()
+            frontend = manifest["frontendPreparation"]
+            frontend["repositories"] = {
+                "cedar-workspace": {
+                    "changedFiles": [],
+                    "path": str(root),
+                    "revision": manifest["sourceRepositories"]["cedar-workspace"],
+                },
+            }
+            consumer = frontend["consumers"][0]
+            consumer["manifestSha256"] = release_train._file_sha256(root / "package.json")
+            consumer["lockSha256"] = release_train._file_sha256(root / "package-lock.json")
+            state.update_current_manifest({"frontendPreparation": frontend})
+
+            completed = create_active_release_refs(state, creator)
+
+            record = completed["localRefs"]["completedTasks"]["release:cedar-workspace"]
+            self.assertEqual([], record["changedFiles"])
+            self.assertEqual(
+                manifest["sourceRepositories"]["cedar-workspace"],
+                self._git(root, "rev-parse", f"{record['commit']}^"),
+            )
+
     def test_prepared_file_drift_blocks_local_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             state, creator, _cedar_home, release_workspace, _next_workspace = self.make_release(
@@ -1615,6 +1690,70 @@ class ReleaseLocalRefsTest(unittest.TestCase):
                 ).splitlines())
                 self.assertIn("dist/main.old.js", changed)
                 self.assertIn("dist/main.new.js", changed)
+
+    def test_materialization_carries_repository_license_into_legacy_distribution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "dist"
+            destination = root / "dist"
+            source.mkdir(parents=True)
+            destination.mkdir()
+            (source / "index.html").write_text("built\n", encoding="utf-8")
+            for name in ("README.md", "package-lock.json", "package.json"):
+                (destination / name).write_text(f"{name}\n", encoding="utf-8")
+            (root / "license.txt").write_text("BSD\n", encoding="utf-8")
+
+            release_train.ReleaseDistributionMaterializer._copy_exact_build(
+                source,
+                destination,
+                ["README.md", "license.txt", "package-lock.json", "package.json"],
+            )
+
+            self.assertEqual("BSD\n", (destination / "license.txt").read_text())
+            self.assertEqual("built\n", (destination / "index.html").read_text())
+
+    def test_local_ref_verification_keeps_both_sides_of_detected_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "frontend"
+            root.mkdir()
+            self._git(root, "init", "--quiet")
+            old = root / "main.old.js"
+            old.write_text("const payload = 'same bytes';\n" * 20, encoding="utf-8")
+            self._git(root, "add", "main.old.js")
+            self._git(
+                root, "-c", "user.name=Release Test",
+                "-c", "user.email=release@example.org",
+                "commit", "--quiet", "-m", "source",
+            )
+            source = self._git(root, "rev-parse", "HEAD")
+            new = root / "main.new.js"
+            old.rename(new)
+            new.write_text(new.read_text() + "// release\n", encoding="utf-8")
+            self._git(root, "add", "--all")
+            self._git(
+                root, "-c", "user.name=Release Test",
+                "-c", "user.email=release@example.org",
+                "commit", "--quiet", "-m", "release",
+            )
+            commit = self._git(root, "rev-parse", "HEAD")
+            creator = ReleaseRefCreator(ReleaseState(root=Path(directory) / "state"))
+            task = {
+                "id": "release:frontend",
+                "variant": "release",
+                "repository": "frontend",
+                "workspace": directory,
+                "branch": "release/pre-2.9.5",
+                "tag": "release-2.9.5",
+                "sourceRevision": source,
+                "expectedFiles": {
+                    "main.old.js": None,
+                    "main.new.js": release_train._file_sha256(new),
+                },
+            }
+
+            record = creator._verify_commit(root, task, commit)
+
+            self.assertEqual(["main.new.js", "main.old.js"], record["changedFiles"])
 
 
 class ReleaseRemoteIntegrationTest(unittest.TestCase):
