@@ -29,9 +29,15 @@ def train(
 
 
 @app.command("train-status")
-def train_status(version: str = typer.Argument(..., help="Immutable train identifier.")):
-    """Show which persisted Maven, npm, and Docker train stages are recorded."""
-    raise typer.Exit(code=BuildTrainWorker.status(version))
+def train_status(
+        version: str = typer.Argument(..., help="Immutable train identifier."),
+        watch: bool = typer.Option(
+            False,
+            "--watch",
+            help="Follow compact major-stage and Docker-matrix counts until completion.",
+        )):
+    """Show persisted stages, workflow progress, and the safe recovery decision."""
+    raise typer.Exit(code=BuildTrainWorker.status(version, watch=watch))
 
 
 @app.command("this")

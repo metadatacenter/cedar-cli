@@ -1,6 +1,7 @@
 import datetime as dt
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,12 +125,12 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('resume=false', run.call_args.args[0])
         self.assertIn('develop', run.call_args.args[0])
         self.assertIn(
-            'Major-stage summary: cedarcli publish train-status '
-            '2.9.3-dev.20260824.1847',
+            'Compact live summary: cedarcli publish train-status '
+            '2.9.3-dev.20260824.1847 --watch',
             result.output,
         )
         self.assertIn(
-            'Detailed live output: gh run watch 33097135798 '
+            'Detailed GitHub output: gh run watch 33097135798 '
             '--repo metadatacenter/cedar-development --compact --exit-status',
             result.output,
         )
@@ -182,6 +183,7 @@ class BuildTrainTest(unittest.TestCase):
                               'cedar-embeddable-editor', 7, 3),
             ),
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
+            patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
         ):
@@ -193,6 +195,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('Would dispatch:', result.output)
         self.assertIn('No changes made.', result.output)
         self.assertEqual(3, run.call_count)
+        targets.assert_called_once_with()
         self.assertFalse(any(call.args[0][1:3] == ['workflow', 'run'] for call in run.call_args_list))
 
     def test_cli_dry_run_refuses_a_train_id_collision(self):
@@ -229,6 +232,7 @@ class BuildTrainTest(unittest.TestCase):
                               'cedar-embeddable-editor', 7, 3),
             ),
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
+            patch.object(BuildTrainWorker, '_publication_targets_preflight'),
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
         ):
@@ -281,8 +285,9 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotEqual(0, result.exit_code)
         self.assertIn('No such command', result.output)
 
+    @patch.object(BuildTrainWorker, '_workflow_run', return_value=None)
     @patch.object(BuildTrain, '_read')
-    def test_cli_reports_each_persisted_train_stage(self, read):
+    def test_cli_reports_each_persisted_train_stage(self, read, _workflow):
         read.side_effect = lambda path: (
             {'version': '2.9.3-dev.20260824.1847'}
             if path.startswith(('trains/', 'completed/', 'npm/'))
@@ -303,6 +308,109 @@ class BuildTrainTest(unittest.TestCase):
         )
         self.assertIn(BuildTrain.STATE_BROWSE_URL, result.output)
         self.assertNotIn(f'Manifests: {BuildTrain.STATE_BASE_URL}/', result.output)
+        self.assertIn('source state is recorded and publication is incomplete', result.output)
+        self.assertIn('cedarcli publish train --resume', result.output)
+
+    def test_local_publication_preflight_uses_maven_settings_without_exposing_password(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / 'home'
+            settings = home / '.m2' / 'settings.xml'
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                '<settings><servers><server><id>bmir-nexus-releases</id>'
+                '<username>settings-user</username><password>settings-secret</password>'
+                '</server></servers></settings>',
+                encoding='utf-8',
+            )
+            cedar_home = Path(directory) / 'CEDAR'
+            controller = cedar_home / 'cedar-development' / 'ops' / 'build_train.py'
+            controller.parent.mkdir(parents=True)
+            controller.write_text('# controller\n', encoding='utf-8')
+            completed = type('Completed', (), {
+                'returncode': 0,
+                'stdout': 'OK Nexus service status\nOK Docker registry authentication\n',
+                'stderr': '',
+            })()
+            with patch.object(Util, 'cedar_home', str(cedar_home)), \
+                    patch.dict(os.environ, {'HOME': str(home)}, clear=True), \
+                    patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
+                          return_value=completed) as run:
+                BuildTrainWorker._publication_targets_preflight()
+
+        environment = run.call_args.kwargs['env']
+        self.assertEqual('settings-user', environment['BMIR_NEXUS_USERNAME'])
+        self.assertEqual('settings-secret', environment['BMIR_NEXUS_PASSWORD'])
+        self.assertNotIn('settings-secret', completed.stdout)
+        self.assertEqual('probe-publication', run.call_args.args[0][-1])
+
+    def test_failed_run_names_subcheck_and_selects_resume_for_recorded_source(self):
+        version = '2.9.3-dev.20260824.1847'
+
+        def state(path):
+            if path == f'trains/{version}.json':
+                return {'version': version}
+            raise ValueError('build-train state does not exist')
+
+        workflow = {'databaseId': 12, 'status': 'completed', 'conclusion': 'failure'}
+        progress = {
+            'status': 'completed', 'conclusion': 'failure', 'url': 'https://example/run/12',
+            'jobs': [{
+                'name': 'npm 2/3 · wire model and publish CEE',
+                'status': 'completed', 'conclusion': 'failure',
+                'steps': [{'name': 'Gate CEE', 'conclusion': 'failure'}],
+            }],
+        }
+        with patch.object(BuildTrain, '_read', side_effect=state), \
+                patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow), \
+                patch.object(BuildTrainWorker, '_workflow_progress', return_value=progress):
+            result = self.runner.invoke(publish.app, ['train-status', version])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn('Failed subcheck: npm 2/3', result.output)
+        self.assertIn('Gate CEE', result.output)
+        self.assertIn(f'--resume {version}', result.output)
+        self.assertIn('--dry-run', result.output)
+        self.assertIn('Publication may be partial', result.output)
+
+    def test_failure_before_source_state_requires_a_new_train(self):
+        version = '2.9.3-dev.20260824.1847'
+        with patch.object(
+                BuildTrain, '_read', side_effect=ValueError('build-train state does not exist')), \
+                patch.object(BuildTrainWorker, '_workflow_run', return_value=None):
+            result = self.runner.invoke(publish.app, ['train-status', version])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('no source state was recorded; use a new train ID', result.output)
+        self.assertIn('Publication: none can have started', result.output)
+        self.assertIn('Recommended command: cedarcli publish train', result.output)
+
+    def test_watch_reports_compact_matrix_counts_then_completion(self):
+        version = '2.9.3-dev.20260824.1847'
+        workflow = {'databaseId': 13, 'status': 'in_progress', 'conclusion': None}
+        running = {
+            'status': 'in_progress', 'conclusion': None, 'url': 'https://example/run/13',
+            'jobs': [
+                {'name': 'publish-maven', 'status': 'completed', 'conclusion': 'success'},
+                {'name': 'npm 1/3 · model', 'status': 'completed', 'conclusion': 'success'},
+                {'name': 'java-base', 'status': 'completed', 'conclusion': 'success'},
+            ],
+        }
+        complete = {
+            'status': 'completed', 'conclusion': 'success', 'url': 'https://example/run/13',
+            'jobs': running['jobs'],
+        }
+        with patch.object(BuildTrain, '_read', return_value={'version': version}), \
+                patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow), \
+                patch.object(
+                    BuildTrainWorker, '_workflow_progress', side_effect=[running, complete]), \
+                patch('org.metadatacenter.worker.BuildTrainWorker.time.sleep') as sleep:
+            result = self.runner.invoke(publish.app, ['train-status', version, '--watch'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('npm 1/3 done', result.output)
+        self.assertIn('images 1/31 done', result.output)
+        self.assertIn('Decision: complete; do not resume or abandon', result.output)
+        sleep.assert_called_once_with(10)
 
 
 if __name__ == '__main__':
