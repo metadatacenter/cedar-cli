@@ -82,6 +82,94 @@ LICENSE_FILE_NAME = "license.txt"
 LICENSE_COPYRIGHT_RE = re.compile(r"^Copyright \(c\) (\d{4}),", re.MULTILINE)
 
 MAVEN_GENERATED_VERSION_FILES = {
+    "cedar-artifact-server": {
+        "cedar-artifact-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-artifact-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-bridge-server": {
+        "cedar-bridge-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-bridge-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-group-server": {
+        "cedar-group-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-group-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-impex-server": {
+        "cedar-impex-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-impex-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-messaging-server": {
+        "cedar-messaging-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-messaging-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-monitor-server": {
+        "cedar-monitor-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-monitor-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-openview-server": {
+        "cedar-openview-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-openview-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-repo-server": {
+        "cedar-repo-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-repo-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-submission-server": {
+        "cedar-submission-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-submission-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-user-server": {
+        "cedar-user-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-user-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
+    "cedar-worker-server": {
+        "cedar-worker-server-application/src/main/resources/assets/swagger-api/swagger.json": (
+            '"version" : "{}"'
+        ),
+        "cedar-worker-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
+            "version: {}"
+        ),
+    },
     "cedar-resource-server": {
         "cedar-resource-server-application/src/main/resources/assets/swagger-api/swagger.json": (
             '"version" : "{}"'
