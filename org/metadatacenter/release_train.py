@@ -657,11 +657,44 @@ def _normalize_bundle_provenance(
     public_bundle: bytes,
     public_version: str,
     public_model_version: str,
+    development_allow_scripts: dict[str, bool] | None = None,
 ) -> tuple[bytes, bytes]:
-    """Normalize only the three provenance literals deliberately changed for npmjs."""
+    """Normalize provenance and captured build-only install policy, never executable code."""
 
     normalized_dev = dev_bundle
     normalized_public = public_bundle
+    if development_allow_scripts:
+        if not all(
+            isinstance(package, str) and package and allowed is True
+            for package, allowed in development_allow_scripts.items()
+        ):
+            raise ReleaseError(
+                f"{dev_identity} source allowScripts must contain only non-empty package names "
+                "explicitly set to true"
+            )
+        policy = (
+            b",allowScripts:"
+            + json.dumps(
+                development_allow_scripts,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        normalized_dev = _replace_once(
+            dev_identity,
+            "embedded allowScripts install policy",
+            normalized_dev,
+            policy,
+            b"",
+        )
+        public_count = normalized_public.count(policy)
+        if public_count > 1:
+            raise ReleaseError(
+                f"{public_identity} bundle must contain at most one embedded allowScripts "
+                f"install policy; found {public_count}"
+            )
+        if public_count == 1:
+            normalized_public = normalized_public.replace(policy, b"", 1)
     substitutions = (
         (
             "CEE version",
@@ -702,6 +735,8 @@ def compare_cee_packages(
     dev_version: str,
     public_tarball: bytes,
     public_version: str,
+    *,
+    development_allow_scripts: dict[str, bool] | None = None,
 ) -> dict:
     """Prove that a public CEE package is a metadata-only promotion of a train package."""
 
@@ -784,6 +819,7 @@ def compare_cee_packages(
                 public_files["cedar-embeddable-editor.js"],
                 public_version,
                 public_model_version,
+                development_allow_scripts,
             )
             if dev_bundle != public_bundle:
                 raise ReleaseError(
@@ -823,7 +859,10 @@ def compare_cee_packages(
             "cedar-embeddable-editor.js:load trace",
             "bundle-manifest.json:derived bundle bytes and sha256",
             f"CHANGELOG.md:{public_version} release entry",
-        ],
+        ] + (
+            ["cedar-embeddable-editor.js:embedded allowScripts install policy"]
+            if development_allow_scripts else []
+        ),
     }
 
 
@@ -857,6 +896,23 @@ class ReleasePlanner:
         assert result is not None
         config, content = result
         return config, url, _sha256(content)
+
+    def _repository_json(
+        self,
+        repository: str,
+        revision: str,
+        relative: str,
+    ) -> tuple[dict, str, str]:
+        if not GIT_SHA_RE.fullmatch(revision):
+            raise ReleaseError(f"{repository} has no valid captured revision")
+        url = (
+            f"https://raw.githubusercontent.com/metadatacenter/{repository}/"
+            f"{revision}/{relative}"
+        )
+        result = self.http.read_json(url)
+        assert result is not None
+        value, content = result
+        return value, url, _sha256(content)
 
     @staticmethod
     def _release_repositories(build_config: dict, source: dict) -> tuple[list[str], list[str]]:
@@ -1123,6 +1179,20 @@ class ReleasePlanner:
         )
         if not isinstance(dev_record, dict):
             raise ReleaseError(f"npm completion has no verified {DEV_CEE_NAME}@{dev_version}")
+        dev_revision = planned_cee.get("revision")
+        if not isinstance(dev_revision, str) or not GIT_SHA_RE.fullmatch(dev_revision):
+            raise ReleaseError("npm plan CEE record has no valid captured revision")
+        source_cee_revision = source.get("repositories", {}).get("cedar-embeddable-editor")
+        if source_cee_revision is not None and source_cee_revision != dev_revision:
+            raise ReleaseError("npm plan and source manifest disagree for cedar-embeddable-editor")
+        cee_source_package, _, _ = self._repository_json(
+            "cedar-embeddable-editor", dev_revision, "package.json"
+        )
+        development_allow_scripts = cee_source_package.get("allowScripts")
+        if development_allow_scripts is not None and not isinstance(
+            development_allow_scripts, dict
+        ):
+            raise ReleaseError("captured CEE package.json has an invalid allowScripts policy")
         dev_url = dev_record.get("tarball")
         dev_integrity = dev_record.get("integrity")
         dev_tarball_sha256 = dev_record.get("tarballSha256")
@@ -1146,7 +1216,11 @@ class ReleasePlanner:
             f"{PUBLIC_CEE_NAME}@{cee_version}", public_tarball, public_integrity
         )
         proof = compare_cee_packages(
-            dev_tarball, dev_version, public_tarball, cee_version
+            dev_tarball,
+            dev_version,
+            public_tarball,
+            cee_version,
+            development_allow_scripts=development_allow_scripts,
         )
 
         return {

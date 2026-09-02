@@ -169,11 +169,19 @@ class FakeState:
 
 
 class FakeHttp:
-    def __init__(self, contents, public_metadata, frontend_config, build_config):
+    def __init__(
+        self,
+        contents,
+        public_metadata,
+        frontend_config,
+        build_config,
+        cee_source_package=None,
+    ):
         self.contents = contents
         self.public_metadata = public_metadata
         self.frontend_config = frontend_config
         self.build_config = build_config
+        self.cee_source_package = cee_source_package or {}
 
     def read(self, url, *, missing_ok=False):
         return self.contents[url]
@@ -183,6 +191,8 @@ class FakeHttp:
             value = self.frontend_config
         elif url.endswith("/ops/build-train.json"):
             value = self.build_config
+        elif "/cedar-embeddable-editor/" in url and url.endswith("/package.json"):
+            value = self.cee_source_package
         else:
             value = self.public_metadata
         content = json.dumps(value, indent=2, sort_keys=True).encode()
@@ -282,6 +292,89 @@ class CeePromotionTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
             compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_captured_allow_scripts_policy_is_normalized_out_of_bundle(self):
+        allow_scripts = {
+            "@parcel/watcher@2.6.0": True,
+            "esbuild@0.28.1": True,
+        }
+        policy = (
+            b",allowScripts:"
+            + json.dumps(allow_scripts, separators=(",", ":")).encode()
+        )
+        dev = package_tarball(
+            DEV_CEE_NAME,
+            DEV_VERSION,
+            development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+                suffix=policy.decode(),
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME,
+            PUBLIC_VERSION,
+            development=False,
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09"
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+
+        proof = compare_cee_packages(
+            dev,
+            DEV_VERSION,
+            public,
+            PUBLIC_VERSION,
+            development_allow_scripts=allow_scripts,
+        )
+
+        self.assertIn(
+            "cedar-embeddable-editor.js:embedded allowScripts install policy",
+            proof["allowedMetadataChanges"],
+        )
+
+    def test_allow_scripts_normalization_still_rejects_adjacent_code_change(self):
+        allow_scripts = {"esbuild@0.28.1": True}
+        policy = (
+            b",allowScripts:"
+            + json.dumps(allow_scripts, separators=(",", ":")).encode()
+        )
+        dev = package_tarball(
+            DEV_CEE_NAME,
+            DEV_VERSION,
+            development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+                suffix=policy.decode() + "changed-code",
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME,
+            PUBLIC_VERSION,
+            development=False,
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09"
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+
+        with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+            compare_cee_packages(
+                dev,
+                DEV_VERSION,
+                public,
+                PUBLIC_VERSION,
+                development_allow_scripts=allow_scripts,
+            )
 
     def test_change_to_older_changelog_content_is_rejected(self):
         dev = package_tarball(
@@ -386,9 +479,37 @@ class CeePromotionTest(unittest.TestCase):
 
 
 class ReleasePlannerTest(unittest.TestCase):
-    def make_planner(self):
-        dev = package_tarball(DEV_CEE_NAME, DEV_VERSION, development=True)
-        public = package_tarball(PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False)
+    def make_planner(self, allow_scripts=None):
+        if allow_scripts:
+            policy = (
+                b",allowScripts:"
+                + json.dumps(allow_scripts, separators=(",", ":")).encode()
+            )
+            dev = package_tarball(
+                DEV_CEE_NAME,
+                DEV_VERSION,
+                development=True,
+                bundle=provenance_bundle(
+                    DEV_VERSION,
+                    "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                    "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                    "2026-08-27 12:23 10212094",
+                    suffix=policy.decode(),
+                ),
+                changelog=PUBLIC_CHANGELOG,
+            )
+            public = package_tarball(
+                PUBLIC_CEE_NAME,
+                PUBLIC_VERSION,
+                development=False,
+                bundle=provenance_bundle(
+                    PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09"
+                ),
+                changelog=PUBLIC_CHANGELOG,
+            )
+        else:
+            dev = package_tarball(DEV_CEE_NAME, DEV_VERSION, development=True)
+            public = package_tarball(PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False)
         dev_url = "https://nexus.example/cee-dev.tgz"
         public_url = "https://registry.npmjs.org/cee-public.tgz"
         source = {
@@ -524,7 +645,11 @@ class ReleasePlannerTest(unittest.TestCase):
             },
         }
         http = FakeHttp(
-            {dev_url: dev, public_url: public}, metadata, frontend_config, build_config,
+            {dev_url: dev, public_url: public},
+            metadata,
+            frontend_config,
+            build_config,
+            cee_source_package={"allowScripts": allow_scripts} if allow_scripts else {},
         )
         return ReleasePlanner(http=http, state=state)
 
@@ -552,6 +677,24 @@ class ReleasePlannerTest(unittest.TestCase):
         self.assertEqual(
             f"docker/completed/{TRAIN}.json",
             manifest["trainState"]["dockerCompletion"],
+        )
+
+    def test_plan_binds_embedded_allow_scripts_to_captured_cee_source(self):
+        allow_scripts = {
+            "@parcel/watcher@2.6.0": True,
+            "esbuild@0.28.1": True,
+        }
+
+        manifest = self.make_planner(allow_scripts=allow_scripts).build(
+            release_version="2.9.3",
+            next_version="2.9.4-SNAPSHOT",
+            train=TRAIN,
+            cee_version=PUBLIC_VERSION,
+        )
+
+        self.assertIn(
+            "cedar-embeddable-editor.js:embedded allowScripts install policy",
+            manifest["cee"]["promotionProof"]["allowedMetadataChanges"],
         )
 
     def test_plan_refuses_a_train_without_complete_docker_evidence(self):
