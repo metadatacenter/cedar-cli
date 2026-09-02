@@ -182,6 +182,7 @@ class BuildTrainTest(unittest.TestCase):
                 return_value=(44, 'cedar-model-typescript-library',
                               'cedar-embeddable-editor', 7, 3),
             ),
+            patch.object(BuildTrainWorker, '_local_configuration_preflight') as local_config,
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
             patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
@@ -190,11 +191,13 @@ class BuildTrainTest(unittest.TestCase):
             result = self.runner.invoke(publish.app, ['train', '--dry-run'])
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn('DRY RUN', result.output)
+        self.assertIn('prospective ID; not reserved', result.output)
         self.assertIn('44 repositories', result.output)
         self.assertIn('7 frontends', result.output)
         self.assertIn('Would dispatch:', result.output)
         self.assertIn('No changes made.', result.output)
         self.assertEqual(3, run.call_count)
+        local_config.assert_called_once_with()
         targets.assert_called_once_with()
         self.assertFalse(any(call.args[0][1:3] == ['workflow', 'run'] for call in run.call_args_list))
 
@@ -411,6 +414,41 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('images 1/31 done', result.output)
         self.assertIn('Decision: complete; do not resume or abandon', result.output)
         sleep.assert_called_once_with(10)
+
+    def test_watch_heartbeats_with_active_step_when_stage_counts_do_not_change(self):
+        version = '2.9.3-dev.20260824.1847'
+        workflow = {'databaseId': 13, 'status': 'in_progress', 'conclusion': None}
+        running = {
+            'status': 'in_progress', 'conclusion': None, 'url': 'https://example/run/13',
+            'jobs': [{
+                'name': 'publish-maven', 'status': 'in_progress', 'conclusion': None,
+                'steps': [{
+                    'name': 'Build and publish the Maven train',
+                    'status': 'in_progress', 'conclusion': None,
+                }],
+            }],
+        }
+        complete = {
+            'status': 'completed', 'conclusion': 'success', 'url': 'https://example/run/13',
+            'jobs': [{
+                'name': 'publish-maven', 'status': 'completed', 'conclusion': 'success',
+                'steps': [],
+            }],
+        }
+        with patch.object(BuildTrain, '_read', return_value={'version': version}), \
+                patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow), \
+                patch.object(
+                    BuildTrainWorker, '_workflow_progress',
+                    side_effect=[running, running, complete]), \
+                patch('org.metadatacenter.worker.BuildTrainWorker.time.monotonic',
+                      side_effect=[0, 0, 61]), \
+                patch('org.metadatacenter.worker.BuildTrainWorker.time.sleep'):
+            result = self.runner.invoke(publish.app, ['train-status', version, '--watch'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('active publish-maven —', result.output)
+        self.assertIn('Build and publish the Maven train', result.output)
+        self.assertIn('elapsed 0:01:01', result.output)
 
 
 if __name__ == '__main__':

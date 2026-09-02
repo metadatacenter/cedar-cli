@@ -23,6 +23,7 @@ class BuildTrainWorker:
     FAILED_CONCLUSIONS = {
         'action_required', 'cancelled', 'failure', 'startup_failure', 'timed_out',
     }
+    WATCH_HEARTBEAT_SECONDS = 60
 
     @classmethod
     def _open_work(cls):
@@ -278,6 +279,23 @@ class BuildTrainWorker:
             return str(job.get('name') or 'unknown job')
         return None
 
+    @staticmethod
+    def _active_subcheck(payload):
+        for job in payload.get('jobs') or []:
+            if job.get('status') != 'in_progress':
+                continue
+            for step in job.get('steps') or []:
+                if step.get('status') == 'in_progress':
+                    return f"{job.get('name', 'unknown job')} — {step.get('name', 'unknown step')}"
+            return str(job.get('name') or 'unknown job')
+        return 'workflow is queued'
+
+    @staticmethod
+    def _elapsed(seconds):
+        minutes, remainder = divmod(max(0, int(seconds)), 60)
+        hours, minutes = divmod(minutes, 60)
+        return f'{hours:d}:{minutes:02d}:{remainder:02d}'
+
     @classmethod
     def _render_stage_records(cls, records):
         for label, path, state, error in records:
@@ -346,13 +364,22 @@ class BuildTrainWorker:
             try:
                 progress = cls._workflow_progress(run_id)
                 previous = None
+                watch_started = time.monotonic()
+                last_report = watch_started - cls.WATCH_HEARTBEAT_SECONDS
                 while watch and progress.get('status') in {
                     'queued', 'in_progress', 'waiting', 'pending',
                 }:
                     summary = cls._workflow_summary(progress)
-                    if summary != previous:
-                        console.print(summary)
+                    now = time.monotonic()
+                    heartbeat = now - last_report >= cls.WATCH_HEARTBEAT_SECONDS
+                    if summary != previous or heartbeat:
+                        detail = cls._active_subcheck(progress)
+                        console.print(
+                            f'{summary} | active {detail} | '
+                            f'elapsed {cls._elapsed(now - watch_started)}'
+                        )
                         previous = summary
+                        last_report = now
                     time.sleep(10)
                     progress = cls._workflow_progress(run_id)
                 summary = cls._workflow_summary(progress)
@@ -543,6 +570,28 @@ class BuildTrainWorker:
                 console.print(f'  [green]OK[/green] {line.removeprefix("OK ")}')
 
     @classmethod
+    def _local_configuration_preflight(cls):
+        cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        if not cedar_home:
+            raise ValueError('CEDAR_HOME is not set')
+        controller = Path(cedar_home) / 'cedar-development' / 'ops' / 'build_train.py'
+        try:
+            result = subprocess.run(
+                [sys.executable, str(controller), 'validate-local',
+                 '--workspace', str(cedar_home)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            raise ValueError(f'cannot run local train configuration preflight: {error}') from error
+        if result.returncode:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            raise ValueError(
+                'local train configuration preflight failed'
+                + (f': {detail[-1]}' if detail else ''))
+
+    @classmethod
     def _preflight(cls, selected, resume):
         source_path = f'trains/{selected}.json'
         try:
@@ -562,6 +611,8 @@ class BuildTrainWorker:
             raise ValueError(f'train {selected} already exists; use --resume {selected}')
 
         summary = cls._configuration_summary()
+        if not resume:
+            cls._local_configuration_preflight()
         cls._github_preflight()
         active = cls._active_workflow_runs()
         if active:
@@ -588,7 +639,10 @@ class BuildTrainWorker:
         repository_count, model, cee, frontend_count, additional_count = summary
 
         console.print('[bold]DRY RUN — no workflow will be dispatched[/bold]')
-        console.print(f'Train: {selected}')
+        console.print(
+            f'Train: {selected}'
+            + ('' if resume else ' (prospective ID; not reserved)')
+        )
         console.print(f'Mode: {"resume" if resume else "new"}')
         console.print('Preflight:')
         console.print('  [green]OK[/green] GitHub authentication, workflow, and idle slot')
