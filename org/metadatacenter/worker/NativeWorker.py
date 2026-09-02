@@ -1,10 +1,16 @@
 import os
 import shlex
+import sys
 from typing import Iterable
+
+from rich.console import Console
 
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.ServerWorker import ServerWorker
 from org.metadatacenter.worker.Worker import Worker
+
+
+console = Console()
 
 
 class NativeWorker(Worker):
@@ -69,5 +75,20 @@ class NativeWorker(Worker):
         return cls.execute("watch", title="Watching native CEDAR process status")
 
     @classmethod
-    def logs(cls, service: str):
-        return cls.execute("logs", (service,), f"Following native CEDAR log: {service}")
+    def logs(cls, service: str, lines: int = 100, dropwizard: bool = False):
+        """Hand the terminal to tail rather than relaying its output.
+
+        Every other action here is relayed line by line through rich, which rewraps each line to
+        the terminal width, strips the indentation a stack trace is made of, and keeps the whole
+        stream in memory. A follow runs until it is interrupted and prints exactly those lines, so
+        it replaces this process instead: the log arrives as it was written, nothing accumulates,
+        the interrupt reaches tail directly, and tail's own status becomes the CLI's.
+        """
+        controller = cls.controller_path()
+        arguments = [controller, "logs", service, "--lines", str(lines)]
+        if dropwizard:
+            arguments.append("--dropwizard")
+        appender = "Dropwizard log" if dropwizard else "log"
+        console.print(f"[yellow]Following native CEDAR {appender}: {service}[/yellow]")
+        sys.stdout.flush()
+        os.execv(controller, arguments)

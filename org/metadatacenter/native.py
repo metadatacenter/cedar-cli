@@ -63,12 +63,24 @@ def restart(services: Optional[List[str]] = typer.Argument(None)):
 
 
 @app.command("logs")
-def logs(service: str = typer.Argument(...)):
+def logs(service: str = typer.Argument(...),
+         lines: int = typer.Option(
+             100, "-n", "--lines",
+             help="Lines of history to show before following."),
+         dropwizard: bool = typer.Option(
+             False, "--dropwizard",
+             help="Follow the service's Dropwizard appender log, which survives restarts and "
+                  "rotates daily, rather than its standard output, which start truncates.")):
     """Follow the log for one managed native application."""
     mode = ModeManager.require_surface("native")
     if mode is CedarMode.HYBRID:
         _require_native_frontend_services((service,), "logs")
-    exit_on_failure(NativeWorker.logs(service))
+    # Replaces this process with tail, so nothing after it runs.
+    NativeWorker.logs(service, lines, dropwizard)
+
+
+# One log is being followed, so the singular is what a caller reaches for first.
+app.command("log", hidden=True)(logs)
 
 
 def _require_native_backend(operation):
