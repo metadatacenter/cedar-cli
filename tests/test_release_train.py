@@ -881,6 +881,57 @@ class ReleaseStateAndCliTest(unittest.TestCase):
         self.assertIn("consumer preparation failed", output)
         self.assertIn("Run:  cedarcli release resume", output)
 
+    def test_status_watch_reports_active_task_and_stops_at_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            state.update_current_manifest({
+                "phase": "validating-builds",
+                "buildValidation": {
+                    "completedTasks": {},
+                    "inProgressTask": "release:maven:parent",
+                },
+            })
+
+            def finish(_delay):
+                state.update_current_manifest({"phase": "accepted", "failure": None})
+
+            with release_train.console.capture() as capture:
+                manifest, _path, code = release_train._watch_release(
+                    state, sleeper=finish, interval=0, heartbeat=60,
+                )
+
+        self.assertEqual(0, code)
+        self.assertEqual("accepted", manifest["phase"])
+        self.assertIn("active release:maven:parent", capture.get())
+
+    def test_status_watch_stays_attached_during_a_scheduled_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            state.update_current_manifest({
+                "phase": "artifact-publication-failed",
+                "failure": "registry returned 503",
+                "retry": {
+                    "attempt": 1, "maximum": 5, "delaySeconds": 30,
+                    "reason": "registry returned 503",
+                },
+            })
+
+            def finish(_delay):
+                state.update_current_manifest({
+                    "phase": "accepted", "failure": None, "retry": None,
+                })
+
+            with release_train.console.capture() as capture:
+                manifest, _path, code = release_train._watch_release(
+                    state, sleeper=finish, interval=0, heartbeat=60,
+                )
+
+        self.assertEqual(0, code)
+        self.assertEqual("accepted", manifest["phase"])
+        self.assertIn("retry 1/5 in 30s", capture.get())
+
     def test_abandon_command_records_the_operator_reason(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -1066,6 +1117,33 @@ class ReleaseWorkspaceTest(unittest.TestCase):
             for repository in repositories:
                 self.assertEqual([], prepared[repository]["changedFiles"])
 
+    def test_consumer_preparation_forces_strict_install_script_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cedar_home, manifest = self.make_workspace(directory)
+            delegate = self._successful_runner(manifest["cee"]["consumers"])
+            node_environments = []
+
+            def runner(args, **kwargs):
+                if args[0] == "node":
+                    node_environments.append(kwargs["env"].copy())
+                return delegate(args, **kwargs)
+
+            state = ReleaseState(root=Path(directory) / "state")
+            state.start(manifest)
+            prepare_active_release(
+                state,
+                ReleaseWorkspacePreparer(
+                    state, command_runner=runner,
+                    environment={"CEDAR_HOME": str(cedar_home)},
+                ),
+            )
+
+        self.assertTrue(node_environments)
+        self.assertTrue(all(
+            environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] == "true"
+            for environment in node_environments
+        ))
+
     def test_failed_attempt_is_retained_and_resume_uses_a_new_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
             cedar_home, manifest = self.make_workspace(directory)
@@ -1096,6 +1174,25 @@ class ReleaseWorkspaceTest(unittest.TestCase):
 
 
 class ReleaseVersionPreparationTest(unittest.TestCase):
+    def test_version_stamping_refreshes_train_lock_baselines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            lock = workspace / "frontend" / "package-lock.json"
+            lock.parent.mkdir()
+            lock.write_text('{"version":"2.9.7-SNAPSHOT"}\n', encoding="utf-8")
+            config = workspace / "cedar-development" / "ops" / "frontend-train.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({"auditBaselines": [{
+                "repository": "frontend", "lock": "package-lock.json",
+                "sha256": "0" * 64,
+            }]}) + "\n", encoding="utf-8")
+
+            changed = ReleaseVersionPreparer._refresh_train_audit_baselines(workspace)
+
+            self.assertTrue(changed)
+            recorded = json.loads(config.read_bytes())["auditBaselines"][0]["sha256"]
+            self.assertEqual(release_train._file_sha256(lock), recorded)
+
     def make_sources(self, directory):
         cedar_home = Path(directory) / "CEDAR"
         source_version = "2.9.3-SNAPSHOT"
@@ -1443,6 +1540,36 @@ class ReleaseBuildValidationTest(unittest.TestCase):
         self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
         self.assertEqual(["--legacy-peer-deps"], install_options["content"])
         self.assertEqual(["--legacy-peer-deps"], install_options["cee-demo-angular"])
+
+    def test_release_npm_tasks_force_strict_install_script_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory, include_frontend=True)
+            captured = []
+            validator = ReleaseBuildValidator(
+                ReleaseState(root=Path(directory) / "state"),
+                executor=lambda task, environment: captured.append(
+                    (task["id"], environment.copy())) or "",
+            )
+            task = next(
+                item for item in validator.tasks(manifest)
+                if item["id"] == "release:npm:template-editor:install"
+            )
+
+            validator.run_task(manifest, task)
+
+            self.assertEqual("true", captured[0][1]["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"])
+
+    def test_quiet_build_keeps_raw_output_in_its_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "task.log"
+            with patch("builtins.print") as printed:
+                ReleaseBuildValidator._stream_command(
+                    ["/bin/sh", "-c", "printf 'raw build output\\n'"],
+                    Path(directory), dict(os.environ), log,
+                )
+
+            printed.assert_not_called()
+            self.assertEqual("raw build output\n", log.read_text(encoding="utf-8"))
 
     def test_failed_build_resume_keeps_logs_and_skips_completed_tasks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2473,7 +2600,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             uploads = []
             publisher = ReleaseArtifactPublisher(
                 ReleaseState(root=Path(directory) / "state"),
-                http=MixedHttp(), progress_reporter=progress.append,
+                http=MixedHttp(), progress_reporter=progress.append, verbose=True,
             )
             publisher._upload = lambda destination, content: uploads.append(
                 (destination, content))
@@ -2596,6 +2723,37 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
         bad = {**evidence, "tarballSha256": "0" * 64}
         with self.assertRaisesRegex(ReleaseError, "tarball differs"):
             publisher._verify_npm_package(task, bad, wait=False)
+
+    def test_failed_npm_publish_retains_its_captured_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            attempt = Path(directory) / "attempt"
+            workspace = attempt / "workspace"
+            workspace.mkdir(parents=True)
+            tarball = attempt / "cedar-frontend-2.9.3.tgz"
+            tarball.write_bytes(b"packed")
+            task = {
+                "id": "npm:release:frontend",
+                "kind": "npm-release",
+                "version": "2.9.3",
+                "registry": "https://nexus.example/repository/npm/",
+                "workspace": str(workspace),
+            }
+            publisher = ReleaseArtifactPublisher(
+                ReleaseState(root=Path(directory) / "state"))
+            evidence = {
+                "name": "cedar-frontend",
+                "integrity": "sha512-evidence",
+                "tarballSha256": "0" * 64,
+            }
+            with patch.object(publisher, "_pack_npm", return_value=(tarball, evidence)), \
+                    patch.object(publisher, "_npm_version_record", return_value=None), \
+                    patch.object(release_train.subprocess, "run", return_value=
+                                 FakeCompletedProcess(returncode=1, stderr="registry refused")):
+                with self.assertRaisesRegex(ReleaseError, "npm publish exited 1"):
+                    publisher._publish_npm(task)
+
+            log = attempt / "publication-logs" / "npm-release-frontend.log"
+            self.assertEqual("registry refused\n", log.read_text(encoding="utf-8"))
 
     def test_npm_pack_is_archived_from_the_integrated_commit_with_git_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2746,6 +2904,8 @@ class ReleasePreflightTest(unittest.TestCase):
             http=http or FakeNexus(),
             environment=values,
             accepted_red_develop=accepted,
+            ci_sleeper=lambda _delay: None,
+            ci_delays=(),
         )
 
     @staticmethod
@@ -3009,6 +3169,35 @@ class ReleasePreflightTest(unittest.TestCase):
 
         self.assertTrue(any("dist/README.md" in finding.message for finding in findings))
 
+    def test_release_source_contract_rejects_an_unreviewed_install_script(self):
+        manifest = self._release_of("cedar-openview")
+        manifest["sourceVersion"] = "2.9.3-SNAPSHOT"
+        preflight = self._preflight(manifest=manifest)
+        package = {"version": "2.9.3-SNAPSHOT", "allowScripts": {}}
+        lock = {
+            "version": "2.9.3-SNAPSHOT",
+            "packages": {
+                "": {"version": "2.9.3-SNAPSHOT"},
+                "node_modules/native-addon": {
+                    "version": "1.2.3", "hasInstallScript": True,
+                },
+            },
+        }
+
+        with patch.object(preflight, "_source_paths", return_value=[
+            "cedar-openview-src/package.json",
+            "cedar-openview-src/package-lock.json",
+        ]), patch.object(
+            preflight, "_source_json",
+            side_effect=lambda _repository, relative: package
+            if relative.endswith("package.json") else lock,
+        ):
+            findings = preflight.check_source_contract()
+
+        npm_findings = [item for item in findings if item.check == "npm-scripts"]
+        self.assertEqual(1, len(npm_findings))
+        self.assertIn("native-addon@1.2.3", npm_findings[0].message)
+
     @staticmethod
     def _release_of(*repositories):
         manifest = manifest_fixture()
@@ -3019,17 +3208,21 @@ class ReleasePreflightTest(unittest.TestCase):
     def test_ci_is_asked_about_the_train_source_rather_than_the_current_develop(self):
         """A release advances develop everywhere, so the latest run answers the wrong question."""
         commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
-                stdout="success\tcompleted\t1\tCI"),
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "success", "status": "completed", "id": 1, "name": "CI",
+                }]})),
         })
         self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
 
-        self.assertIn(f"head_sha={'a' * 40}", commands.calls[0][2])
+        query = next(call[2] for call in commands.calls if call[:2] == ["gh", "api"])
+        self.assertIn(f"head_sha={'a' * 40}", query)
 
     def test_a_source_commit_with_no_ci_run_blocks(self):
         commands = FakeCommands({
-            ("gh", "api"): FakeCompletedProcess(stdout=""),
+            ("gh", "api"): FakeCompletedProcess(stdout='{"workflow_runs": []}'),
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
         })
         findings = self._preflight(
@@ -3040,17 +3233,23 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertIn("no CI run", findings[0].message)
 
     def test_a_repository_without_a_ci_workflow_is_advisory(self):
-        commands = FakeCommands({("gh", "api"): FakeCompletedProcess(stdout="")})
+        commands = FakeCommands({
+            ("gh", "api"): FakeCompletedProcess(stdout='{"workflow_runs": []}'),
+        })
         findings = self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
 
         self.assertEqual(1, len(findings))
         self.assertFalse(findings[0].fatal)
         self.assertIn("no CI workflow contract", findings[0].message)
+        self.assertFalse(any(call[:2] == ("gh", "api") for call in commands.calls))
 
     def test_a_still_running_workflow_blocks(self):
         commands = FakeCommands({
-            ("gh", "api"): FakeCompletedProcess(stdout="pending\tin_progress\t7\tCI"),
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
+            ("gh", "api"): FakeCompletedProcess(stdout=json.dumps({"workflow_runs": [{
+                "conclusion": None, "status": "in_progress", "id": 7, "name": "CI",
+            }]})),
         })
         findings = self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
@@ -3062,8 +3261,12 @@ class ReleasePreflightTest(unittest.TestCase):
     def test_a_cancelled_run_is_advisory_rather_than_blocking(self):
         """Cancelling is something done to a workflow, not something learned about the code."""
         commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
-                stdout="cancelled\tcompleted\t33226052977\tBuild train"),
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "cancelled", "status": "completed",
+                    "id": 33226052977, "name": "Build train",
+                }]})),
         })
         findings = self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
@@ -3075,8 +3278,12 @@ class ReleasePreflightTest(unittest.TestCase):
     def test_a_red_develop_blocks_the_release(self):
         manifest = self._release_of("repo-one")
         commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
-                stdout="failure\tcompleted\t33211149320\tCI"),
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "failure", "status": "completed",
+                    "id": 33211149320, "name": "CI",
+                }]})),
         })
         findings = self._preflight(
             commands=commands, manifest=manifest).check_develop_is_green()
@@ -3088,8 +3295,12 @@ class ReleasePreflightTest(unittest.TestCase):
     def test_a_red_develop_accepted_by_run_becomes_advisory(self):
         manifest = self._release_of("repo-one")
         commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
-                stdout="failure\tcompleted\t33211149320\tCI"),
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "failure", "status": "completed",
+                    "id": 33211149320, "name": "CI",
+                }]})),
         })
         findings = self._preflight(
             commands=commands, manifest=manifest,
@@ -3102,8 +3313,12 @@ class ReleasePreflightTest(unittest.TestCase):
     def test_accepting_a_different_run_does_not_clear_the_current_one(self):
         manifest = self._release_of("repo-one")
         commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
-                stdout="failure\tcompleted\t33211149320\tCI"),
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "failure", "status": "completed",
+                    "id": 33211149320, "name": "CI",
+                }]})),
         })
         findings = self._preflight(
             commands=commands, manifest=manifest,
@@ -3114,8 +3329,12 @@ class ReleasePreflightTest(unittest.TestCase):
     def test_a_green_develop_passes(self):
         manifest = self._release_of("repo-one")
         commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
-                stdout="success\tcompleted\t33211149320\tCI"),
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "success", "status": "completed",
+                    "id": 33211149320, "name": "CI",
+                }]})),
         })
         self.assertEqual(
             [], self._preflight(commands=commands, manifest=manifest).check_develop_is_green())
@@ -3245,6 +3464,7 @@ class ReleasePreflightTest(unittest.TestCase):
 
         names = {
             "check_toolchain", "check_profile", "check_disk_space",
+            "check_npm_configuration",
             "check_nexus_authorization", "check_npm_authorization",
             "check_push_permission", "check_target_version_unused",
             "check_target_artifacts_unused", "check_remote_survey",
@@ -3455,7 +3675,7 @@ class TransientRetryTest(unittest.TestCase):
             {"phase": "accepted"},
         ]
 
-        def advance(_state):
+        def advance(_state, **_dependencies):
             outcome = outcomes.pop(0)
             if isinstance(outcome, Exception):
                 raise outcome
@@ -3472,7 +3692,7 @@ class TransientRetryTest(unittest.TestCase):
     def test_a_guard_failure_stops_immediately(self):
         slept = []
 
-        def advance(_state):
+        def advance(_state, **_dependencies):
             raise ReleaseError("integration commit changed the prepared tree")
 
         with tempfile.TemporaryDirectory() as directory, \
@@ -3486,7 +3706,7 @@ class TransientRetryTest(unittest.TestCase):
     def test_retries_are_bounded(self):
         slept = []
 
-        def advance(_state):
+        def advance(_state, **_dependencies):
             raise RetryableReleaseError("connection reset")
 
         with tempfile.TemporaryDirectory() as directory, \
