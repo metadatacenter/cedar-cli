@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -47,6 +48,7 @@ from org.metadatacenter.npm_policy import (
     unreviewed_install_scripts,
 )
 from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 
 
 app = typer.Typer()
@@ -1449,8 +1451,14 @@ class ReleaseWorkspacePreparer:
             raise ReleaseError(f"cannot run {args[0]}: {error}") from error
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
+            if result.returncode < 0 and not detail:
+                detail = "the process produced no diagnostic output of its own"
             _raise_command_failure(
-                args, f"command failed ({' '.join(args)})", detail)
+                args,
+                f"command {describe_subprocess_failure(result.returncode)} "
+                f"({' '.join(args)})",
+                detail,
+            )
         stdout = (result.stdout or "").strip()
         if stream:
             output = "\n".join(
@@ -1873,10 +1881,11 @@ class ReleaseVersionPreparer:
         if old == next_version:
             raise ReleaseError("next development version must differ from the train source version")
 
+        for repository, revision in repositories.items():
+            self._ensure_clone(repository, revision, next_workspace / repository)
         for repository in release_repositories:
             revision = repositories.get(repository)
             self._ensure_clone(repository, revision, release_workspace / repository)
-            self._ensure_clone(repository, revision, next_workspace / repository)
 
         cee_allowed_by_repo: dict[str, set[str]] = {}
         for consumer in manifest["cee"]["consumers"]:
@@ -1885,8 +1894,6 @@ class ReleaseVersionPreparer:
             })
 
         for repository, relative_paths in cee_allowed_by_repo.items():
-            if repository not in release_repositories:
-                continue
             for relative in relative_paths:
                 source = release_workspace / repository / relative
                 destination = next_workspace / repository / relative
@@ -2074,9 +2081,12 @@ class ReleaseBuildValidator:
                 detail = "\n".join(log.read_text(encoding="utf-8").splitlines()[-80:])
             except OSError:
                 detail = ""
+            if returncode < 0 and not detail:
+                detail = "the process produced no diagnostic output of its own"
             _raise_command_failure(
                 command,
-                f"build command exited {returncode}: {' '.join(command)}; log: {log}",
+                f"build command {describe_subprocess_failure(returncode)}: "
+                f"{' '.join(command)}; log: {log}",
                 detail,
             )
 
@@ -2093,6 +2103,8 @@ class ReleaseBuildValidator:
         )
         environment["npm_config_cache"] = str(attempt / "build-cache" / "npm")
         environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] = "true"
+        environment["CI"] = "true"
+        environment["NG_CLI_ANALYTICS"] = "false"
         started = dt.datetime.now(dt.timezone.utc).isoformat()
         if self.executor is None:
             self._stream_command(
@@ -3535,7 +3547,12 @@ class ReleaseArtifactPublisher:
             raise ReleaseError(f"cannot run npm pack for {task['id']}: {error}") from error
         if pack.returncode:
             detail = (pack.stderr or pack.stdout).strip()
-            raise ReleaseError(f"npm pack failed for {task['id']}: {detail}")
+            if pack.returncode < 0 and not detail:
+                detail = "the process produced no diagnostic output of its own"
+            raise ReleaseError(
+                f"npm pack {describe_subprocess_failure(pack.returncode)} "
+                f"for {task['id']}: {detail}"
+            )
         try:
             packed = json.loads(pack.stdout)
             filename = packed[0]["filename"]
@@ -3589,9 +3606,12 @@ class ReleaseArtifactPublisher:
             if output and self.verbose:
                 console.print(output, markup=False)
             if result.returncode:
+                if result.returncode < 0 and not output:
+                    output = "the process produced no diagnostic output of its own"
                 _raise_command_failure(
                     command,
-                    f"npm publish exited {result.returncode}: {evidence['name']}",
+                    f"npm publish {describe_subprocess_failure(result.returncode)}: "
+                    f"{evidence['name']}",
                     output,
                 )
         if existing is not None:
@@ -4183,6 +4203,7 @@ class ReleaseAcceptance:
         *,
         remote_integrator: "ReleaseRemoteIntegrator | None" = None,
         publisher: "ReleaseArtifactPublisher | None" = None,
+        development_validator=None,
         environment=None,
     ):
         self.state = state
@@ -4191,6 +4212,9 @@ class ReleaseAcceptance:
             state, environment=self.environment)
         self.publisher = publisher or ReleaseArtifactPublisher(
             state, environment=self.environment)
+        self.development_validator = (
+            development_validator or self._run_development_validator
+        )
 
     def _check(self, name: str, detail: str) -> dict:
         return {"check": name, "detail": detail}
@@ -4275,12 +4299,71 @@ class ReleaseAcceptance:
         ))
         return checks
 
+    def _run_development_validator(self, manifest: dict) -> str:
+        workspace = Path(
+            manifest.get("versionPreparation", {})
+            .get("nextDevelopment", {})
+            .get("workspace", "")
+        )
+        script = workspace / "cedar-development" / "ops" / "build_train.py"
+        configuration = workspace / "cedar-development" / "ops"
+        required = [
+            script,
+            configuration / "build-train.json",
+            configuration / "frontend-train.json",
+            configuration / "docker-train.json",
+        ]
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise ReleaseError(
+                "next-development train validation inputs are missing: " + ", ".join(missing)
+            )
+        command = [
+            sys.executable,
+            str(script),
+            "--config", str(configuration / "build-train.json"),
+            "validate-local",
+            "--workspace", str(workspace),
+            "--frontend-config", str(configuration / "frontend-train.json"),
+            "--docker-config", str(configuration / "docker-train.json"),
+            "--expected-source-version", manifest["nextDevelopmentVersion"],
+        ]
+        environment = dict(self.environment)
+        environment.update({
+            "CEDAR_HOME": str(workspace),
+            "CI": "true",
+            "NG_CLI_ANALYTICS": "false",
+        })
+        try:
+            result = subprocess.run(
+                command, check=False, text=True, capture_output=True, env=environment,
+            )
+        except OSError as error:
+            raise ReleaseError(f"cannot validate next-development train state: {error}") from error
+        output = "\n".join(
+            part.strip() for part in (result.stdout, result.stderr) if part and part.strip()
+        )
+        if result.returncode:
+            raise ReleaseError(
+                "next-development train validation "
+                f"{describe_subprocess_failure(result.returncode)}: {output}"
+            )
+        return output.splitlines()[-1] if output else "local train configuration passed"
+
+    def _next_development_can_seed_train(self, manifest: dict) -> list[dict]:
+        detail = self.development_validator(manifest)
+        return [self._check(
+            "next-development-train",
+            f"{manifest['nextDevelopmentVersion']} can seed the next train: {detail}",
+        )]
+
     def run(self, manifest: dict) -> dict:
         self.publisher.ensure_nexus_ready("release acceptance")
         checks = []
         checks.extend(self._remote_state_still_holds(manifest))
         checks.extend(self._published_artifacts_still_hold(manifest))
         checks.extend(self._consumers_pin_the_proven_cee(manifest))
+        checks.extend(self._next_development_can_seed_train(manifest))
         return {
             "acceptedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
             "checks": checks,

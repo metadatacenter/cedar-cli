@@ -815,6 +815,10 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             self.assertEqual([], list(Path(directory).iterdir()))
         build.assert_called_once()
 
+    @patch.object(
+        ReleaseAcceptance, "_run_development_validator",
+        return_value="local train configuration passed",
+    )
     @patch.object(ReleaseArtifactPublisher, "ensure_nexus_ready", return_value=None)
     @patch.object(ReleaseArtifactPublisher, "snapshot_tasks", return_value=[])
     @patch.object(ReleaseArtifactPublisher, "tasks", return_value=[])
@@ -828,6 +832,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
     def test_start_persists_internal_state_and_status_finds_it(
         self, _build, _preflight, _workspace_prepare, _version_prepare, _build_tasks,
         _ref_tasks, _remote_tasks, _artifact_tasks, _snapshot_tasks, _nexus,
+        _development,
     ):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -1311,7 +1316,9 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             manifest = manifest_fixture()
             manifest.update({
                 "sourceRepositories": revisions,
-                "releaseRepositories": list(revisions),
+                "releaseRepositories": [
+                    repository for repository in revisions if repository != "cedar-cli"
+                ],
                 "mavenRepositories": [
                     "maven-repo",
                     "cedar-resource-server",
@@ -1342,6 +1349,10 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 (release_workspace / "cedar-template-editor" / "package.json").read_bytes()
             )
             next_workspace = Path(result["nextDevelopment"]["workspace"])
+            self.assertEqual(
+                "plain repository\n",
+                (next_workspace / "cedar-cli" / "README.md").read_text(encoding="utf-8"),
+            )
             next_package = json.loads(
                 (next_workspace / "cedar-template-editor" / "package.json").read_bytes()
             )
@@ -1558,6 +1569,8 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             validator.run_task(manifest, task)
 
             self.assertEqual("true", captured[0][1]["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"])
+            self.assertEqual("true", captured[0][1]["CI"])
+            self.assertEqual("false", captured[0][1]["NG_CLI_ANALYTICS"])
 
     def test_quiet_build_keeps_raw_output_in_its_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2749,7 +2762,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                     patch.object(publisher, "_npm_version_record", return_value=None), \
                     patch.object(release_train.subprocess, "run", return_value=
                                  FakeCompletedProcess(returncode=1, stderr="registry refused")):
-                with self.assertRaisesRegex(ReleaseError, "npm publish exited 1"):
+                with self.assertRaisesRegex(ReleaseError, "npm publish exited with code 1"):
                     publisher._publish_npm(task)
 
             log = attempt / "publication-logs" / "npm-release-frontend.log"
@@ -3550,6 +3563,39 @@ class ReleaseLicenseStampingTest(unittest.TestCase):
 class ReleaseAcceptanceTest(unittest.TestCase):
     """The release proves itself, rather than leaving an operator to prove it by hand."""
 
+    def test_next_development_proof_uses_captured_configuration_and_exact_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "next-workspace"
+            ops = workspace / "cedar-development" / "ops"
+            ops.mkdir(parents=True)
+            for name in (
+                "build_train.py", "build-train.json", "frontend-train.json",
+                "docker-train.json",
+            ):
+                (ops / name).write_text("{}\n", encoding="utf-8")
+            manifest = manifest_fixture()
+            manifest["versionPreparation"] = {
+                "nextDevelopment": {"workspace": str(workspace)},
+            }
+            acceptance = ReleaseAcceptance(
+                ReleaseState(root=Path(directory) / "state"),
+                remote_integrator=object(), publisher=object(), environment={},
+            )
+            completed = subprocess.CompletedProcess(
+                args=[], returncode=0,
+                stdout="Local train configuration passed: 48 repositories.\n",
+                stderr="",
+            )
+            with patch.object(release_train.subprocess, "run", return_value=completed) as run:
+                detail = acceptance._run_development_validator(manifest)
+
+        command = run.call_args.args[0]
+        self.assertIn(str(ops / "build-train.json"), command)
+        self.assertIn("--expected-source-version", command)
+        self.assertIn("2.9.4-SNAPSHOT", command)
+        self.assertEqual("true", run.call_args.kwargs["env"]["CI"])
+        self.assertEqual("Local train configuration passed: 48 repositories.", detail)
+
     def _published(self, directory):
         state = ReleaseState(root=Path(directory))
         manifest = manifest_fixture()
@@ -3609,6 +3655,9 @@ class ReleaseAcceptanceTest(unittest.TestCase):
             state,
             remote_integrator=FakeRemoteIntegrator(),
             publisher=FakePublisher(),
+            development_validator=lambda manifest: (
+                f"validated {manifest['nextDevelopmentVersion']}"
+            ),
         )
 
     def test_a_repository_without_the_release_tag_fails_acceptance(self):
@@ -3634,6 +3683,9 @@ class ReleaseAcceptanceTest(unittest.TestCase):
         details = [check["detail"] for check in manifest["acceptance"]["checks"]]
         self.assertTrue(any(
             "release-2.9.3 present at the recorded commit" in detail
+            for detail in details))
+        self.assertTrue(any(
+            "2.9.4-SNAPSHOT can seed the next train" in detail
             for detail in details))
         self.assertIsNotNone(manifest["acceptance"]["acceptedAt"])
         self.assertEqual(["repo-one", "repo-two"], acceptance.remote_integrator.verified)
