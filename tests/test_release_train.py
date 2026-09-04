@@ -2989,7 +2989,18 @@ class ReleasePreflightTest(unittest.TestCase):
 
         self.assertTrue(findings)
         self.assertIn("Java 25", findings[0].message)
-        self.assertIn("java_home -v 17", findings[0].remedy)
+        # Whatever the host, the remedy has to say which variable to set and to what. Asserting the
+        # macOS command here made this pass only on a Mac.
+        self.assertIn("JAVA_HOME", findings[0].remedy)
+        self.assertIn("17", findings[0].remedy)
+
+    def test_the_java_remedy_suits_the_host_giving_it(self):
+        with patch("platform.system", return_value="Darwin"):
+            self.assertIn("java_home -v 17", release_train.java_17_remediation())
+        with patch("platform.system", return_value="Linux"):
+            linux = release_train.java_17_remediation()
+        self.assertNotIn("java_home -v 17", linux)
+        self.assertIn("/usr/lib/jvm/java-17", linux)
 
     def test_java_seventeen_passes(self):
         commands = FakeCommands({
