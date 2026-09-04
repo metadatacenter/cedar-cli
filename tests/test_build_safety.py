@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
+    _process_cwd,
     capture_estate_state,
     changed_repositories,
     isolated_frontend_workspace,
@@ -67,6 +68,27 @@ class BuildSafetyTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(BuildSafetyError, "PID 17"):
                 require_no_frontend_runtime_collision(Path("/tmp/frontend"))
+
+    def test_process_cwd_reads_a_real_platform_process(self):
+        """Exercise Linux /proc and the macOS lsof fallback on their real runners."""
+        with tempfile.TemporaryDirectory() as directory:
+            process = subprocess.Popen(
+                ["python3", "-c", "import time; time.sleep(30)"],
+                cwd=directory,
+            )
+            try:
+                self.assertEqual(Path(directory).resolve(), _process_cwd(process.pid))
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+
+    def test_ci_exercises_process_safety_on_linux_and_macos(self):
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ubuntu-latest", workflow)
+        self.assertIn("macos-latest", workflow)
 
     def test_negative_return_code_names_signal_and_crash_evidence(self):
         self.assertEqual("exited with code 7", describe_return_code(7))
