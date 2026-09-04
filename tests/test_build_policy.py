@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 from typer.testing import CliRunner
 
 from CedarCliSettings import CedarCliSettings
-from org.metadatacenter import build, clean_maven
+from org.metadatacenter import build, clean_maven, publish
 from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
@@ -14,6 +14,7 @@ from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
+from org.metadatacenter.util.Util import Util
 
 
 class BuildPolicyTest(unittest.TestCase):
@@ -112,6 +113,52 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertEqual(
             ['npm install --legacy-peer-deps', 'npm run build'],
             openview_source.build_command_list)
+
+    @patch.dict("os.environ", {
+        "CEDAR_HOME": "/tmp/CEDAR",
+        "CEDAR_DEV_BUILD_FRONTENDS": "true",
+    })
+    @patch.object(build.plan_executor, "execute")
+    def test_frontend_build_compiles_without_materializing_distributions(self, execute):
+        result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        commands = self.commands(execute.call_args.args[0])
+        self.assertIn('npm run build', commands)
+        self.assertFalse(any(command.startswith(("cp -a ", "cat ")) for command in commands))
+        for distribution in (
+                "cedar-monitoring-dist", "cedar-bridging-dist", "cedar-openview-dist",
+                "cedar-cee-demo-angular-dist"):
+            self.assertFalse(any(distribution in command for command in commands))
+
+    @patch.dict("os.environ", {
+        "CEDAR_HOME": "/tmp/CEDAR",
+        "CEDAR_DEV_BUILD_FRONTENDS": "true",
+    })
+    @patch.object(build.plan_executor, "execute")
+    def test_full_build_does_not_materialize_frontend_distributions(self, execute):
+        result = self.runner.invoke(build.app, ["all", "--dry-run"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        commands = self.commands(execute.call_args.args[0])
+        self.assertTrue(any(command.startswith("./mvnw clean install") for command in commands))
+        self.assertIn('npm run build', commands)
+        self.assertFalse(any(command.startswith(("cp -a ", "cat ")) for command in commands))
+
+    @patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
+    @patch.object(Util, "cedar_home", "/tmp/CEDAR")
+    @patch.object(publish.plan_executor, "execute")
+    def test_explicit_frontend_publish_still_materializes_distributions(self, execute):
+        result = self.runner.invoke(publish.app, ["frontends", "--dry-run"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        commands = self.commands(execute.call_args.args[0])
+        copy_commands = [command for command in commands if command.startswith("cp -a ")]
+        self.assertEqual(4, len(copy_commands))
+        for distribution in (
+                "cedar-monitoring-dist", "cedar-bridging-dist", "cedar-openview-dist",
+                "cedar-cee-demo-angular-dist"):
+            self.assertTrue(any(distribution in command for command in copy_commands))
 
     def test_continue_mode_runs_all_commands_and_returns_the_first_failure(self):
         executor = ShellTaskExecutor()
