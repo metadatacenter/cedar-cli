@@ -107,7 +107,7 @@ class ReposFactory:
         openview_multi = Repo("cedar-openview", RepoType.MULTI, [], is_frontend=True)
         openview_src = Repo("cedar-openview-src", RepoType.ANGULAR,
                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                            build_command_list=['npm install --legacy-peer-deps', 'npm run build'])
+                            build_command_list=['npm ci --legacy-peer-deps', 'npm run build'])
         openview_dist = Repo("cedar-openview-dist", RepoType.ANGULAR_DIST,
                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
 
@@ -150,8 +150,8 @@ class ReposFactory:
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True,
                                  build_command_list=[
-                                     'npm install',
-                                     'npm --prefix visual install',
+                                     'npm ci',
+                                     'npm --prefix visual ci',
                                      'npm run build:production',
                                      'npm --prefix visual run bundle',
                                      'npm run package:npm:prebuilt',

@@ -21,9 +21,9 @@ class BuildShellTaskFactory:
         return task
 
     @classmethod
-    def npm_install_legacy_ng_build(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("NPM install, NG build", TaskType.SHELL, repo)
-        task.command_list = ['npm install --legacy-peer-deps', 'ng build --configuration=production']
+    def npm_ci_legacy_ng_build(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("NPM clean install, NG build", TaskType.SHELL, repo)
+        task.command_list = ['npm ci --legacy-peer-deps', 'ng build --configuration=production']
         return task
 
     @classmethod
@@ -39,9 +39,9 @@ class BuildShellTaskFactory:
         return task
 
     @classmethod
-    def npm_install(cls, repo: Repo) -> PlanTask:
-        task = PlanTask("NPM install", TaskType.SHELL, repo)
-        task.command_list = ['npm install']
+    def npm_ci(cls, repo: Repo) -> PlanTask:
+        task = PlanTask("NPM clean install", TaskType.SHELL, repo)
+        task.command_list = ['npm ci']
         return task
 
     @classmethod

@@ -111,7 +111,7 @@ class BuildPolicyTest(unittest.TestCase):
                                if repo.name == "cedar-openview-src")
 
         self.assertEqual(
-            ['npm install --legacy-peer-deps', 'npm run build'],
+            ['npm ci --legacy-peer-deps', 'npm run build'],
             openview_source.build_command_list)
 
     @patch.dict("os.environ", {
@@ -125,6 +125,10 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         commands = self.commands(execute.call_args.args[0])
         self.assertIn('npm run build', commands)
+        self.assertIn('npm ci --legacy-peer-deps', commands)
+        self.assertFalse(any(re.match(
+            r"^npm(?:\s+--prefix\s+\S+)?\s+install(?:\s|$)", command)
+            for command in commands))
         self.assertFalse(any(command.startswith(("cp -a ", "cat ")) for command in commands))
         for distribution in (
                 "cedar-monitoring-dist", "cedar-bridging-dist", "cedar-openview-dist",

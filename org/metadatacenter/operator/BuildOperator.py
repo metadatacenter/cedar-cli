@@ -44,7 +44,7 @@ class BuildOperator(Operator):
                     if repo.build_command_list:
                         shell_wrapper.add_task_as_task(BuildShellTaskFactory.repo_build_commands(repo))
                     else:
-                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
+                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_ci_legacy_ng_build(repo))
                 else:
                     shell_wrapper = PlanTask("Build angular project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER,
                                              repo)
@@ -63,7 +63,7 @@ class BuildOperator(Operator):
                     elif repo.build_command_list:
                         shell_wrapper.add_task_as_task(BuildShellTaskFactory.repo_build_commands(repo))
                     else:
-                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
+                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_ci(repo))
                 else:
                     shell_wrapper = PlanTask("Build angularJS project - skipped because of CEDAR_DEV_BUILD_FRONTENDS",
                                              TaskType.SHELL_WRAPPER, repo)
@@ -72,7 +72,7 @@ class BuildOperator(Operator):
             elif repo.repo_type == RepoType.TYPESCRIPT:
                 shell_wrapper = PlanTask("Build TypeScript project", TaskType.SHELL_WRAPPER, repo)
                 if not repo.skip_npm_install:
-                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
+                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_ci(repo))
                 shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_run_build(repo))
                 task.add_task_as_task(shell_wrapper)
             else:
