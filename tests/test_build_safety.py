@@ -103,3 +103,21 @@ class BuildSafetyTest(unittest.TestCase):
             detail = describe_subprocess_failure(-6)
         self.assertIn("SIGABRT (signal 6)", detail)
         self.assertIn("/Users/test/Library/Logs/DiagnosticReports", detail)
+
+    def test_crash_evidence_points_at_the_place_this_host_keeps_it(self):
+        """A signal leaves its evidence somewhere different on each system, and saying the wrong
+        place is worse than saying nothing: it sends the reader to an empty directory."""
+        with patch("platform.system", return_value="Linux"):
+            linux = describe_subprocess_failure(-11)
+        self.assertIn("SIGSEGV (signal 11)", linux)
+        self.assertIn("coredumpctl", linux)
+        self.assertNotIn("DiagnosticReports", linux)
+
+        with patch("platform.system", return_value="SunOS"):
+            unknown = describe_subprocess_failure(-6)
+        self.assertIn("crash-report or core-dump location", unknown)
+
+    def test_a_clean_exit_carries_no_crash_evidence_hint(self):
+        for system in ("Darwin", "Linux", "SunOS"):
+            with patch("platform.system", return_value=system):
+                self.assertEqual("exited with code 0", describe_subprocess_failure(0))
