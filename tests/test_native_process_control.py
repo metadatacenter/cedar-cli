@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from org.metadatacenter import native, start, start_frontend, stop, stop_frontend
+from org.metadatacenter import (native, start, start_frontend, start_microservice, stop,
+                                stop_frontend)
 from org.metadatacenter.model.CedarMode import CedarMode
 from org.metadatacenter.util.ModeManager import ModeManager
 from org.metadatacenter.worker.NativeWorker import NativeWorker
@@ -159,10 +160,20 @@ class NativeProcessControlTest(unittest.TestCase):
         self.assertNotIn("osascript", command)
 
     @patch("org.metadatacenter.worker.NativeWorker.Worker.execute_generic_shell_commands")
-    def test_open_cli_name_maps_to_openview_service(self, execute):
-        StartMicroserviceWorker.open()
+    def test_the_openview_command_is_named_for_its_service(self, execute):
+        StartMicroserviceWorker.openview()
 
         self.assertIn("cedar-services.sh start openview", execute.call_args.args[0][0])
+
+    def test_the_superseded_open_spelling_still_starts_openview(self):
+        """It was the published name, so a script that learned it keeps working."""
+        command = start_microservice.app.registered_commands
+        names = {registered.name for registered in command}
+
+        self.assertIn("openview", names)
+        self.assertIn("open", names)
+        self.assertTrue(next(r for r in command if r.name == "open").hidden)
+        self.assertFalse(next(r for r in command if r.name == "openview").hidden)
 
     @patch("org.metadatacenter.worker.NativeWorker.ServerWorker.status")
     @patch("org.metadatacenter.worker.NativeWorker.Worker.execute_generic_shell_commands")
