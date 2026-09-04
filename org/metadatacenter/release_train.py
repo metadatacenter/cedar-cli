@@ -1347,7 +1347,67 @@ class ReleaseState:
             "manifest": str(path),
             "startedAt": active["startedAt"],
         })
+        # A release attempt is an operational workspace, not an archive. Once the
+        # pointer names this release, older workspaces and ledgers are baggage and
+        # can only make the next train less reliable by consuming disk.
+        self._prune_obsolete()
         return path
+
+    def _prune_obsolete(self) -> dict[str, list[str]]:
+        """Keep only the release named by current.json and its active attempt.
+
+        Paths come only from the state root and the current manifest. A malformed
+        pointer is refused before anything is removed.
+        """
+        current = self.read_current()
+        manifest = Path(current.get("manifest", "")).expanduser().resolve()
+        releases = (self.root / "releases").resolve()
+        if manifest.parent != releases or not manifest.is_file():
+            raise ReleaseError(f"active release manifest is outside the state root: {manifest}")
+
+        try:
+            active = json.loads(manifest.read_bytes())
+        except json.JSONDecodeError as error:
+            raise ReleaseError(f"invalid release manifest at {manifest}") from error
+        if active.get("releaseVersion") != current.get("releaseVersion"):
+            raise ReleaseError("active release pointer and manifest disagree")
+
+        protected_attempt = None
+        workspace = active.get("frontendPreparation", {}).get("workspace")
+        if workspace:
+            candidate = Path(workspace).expanduser().resolve().parent
+            attempts = (self.root / "attempts").resolve()
+            # Only paths inside this state root can need protection: enumeration
+            # below never follows or removes anything outside it.
+            if candidate.parent.parent == attempts:
+                protected_attempt = candidate
+
+        removed_attempts: list[str] = []
+        attempts_root = self.root / "attempts"
+        if attempts_root.is_dir():
+            for version_dir in sorted(attempts_root.iterdir()):
+                if not version_dir.is_dir() or version_dir.is_symlink():
+                    continue
+                for attempt in sorted(version_dir.iterdir()):
+                    if not attempt.is_dir() or attempt.is_symlink():
+                        continue
+                    if protected_attempt is not None and attempt.resolve() == protected_attempt:
+                        continue
+                    shutil.rmtree(attempt)
+                    removed_attempts.append(str(attempt))
+                try:
+                    version_dir.rmdir()
+                except OSError:
+                    pass
+
+        removed_ledgers: list[str] = []
+        if releases.is_dir():
+            for ledger in sorted(releases.iterdir()):
+                if not ledger.is_file() or ledger.resolve() == manifest:
+                    continue
+                ledger.unlink()
+                removed_ledgers.append(str(ledger))
+        return {"attempts": removed_attempts, "ledgers": removed_ledgers}
 
     def conclude(self, outcome: str = "accepted") -> None:
         """Record that the active release has finished, so it no longer holds the slot.
@@ -4626,8 +4686,17 @@ PROFILE_COMMAND = ("CEDAR_PROFILE=develop source "
 # Maven failure rather than as a missing toolchain.
 REQUIRED_TOOLS = ("git", "javac", "mvn", "node", "npm")
 REQUIRED_JAVA_MAJOR = 17
-# A train, its attempt tree and the archives of earlier attempts.
-REQUIRED_FREE_BYTES = 40 * 1024 ** 3
+
+# Calibrated allocations for one clean release workspace. The final requirement
+# is derived from the manifest's repository/build counts; these are deliberately
+# named so observed train footprints can tune the model without restoring a
+# single opaque free-space threshold.
+CHECKOUT_BYTES_PER_REPOSITORY = 48 * 1024 ** 2
+MAVEN_BYTES_PER_REPOSITORY_VARIANT = 192 * 1024 ** 2
+FRONTEND_BYTES_PER_SURFACE_VARIANT = 512 * 1024 ** 2
+PUBLICATION_CACHE_AND_LOG_BYTES = 2 * 1024 ** 3
+MINIMUM_SPACE_HEADROOM_BYTES = 4 * 1024 ** 3
+SPACE_HEADROOM_PERCENT = 25
 
 NEXUS_HOST = "https://nexus.bmir.stanford.edu"
 NEXUS_NPM_REGISTRY = f"{NEXUS_HOST}/repository/npm-cedar/"
@@ -4713,6 +4782,53 @@ class PreflightFinding:
         return self.severity == "fail"
 
 
+@dataclasses.dataclass(frozen=True)
+class ReleaseSpaceBudget:
+    components: dict[str, int]
+    headroom_bytes: int
+
+    @property
+    def required_bytes(self) -> int:
+        return sum(self.components.values()) + self.headroom_bytes
+
+    def summary(self) -> str:
+        gib = 1024 ** 3
+        parts = [f"{name} {value / gib:.1f} GiB" for name, value in self.components.items()]
+        parts.append(f"headroom {self.headroom_bytes / gib:.1f} GiB")
+        return ", ".join(parts)
+
+
+class ReleaseSpaceEstimator:
+    """Estimate peak disposable space from the work declared by a release manifest."""
+
+    def __init__(self, manifest: dict):
+        self.manifest = manifest
+
+    def estimate(self) -> ReleaseSpaceBudget:
+        source_repositories = len(self.manifest.get("sourceRepositories", {}))
+        release_repositories = len(self.manifest.get("releaseRepositories", []))
+        maven_repositories = len(self.manifest.get("mavenRepositories", []))
+        frontend_surfaces = len(FRONTEND_BUILD_SURFACES)
+        components = {
+            "clean checkouts": (
+                source_repositories + release_repositories
+            ) * CHECKOUT_BYTES_PER_REPOSITORY,
+            "Maven release/next builds": (
+                maven_repositories * 2 * MAVEN_BYTES_PER_REPOSITORY_VARIANT
+            ),
+            "frontend release/next builds": (
+                frontend_surfaces * 2 * FRONTEND_BYTES_PER_SURFACE_VARIANT
+            ),
+            "publication caches and logs": PUBLICATION_CACHE_AND_LOG_BYTES,
+        }
+        subtotal = sum(components.values())
+        headroom = max(
+            MINIMUM_SPACE_HEADROOM_BYTES,
+            subtotal * SPACE_HEADROOM_PERCENT // 100,
+        )
+        return ReleaseSpaceBudget(components, headroom)
+
+
 class ReleasePreflight:
     """Settle every release precondition that is knowable before the first build.
 
@@ -4753,6 +4869,7 @@ class ReleasePreflight:
         http: HttpClient | None = None,
         environment=None,
         accepted_red_develop: dict[str, str] | None = None,
+        space_estimator: ReleaseSpaceEstimator | None = None,
         ci_sleeper=time.sleep,
         ci_delays: tuple[float, ...] = (2, 5, 10),
     ):
@@ -4762,6 +4879,7 @@ class ReleasePreflight:
         self.command_runner = command_runner or subprocess.run
         self.http = http or HttpClient(environment=self.environment)
         self.accepted_red_develop = dict(accepted_red_develop or {})
+        self.space_estimator = space_estimator or ReleaseSpaceEstimator(manifest)
         self.ci_sleeper = ci_sleeper
         self.ci_delays = ci_delays
         self._source_path_cache: dict[str, list[str]] = {}
@@ -4913,13 +5031,14 @@ class ReleasePreflight:
             free = shutil.disk_usage(self.state.root.parent).free
         except OSError as error:
             return [PreflightFinding("disk", "warn", f"cannot measure free space: {error}")]
-        if free >= REQUIRED_FREE_BYTES:
+        budget = self.space_estimator.estimate()
+        if free >= budget.required_bytes:
             return []
         return [PreflightFinding(
             "disk", "fail",
-            f"{free // 1024 ** 3} GiB free, and a release needs "
-            f"{REQUIRED_FREE_BYTES // 1024 ** 3} GiB for the train, the attempt tree and archives",
-            "free space or archive earlier release attempts",
+            f"{free / 1024 ** 3:.1f} GiB free, but this release is estimated to need "
+            f"{budget.required_bytes / 1024 ** 3:.1f} GiB ({budget.summary()})",
+            "free space; obsolete release attempts are removed automatically when a release starts",
         )]
 
     def check_working_trees(self) -> list[PreflightFinding]:
@@ -5288,6 +5407,11 @@ class ReleasePreflight:
                 ))
                 continue
             runs = list(probe.runs)
+            if repository == "cedar-development":
+                runs = [
+                    record for record in runs
+                    if record.get("path") != ".github/workflows/build-train.yml"
+                ]
             if not runs:
                 findings.append(PreflightFinding(
                     "ci", "fail",
@@ -5295,18 +5419,6 @@ class ReleasePreflight:
                     "after bounded indexing grace",
                 ))
                 continue
-            if repository == "cedar-development":
-                runs = [
-                    record for record in runs
-                    if record.get("path") != ".github/workflows/build-train.yml"
-                ]
-                if not runs:
-                    findings.append(PreflightFinding(
-                        "ci", "warn",
-                        "cedar-development has no separate source-validation run; "
-                        "the train executed its captured controller",
-                    ))
-                    continue
             for name, record in latest_runs_by_name(runs).items():
                 conclusion = record.get("conclusion")
                 status = record.get("status")

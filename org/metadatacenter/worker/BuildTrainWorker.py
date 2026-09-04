@@ -681,11 +681,6 @@ class BuildTrainWorker:
                     record for record in runs
                     if record.get('path') != '.github/workflows/build-train.yml'
                 ]
-                if not runs:
-                    console.print(
-                        '  [yellow]CI advisory: cedar-development has no separate '
-                        'source-validation run; the train executes its captured controller.[/yellow]')
-                    continue
             if not runs:
                 failures.append(
                     f'{repository}: no CI run for {revision[:8]} after bounded indexing grace')

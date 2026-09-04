@@ -612,6 +612,29 @@ class OpenWorkRefusalTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'in_progress.*runs/7'):
                     BuildTrainWorker._source_ci_preflight()
 
+    def test_local_train_requires_cedar_development_source_validation_ci(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-development'])
+            workflows = Path(directory) / 'cedar-development' / '.github' / 'workflows'
+            workflows.mkdir(parents=True)
+            (workflows / 'build-train.yml').write_text('name: train\n', encoding='utf-8')
+            (workflows / 'release-tooling-ci.yml').write_text('name: CI\n', encoding='utf-8')
+            only_train = {
+                'name': 'Immutable development build train', 'status': 'in_progress',
+                'conclusion': None, 'path': '.github/workflows/build-train.yml',
+            }
+            with (
+                    patch.object(Util, 'cedar_home', directory),
+                    patch.object(BuildTrainWorker, '_git', return_value=(
+                        0, f"{'a' * 40}\trefs/heads/develop", '')),
+                    patch(
+                        'org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                        return_value=SimpleNamespace(runs=(only_train,)),
+                    ),
+            ):
+                with self.assertRaisesRegex(ValueError, 'cedar-development: no CI run'):
+                    BuildTrainWorker._source_ci_preflight()
+
     def test_train_preflight_names_unsafe_npmrc_keys_without_values(self):
         with tempfile.TemporaryDirectory() as directory:
             npmrc = Path(directory) / '.npmrc'
