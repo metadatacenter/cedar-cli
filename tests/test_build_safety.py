@@ -1,3 +1,4 @@
+import os
 import subprocess
 import tempfile
 import unittest
@@ -48,6 +49,10 @@ class BuildSafetyTest(unittest.TestCase):
                     (workspace / "source.txt").write_text("generated\n", encoding="utf-8")
                     self.assertEqual("true", environment["CI"])
                     self.assertTrue(environment["npm_config_cache"].startswith(str(workspace.parent)))
+                    self.assertEqual(
+                        str(workspace / "node_modules" / ".bin"),
+                        environment["PATH"].split(os.pathsep)[0],
+                    )
                     self.assertEqual([(42, "ng serve")], collisions)
             self.assertEqual("developer change\n", (repo / "source.txt").read_text())
 

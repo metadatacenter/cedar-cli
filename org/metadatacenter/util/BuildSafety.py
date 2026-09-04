@@ -125,10 +125,16 @@ def isolated_frontend_workspace(source: Path, *, reuse_node_modules: bool = Fals
                     )
                 (build_root / "node_modules").symlink_to(dependencies, target_is_directory=True)
             environment = dict(os.environ)
+            existing_path = environment.get("PATH", "")
+            local_binaries = str(build_root / "node_modules" / ".bin")
             environment.update({
                 "CI": "true",
                 "NG_CLI_ANALYTICS": "false",
                 "npm_config_cache": str(temporary_root / "npm-cache"),
+                # npm ci creates this directory during the first command. Resolve the following
+                # bare ng/gulp/vite command from the isolated dependency graph, even on a clean
+                # runner that has no globally installed frontend CLI.
+                "PATH": local_binaries + (os.pathsep + existing_path if existing_path else ""),
             })
             yield build_root, environment, collisions
     finally:
