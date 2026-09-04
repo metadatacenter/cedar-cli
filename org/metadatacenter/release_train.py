@@ -4686,6 +4686,14 @@ PROFILE_COMMAND = ("CEDAR_PROFILE=develop source "
 # Maven failure rather than as a missing toolchain.
 REQUIRED_TOOLS = ("git", "javac", "mvn", "node", "npm")
 REQUIRED_JAVA_MAJOR = 17
+# The command that points a shell at a JDK 17 is not the same on both systems CEDAR releases from,
+# and this string is advice an operator is meant to run. macOS resolves it through java_home; a Linux
+# host has no such tool, so name the location the CLI itself searches.
+JAVA_17_REMEDIATION = (
+    "export JAVA_HOME=$(/usr/libexec/java_home -v 17)"
+    if Path("/usr/libexec/java_home").is_file()
+    else "export JAVA_HOME to a JDK 17, which on this host is usually one of /usr/lib/jvm/java-17-*"
+)
 
 # Calibrated allocations for one clean release workspace. The final requirement
 # is derived from the manifest's repository/build counts; these are deliberately
@@ -4994,7 +5002,7 @@ class ReleasePreflight:
         if code != 0:
             findings.append(PreflightFinding(
                 "toolchain", "fail", "java is not on PATH",
-                'export JAVA_HOME=$(/usr/libexec/java_home -v 17)',
+                JAVA_17_REMEDIATION,
             ))
             return findings
         match = re.search(r'version "(\d+)', stderr)
@@ -5004,7 +5012,7 @@ class ReleasePreflight:
                 "toolchain", "fail",
                 f"Java {major or 'of unknown version'} is active, and CEDAR builds require "
                 f"Java {REQUIRED_JAVA_MAJOR}",
-                'export JAVA_HOME=$(/usr/libexec/java_home -v 17)',
+                JAVA_17_REMEDIATION,
             ))
         code, node, stderr = self._capture(["node", "--version"])
         if code != 0 or node != REQUIRED_NODE_VERSION:
