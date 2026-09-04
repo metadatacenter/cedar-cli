@@ -175,6 +175,29 @@ class NativeProcessControlTest(unittest.TestCase):
         self.assertTrue(next(r for r in command if r.name == "open").hidden)
         self.assertFalse(next(r for r in command if r.name == "openview").hidden)
 
+    @patch.object(ModeManager, "require_surface", return_value=CedarMode.NATIVE)
+    @patch.object(NativeWorker, "restart")
+    def test_restart_refuses_a_name_no_application_answers_to(self, restart, _surface):
+        """Unlike start and stop, restart takes free text, so it can be handed anything."""
+        runner = CliRunner()
+
+        result = runner.invoke(native.app, ["restart", "microservice", "monitor"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("microservice", result.output)
+        restart.assert_not_called()
+
+    @patch.object(ModeManager, "require_surface", return_value=CedarMode.NATIVE)
+    @patch.object(NativeWorker, "restart")
+    def test_restart_passes_applications_it_recognizes_through(self, restart, _surface):
+        runner = CliRunner()
+        restart.return_value.returncode = 0
+
+        result = runner.invoke(native.app, ["restart", "monitor", "ui-main"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        restart.assert_called_once_with(["monitor", "ui-main"])
+
     @patch("org.metadatacenter.worker.NativeWorker.ServerWorker.status")
     @patch("org.metadatacenter.worker.NativeWorker.Worker.execute_generic_shell_commands")
     def test_native_status_includes_process_and_host_port_checks(self, execute, host_status):
