@@ -3,6 +3,7 @@ import io
 import json
 import os
 import tempfile
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -184,6 +185,8 @@ class BuildTrainTest(unittest.TestCase):
             ),
             patch.object(BuildTrainWorker, '_local_configuration_preflight') as local_config,
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
+            patch.object(BuildTrainWorker, '_source_ci_preflight') as source_ci,
+            patch.object(BuildTrainWorker, '_npm_configuration_preflight') as npm_config,
             patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
@@ -199,6 +202,8 @@ class BuildTrainTest(unittest.TestCase):
         self.assertEqual(3, run.call_count)
         local_config.assert_called_once_with()
         targets.assert_called_once_with()
+        source_ci.assert_called_once_with(None)
+        npm_config.assert_called_once_with()
         self.assertFalse(any(call.args[0][1:3] == ['workflow', 'run'] for call in run.call_args_list))
 
     def test_cli_dry_run_refuses_a_train_id_collision(self):
@@ -235,6 +240,8 @@ class BuildTrainTest(unittest.TestCase):
                               'cedar-embeddable-editor', 7, 3),
             ),
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
+            patch.object(BuildTrainWorker, '_source_ci_preflight'),
+            patch.object(BuildTrainWorker, '_npm_configuration_preflight'),
             patch.object(BuildTrainWorker, '_publication_targets_preflight'),
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
@@ -557,6 +564,64 @@ class OpenWorkRefusalTest(unittest.TestCase):
 
         self.assertEqual(1, len(active))
         self.assertIn('in_progress', active[0])
+
+    def test_local_train_preflight_checks_the_exact_develop_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-a'])
+            workflows = Path(directory) / 'cedar-a' / '.github' / 'workflows'
+            workflows.mkdir(parents=True)
+            (workflows / 'ci.yml').write_text('name: CI\n', encoding='utf-8')
+            run = {
+                'name': 'CI', 'status': 'completed', 'conclusion': 'success',
+                'id': 7,
+            }
+            with (
+                    patch.object(Util, 'cedar_home', directory),
+                    patch.object(BuildTrainWorker, '_git', return_value=(
+                        0, f"{'a' * 40}\trefs/heads/develop", '')),
+                    patch(
+                        'org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                        return_value=SimpleNamespace(runs=(run,)),
+                    ) as probe,
+            ):
+                BuildTrainWorker._source_ci_preflight()
+
+        probe.assert_called_once()
+        self.assertEqual('cedar-a', probe.call_args.args[0])
+        self.assertEqual('a' * 40, probe.call_args.args[1])
+
+    def test_local_train_preflight_refuses_pending_ci_with_run_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-a'])
+            workflows = Path(directory) / 'cedar-a' / '.github' / 'workflows'
+            workflows.mkdir(parents=True)
+            (workflows / 'ci.yml').write_text('name: CI\n', encoding='utf-8')
+            run = {
+                'name': 'CI', 'status': 'in_progress', 'conclusion': None,
+                'id': 7, 'html_url': 'https://github.example/runs/7',
+            }
+            with (
+                    patch.object(Util, 'cedar_home', directory),
+                    patch.object(BuildTrainWorker, '_git', return_value=(
+                        0, f"{'a' * 40}\trefs/heads/develop", '')),
+                    patch(
+                        'org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                        return_value=SimpleNamespace(runs=(run,)),
+                    ),
+            ):
+                with self.assertRaisesRegex(ValueError, 'in_progress.*runs/7'):
+                    BuildTrainWorker._source_ci_preflight()
+
+    def test_train_preflight_names_unsafe_npmrc_keys_without_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            npmrc = Path(directory) / '.npmrc'
+            npmrc.write_text(
+                'always-auth=true\n//registry.example/:_authToken=secret\n',
+                encoding='utf-8',
+            )
+            with patch.dict(os.environ, {'NPM_CONFIG_USERCONFIG': str(npmrc)}, clear=False):
+                with self.assertRaisesRegex(ValueError, 'publication authentication'):
+                    BuildTrainWorker._npm_configuration_preflight()
 
     def test_dispatch_refuses_and_runs_no_workflow(self):
         with patch.object(BuildTrainWorker, '_preflight', side_effect=ValueError(

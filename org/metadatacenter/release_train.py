@@ -35,6 +35,17 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from org.metadatacenter.github_ci import (
+    GREEN_CONCLUSIONS,
+    GithubCIProbeError,
+    latest_runs_by_name,
+    probe_exact_commit,
+    run_url,
+)
+from org.metadatacenter.npm_policy import (
+    npm_user_config_findings,
+    unreviewed_install_scripts,
+)
 from org.metadatacenter.util.BuildTrain import BuildTrain
 
 
@@ -1397,10 +1408,13 @@ def _file_sha256(path: Path) -> str:
 class ReleaseWorkspacePreparer:
     """Prepare stable-CEE frontend inputs in clones of the train's exact commits."""
 
-    def __init__(self, state: ReleaseState, command_runner=None, environment=None):
+    def __init__(
+        self, state: ReleaseState, command_runner=None, environment=None, *, verbose: bool = False,
+    ):
         self.state = state
         self.command_runner = command_runner or subprocess.run
         self.environment = dict(os.environ if environment is None else environment)
+        self.verbose = verbose
 
     def next_attempt(self, release_version: str) -> Path:
         attempts = self.state.root / "attempts" / release_version
@@ -1428,7 +1442,7 @@ class ReleaseWorkspacePreparer:
                 cwd=str(cwd) if cwd else None,
                 env=environment,
                 text=True,
-                capture_output=not stream,
+                capture_output=True,
                 check=False,
             )
         except OSError as error:
@@ -1437,7 +1451,14 @@ class ReleaseWorkspacePreparer:
             detail = (result.stderr or result.stdout or "").strip()
             _raise_command_failure(
                 args, f"command failed ({' '.join(args)})", detail)
-        return (result.stdout or "").strip()
+        stdout = (result.stdout or "").strip()
+        if stream:
+            output = "\n".join(
+                part for part in (stdout, (result.stderr or "").strip()) if part)
+            if output and self.verbose:
+                console.print(output, markup=False)
+            return output
+        return stdout
 
     def _clone(self, repository: str, revision: str, destination: Path) -> None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", repository):
@@ -1531,17 +1552,24 @@ class ReleaseWorkspacePreparer:
         command_environment = dict(self.environment)
         command_environment["CEDAR_HOME"] = str(workspace)
         command_environment["npm_config_cache"] = str(attempt / "npm-cache")
-        self._run(
+        command_environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] = "true"
+        apply_output = self._run(
             ["node", str(helper), "--apply", cee_version],
             cwd=workspace / "cedar-development",
             environment=command_environment,
             stream=True,
         )
-        self._run(
+        check_output = self._run(
             ["node", str(helper), "--check", cee_version],
             cwd=workspace / "cedar-development",
             environment=command_environment,
             stream=True,
+        )
+        preparation_log = attempt / "preparation-logs" / "cee-propagation.log"
+        preparation_log.parent.mkdir(parents=True, exist_ok=True)
+        preparation_log.write_text(
+            "\n".join(output for output in (apply_output, check_output) if output) + "\n",
+            encoding="utf-8",
         )
 
         verified = []
@@ -1573,6 +1601,8 @@ class ReleaseWorkspacePreparer:
             changes[repository] = sorted(actual)
         return {
             "attempt": attempt.name,
+            "log": str(preparation_log),
+            "logSha256": _file_sha256(preparation_log),
             "workspace": str(workspace),
             "preparedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
             "repositories": {
@@ -1787,6 +1817,39 @@ class ReleaseVersionPreparer:
         ]).splitlines()))
         return changed | untracked
 
+    @classmethod
+    def _refresh_train_audit_baselines(cls, workspace: Path) -> bool:
+        config_path = workspace / "cedar-development" / "ops" / "frontend-train.json"
+        if not config_path.is_file():
+            return False
+        try:
+            config = json.loads(config_path.read_bytes())
+        except (OSError, json.JSONDecodeError) as error:
+            raise ReleaseError(f"cannot read train audit baselines {config_path}: {error}") from error
+        baselines = config.get("auditBaselines")
+        if not isinstance(baselines, list) or not baselines:
+            raise ReleaseError(f"{config_path} has no npm audit baselines")
+        changed = False
+        for baseline in baselines:
+            if not isinstance(baseline, dict):
+                raise ReleaseError(f"{config_path} contains an invalid npm audit baseline")
+            repository = baseline.get("repository")
+            relative = baseline.get("lock")
+            if not isinstance(repository, str) or not isinstance(relative, str):
+                raise ReleaseError(f"{config_path} contains an unnamed npm audit baseline")
+            lock = workspace / repository / relative
+            if not lock.is_file():
+                # CEE and the TypeScript model publish independently and are deliberately
+                # absent from a CEDAR release workspace; their source locks did not move.
+                continue
+            digest = _file_sha256(lock)
+            if baseline.get("sha256") != digest:
+                baseline["sha256"] = digest
+                changed = True
+        if changed:
+            cls._write_json(config_path, config)
+        return changed
+
     def prepare(self, manifest: dict) -> dict:
         frontend = manifest.get("frontendPreparation", {})
         release_workspace = Path(frontend.get("workspace", ""))
@@ -1845,11 +1908,18 @@ class ReleaseVersionPreparer:
             ("nextDevelopment", next_workspace, next_version),
         ):
             records = {}
+            stamped_by_repository = {}
             for repository in release_repositories:
                 root = workspace / repository
-                stamped = self._stamp_repository(
+                stamped_by_repository[repository] = self._stamp_repository(
                     repository, root, old, target, maven_repositories, copyright_year
                 )
+            if self._refresh_train_audit_baselines(workspace):
+                stamped_by_repository.setdefault("cedar-development", set()).add(
+                    "ops/frontend-train.json")
+            for repository in release_repositories:
+                root = workspace / repository
+                stamped = stamped_by_repository[repository]
                 allowed = set(stamped)
                 allowed.update(cee_allowed_by_repo.get(repository, set()))
                 actual = self._actual_changes(root)
@@ -1883,10 +1953,13 @@ class ReleaseVersionPreparer:
 class ReleaseBuildValidator:
     """Build prepared source variants without publishing or changing Git history."""
 
-    def __init__(self, state: ReleaseState, executor=None, environment=None):
+    def __init__(
+        self, state: ReleaseState, executor=None, environment=None, *, verbose: bool = False,
+    ):
         self.state = state
         self.executor = executor
         self.environment = dict(os.environ if environment is None else environment)
+        self.verbose = verbose
 
     @staticmethod
     def _task_id(*parts: str) -> str:
@@ -1971,7 +2044,9 @@ class ReleaseBuildValidator:
         return tasks
 
     @staticmethod
-    def _stream_command(command: list[str], cwd: Path, environment: dict, log: Path) -> None:
+    def _stream_command(
+        command: list[str], cwd: Path, environment: dict, log: Path, *, verbose: bool = False,
+    ) -> None:
         log.parent.mkdir(parents=True, exist_ok=True)
         try:
             with log.open("w", encoding="utf-8") as output:
@@ -1985,10 +2060,12 @@ class ReleaseBuildValidator:
                     bufsize=1,
                 )
                 assert process.stdout is not None
-                for line in process.stdout:
-                    output.write(line)
-                    output.flush()
-                    print(line, end="", flush=True)
+                with process.stdout:
+                    for line in process.stdout:
+                        output.write(line)
+                        output.flush()
+                        if verbose:
+                            print(line, end="", flush=True)
                 returncode = process.wait()
         except OSError as error:
             raise ReleaseError(f"cannot run {command[0]}: {error}") from error
@@ -2015,9 +2092,12 @@ class ReleaseBuildValidator:
             manifest["versionPreparation"][task["variant"]]["workspace"]
         )
         environment["npm_config_cache"] = str(attempt / "build-cache" / "npm")
+        environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] = "true"
         started = dt.datetime.now(dt.timezone.utc).isoformat()
         if self.executor is None:
-            self._stream_command(task["command"], Path(task["cwd"]), environment, log)
+            self._stream_command(
+                task["command"], Path(task["cwd"]), environment, log, verbose=self.verbose,
+            )
         else:
             log.parent.mkdir(parents=True, exist_ok=True)
             output = self.executor(task, environment)
@@ -2870,6 +2950,7 @@ class ReleaseArtifactPublisher:
         sleeper=None,
         nexus_guard=None,
         progress_reporter=None,
+        verbose: bool = False,
     ):
         self.state = state
         self.environment = _environment_with_nexus_credentials(environment)
@@ -2877,6 +2958,7 @@ class ReleaseArtifactPublisher:
         self.executor = executor
         self.sleeper = sleeper or time.sleep
         self.progress_reporter = progress_reporter
+        self.verbose = verbose
         self.nexus_guard = nexus_guard or NexusCircuitBreaker(
             self.http, self.environment)
 
@@ -3165,9 +3247,9 @@ class ReleaseArtifactPublisher:
         }
         if self.progress_reporter is not None:
             self.progress_reporter(progress)
-        if current is None:
+        if self.verbose and current is None:
             console.print(f"Maven release publication: 0/{total} files")
-        else:
+        elif self.verbose:
             console.print(
                 f"Maven release publication: {completed}/{total} files; "
                 f"{action}: {current}",
@@ -3480,6 +3562,10 @@ class ReleaseArtifactPublisher:
     def _publish_npm(self, task: dict) -> dict:
         tarball, evidence = self._pack_npm(task)
         existing = self._npm_version_record(task["registry"], evidence["name"], task["version"])
+        attempt = Path(task["workspace"]).parent
+        log = attempt / "publication-logs" / f"{task['id'].replace(':', '-')}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        output = "already present; publication skipped"
         if existing is None:
             command = [
                 "npm", "publish", str(tarball), "--tag", "latest",
@@ -3499,7 +3585,8 @@ class ReleaseArtifactPublisher:
                 ) from error
             output = "\n".join(
                 part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
-            if output:
+            log.write_text(output + "\n", encoding="utf-8")
+            if output and self.verbose:
                 console.print(output, markup=False)
             if result.returncode:
                 _raise_command_failure(
@@ -3507,8 +3594,16 @@ class ReleaseArtifactPublisher:
                     f"npm publish exited {result.returncode}: {evidence['name']}",
                     output,
                 )
+        if existing is not None:
+            log.write_text(output + "\n", encoding="utf-8")
         verified = self._verify_npm_package(task, evidence, wait=True)
-        return {**task, **verified, "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
+        return {
+            **task,
+            **verified,
+            "log": str(log),
+            "logSha256": _file_sha256(log),
+            "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
 
     def _deploy_snapshot(self, manifest: dict, task: dict) -> dict:
         self._verify_workspace(task)
@@ -3517,7 +3612,7 @@ class ReleaseArtifactPublisher:
         environment = dict(self.environment)
         environment["CEDAR_HOME"] = task["workspace"]
         ReleaseBuildValidator._stream_command(
-            task["command"], Path(task["cwd"]), environment, log,
+            task["command"], Path(task["cwd"]), environment, log, verbose=self.verbose,
         )
         return {
             **task,
@@ -3563,6 +3658,9 @@ class ReleaseArtifactPublisher:
         elif task["kind"] == "npm-release":
             self._verify_workspace(task)
             self._verify_npm_package(task, record, wait=False)
+            log = Path(record.get("log", ""))
+            if not log.is_file() or _file_sha256(log) != record.get("logSha256"):
+                raise ReleaseError(f"recorded npm publication log changed for {task['id']}")
         elif task["kind"] == "maven-snapshot-deploy":
             self._verify_snapshot_workspace(manifest, task)
             log = Path(record.get("log", ""))
@@ -3609,6 +3707,14 @@ def validate_active_release_builds(
         if task["id"] in completed:
             continue
         task = {**task, "evidenceAttempt": evidence["attempt"]}
+        evidence["inProgressTask"] = task["id"]
+        state.update_current_manifest({
+            "phase": "validating-builds",
+            "buildValidation": evidence,
+            "failure": None,
+        })
+        console.print(
+            f"Build {len(completed) + 1}/{len(tasks)}: {task['id']}", markup=False)
         try:
             record = validator.run_task(manifest, task)
         except ReleaseError as error:
@@ -3621,6 +3727,7 @@ def validate_active_release_builds(
             raise
         completed[task["id"]] = record
         evidence.pop("failedTask", None)
+        evidence.pop("inProgressTask", None)
         state.update_current_manifest({
             "phase": "validating-builds",
             "buildValidation": evidence,
@@ -3675,6 +3782,14 @@ def create_active_release_refs(
     for task in tasks:
         if task["id"] in completed:
             continue
+        evidence["inProgressTask"] = task["id"]
+        state.update_current_manifest({
+            "phase": "creating-local-refs",
+            "localRefs": evidence,
+            "failure": None,
+        })
+        console.print(
+            f"Local ref {len(completed) + 1}/{len(tasks)}: {task['id']}", markup=False)
         try:
             record = creator.create(manifest, task)
         except ReleaseError as error:
@@ -3687,6 +3802,7 @@ def create_active_release_refs(
             raise
         completed[task["id"]] = record
         evidence.pop("failedTask", None)
+        evidence.pop("inProgressTask", None)
         state.update_current_manifest({
             "phase": "creating-local-refs",
             "localRefs": evidence,
@@ -3733,6 +3849,14 @@ def integrate_active_release(
     for task in tasks:
         if task["id"] in completed:
             continue
+        evidence["inProgressTask"] = task["id"]
+        state.update_current_manifest({
+            "phase": "integrating-remotes",
+            "remoteIntegration": evidence,
+            "failure": None,
+        })
+        console.print(
+            f"Remote {len(completed) + 1}/{len(tasks)}: {task['id']}", markup=False)
         try:
             record = integrator.integrate(manifest, task)
         except ReleaseError as error:
@@ -3745,6 +3869,7 @@ def integrate_active_release(
             raise
         completed[task["id"]] = record
         evidence.pop("failedTask", None)
+        evidence.pop("inProgressTask", None)
         state.update_current_manifest({
             "phase": "integrating-remotes",
             "remoteIntegration": evidence,
@@ -3793,6 +3918,14 @@ def publish_active_release_snapshots(
     for task in tasks:
         if task["id"] in completed:
             continue
+        evidence["inProgressTask"] = task["id"]
+        state.update_current_manifest({
+            "phase": "publishing-snapshots",
+            "snapshotPublication": evidence,
+            "failure": None,
+        })
+        console.print(
+            f"Snapshot {len(completed) + 1}/{len(tasks)}: {task['id']}", markup=False)
         try:
             record = publisher.run_task(manifest, task)
         except ReleaseError as error:
@@ -3805,6 +3938,7 @@ def publish_active_release_snapshots(
             raise
         completed[task["id"]] = record
         evidence.pop("failedTask", None)
+        evidence.pop("inProgressTask", None)
         state.update_current_manifest({
             "phase": "publishing-snapshots",
             "snapshotPublication": evidence,
@@ -3886,6 +4020,16 @@ def publish_active_release(
     for task in tasks:
         if task["id"] in completed:
             continue
+        evidence["inProgressTask"] = {"id": task["id"], "kind": task["kind"]}
+        state.update_current_manifest({
+            "phase": "publishing-artifacts",
+            "artifactPublication": evidence,
+            "failure": None,
+        })
+        console.print(
+            f"Artifact {len(set(completed) & task_ids) + 1}/{len(tasks)}: {task['id']}",
+            markup=False,
+        )
         try:
             record = publisher.run_task(manifest, task)
         except ReleaseError as error:
@@ -4375,6 +4519,7 @@ def advance_active_release(
     if start is None:
         raise ReleaseError(f"a release in {phase} has no stage that can continue it")
     for stage in RELEASE_STAGES[start:]:
+        console.print(f"Release phase: {stage.name}", markup=False)
         manifest = stage(state, dependencies)
     return manifest
 
@@ -4505,6 +4650,7 @@ class ReleasePreflight:
         "check_git_identity",
         "check_nexus_authorization",
         "check_npm_authorization",
+        "check_npm_configuration",
         "check_push_permission",
         "check_target_version_unused",
         "check_target_artifacts_unused",
@@ -4524,6 +4670,8 @@ class ReleasePreflight:
         http: HttpClient | None = None,
         environment=None,
         accepted_red_develop: dict[str, str] | None = None,
+        ci_sleeper=time.sleep,
+        ci_delays: tuple[float, ...] = (2, 5, 10),
     ):
         self.manifest = manifest
         self.environment = _environment_with_nexus_credentials(environment)
@@ -4531,6 +4679,8 @@ class ReleasePreflight:
         self.command_runner = command_runner or subprocess.run
         self.http = http or HttpClient(environment=self.environment)
         self.accepted_red_develop = dict(accepted_red_develop or {})
+        self.ci_sleeper = ci_sleeper
+        self.ci_delays = ci_delays
         self._source_path_cache: dict[str, list[str]] = {}
 
     @property
@@ -4572,12 +4722,15 @@ class ReleasePreflight:
         """Recheck only conditions still relevant to the recorded next stage."""
         stage = _next_release_stage(self.manifest)
         checks = ["check_toolchain", "check_profile", "check_disk_space"]
+        if stage != "acceptance":
+            checks.append("check_npm_configuration")
         if stage in {"frontends", "versions", "builds"}:
             checks.extend([
                 "check_working_trees", "check_git_identity",
                 "check_nexus_authorization", "check_npm_authorization",
                 "check_push_permission", "check_target_version_unused",
                 "check_target_artifacts_unused", "check_source_contract",
+                "check_develop_is_green",
                 "check_generated_version_files", "check_license_files",
                 "check_remote_survey",
             ])
@@ -4830,6 +4983,33 @@ class ReleasePreflight:
             f"npm login --registry {NEXUS_NPM_REGISTRY}",
         )]
 
+    def check_npm_configuration(self) -> list[PreflightFinding]:
+        configured = self.environment.get("NPM_CONFIG_USERCONFIG") \
+            or self.environment.get("npm_config_userconfig")
+        if configured:
+            path = Path(configured).expanduser()
+        else:
+            code, output, stderr = self._capture(["npm", "config", "get", "userconfig"])
+            if code != 0 or not output:
+                return [PreflightFinding(
+                    "npm-config", "fail",
+                    "npm user configuration path is unreadable: "
+                    + (stderr.splitlines()[-1] if stderr else "npm returned no path"),
+                    "repair npm configuration before releasing",
+                )]
+            path = Path(output).expanduser()
+        try:
+            findings = npm_user_config_findings(path)
+        except ValueError as error:
+            return [PreflightFinding("npm-config", "fail", str(error))]
+        return [
+            PreflightFinding(
+                "npm-config", finding.severity,
+                f"{finding.message} in {path}", finding.remedy,
+            )
+            for finding in findings
+        ]
+
     def check_push_permission(self) -> list[PreflightFinding]:
         """Ask each remote whether the release's own writes would be accepted.
 
@@ -5000,65 +5180,86 @@ class ReleasePreflight:
             source = self.manifest.get("sourceRepositories", {}).get(repository)
             if not source:
                 continue
-            code, output, stderr = self._capture([
-                "gh", "api",
-                f"repos/metadatacenter/{repository}/actions/runs"
-                f"?head_sha={source}&per_page=20",
-                # A run still in flight has a null conclusion, and an empty leading field
-                # would be lost to the surrounding strip, so name it.
-                "--jq", '.workflow_runs[] | [.conclusion // "pending", .status, .id, .name]'
-                        " | @tsv",
-            ])
-            if code != 0:
+            has_workflow = any(
+                path.startswith(".github/workflows/")
+                for path in self._source_paths(repository)
+            )
+            if not has_workflow:
+                findings.append(PreflightFinding(
+                    "ci", "warn",
+                    f"{repository} has no CI workflow contract; release validation builds it",
+                ))
+                continue
+            try:
+                probe = probe_exact_commit(
+                    repository,
+                    source,
+                    runner=self.command_runner,
+                    sleeper=self.ci_sleeper,
+                    delays=self.ci_delays,
+                    reporter=lambda message: console.print(f"  [yellow]ci: {message}[/yellow]"),
+                )
+            except GithubCIProbeError as error:
+                findings.append(PreflightFinding(
+                    "ci", "fail", str(error),
+                ))
+                continue
+            runs = list(probe.runs)
+            if not runs:
                 findings.append(PreflightFinding(
                     "ci", "fail",
-                    f"{repository} CI state is unreadable: "
-                    f"{stderr.splitlines()[-1] if stderr else code}",
+                    f"{repository} has no CI run for the train source {source[:8]} "
+                    "after bounded indexing grace",
                 ))
                 continue
-            if not output:
-                has_workflow = any(
-                    path.startswith(".github/workflows/")
-                    for path in self._source_paths(repository)
-                )
-                findings.append(PreflightFinding(
-                    "ci", "fail" if has_workflow else "warn",
-                    (
-                        f"{repository} has no CI run for the train source {source[:8]}"
-                        if has_workflow else
-                        f"{repository} has no CI workflow contract; release validation builds it"
-                    ),
-                ))
-                continue
-            for line in output.splitlines():
-                conclusion, status, run_id, name = (line.split("\t") + ["", "", "", ""])[:4]
+            if repository == "cedar-development":
+                runs = [
+                    record for record in runs
+                    if record.get("path") != ".github/workflows/build-train.yml"
+                ]
+                if not runs:
+                    findings.append(PreflightFinding(
+                        "ci", "warn",
+                        "cedar-development has no separate source-validation run; "
+                        "the train executed its captured controller",
+                    ))
+                    continue
+            for name, record in latest_runs_by_name(runs).items():
+                conclusion = record.get("conclusion")
+                status = record.get("status")
+                run_id = str(record.get("id") or "")
+                url = run_url(record)
+                where = f" ({url})" if url else ""
                 if status != "completed":
                     findings.append(PreflightFinding(
                         "ci", "fail",
-                        f"{repository} {name or 'CI'} is still {status} for {source[:8]}",
+                        f"{repository} {name} is still {status or 'pending'} for "
+                        f"{source[:8]}{where}",
+                        f"watch the run before retrying: {url}" if url else "wait for CI to settle",
                     ))
                     continue
-                if conclusion in {"success", "skipped", "neutral"}:
+                if conclusion in GREEN_CONCLUSIONS:
                     continue
                 if conclusion == "cancelled":
                     # Somebody stopped this run. That is an action taken about the workflow,
                     # never a result about the code, so it is reported and not blocked on.
                     findings.append(PreflightFinding(
                         "ci", "warn",
-                        f"{repository} {name or 'CI'} was cancelled for the train source "
-                        f"{source[:8]} in run {run_id}",
+                        f"{repository} {name} was cancelled for the train source "
+                        f"{source[:8]} in run {run_id}{where}",
                     ))
                     continue
                 if self.accepted_red_develop.get(repository) == run_id:
                     findings.append(PreflightFinding(
                         "ci", "warn",
-                        f"{repository} develop is {conclusion} in run {run_id}, accepted explicitly",
+                        f"{repository} develop is {conclusion} in run {run_id}, "
+                        f"accepted explicitly{where}",
                     ))
                     continue
                 findings.append(PreflightFinding(
                     "ci", "fail",
-                    f"{repository} {name or 'CI'} is {conclusion} for the train source "
-                    f"{source[:8]} in run {run_id}",
+                    f"{repository} {name} is {conclusion} for the train source "
+                    f"{source[:8]} in run {run_id}{where}",
                     f"fix develop and build a new train, or accept this run with "
                     f"--accept-red-develop {repository}={run_id}",
                 ))
@@ -5106,6 +5307,25 @@ class ReleasePreflight:
                 findings.append(PreflightFinding(
                     "source", "fail",
                     f"train source {repository} is missing required release input {relative}",
+                ))
+        for surface in FRONTEND_BUILD_SURFACES:
+            repository = surface["repository"]
+            if repository not in self.repositories:
+                continue
+            prefix = "" if surface["directory"] == "." else f"{surface['directory']}/"
+            package = self._source_json(repository, f"{prefix}package.json")
+            lock = self._source_json(repository, f"{prefix}package-lock.json")
+            identity = f"{repository}:{surface['directory']}"
+            try:
+                pending = unreviewed_install_scripts(package, lock, identity)
+            except ValueError as error:
+                findings.append(PreflightFinding("npm-scripts", "fail", str(error)))
+                continue
+            if pending:
+                findings.append(PreflightFinding(
+                    "npm-scripts", "fail",
+                    f"{identity} has unreviewed npm install scripts: " + ", ".join(pending),
+                    "record an exact true/false allowScripts decision in the captured package.json",
                 ))
         for phase in self.manifest.get("mavenPhases", []):
             repository = phase.get("repository")
@@ -5427,6 +5647,87 @@ def _render_release_status(manifest: dict, path: Path) -> None:
     console.print(f"State: {path}")
 
 
+_ACTIVE_RELEASE_SECTIONS = {
+    "validating-builds": "buildValidation",
+    "creating-local-refs": "localRefs",
+    "publishing-snapshots": "snapshotPublication",
+    "integrating-remotes": "remoteIntegration",
+    "publishing-artifacts": "artifactPublication",
+}
+
+
+def _release_watch_summary(manifest: dict, elapsed: float) -> str:
+    phase = manifest.get("phase", "unknown")
+    rows = _release_progress(manifest)
+    current = next((row for row in rows if row["state"] in {"next", "failed"}), None)
+    progress = (
+        f"{current['phase']} {current['completed']}/{current['total']}"
+        if current else "complete"
+    )
+    section_name = _ACTIVE_RELEASE_SECTIONS.get(phase)
+    section = manifest.get(section_name, {}) if section_name else {}
+    active = section.get("inProgressTask") if isinstance(section, dict) else None
+    if isinstance(active, dict):
+        identifier = active.get("id")
+        if active.get("kind") == "maven-release-upload":
+            identifier = (
+                f"{identifier} files {active.get('completedFiles', 0)}/"
+                f"{active.get('totalFiles', '?')}"
+            )
+    else:
+        identifier = active
+    detail = f" | active {identifier}" if identifier else ""
+    retry = manifest.get("retry")
+    if isinstance(retry, dict):
+        failure = (
+            f" | retry {retry.get('attempt')}/{retry.get('maximum')} in "
+            f"{retry.get('delaySeconds')}s: {retry.get('reason')}"
+        )
+    else:
+        failure = f" | failure {manifest['failure']}" if manifest.get("failure") else ""
+    minutes, seconds = divmod(max(0, int(elapsed)), 60)
+    hours, minutes = divmod(minutes, 60)
+    elapsed_text = f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"Release {manifest.get('releaseVersion')} | {progress}{detail}{failure} | {elapsed_text}"
+
+
+def _watch_release(
+    state: ReleaseState, *, sleeper=time.sleep, interval: float = 10,
+    heartbeat: float = 60,
+) -> tuple[dict, Path, int]:
+    started = time.monotonic()
+    last_report = started - heartbeat
+    previous = None
+    while True:
+        manifest, path = state.read_current_manifest()
+        now = time.monotonic()
+        summary = _release_watch_summary(manifest, now - started)
+        signature = (
+            manifest.get("phase"),
+            manifest.get("failure"),
+            json.dumps(manifest.get("retry"), sort_keys=True),
+            tuple(
+                (row["phase"], row["state"], row["completed"], row["total"], row.get("detail"))
+                for row in _release_progress(manifest)
+            ),
+            json.dumps(
+                (manifest.get(_ACTIVE_RELEASE_SECTIONS.get(manifest.get("phase"), ""), {}) or {})
+                .get("inProgressTask"),
+                sort_keys=True,
+            ),
+        )
+        if signature != previous or now - last_report >= heartbeat:
+            console.print(summary, markup=False)
+            previous = signature
+            last_report = now
+        phase = manifest.get("phase")
+        if phase == RELEASE_TERMINAL_PHASE:
+            return manifest, path, 0
+        if phase == "abandoned" or (manifest.get("failure") and not manifest.get("retry")):
+            return manifest, path, 1
+        sleeper(interval)
+
+
 def _build_or_exit(
     release_version: str,
     next_version: str,
@@ -5449,23 +5750,55 @@ TRANSIENT_RETRY_ATTEMPTS = 5
 TRANSIENT_RETRY_BACKOFF_SECONDS = (30, 60, 120, 300)
 
 
-def _drive_release(state: ReleaseState, *, sleeper=time.sleep) -> dict:
+def _drive_release(
+    state: ReleaseState, *, sleeper=time.sleep, verbose: bool = False,
+) -> dict:
     """Advance the release, absorbing narrowly classified transport faults.
 
     A release runs for hours across two registries and forty remotes. Only
     RetryableReleaseError is retried, and only a safe transport condition raises it, so a
     guard still stops the release on its first refusal.
     """
+    workspace_preparer = ReleaseWorkspacePreparer(state, verbose=verbose)
+    version_preparer = ReleaseVersionPreparer(
+        state, workspace_preparer=workspace_preparer)
+    build_validator = ReleaseBuildValidator(state, verbose=verbose)
+    ref_creator = ReleaseRefCreator(state, git_runner=workspace_preparer)
+    remote_integrator = ReleaseRemoteIntegrator(
+        state, git_runner=workspace_preparer)
+    artifact_publisher = ReleaseArtifactPublisher(state, verbose=verbose)
+    acceptance = ReleaseAcceptance(
+        state, remote_integrator=remote_integrator, publisher=artifact_publisher)
     for attempt in range(1, TRANSIENT_RETRY_ATTEMPTS + 1):
+        if attempt > 1:
+            state.update_current_manifest({"retry": None, "failure": None})
         try:
-            return advance_active_release(state)
-        except RetryableReleaseError:
+            return advance_active_release(
+                state,
+                workspace_preparer=workspace_preparer,
+                version_preparer=version_preparer,
+                build_validator=build_validator,
+                ref_creator=ref_creator,
+                remote_integrator=remote_integrator,
+                artifact_publisher=artifact_publisher,
+                acceptance=acceptance,
+            )
+        except RetryableReleaseError as error:
             if attempt == TRANSIENT_RETRY_ATTEMPTS:
                 raise
             delay = TRANSIENT_RETRY_BACKOFF_SECONDS[
                 min(attempt - 1, len(TRANSIENT_RETRY_BACKOFF_SECONDS) - 1)]
             console.print(
                 f"[yellow]Transient failure on attempt {attempt}; retrying in {delay}s[/yellow]")
+            state.update_current_manifest({
+                "retry": {
+                    "attempt": attempt,
+                    "maximum": TRANSIENT_RETRY_ATTEMPTS,
+                    "delaySeconds": delay,
+                    "reason": str(error),
+                    "recordedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+                },
+            })
             sleeper(delay)
     raise ReleaseError("release exhausted its transient retries")
 
@@ -5553,6 +5886,8 @@ def start(
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
     accept_red_develop: list[str] = typer.Option(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
+    verbose: bool = typer.Option(
+        False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Run a manifest-owned train release through verified Git and publication stages."""
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
@@ -5561,7 +5896,9 @@ def start(
     state = ReleaseState()
     try:
         path = state.start(manifest)
-        active = _drive_release(state)
+        console.print("Compact progress is shown below; full task output is retained in attempt logs.")
+        console.print("A second terminal may run: cedarcli release status --watch")
+        active = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         if state.current_path.exists():
@@ -5572,13 +5909,18 @@ def start(
 
 
 @app.command("resume")
-def resume():
+def resume(
+    verbose: bool = typer.Option(
+        False, "--verbose", help="Stream full task output instead of compact progress"),
+):
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
     try:
         active, path = state.read_current_manifest()
         _release_resume_gate_or_exit(active)
-        manifest = _drive_release(state)
+        console.print("Compact progress is shown below; full task output is retained in attempt logs.")
+        console.print("A second terminal may run: cedarcli release status --watch")
+        manifest = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
@@ -5607,14 +5949,30 @@ def abandon(
 
 
 @app.command("status")
-def status():
+def status(
+    watch: bool = typer.Option(False, "--watch", help="Watch compact progress until release stops"),
+):
     """Show the active train-backed release and its immutable CEE proof."""
     try:
-        manifest, path = ReleaseState().read_current_manifest()
+        state = ReleaseState()
+        manifest, path = state.read_current_manifest()
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
     _render_plan(manifest)
+    if watch:
+        try:
+            manifest, path, code = _watch_release(state)
+        except KeyboardInterrupt:
+            console.print("[yellow]Stopped watching; the release state is unchanged.[/yellow]")
+            raise typer.Exit(130)
+        if manifest.get("acceptance"):
+            for check in manifest["acceptance"]["checks"]:
+                console.print(f"Accepted:            {check['detail']}")
+        _render_release_status(manifest, path)
+        if code:
+            raise typer.Exit(code)
+        return
     if manifest.get("acceptance"):
         for check in manifest["acceptance"]["checks"]:
             console.print(f"Accepted:            {check['detail']}")

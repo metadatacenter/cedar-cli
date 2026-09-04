@@ -9,6 +9,14 @@ import time
 
 from rich.console import Console
 
+from org.metadatacenter.github_ci import (
+    GREEN_CONCLUSIONS,
+    GithubCIProbeError,
+    latest_runs_by_name,
+    probe_exact_commit,
+    run_url,
+)
+from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.release_train import _environment_with_nexus_credentials
@@ -570,6 +578,134 @@ class BuildTrainWorker:
                 console.print(f'  [green]OK[/green] {line.removeprefix("OK ")}')
 
     @classmethod
+    def _npm_configuration_preflight(cls):
+        configured = os.environ.get('NPM_CONFIG_USERCONFIG') \
+            or os.environ.get('npm_config_userconfig')
+        if configured:
+            path = Path(configured).expanduser()
+        else:
+            try:
+                result = subprocess.run(
+                    ['npm', 'config', 'get', 'userconfig'],
+                    text=True, capture_output=True, check=False,
+                )
+            except OSError as error:
+                raise ValueError(f'cannot inspect npm user configuration: {error}') from error
+            if result.returncode or not result.stdout.strip():
+                detail = (result.stderr or '').strip().splitlines()
+                raise ValueError(
+                    'cannot inspect npm user configuration'
+                    + (f': {detail[-1]}' if detail else ''))
+            path = Path(result.stdout.strip()).expanduser()
+        try:
+            findings = npm_user_config_findings(path)
+        except ValueError as error:
+            raise ValueError(str(error)) from error
+        blockers = [finding for finding in findings if finding.severity == 'fail']
+        for finding in findings:
+            style = 'red' if finding.severity == 'fail' else 'yellow'
+            console.print(f'  [{style}]npm config: {finding.message} in {path}[/{style}]')
+            console.print(f'    {finding.remedy}')
+        if blockers:
+            raise ValueError('npm user configuration can change publication authentication')
+
+    @classmethod
+    def _source_ci_preflight(cls, source=None):
+        cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        if not cedar_home:
+            raise ValueError('CEDAR_HOME is not set')
+        ops = Path(cedar_home) / 'cedar-development' / 'ops'
+        try:
+            build = json.loads((ops / 'build-train.json').read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f'cannot read build-train configuration: {error}') from error
+        recorded = source.get('repositories', {}) if isinstance(source, dict) else {}
+        failures = []
+        for repository in build.get('repositories', []):
+            root = Path(cedar_home) / repository
+            revision = recorded.get(repository)
+            if not revision:
+                code, output, detail = cls._git(
+                    root if (root / '.git').exists() else Path(cedar_home),
+                    'ls-remote',
+                    'origin' if (root / '.git').exists() else
+                    f'https://github.com/metadatacenter/{repository}.git',
+                    'refs/heads/develop',
+                )
+                if code != 0 or not output:
+                    failures.append(
+                        f'{repository}: cannot resolve develop'
+                        + (f' ({detail.splitlines()[-1]})' if detail else ''))
+                    continue
+                revision = output.split()[0]
+            has_workflow = None
+            if (root / '.git').exists():
+                code, output, _detail = cls._git(
+                    root, 'ls-tree', '-r', '--name-only', revision, '--',
+                    '.github/workflows')
+                if code == 0:
+                    has_workflow = bool(output.strip())
+            if has_workflow is None:
+                try:
+                    response = subprocess.run([
+                        'gh', 'api',
+                        f'repos/metadatacenter/{repository}/contents/.github/workflows?ref={revision}',
+                    ], text=True, capture_output=True, check=False)
+                except OSError as error:
+                    failures.append(f'{repository}: cannot inspect CI workflow contract ({error})')
+                    continue
+                has_workflow = response.returncode == 0
+                if response.returncode and 'HTTP 404' not in (response.stderr or response.stdout):
+                    detail = (response.stderr or response.stdout or '').strip().splitlines()
+                    failures.append(
+                        f'{repository}: cannot inspect CI workflow contract '
+                        f'({detail[-1] if detail else f"exit {response.returncode}"})')
+                    continue
+            if not has_workflow:
+                console.print(
+                    f'  [yellow]CI advisory: {repository} has no workflow contract; '
+                    'the train gates its outputs.[/yellow]')
+                continue
+            try:
+                probe = probe_exact_commit(
+                    repository,
+                    revision,
+                    reporter=lambda message: console.print(f'  [yellow]{message}[/yellow]'),
+                )
+            except GithubCIProbeError as error:
+                failures.append(str(error))
+                continue
+            runs = list(probe.runs)
+            if repository == 'cedar-development':
+                runs = [
+                    record for record in runs
+                    if record.get('path') != '.github/workflows/build-train.yml'
+                ]
+                if not runs:
+                    console.print(
+                        '  [yellow]CI advisory: cedar-development has no separate '
+                        'source-validation run; the train executes its captured controller.[/yellow]')
+                    continue
+            if not runs:
+                failures.append(
+                    f'{repository}: no CI run for {revision[:8]} after bounded indexing grace')
+                continue
+            for name, record in latest_runs_by_name(runs).items():
+                status = record.get('status')
+                conclusion = record.get('conclusion')
+                url = run_url(record)
+                suffix = f' ({url})' if url else ''
+                if status != 'completed':
+                    failures.append(
+                        f'{repository}: {name} is {status or "pending"}{suffix}')
+                elif conclusion not in GREEN_CONCLUSIONS:
+                    failures.append(
+                        f'{repository}: {name} concluded '
+                        f'{conclusion or "without a result"}{suffix}')
+        if failures:
+            raise ValueError('train source CI is not settled: ' + '; '.join(failures))
+
+    @classmethod
     def _local_configuration_preflight(cls):
         cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
         if not cedar_home:
@@ -626,6 +762,8 @@ class BuildTrainWorker:
         if alignment:
             raise ValueError(
                 'local source checkouts do not match GitHub develop: ' + '; '.join(alignment))
+        cls._source_ci_preflight(source)
+        cls._npm_configuration_preflight()
         cls._publication_targets_preflight()
         return summary, source
 
