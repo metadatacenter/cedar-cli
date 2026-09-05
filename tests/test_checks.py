@@ -98,6 +98,20 @@ class CheckCommandsTest(unittest.TestCase):
         version_console.print.assert_called_once()
         write_report.assert_called_once()
 
+    def test_ci_check_reports_through_the_train_worker_and_keeps_its_exit_code(self):
+        with patch("org.metadatacenter.check.BuildTrainWorker.report_source_ci",
+                   return_value=1) as report:
+            result = self.runner.invoke(check.app, ["ci"])
+        self.assertEqual(1, result.exit_code, result.output)
+        report.assert_called_once_with(show_all=False)
+
+    def test_ci_check_can_list_every_repository(self):
+        with patch("org.metadatacenter.check.BuildTrainWorker.report_source_ci",
+                   return_value=0) as report:
+            result = self.runner.invoke(check.app, ["ci", "--all"])
+        self.assertEqual(0, result.exit_code, result.output)
+        report.assert_called_once_with(show_all=True)
+
 
 if __name__ == "__main__":
     unittest.main()

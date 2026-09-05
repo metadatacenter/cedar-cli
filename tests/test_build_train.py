@@ -653,3 +653,241 @@ class OpenWorkRefusalTest(unittest.TestCase):
                 patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run') as run:
             self.assertEqual(1, BuildTrainWorker.dispatch())
         run.assert_not_called()
+
+
+class PreflightReportTest(unittest.TestCase):
+    """The dispatch preflight reports every finding at once, and the CI question stands alone."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    @staticmethod
+    def _home(directory, repositories, workflows=()):
+        ops = Path(directory) / 'cedar-development' / 'ops'
+        ops.mkdir(parents=True)
+        (ops / 'build-train.json').write_text(json.dumps({
+            'organization': 'metadatacenter',
+            'sourceBranch': 'develop',
+            'repositories': repositories,
+        }), encoding='utf-8')
+        for repository in repositories:
+            (Path(directory) / repository / '.git').mkdir(parents=True)
+            if repository in workflows:
+                folder = Path(directory) / repository / '.github' / 'workflows'
+                folder.mkdir(parents=True)
+                (folder / 'ci.yml').write_text('name: CI\n', encoding='utf-8')
+        return directory
+
+    def test_the_newest_dispatched_train_is_chosen_by_time_not_by_name(self):
+        runs = [
+            {'displayTitle': 'Build train 2.9.9-dev.20260905.0900',
+             'createdAt': '2026-09-05T09:00:00Z'},
+            {'displayTitle': 'Build train 2.10.0-dev.20260906.0100',
+             'createdAt': '2026-09-06T01:00:00Z'},
+            {'displayTitle': 'Publication preflight canary', 'createdAt': '2026-09-07T00:00:00Z'},
+        ]
+        result = type('Result', (), {
+            'returncode': 0, 'stdout': json.dumps(runs), 'stderr': '',
+        })()
+        with patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
+                   return_value=result):
+            self.assertEqual(
+                '2.10.0-dev.20260906.0100', BuildTrainWorker._newest_dispatched_train())
+
+    def test_train_status_without_an_id_reports_the_newest_train(self):
+        version = '2.9.8-dev.20260905.0436'
+        with (
+            patch.object(BuildTrainWorker, '_newest_dispatched_train', return_value=version),
+            patch.object(BuildTrainWorker, '_workflow_run', return_value=None),
+            patch.object(BuildTrain, '_read', side_effect=ValueError(
+                'build-train state does not exist')),
+        ):
+            result = self.runner.invoke(publish.app, ['train-status'])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn(f'Newest dispatched train: {version}', result.output)
+        self.assertIn(f'Build train {version}', result.output)
+
+    def test_train_status_without_any_dispatched_train_says_so(self):
+        result = type('Result', (), {'returncode': 0, 'stdout': '[]', 'stderr': ''})()
+        with patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
+                   return_value=result):
+            outcome = self.runner.invoke(publish.app, ['train-status'])
+        self.assertEqual(1, outcome.exit_code, outcome.output)
+        self.assertIn('no dispatched build train was found', outcome.output)
+
+    def test_preflight_reports_every_finding_together(self):
+        with (
+            patch.object(BuildTrain, '_read', side_effect=ValueError(
+                'build-train state does not exist')),
+            patch.object(BuildTrainWorker, '_configuration_summary',
+                         return_value=(43, 'model', 'cee', 7, 3)),
+            patch.object(BuildTrainWorker, '_local_configuration_preflight', side_effect=ValueError(
+                'local train configuration preflight failed:\n'
+                '2 npm lock baselines fail review:\n  first lock\n  second lock')),
+            patch.object(BuildTrainWorker, '_github_preflight'),
+            patch.object(BuildTrainWorker, '_active_workflow_runs', return_value=[]),
+            patch.object(BuildTrainWorker, '_open_work', return_value=[
+                'cedar-x has 1 uncommitted change(s), which the train cannot see']),
+            patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
+            patch.object(BuildTrainWorker, '_source_ci_preflight', side_effect=ValueError(
+                'train source CI is not settled: cedar-y: CI concluded failure')) as source_ci,
+            patch.object(BuildTrainWorker, '_npm_configuration_preflight') as npm_config,
+            patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None)
+
+        message = str(refused.exception)
+        self.assertIn('3 preflight findings', message)
+        self.assertIn('- local train configuration preflight failed', message)
+        self.assertIn('  first lock', message)
+        self.assertIn('  second lock', message)
+        self.assertIn('- source repositories hold work the train cannot see: cedar-x', message)
+        self.assertIn('- train source CI is not settled: cedar-y', message)
+        source_ci.assert_called_once_with(None)
+        npm_config.assert_called_once_with()
+        targets.assert_called_once_with()
+
+    def test_a_single_finding_is_reported_as_itself(self):
+        self.assertEqual('only one', BuildTrainWorker._preflight_failure(['only one']))
+
+    def test_github_dependent_checks_are_skipped_once_the_cli_has_failed(self):
+        with (
+            patch.object(BuildTrain, '_read', side_effect=ValueError(
+                'build-train state does not exist')),
+            patch.object(BuildTrainWorker, '_configuration_summary',
+                         return_value=(43, 'model', 'cee', 7, 3)),
+            patch.object(BuildTrainWorker, '_local_configuration_preflight'),
+            patch.object(BuildTrainWorker, '_github_preflight', side_effect=ValueError(
+                'GitHub CLI authentication failed: not logged in')),
+            patch.object(BuildTrainWorker, '_active_workflow_runs') as active,
+            patch.object(BuildTrainWorker, '_open_work', return_value=[]),
+            patch.object(BuildTrainWorker, '_source_alignment', return_value=[
+                'cedar-z local develop is 11111111, but GitHub develop is 22222222']),
+            patch.object(BuildTrainWorker, '_source_ci_preflight') as source_ci,
+            patch.object(BuildTrainWorker, '_npm_configuration_preflight'),
+            patch.object(BuildTrainWorker, '_publication_targets_preflight'),
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None)
+
+        message = str(refused.exception)
+        self.assertIn('2 preflight findings', message)
+        self.assertIn('GitHub CLI authentication failed', message)
+        self.assertIn('cedar-z local develop', message)
+        active.assert_not_called()
+        source_ci.assert_not_called()
+
+    def test_local_configuration_preflight_reports_every_line_of_the_refusal(self):
+        result = type('Result', (), {
+            'returncode': 1, 'stdout': '',
+            'stderr': 'ERROR: 2 npm lock baselines fail review:\n  first lock\n  second lock\n'
+                      'Review each',
+        })()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(Util, 'cedar_home', directory), \
+                patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
+                      return_value=result):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._local_configuration_preflight()
+        message = str(refused.exception)
+        self.assertTrue(message.startswith('local train configuration preflight failed:\n'))
+        self.assertIn('first lock', message)
+        self.assertIn('second lock', message)
+        self.assertNotIn('ERROR:', message)
+
+    def test_source_ci_survey_classifies_each_head(self):
+        sha = 'a' * 40
+
+        def git(root, *arguments):
+            if arguments[0] == 'ls-remote':
+                return 0, f'{sha}\trefs/heads/develop', ''
+            if arguments[0] == 'ls-tree':
+                has_workflow = (Path(root) / '.github' / 'workflows').exists()
+                return 0, ('.github/workflows/ci.yml' if has_workflow else ''), ''
+            raise AssertionError(arguments)
+
+        runs = {
+            'cedar-a': ({'name': 'CI', 'status': 'completed', 'conclusion': 'success', 'id': 5},),
+            'cedar-b': ({'name': 'CI', 'status': 'completed', 'conclusion': 'failure', 'id': 7,
+                         'html_url': 'https://github.example/runs/7',
+                         'repository': {'full_name': 'metadatacenter/cedar-b'}},),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-a', 'cedar-b', 'cedar-c'], workflows=('cedar-a', 'cedar-b'))
+            with (
+                patch.object(Util, 'cedar_home', directory),
+                patch.object(BuildTrainWorker, '_git', side_effect=git),
+                patch('org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                      side_effect=lambda repository, *_a, **_k: SimpleNamespace(
+                          runs=runs[repository])),
+            ):
+                verdicts = BuildTrainWorker.source_ci_survey()
+
+        by_repository = {verdict.repository: verdict for verdict in verdicts}
+        self.assertEqual('green', by_repository['cedar-a'].state)
+        red = by_repository['cedar-b']
+        self.assertEqual(('red', '7', 'metadatacenter/cedar-b', 'https://github.example/runs/7'),
+                         (red.state, red.run_id, red.run_repository, red.url))
+        self.assertTrue(red.blocks_a_train)
+        advisory = by_repository['cedar-c']
+        self.assertEqual('advisory', advisory.state)
+        self.assertFalse(advisory.blocks_a_train)
+
+    def _verdict(self, repository, state, **fields):
+        from org.metadatacenter.worker.BuildTrainWorker import SourceCIVerdict
+        values = {
+            'repository': repository, 'revision': 'b' * 40, 'workflow': 'CI',
+            'state': state, 'detail': f'CI is {state}',
+        }
+        values.update(fields)
+        return SourceCIVerdict(**values)
+
+    def test_report_source_ci_lists_what_is_not_green_and_hints_a_rerun(self):
+        verdicts = [
+            self._verdict('cedar-a', 'green', detail='CI concluded success'),
+            self._verdict('cedar-b', 'red', detail='CI concluded failure', run_id='7',
+                          run_repository='metadatacenter/cedar-b',
+                          url='https://github.example/runs/7'),
+            self._verdict('cedar-c', 'pending', detail='CI is in_progress'),
+            self._verdict('cedar-d', 'advisory', workflow='',
+                          detail='cedar-d has no workflow contract; the train gates its outputs.'),
+        ]
+        from rich.console import Console
+        buffer = io.StringIO()
+        with (
+            patch.object(BuildTrainWorker, 'source_ci_survey', return_value=verdicts),
+            patch('org.metadatacenter.worker.BuildTrainWorker.console',
+                  Console(file=buffer, width=200, force_terminal=False)),
+        ):
+            code = BuildTrainWorker.report_source_ci()
+        output = buffer.getvalue()
+
+        self.assertEqual(1, code)
+        self.assertNotIn('cedar-a', output)
+        self.assertIn('cedar-b', output)
+        self.assertIn('https://github.example/runs/7', output)
+        self.assertIn('gh run rerun 7 --failed --repo metadatacenter/cedar-b', output)
+        self.assertIn('1 green, 1 red, 1 pending, 0 without a run, 1 without a workflow, 0 unreadable',
+                      output)
+        self.assertIn('A train would refuse: 2 verdict(s)', output)
+
+    def test_report_source_ci_can_list_every_head_and_passes_when_all_are_green(self):
+        verdicts = [
+            self._verdict('cedar-a', 'green', detail='CI concluded success'),
+            self._verdict('cedar-d', 'advisory', workflow='',
+                          detail='cedar-d has no workflow contract; the train gates its outputs.'),
+        ]
+        from rich.console import Console
+        buffer = io.StringIO()
+        with (
+            patch.object(BuildTrainWorker, 'source_ci_survey', return_value=verdicts),
+            patch('org.metadatacenter.worker.BuildTrainWorker.console',
+                  Console(file=buffer, width=200, force_terminal=False)),
+        ):
+            code = BuildTrainWorker.report_source_ci(show_all=True)
+        output = buffer.getvalue()
+
+        self.assertEqual(0, code)
+        self.assertIn('cedar-a', output)
+        self.assertIn('a train may be dispatched', output)

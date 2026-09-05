@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ import sys
 import time
 
 from rich.console import Console
+from rich.table import Column, Table
+from rich.text import Text
 
 from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
@@ -25,9 +28,35 @@ from org.metadatacenter.release_train import _environment_with_nexus_credentials
 console = Console()
 
 
+@dataclass(frozen=True)
+class SourceCIVerdict:
+    """CI at one train source repository's exact develop commit, as GitHub reports it.
+
+    A repository yields one verdict per workflow it runs, or a single verdict saying why no
+    workflow verdict exists: it has no workflow contract, GitHub has no run for the commit, or
+    the state could not be read at all.
+    """
+
+    repository: str
+    revision: str
+    workflow: str
+    state: str
+    detail: str
+    url: str = ''
+    run_id: str = ''
+    run_repository: str = ''
+
+    STATES = ('green', 'red', 'pending', 'missing', 'advisory', 'error')
+
+    @property
+    def blocks_a_train(self):
+        return self.state in {'red', 'pending', 'missing', 'error'}
+
+
 class BuildTrainWorker:
     WORKFLOW = 'build-train.yml'
     REPOSITORY = 'metadatacenter/cedar-development'
+    TRAIN_TITLE_RE = re.compile(r'^Build train (\d+\.\d+\.\d+-dev\.\d{8}\.\d{4})')
     FAILED_CONCLUSIONS = {
         'action_required', 'cancelled', 'failure', 'startup_failure', 'timed_out',
     }
@@ -172,7 +201,7 @@ class BuildTrainWorker:
         return records
 
     @classmethod
-    def _workflow_run(cls, version):
+    def _workflow_runs(cls):
         command = [
             'gh', 'run', 'list', '--repo', cls.REPOSITORY,
             '--workflow', cls.WORKFLOW, '--limit', '100',
@@ -188,9 +217,30 @@ class BuildTrainWorker:
                 'cannot inspect the build-train workflow'
                 + (f': {detail[-1]}' if detail else ''))
         try:
-            runs = json.loads(result.stdout or '[]')
+            return json.loads(result.stdout or '[]')
         except json.JSONDecodeError as error:
             raise ValueError('GitHub CLI returned invalid workflow JSON') from error
+
+    @classmethod
+    def _newest_dispatched_train(cls):
+        """The train behind the most recently created build-train workflow run.
+
+        The operator never chooses a train ID, so the one they mean is almost always the one
+        just dispatched. Newest by creation time, not by ID: the IDs carry the development base
+        version first, and 2.10 sorts before 2.9 as text.
+        """
+        dated = []
+        for run in cls._workflow_runs():
+            match = cls.TRAIN_TITLE_RE.match(str(run.get('displayTitle', '')))
+            if match:
+                dated.append((str(run.get('createdAt', '')), match.group(1)))
+        if not dated:
+            raise ValueError(f'no dispatched build train was found in {cls.WORKFLOW}')
+        return max(dated)[1]
+
+    @classmethod
+    def _workflow_run(cls, version):
+        runs = cls._workflow_runs()
         prefix = f'Build train {version}'
         matches = [
             run for run in runs
@@ -353,9 +403,13 @@ class BuildTrainWorker:
             'train instead.')
 
     @classmethod
-    def status(cls, version, watch=False):
+    def status(cls, version=None, watch=False):
         try:
-            selected = BuildTrain.validate(version)
+            if version:
+                selected = BuildTrain.validate(version)
+            else:
+                selected = cls._newest_dispatched_train()
+                console.print(f'Newest dispatched train: {selected}')
         except ValueError as error:
             console.print(f'[red]{error}[/red]')
             return 1
@@ -610,7 +664,12 @@ class BuildTrainWorker:
             raise ValueError('npm user configuration can change publication authentication')
 
     @classmethod
-    def _source_ci_preflight(cls, source=None):
+    def source_ci_survey(cls, source=None, reporter=None):
+        """One verdict per workflow at each train source repository's exact develop commit.
+
+        A train captures `develop` on GitHub, so the question is asked of the remote head, or of
+        the commit an existing source manifest recorded, never of the local checkout.
+        """
         cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
         if not cedar_home:
             raise ValueError('CEDAR_HOME is not set')
@@ -620,7 +679,8 @@ class BuildTrainWorker:
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f'cannot read build-train configuration: {error}') from error
         recorded = source.get('repositories', {}) if isinstance(source, dict) else {}
-        failures = []
+        report = reporter or (lambda message: console.print(f'  [yellow]{message}[/yellow]'))
+        verdicts = []
         for repository in build.get('repositories', []):
             root = Path(cedar_home) / repository
             revision = recorded.get(repository)
@@ -633,9 +693,10 @@ class BuildTrainWorker:
                     'refs/heads/develop',
                 )
                 if code != 0 or not output:
-                    failures.append(
+                    verdicts.append(SourceCIVerdict(
+                        repository, '', '', 'error',
                         f'{repository}: cannot resolve develop'
-                        + (f' ({detail.splitlines()[-1]})' if detail else ''))
+                        + (f' ({detail.splitlines()[-1]})' if detail else '')))
                     continue
                 revision = output.split()[0]
             has_workflow = None
@@ -652,28 +713,27 @@ class BuildTrainWorker:
                         f'repos/metadatacenter/{repository}/contents/.github/workflows?ref={revision}',
                     ], text=True, capture_output=True, check=False)
                 except OSError as error:
-                    failures.append(f'{repository}: cannot inspect CI workflow contract ({error})')
+                    verdicts.append(SourceCIVerdict(
+                        repository, revision, '', 'error',
+                        f'{repository}: cannot inspect CI workflow contract ({error})'))
                     continue
                 has_workflow = response.returncode == 0
                 if response.returncode and 'HTTP 404' not in (response.stderr or response.stdout):
                     detail = (response.stderr or response.stdout or '').strip().splitlines()
-                    failures.append(
+                    verdicts.append(SourceCIVerdict(
+                        repository, revision, '', 'error',
                         f'{repository}: cannot inspect CI workflow contract '
-                        f'({detail[-1] if detail else f"exit {response.returncode}"})')
+                        f'({detail[-1] if detail else f"exit {response.returncode}"})'))
                     continue
             if not has_workflow:
-                console.print(
-                    f'  [yellow]CI advisory: {repository} has no workflow contract; '
-                    'the train gates its outputs.[/yellow]')
+                verdicts.append(SourceCIVerdict(
+                    repository, revision, '', 'advisory',
+                    f'{repository} has no workflow contract; the train gates its outputs.'))
                 continue
             try:
-                probe = probe_exact_commit(
-                    repository,
-                    revision,
-                    reporter=lambda message: console.print(f'  [yellow]{message}[/yellow]'),
-                )
+                probe = probe_exact_commit(repository, revision, reporter=report)
             except GithubCIProbeError as error:
-                failures.append(str(error))
+                verdicts.append(SourceCIVerdict(repository, revision, '', 'error', str(error)))
                 continue
             runs = list(probe.runs)
             if repository == 'cedar-development':
@@ -682,23 +742,114 @@ class BuildTrainWorker:
                     if record.get('path') != '.github/workflows/build-train.yml'
                 ]
             if not runs:
-                failures.append(
-                    f'{repository}: no CI run for {revision[:8]} after bounded indexing grace')
+                verdicts.append(SourceCIVerdict(
+                    repository, revision, '', 'missing',
+                    f'no CI run for {revision[:8]} after bounded indexing grace'))
                 continue
             for name, record in latest_runs_by_name(runs).items():
                 status = record.get('status')
                 conclusion = record.get('conclusion')
+                owner = record.get('repository')
+                run_repository = owner.get('full_name', '') if isinstance(owner, dict) else ''
+                run_id = str(record.get('id') or '')
                 url = run_url(record)
-                suffix = f' ({url})' if url else ''
                 if status != 'completed':
-                    failures.append(
-                        f'{repository}: {name} is {status or "pending"}{suffix}')
+                    verdicts.append(SourceCIVerdict(
+                        repository, revision, name, 'pending',
+                        f'{name} is {status or "pending"}', url, run_id, run_repository))
                 elif conclusion not in GREEN_CONCLUSIONS:
-                    failures.append(
-                        f'{repository}: {name} concluded '
-                        f'{conclusion or "without a result"}{suffix}')
+                    verdicts.append(SourceCIVerdict(
+                        repository, revision, name, 'red',
+                        f'{name} concluded {conclusion or "without a result"}',
+                        url, run_id, run_repository))
+                else:
+                    verdicts.append(SourceCIVerdict(
+                        repository, revision, name, 'green',
+                        f'{name} concluded {conclusion}', url, run_id, run_repository))
+        return verdicts
+
+    @classmethod
+    def _source_ci_preflight(cls, source=None):
+        failures = []
+        for verdict in cls.source_ci_survey(source):
+            if verdict.state == 'advisory':
+                console.print(f'  [yellow]CI advisory: {verdict.detail}[/yellow]')
+            elif verdict.state == 'error':
+                failures.append(verdict.detail)
+            elif verdict.blocks_a_train:
+                suffix = f' ({verdict.url})' if verdict.url else ''
+                failures.append(f'{verdict.repository}: {verdict.detail}{suffix}')
         if failures:
             raise ValueError('train source CI is not settled: ' + '; '.join(failures))
+
+    @classmethod
+    def report_source_ci(cls, show_all=False):
+        """Show CI at every head a train would capture, and whether a train would refuse.
+
+        A release advances `develop` in forty repositories at once, and a red run among them is
+        otherwise discovered when the next train is attempted. This is the same probe the
+        dispatch preflight runs, laid out as a table with the run to look at and, for a red run,
+        the command that re-runs only its failed jobs.
+        """
+        try:
+            verdicts = cls.source_ci_survey()
+        except ValueError as error:
+            console.print(f'[red]{error}[/red]')
+            return 1
+        styles = {
+            'green': 'green', 'red': 'red', 'pending': 'yellow',
+            'missing': 'yellow', 'advisory': 'yellow', 'error': 'red',
+        }
+        shown = [verdict for verdict in verdicts if show_all or verdict.state != 'green']
+        if shown:
+            table = Table(
+                Column('Repository', no_wrap=True),
+                Column('Commit', no_wrap=True),
+                Column('Workflow'),
+                Column('Result'),
+                Column('Run', overflow='fold'),
+                title='CI at the develop commits a train would capture',
+            )
+            for verdict in shown:
+                table.add_row(
+                    verdict.repository,
+                    verdict.revision[:8],
+                    verdict.workflow or '',
+                    Text(verdict.detail, style=styles[verdict.state]),
+                    verdict.url,
+                )
+            console.print(table)
+        counts = {
+            state: sum(1 for verdict in verdicts if verdict.state == state)
+            for state in SourceCIVerdict.STATES
+        }
+        console.print(
+            f"{counts['green']} green, {counts['red']} red, {counts['pending']} pending, "
+            f"{counts['missing']} without a run, {counts['advisory']} without a workflow, "
+            f"{counts['error']} unreadable"
+        )
+        reruns = [
+            verdict for verdict in verdicts
+            if verdict.state == 'red' and verdict.run_id and verdict.run_repository
+        ]
+        if reruns:
+            console.print(
+                'If a red run failed for a reason its commit did not cause, re-run only its '
+                'failed jobs:')
+            for verdict in reruns:
+                console.print(
+                    f'  gh run rerun {verdict.run_id} --failed --repo {verdict.run_repository}',
+                    soft_wrap=True,
+                )
+        blocking = [verdict for verdict in verdicts if verdict.blocks_a_train]
+        if blocking:
+            console.print(
+                f'[red]A train would refuse: {len(blocking)} verdict(s) are not green.[/red]')
+            return 1
+        console.print(
+            '[green]Every captured head with a workflow is green; a train may be dispatched.'
+            '[/green]')
+        return 0
 
     @classmethod
     def _local_configuration_preflight(cls):
@@ -717,10 +868,11 @@ class BuildTrainWorker:
         except OSError as error:
             raise ValueError(f'cannot run local train configuration preflight: {error}') from error
         if result.returncode:
-            detail = (result.stderr or result.stdout).strip().splitlines()
-            raise ValueError(
-                'local train configuration preflight failed'
-                + (f': {detail[-1]}' if detail else ''))
+            detail = (result.stderr or result.stdout).strip().removeprefix('ERROR: ')
+            message = 'local train configuration preflight failed'
+            if '\n' in detail:
+                raise ValueError(f'{message}:\n{detail}')
+            raise ValueError(f'{message}: {detail}' if detail else message)
 
     @classmethod
     def _preflight(cls, selected, resume):
@@ -741,26 +893,53 @@ class BuildTrainWorker:
         elif source_exists:
             raise ValueError(f'train {selected} already exists; use --resume {selected}')
 
-        summary = cls._configuration_summary()
+        # Every stage runs even after one has refused, so the operator reads one report rather
+        # than fixing a finding, rerunning, and meeting the next. The checks that need the GitHub
+        # CLI are skipped once it has failed, because each would only repeat that failure.
+        findings = []
+
+        def settle(check, *arguments):
+            try:
+                return check(*arguments), True
+            except ValueError as error:
+                findings.append(str(error))
+                return None, False
+
+        summary, _ = settle(cls._configuration_summary)
         if not resume:
-            cls._local_configuration_preflight()
-        cls._github_preflight()
-        active = cls._active_workflow_runs()
-        if active:
-            raise ValueError(
-                'another build train is queued or running: ' + '; '.join(active))
-        open_work = cls._open_work()
-        if open_work:
-            raise ValueError(
+            settle(cls._local_configuration_preflight)
+        _, github_ready = settle(cls._github_preflight)
+        if github_ready:
+            active, settled = settle(cls._active_workflow_runs)
+            if settled and active:
+                findings.append(
+                    'another build train is queued or running: ' + '; '.join(active))
+        open_work, settled = settle(cls._open_work)
+        if settled and open_work:
+            findings.append(
                 'source repositories hold work the train cannot see: ' + '; '.join(open_work))
-        alignment = cls._source_alignment()
-        if alignment:
-            raise ValueError(
+        alignment, settled = settle(cls._source_alignment)
+        if settled and alignment:
+            findings.append(
                 'local source checkouts do not match GitHub develop: ' + '; '.join(alignment))
-        cls._source_ci_preflight(source)
-        cls._npm_configuration_preflight()
-        cls._publication_targets_preflight()
+        if github_ready:
+            settle(cls._source_ci_preflight, source)
+        settle(cls._npm_configuration_preflight)
+        settle(cls._publication_targets_preflight)
+        if findings:
+            raise ValueError(cls._preflight_failure(findings))
         return summary, source
+
+    @staticmethod
+    def _preflight_failure(findings):
+        if len(findings) == 1:
+            return findings[0]
+        lines = []
+        for finding in findings:
+            first, *rest = finding.splitlines() or ['']
+            lines.append(f'- {first}')
+            lines.extend(f'  {line}' for line in rest)
+        return f'{len(findings)} preflight findings:\n' + '\n'.join(lines)
 
     @classmethod
     def _dry_run(cls, selected, resume, command):

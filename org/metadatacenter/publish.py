@@ -30,7 +30,10 @@ def train(
 
 @app.command("train-status")
 def train_status(
-        version: str = typer.Argument(..., help="Immutable train identifier."),
+        version: str = typer.Argument(
+            None,
+            help="Immutable train identifier. Defaults to the newest dispatched train.",
+        ),
         watch: bool = typer.Option(
             False,
             "--watch",
