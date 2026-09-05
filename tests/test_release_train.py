@@ -4254,5 +4254,135 @@ class ReleaseCompletionTest(unittest.TestCase):
             self.assertEqual([], preflight.check_no_release_in_progress())
 
 
+class ToolchainResolverTest(unittest.TestCase):
+    """The CLI follows the runbook's two export lines itself before it asks the toolchain check."""
+
+    JAVA_HOME_17 = "/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home"
+    NODE_DIR = "/opt/homebrew/opt/node@24/bin"
+
+    def _commands(self, java="23.0.1", node="v22.22.0", java_home_code=0):
+        return FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(
+                stderr=f'java version "{java}" 2025-01-21 LTS'),
+            ("/usr/libexec/java_home", "-v", "17"): FakeCompletedProcess(
+                returncode=java_home_code, stdout=self.JAVA_HOME_17 if not java_home_code else ""),
+            (f"{self.JAVA_HOME_17}/bin/java", "-version"): FakeCompletedProcess(
+                stderr='java version "17.0.14" 2025-01-21 LTS'),
+            ("node", "--version"): FakeCompletedProcess(stdout=node),
+            (f"{self.NODE_DIR}/node", "--version"): FakeCompletedProcess(stdout="v24.19.0"),
+        })
+
+    def test_macos_substitutes_java_17_and_node_24_when_the_shell_offers_others(self):
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=self._commands(), system="Darwin",
+            exists=lambda _path: True)
+
+        notes = resolver.resolve()
+
+        self.assertEqual(2, len(notes))
+        self.assertIn("Java 17 from " + self.JAVA_HOME_17, notes[0])
+        self.assertIn("the shell offered Java 23", notes[0])
+        self.assertIn("Node v24.19.0 from " + self.NODE_DIR, notes[1])
+        self.assertIn("the shell offered Node v22.22.0", notes[1])
+        self.assertEqual(self.JAVA_HOME_17, environment["JAVA_HOME"])
+        entries = environment["PATH"].split(os.pathsep)
+        self.assertLess(entries.index(self.NODE_DIR), entries.index("/usr/bin"))
+        self.assertLess(entries.index(f"{self.JAVA_HOME_17}/bin"), entries.index("/usr/bin"))
+
+    def test_a_matching_toolchain_is_left_alone(self):
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=self._commands(java="17.0.14", node="v24.19.0"),
+            system="Darwin", exists=lambda _path: True)
+
+        self.assertEqual([], resolver.resolve())
+        self.assertEqual({"PATH": "/usr/bin"}, environment)
+
+    def test_missing_candidates_leave_the_environment_for_the_check_to_refuse(self):
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=self._commands(java_home_code=1), system="Darwin",
+            exists=lambda _path: False)
+
+        self.assertEqual([], resolver.resolve())
+        self.assertEqual({"PATH": "/usr/bin"}, environment)
+
+    def test_a_java_home_that_is_not_seventeen_is_not_trusted(self):
+        commands = self._commands()
+        commands.answers[(f"{self.JAVA_HOME_17}/bin/java", "-version")] = FakeCompletedProcess(
+            stderr='java version "21.0.2" 2024-01-16 LTS')
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=commands, system="Darwin", exists=lambda _path: True)
+
+        notes = resolver.resolve()
+
+        self.assertNotIn("JAVA_HOME", environment)
+        self.assertEqual(1, len(notes))
+        self.assertIn("Node v24.19.0", notes[0])
+
+    def test_linux_searches_the_jvm_directory(self):
+        home = "/usr/lib/jvm/java-17-openjdk-amd64"
+        commands = FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(stderr='openjdk version "21.0.2"'),
+            (f"{home}/bin/java", "-version"): FakeCompletedProcess(
+                stderr='openjdk version "17.0.13" 2024-10-15'),
+            ("node", "--version"): FakeCompletedProcess(stdout="v24.19.0"),
+        })
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=commands, system="Linux",
+            exists=lambda _path: True, jvms=lambda: [home])
+
+        notes = resolver.resolve()
+
+        self.assertEqual(home, environment["JAVA_HOME"])
+        self.assertEqual(1, len(notes))
+        self.assertTrue(environment["PATH"].startswith(f"{home}/bin{os.pathsep}"))
+
+    def test_the_node_remedy_suits_the_host_giving_it(self):
+        with patch("platform.system", return_value="Darwin"):
+            self.assertIn("/opt/homebrew/opt/node@24/bin", release_train.node_24_remediation())
+        with patch("platform.system", return_value="Linux"):
+            linux = release_train.node_24_remediation()
+        self.assertNotIn("/opt/homebrew", linux)
+        self.assertIn("nvm use 24.19.0", linux)
+
+    def test_the_toolchain_check_names_the_node_remedy(self):
+        commands = FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(
+                stderr='openjdk version "17.0.13" 2024-10-15'),
+            ("node", "--version"): FakeCompletedProcess(stdout="v22.22.0"),
+        })
+        preflight = ReleasePreflight(
+            manifest_fixture(),
+            state=ReleaseState(root=Path(tempfile.gettempdir()) / "preflight-state"),
+            command_runner=commands, http=FakeNexus(), environment=dict(PREFLIGHT_ENVIRONMENT),
+            ci_sleeper=lambda _delay: None, ci_delays=(),
+        )
+        with patch("platform.system", return_value="Darwin"):
+            findings = preflight.check_toolchain()
+        self.assertEqual(1, len(findings))
+        self.assertIn("node@24", findings[0].remedy)
+
+    def test_plan_activates_the_toolchain_before_it_plans(self):
+        runner = CliRunner()
+        with (
+            patch.object(release_train.ToolchainResolver, "resolve",
+                         return_value=["Java 17 from /jdk17; the shell offered Java 23"]),
+            patch.object(release_train, "_build_or_exit",
+                         side_effect=typer.Exit(1)) as build,
+        ):
+            result = runner.invoke(release_train.app, [
+                "plan", "--version", "2.9.9", "--next-version", "2.9.10-SNAPSHOT",
+                "--from-train", "2.9.9-dev.20260905.1200", "--cee-version", "2.0.6",
+            ])
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("Toolchain:           Java 17 from /jdk17; the shell offered Java 23",
+                      result.output)
+        build.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

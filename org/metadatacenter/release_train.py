@@ -4700,6 +4700,107 @@ def java_17_remediation() -> str:
     return "export JAVA_HOME to a JDK 17, which on this host is usually one of /usr/lib/jvm/java-17-*"
 
 
+# Where Homebrew keeps the release's Node when the shell's default node is another version:
+# Apple silicon first, then Intel.
+NODE_24_CANDIDATE_DIRECTORIES = (
+    "/opt/homebrew/opt/node@24/bin",
+    "/usr/local/opt/node@24/bin",
+)
+LINUX_JVM_ROOT = "/usr/lib/jvm"
+
+
+def node_24_remediation() -> str:
+    """The one line that puts the release's Node first on PATH, phrased for the host giving it."""
+    wanted = REQUIRED_NODE_VERSION.removeprefix("v")
+    if platform.system() == "Darwin":
+        return f'export PATH="{NODE_24_CANDIDATE_DIRECTORIES[0]}:$PATH"'
+    return f"put a Node {wanted} bin directory first on PATH, for example with nvm use {wanted}"
+
+
+class ToolchainResolver:
+    """Put the release's Java and Node first on PATH when the shell offers other versions.
+
+    A developer shell pins whatever the day's work needs, and a release needs Java 17 and Node
+    24.19.0 exactly. The runbook tells the operator to export both before starting; the CLI can
+    follow those two instructions itself. It changes only the environment it is given, which for
+    a command is this process and its children, says what it substituted, and leaves the toolchain
+    check to refuse whatever it could not find.
+    """
+
+    def __init__(self, environment, *, command_runner=None, system=None, exists=None, jvms=None):
+        self.environment = environment
+        self.command_runner = command_runner or subprocess.run
+        self.system = system or platform.system()
+        self.exists = exists or (lambda path: Path(path).is_file())
+        self.jvms = jvms or (lambda: sorted(
+            str(path) for path in Path(LINUX_JVM_ROOT).glob(f"*{REQUIRED_JAVA_MAJOR}*")))
+
+    def _capture(self, args: list[str]) -> tuple[int, str, str]:
+        try:
+            result = self.command_runner(
+                args, env=self.environment, text=True, capture_output=True, check=False)
+        except OSError as error:
+            return 127, "", str(error)
+        return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
+
+    @staticmethod
+    def _java_major(version_output: str) -> int | None:
+        match = re.search(r'version "(\d+)', version_output)
+        return int(match.group(1)) if match else None
+
+    def _prepend_path(self, directory: str) -> None:
+        current = self.environment.get("PATH", "")
+        self.environment["PATH"] = f"{directory}{os.pathsep}{current}" if current else directory
+
+    def resolve(self) -> list[str]:
+        """Substitute what the release needs and report each substitution in one line."""
+        return [*self._resolve_java(), *self._resolve_node()]
+
+    def _resolve_java(self) -> list[str]:
+        code, _, stderr = self._capture(["java", "-version"])
+        major = self._java_major(stderr) if code == 0 else None
+        if major == REQUIRED_JAVA_MAJOR:
+            return []
+        home = self._java_17_home()
+        if not home:
+            return []
+        self.environment["JAVA_HOME"] = home
+        self._prepend_path(str(Path(home) / "bin"))
+        offered = f"Java {major}" if major else "no working java"
+        return [f"Java {REQUIRED_JAVA_MAJOR} from {home}; the shell offered {offered}"]
+
+    def _java_17_home(self) -> str | None:
+        if self.system == "Darwin":
+            code, home, _ = self._capture(
+                ["/usr/libexec/java_home", "-v", str(REQUIRED_JAVA_MAJOR)])
+            candidates = [home] if code == 0 and home else []
+        else:
+            candidates = list(self.jvms())
+        for candidate in candidates:
+            java = str(Path(candidate) / "bin" / "java")
+            if not self.exists(java):
+                continue
+            code, _, stderr = self._capture([java, "-version"])
+            if code == 0 and self._java_major(stderr) == REQUIRED_JAVA_MAJOR:
+                return candidate
+        return None
+
+    def _resolve_node(self) -> list[str]:
+        code, version, _ = self._capture(["node", "--version"])
+        if code == 0 and version == REQUIRED_NODE_VERSION:
+            return []
+        for directory in NODE_24_CANDIDATE_DIRECTORIES:
+            binary = str(Path(directory) / "node")
+            if not self.exists(binary):
+                continue
+            candidate_code, candidate_version, _ = self._capture([binary, "--version"])
+            if candidate_code == 0 and candidate_version == REQUIRED_NODE_VERSION:
+                self._prepend_path(directory)
+                offered = f"Node {version}" if code == 0 and version else "no working node"
+                return [f"Node {REQUIRED_NODE_VERSION} from {directory}; the shell offered {offered}"]
+        return []
+
+
 # Calibrated allocations for one clean release workspace. The final requirement
 # is derived from the manifest's repository/build counts; these are deliberately
 # named so observed train footprints can tune the model without restoring a
@@ -5025,7 +5126,7 @@ class ReleasePreflight:
                 "toolchain", "fail",
                 f"Node {node or 'of unknown version'} is active, and release builds require "
                 f"{REQUIRED_NODE_VERSION}",
-                f"activate Node {REQUIRED_NODE_VERSION.removeprefix('v')}",
+                node_24_remediation(),
             ))
         return findings
 
@@ -5936,6 +6037,12 @@ def _watch_release(
         sleeper(interval)
 
 
+def _activate_toolchain() -> None:
+    """Give this process the release's Java and Node before any check or build asks for them."""
+    for note in ToolchainResolver(os.environ).resolve():
+        console.print(f"Toolchain:           {note}")
+
+
 def _build_or_exit(
     release_version: str,
     next_version: str,
@@ -6080,6 +6187,7 @@ def plan(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
 ):
     """Settle every release precondition without changing release state."""
+    _activate_toolchain()
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
     _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
@@ -6098,6 +6206,7 @@ def start(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Run a manifest-owned train release through verified Git and publication stages."""
+    _activate_toolchain()
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
     _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
@@ -6122,6 +6231,7 @@ def resume(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Resume the active train-backed release from its recorded phase."""
+    _activate_toolchain()
     state = ReleaseState()
     try:
         active, path = state.read_current_manifest()
