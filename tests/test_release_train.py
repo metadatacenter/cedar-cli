@@ -533,10 +533,12 @@ class ReleasePlannerTest(unittest.TestCase):
         }
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
         frontend_config = {
+            "dockerCeeVersionVariable": "CEDAR_OPENVIEW_CEE_NPM_VERSION",
             "frontends": [
                 {
                     "id": label,
                     "repository": repository,
+                    "npmVersionVariable": f"CEDAR_{label.upper()}_NPM_VERSION",
                     "ceeConsumer": {"manifest": manifest, "lock": lock},
                 }
                 for label, repository, manifest, lock in (
@@ -595,6 +597,11 @@ class ReleasePlannerTest(unittest.TestCase):
             "version": TRAIN,
             "sourceManifestSha256": hashlib.sha256(source_content).hexdigest(),
             "planSha256": hashlib.sha256(npm_plan_content).hexdigest(),
+            "dockerInputs": {
+                "CEDAR_MAIN_NPM_VERSION": f"{TRAIN.replace('.', '', 0)}.gmain.p4",
+                "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                "CEDAR_OPENVIEW_CEE_NPM_VERSION": DEV_VERSION,
+            },
             "packages": [{
                 "name": DEV_CEE_NAME,
                 "version": DEV_VERSION,
@@ -679,6 +686,61 @@ class ReleasePlannerTest(unittest.TestCase):
             f"docker/completed/{TRAIN}.json",
             manifest["trainState"]["dockerCompletion"],
         )
+        defaults = manifest["dockerFrontendDefaults"]
+        self.assertEqual(
+            "2.9.3-dev.202608262030.gwork.p4",
+            defaults["nextDevelopment"]["CEDAR_WORKSPACE_NPM_VERSION"],
+        )
+        self.assertEqual(DEV_VERSION, defaults["nextDevelopment"]["CEDAR_OPENVIEW_CEE_NPM_VERSION"])
+        # The fixture's frontends are not release surfaces, so only the Editor moves to its
+        # public version on the release side.
+        self.assertEqual(PUBLIC_VERSION, defaults["release"]["CEDAR_OPENVIEW_CEE_NPM_VERSION"])
+        self.assertEqual(
+            defaults["nextDevelopment"]["CEDAR_WORKSPACE_NPM_VERSION"],
+            defaults["release"]["CEDAR_WORKSPACE_NPM_VERSION"],
+        )
+
+    def test_release_docker_defaults_name_released_frontends_and_the_public_editor(self):
+        frontend_config = {
+            "dockerCeeVersionVariable": "CEDAR_OPENVIEW_CEE_NPM_VERSION",
+            "frontends": [
+                {"id": "main", "repository": "cedar-template-editor",
+                 "npmVersionVariable": "CEDAR_TEMPLATE_EDITOR_NPM_VERSION"},
+                {"id": "workspace", "repository": "cedar-workspace",
+                 "npmVersionVariable": "CEDAR_WORKSPACE_NPM_VERSION"},
+                {"id": "openview", "repository": "cedar-openview",
+                 "npmVersionVariable": "CEDAR_OPENVIEW_NPM_VERSION"},
+            ],
+        }
+        inputs = {
+            "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8-dev.202609050436.gf2431e27c276.p4",
+            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8-dev.202609050436.g3bf71549e097.p4",
+            "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.7-dev.202609050436.g9503db76a96f",
+            "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
+        }
+        plan = {"npm": {"surfaces": [
+            {"repository": "cedar-template-editor"}, {"repository": "cedar-openview"},
+        ]}}
+
+        defaults = ReleasePlanner._docker_frontend_defaults(
+            frontend_config, {"dockerInputs": inputs}, plan, "2.9.8", "2.0.6")
+
+        self.assertEqual(inputs, defaults["nextDevelopment"])
+        self.assertEqual({
+            "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8",
+            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8",
+            "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.6",
+            "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
+        }, defaults["release"])
+
+    def test_a_train_without_recorded_docker_inputs_leaves_the_defaults_alone(self):
+        self.assertEqual({}, ReleasePlanner._docker_frontend_defaults(
+            {}, {}, {"npm": {"surfaces": []}}, "2.9.8", "2.0.6"))
+        with self.assertRaisesRegex(ReleaseError, "dockerInputs"):
+            ReleasePlanner._docker_frontend_defaults(
+                {}, {"dockerInputs": {"CEDAR_X": 7}}, {"npm": {"surfaces": []}}, "2.9.8", "2.0.6")
 
     def test_plan_binds_embedded_allow_scripts_to_captured_cee_source(self):
         allow_scripts = {
@@ -1309,6 +1371,9 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     f"export IMAGE_VERSION={source_version}\n"
                     f"export CEDAR_MAVEN_VERSION={source_version}\n"
                     f"export CEDAR_APPLICATION_VERSION={source_version}\n"
+                    "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+                    "export CEDAR_WORKSPACE_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+                    "export CEDAR_OPENVIEW_CEE_NPM_VERSION=2.0.2-dev.202608010000.gold\n"
                 ),
             },
             "cedar-docker-deploy": {
@@ -1388,6 +1453,18 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 "manifest": "package.json",
                 "lock": "package-lock.json",
             }]
+            manifest["dockerFrontendDefaults"] = {
+                "release": {
+                    "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.3",
+                    "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                    "CEDAR_OPENVIEW_CEE_NPM_VERSION": PUBLIC_VERSION,
+                },
+                "nextDevelopment": {
+                    "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.3-dev.202608262030.gmain.p4",
+                    "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                    "CEDAR_OPENVIEW_CEE_NPM_VERSION": DEV_VERSION,
+                },
+            }
             result = ReleaseVersionPreparer(
                 state, workspace_preparer=workspace_preparer,
             ).prepare(manifest)
@@ -1504,6 +1581,21 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             ):
                 self.assertIn(f"export {variable}=2.9.3", release_docker_versions)
                 self.assertIn(f"export {variable}=2.9.4-SNAPSHOT", next_docker_versions)
+            self.assertIn(
+                "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.3\n", release_docker_versions)
+            self.assertIn(
+                f"export CEDAR_OPENVIEW_CEE_NPM_VERSION={PUBLIC_VERSION}\n",
+                release_docker_versions)
+            self.assertIn(
+                "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.3-dev.202608262030.gmain.p4\n",
+                next_docker_versions)
+            self.assertIn(
+                f"export CEDAR_OPENVIEW_CEE_NPM_VERSION={DEV_VERSION}\n", next_docker_versions)
+            for content in (release_docker_versions, next_docker_versions):
+                self.assertIn(
+                    "export CEDAR_WORKSPACE_NPM_VERSION=2.9.3-dev.202608262030.gwork.p4\n",
+                    content)
+                self.assertNotIn("gold", content)
             original_package = json.loads(
                 (cedar_home / "cedar-template-editor" / "package.json").read_bytes()
             )
@@ -3249,6 +3341,35 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertIn("Maven releases already contains", findings[0].message)
         self.assertIn("cedar-ui@2.9.3", findings[1].message)
 
+    def test_source_contract_requires_the_docker_script_to_declare_every_train_input(self):
+        """A variable the train's inputs name but the script lacks would fail in the versions phase."""
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "cedar-docker-build")
+            manifest = self._release_of("cedar-docker-build")
+            manifest["dockerFrontendDefaults"] = {"nextDevelopment": {
+                "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.3-dev.202608262030.gmain.p4",
+                "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+            }}
+            script = (
+                "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
+                "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
+                "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n"
+                "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+            )
+            commands = FakeCommands({
+                ("git", "-C", str(Path(directory) / "cedar-docker-build"), "show"):
+                    FakeCompletedProcess(stdout=script),
+            })
+            findings = self._preflight(
+                manifest=manifest, root=directory, commands=commands,
+            ).check_source_contract()
+
+        messages = [finding.message for finding in findings]
+        self.assertTrue(any(
+            "does not declare CEDAR_WORKSPACE_NPM_VERSION" in message for message in messages))
+        self.assertFalse(any("CEDAR_TEMPLATE_EDITOR_NPM_VERSION" in message for message in messages))
+        self.assertFalse(any("does not contain" in message for message in messages))
+
     def test_missing_preserved_distribution_input_fails_source_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             self._checked_out(directory, "repo-one")
@@ -4385,6 +4506,49 @@ class ToolchainResolverTest(unittest.TestCase):
         self.assertIn("Toolchain:           Java 17 from /jdk17; the shell offered Java 23",
                       result.output)
         build.assert_called_once()
+
+
+class DockerDefaultStampingTest(unittest.TestCase):
+    """The release rewrites the frontend defaults it can prove the script declares, and no others."""
+
+    @staticmethod
+    def _script(directory, extra=""):
+        root = Path(directory)
+        (root / "bin").mkdir()
+        (root / "bin" / "cedar-images-base.sh").write_text(
+            "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
+            "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
+            "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n" + extra,
+            encoding="utf-8",
+        )
+        return root
+
+    def test_a_default_the_train_names_but_the_script_lacks_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._script(directory)
+            with self.assertRaisesRegex(ReleaseError, "CEDAR_WORKSPACE_NPM_VERSION exactly once"):
+                ReleaseVersionPreparer._stamp_docker_build(
+                    root, "2.9.3-SNAPSHOT", "2.9.3", {"CEDAR_WORKSPACE_NPM_VERSION": "x"})
+
+    def test_defaults_are_rewritten_whatever_they_named_before(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._script(
+                directory,
+                "export CEDAR_WORKSPACE_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+                "export CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION=2.8.0\n",
+            )
+            changed = ReleaseVersionPreparer._stamp_docker_build(
+                root, "2.9.3-SNAPSHOT", "2.9.3", {
+                    "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                    "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
+                })
+            content = (root / "bin" / "cedar-images-base.sh").read_text(encoding="utf-8")
+
+        self.assertEqual({"bin/cedar-images-base.sh"}, changed)
+        self.assertIn("export CEDAR_WORKSPACE_NPM_VERSION=2.9.3-dev.202608262030.gwork.p4\n", content)
+        self.assertIn("export CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION=2.8.0\n", content)
+        self.assertIn("export IMAGE_VERSION=2.9.3\n", content)
+        self.assertNotIn("gold", content)
 
 
 if __name__ == "__main__":

@@ -997,6 +997,46 @@ class ReleasePlanner:
         }
 
     @staticmethod
+    def _docker_frontend_defaults(
+        frontend_config: dict,
+        npm_completion: dict,
+        publication_plan: dict,
+        release_version: str,
+        cee_version: str,
+    ) -> dict:
+        """The frontend package each stamped tree's Docker build defaults should name.
+
+        The train records under dockerInputs the exact package behind every frontend build
+        argument it verified. The next-development tree takes those as they are: they exist the
+        moment the release pushes, so the Docker build's CI at the post-release commit resolves
+        them, and they are the newest development packages there are. The release tree takes what
+        outlives them. Nexus keeps only the last couple of trains' development packages and never
+        removes a release, so the released frontends are named at the release version and
+        OpenView's Editor at the public CEE version. Workspace and the Designer publish
+        independently and keep the train's packages in both trees.
+        """
+        inputs = npm_completion.get("dockerInputs")
+        if inputs is None:
+            return {}
+        if not isinstance(inputs, dict) or not inputs or not all(
+            isinstance(name, str) and name and isinstance(value, str) and value
+            for name, value in inputs.items()
+        ):
+            raise ReleaseError("npm completion dockerInputs must map variable names to versions")
+        released = {
+            surface["repository"] for surface in publication_plan["npm"]["surfaces"]
+        }
+        release_values = dict(inputs)
+        for frontend in frontend_config.get("frontends", []):
+            variable = frontend.get("npmVersionVariable")
+            if variable in inputs and frontend.get("repository") in released:
+                release_values[variable] = release_version
+        cee_variable = frontend_config.get("dockerCeeVersionVariable")
+        if isinstance(cee_variable, str) and cee_variable in inputs:
+            release_values[cee_variable] = cee_version
+        return {"release": release_values, "nextDevelopment": dict(inputs)}
+
+    @staticmethod
     def _cee_consumers(config: dict, npm_plan: dict, source: dict) -> list[dict]:
         repositories = source.get("repositories", {})
         if not isinstance(repositories, dict):
@@ -1179,6 +1219,9 @@ class ReleasePlanner:
         maven_phases = self._maven_phases(build_config, maven_repositories)
         publication_plan = self._publication_plan(build_config, release_repositories)
         consumers = self._cee_consumers(frontend_config, npm_plan, source)
+        docker_frontend_defaults = self._docker_frontend_defaults(
+            frontend_config, npm_completion, publication_plan, release_version, cee_version,
+        )
 
         planned_cee = npm_plan.get("cee", {})
         dev_version = planned_cee.get("version")
@@ -1264,6 +1307,7 @@ class ReleasePlanner:
             "mavenRepositories": maven_repositories,
             "mavenPhases": maven_phases,
             "publicationPlan": publication_plan,
+            "dockerFrontendDefaults": docker_frontend_defaults,
             "cee": {
                 "development": {
                     "name": DEV_CEE_NAME,
@@ -1772,7 +1816,9 @@ class ReleaseVersionPreparer:
         return {relative}
 
     @classmethod
-    def _stamp_docker_build(cls, root: Path, old: str, new: str) -> set[str]:
+    def _stamp_docker_build(
+        cls, root: Path, old: str, new: str, frontend_defaults: dict | None = None,
+    ) -> set[str]:
         changed = set()
         for path in sorted(root.rglob("Dockerfile")):
             if cls._replace_exact(
@@ -1793,9 +1839,33 @@ class ReleaseVersionPreparer:
                 raise ReleaseError(
                     f"{base} does not declare {variable} at train source version {old}")
             changed.add(base.relative_to(root).as_posix())
+        for variable, value in sorted((frontend_defaults or {}).items()):
+            cls._replace_default(base, variable, value)
         if not changed:
             raise ReleaseError(f"{root.name} has no Docker version {old} to stamp")
         return changed
+
+    @staticmethod
+    def _replace_default(base: Path, variable: str, value: str) -> bool:
+        """Point one `export VARIABLE=` line at a new value, whatever it named before.
+
+        The compatibility defaults name whichever development packages the last operator pinned,
+        so unlike the three version variables they cannot be matched by their old value. A
+        variable the train's inputs name but the script does not declare is a configuration
+        drift the release must not paper over.
+        """
+        content = base.read_text(encoding="utf-8")
+        pattern = re.compile(rf"^export {re.escape(variable)}=.*$", re.MULTILINE)
+        matches = pattern.findall(content)
+        if len(matches) != 1:
+            raise ReleaseError(
+                f"{base} must declare {variable} exactly once; the train's Docker inputs name it "
+                f"and found {len(matches)} declaration(s)")
+        replacement = f"export {variable}={value}"
+        if matches[0] == replacement:
+            return False
+        base.write_text(pattern.sub(replacement, content), encoding="utf-8")
+        return True
 
     @classmethod
     def _stamp_docker_deploy(cls, root: Path, old: str, new: str) -> set[str]:
@@ -1837,9 +1907,12 @@ class ReleaseVersionPreparer:
         new: str,
         maven_repositories: set[str],
         copyright_year: str,
+        docker_frontend_defaults: dict | None = None,
     ) -> set[str]:
         changed = cls._stamp_license(root, copyright_year)
-        return changed | cls._stamp_versions(repository, root, old, new, maven_repositories)
+        return changed | cls._stamp_versions(
+            repository, root, old, new, maven_repositories, docker_frontend_defaults,
+        )
 
     @classmethod
     def _stamp_versions(
@@ -1849,6 +1922,7 @@ class ReleaseVersionPreparer:
         old: str,
         new: str,
         maven_repositories: set[str],
+        docker_frontend_defaults: dict | None = None,
     ) -> set[str]:
         if repository in maven_repositories:
             return cls._stamp_maven(root, old, new)
@@ -1860,7 +1934,7 @@ class ReleaseVersionPreparer:
         if repository == "cedar-development":
             return cls._stamp_development(root, old, new)
         if repository == "cedar-docker-build":
-            return cls._stamp_docker_build(root, old, new)
+            return cls._stamp_docker_build(root, old, new, docker_frontend_defaults)
         if repository == "cedar-docker-deploy":
             return cls._stamp_docker_deploy(root, old, new)
         return set()
@@ -1970,6 +2044,7 @@ class ReleaseVersionPreparer:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
 
+        docker_frontend_defaults = manifest.get("dockerFrontendDefaults") or {}
         variants = {}
         for variant, workspace, target in (
             ("release", release_workspace, release_version),
@@ -1980,7 +2055,8 @@ class ReleaseVersionPreparer:
             for repository in release_repositories:
                 root = workspace / repository
                 stamped_by_repository[repository] = self._stamp_repository(
-                    repository, root, old, target, maven_repositories, copyright_year
+                    repository, root, old, target, maven_repositories, copyright_year,
+                    docker_frontend_defaults.get(variant),
                 )
             if self._refresh_train_audit_baselines(workspace):
                 stamped_by_repository.setdefault("cedar-development", set()).add(
@@ -5700,6 +5776,20 @@ class ReleasePreflight:
                         "source", "fail",
                         f"train source {repository}:{relative} does not contain {marker!r}",
                     ))
+            if repository == "cedar-docker-build":
+                defaults = (self.manifest.get("dockerFrontendDefaults") or {}).get(
+                    "nextDevelopment", {})
+                for variable in sorted(defaults):
+                    declared = content is not None and re.search(
+                        rf"^export {re.escape(variable)}=", content, re.MULTILINE)
+                    if not declared:
+                        findings.append(PreflightFinding(
+                            "source", "fail",
+                            f"train source {repository}:{relative} does not declare {variable}, "
+                            "which the train's Docker inputs name",
+                            "declare the variable in the images base script, or drop it from "
+                            "frontend-train.json, and build a new train",
+                        ))
         if "cedar-docker-deploy" in self.manifest.get("releaseRepositories", []):
             matches = 0
             for relative in self._source_paths("cedar-docker-deploy"):
