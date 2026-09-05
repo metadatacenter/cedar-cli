@@ -20,6 +20,14 @@ from org.metadatacenter.worker.Worker import Worker
 console = Console()
 
 
+# The frontends whose STALE means an Embeddable Editor other than the one their lock names, not an
+# old jar, and the checkout each reinstalls in. Mirrors serves_cee and fe_dir in cedar-services.sh.
+EDITOR_FRONTENDS = {
+    "ui-main": "cedar-template-editor",
+    "ui-workspace": "cedar-workspace",
+}
+
+
 class ServerWorker(Worker):
     NATIVE_MICROSERVICES = {
         "group", "messaging", "repo", "resource", "schema", "artifact",
@@ -190,8 +198,14 @@ class ServerWorker(Worker):
         unhealthy = [
             f'{row["service"]} ({row["health"]})' for row in native_rows
             if row["health"] not in {"healthy", "docker"}]
-        if stale:
-            warnings.append(f"stale binaries: {', '.join(stale)}; restart them")
+        stale_jars = [service for service in stale if service not in EDITOR_FRONTENDS]
+        if stale_jars:
+            warnings.append(f"stale binaries: {', '.join(stale_jars)}; restart them")
+        for service in stale:
+            if service in EDITOR_FRONTENDS:
+                warnings.append(
+                    f"{service} serves an Embeddable Editor other than the one its lock names; run "
+                    f"(cd $CEDAR_HOME/{EDITOR_FRONTENDS[service]} && npm ci && npx gulp copy:cee)")
         if unmanaged:
             warnings.append(f"unmanaged CEDAR processes: {', '.join(unmanaged)}; restart adopts them")
         if foreign:

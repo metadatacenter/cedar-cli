@@ -38,6 +38,31 @@ class ServerStatusTableTest(unittest.TestCase):
         self.assertIn("native 1/3 healthy", rendered)
         self.assertNotIn("CEDAR native host and infrastructure status", rendered)
 
+    def test_a_stale_editor_frontend_is_told_to_reinstall_not_restart(self):
+        """A restart cannot fix an Editor the lock outran; only npm ci and the copy task can."""
+        output = StringIO()
+        status = [
+            "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors",
+            "resource\t33871\t9007\tup\thealthy\tSTALE\t0",
+            "ui-main\t9202\t4200\tup\thealthy\tSTALE\t0",
+            "ui-workspace\t9252\t4201\tup\thealthy\tSTALE\t0",
+            "ui-designer\t9296\t4202\tup\thealthy\t-\t0",
+        ]
+
+        with patch.object(Util, "get_servers", return_value=[]), patch(
+                "org.metadatacenter.worker.ServerWorker.console",
+                Console(file=output, width=220, color_system=None)):
+            ServerWorker.status(status)
+
+        rendered = output.getvalue()
+        self.assertIn("stale binaries: resource; restart them", rendered)
+        self.assertIn(
+            "ui-main serves an Embeddable Editor other than the one its lock names; run "
+            "(cd $CEDAR_HOME/cedar-template-editor && npm ci && npx gulp copy:cee)", rendered)
+        self.assertIn("(cd $CEDAR_HOME/cedar-workspace && npm ci && npx gulp copy:cee)", rendered)
+        self.assertNotIn("ui-main, ui-workspace; restart", rendered)
+        self.assertNotIn("ui-designer serves", rendered)
+
     def test_machine_status_schema_is_checked(self):
         with self.assertRaisesRegex(ValueError, "unexpected schema"):
             ServerWorker.parse_native_status(["SERVICE PID PORT"])
