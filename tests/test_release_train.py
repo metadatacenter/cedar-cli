@@ -1594,10 +1594,13 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             surface["id"]: surface["install"]
             for surface in release_train.FRONTEND_BUILD_SURFACES
         }
-        self.assertEqual(["--legacy-peer-deps"], install_options["openview"])
+        # Each surface installs in the mode its own CI uses, so a lock the release regenerates is
+        # one that repository's plain `npm ci` accepts. Only Monitoring's CI still asks for the
+        # legacy peer resolution.
+        self.assertEqual([], install_options["openview"])
         self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
-        self.assertEqual(["--legacy-peer-deps"], install_options["content"])
-        self.assertEqual(["--legacy-peer-deps"], install_options["cee-demo-angular"])
+        self.assertEqual([], install_options["content"])
+        self.assertEqual([], install_options["cee-demo-angular"])
 
     def test_release_npm_tasks_force_strict_install_script_policy(self):
         with tempfile.TemporaryDirectory() as directory:
