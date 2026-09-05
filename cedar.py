@@ -3,6 +3,9 @@ import sys
 import typer
 
 from org.metadatacenter.util.ModeManager import ModeError, ModeManager
+from org.metadatacenter.util.OutputBuffering import line_buffer_when_redirected
+
+line_buffer_when_redirected()
 
 try:
     ModeManager.bootstrap(sys.argv[1:])

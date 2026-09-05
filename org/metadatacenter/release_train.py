@@ -6026,7 +6026,7 @@ def _watch_release(
             ),
         )
         if signature != previous or now - last_report >= heartbeat:
-            console.print(summary, markup=False)
+            console.print(summary, markup=False, soft_wrap=True)
             previous = signature
             last_report = now
         phase = manifest.get("phase")

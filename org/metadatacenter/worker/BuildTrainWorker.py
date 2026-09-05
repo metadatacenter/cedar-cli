@@ -438,7 +438,8 @@ class BuildTrainWorker:
                         detail = cls._active_subcheck(progress)
                         console.print(
                             f'{summary} | active {detail} | '
-                            f'elapsed {cls._elapsed(now - watch_started)}'
+                            f'elapsed {cls._elapsed(now - watch_started)}',
+                            soft_wrap=True,
                         )
                         previous = summary
                         last_report = now
@@ -446,7 +447,7 @@ class BuildTrainWorker:
                     progress = cls._workflow_progress(run_id)
                 summary = cls._workflow_summary(progress)
                 if summary != previous:
-                    console.print(summary)
+                    console.print(summary, soft_wrap=True)
                 console.print(f"Workflow: {progress.get('url') or workflow.get('url')}", soft_wrap=True)
                 failure = cls._failed_subcheck(progress)
                 if failure:

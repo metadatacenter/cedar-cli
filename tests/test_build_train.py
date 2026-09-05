@@ -834,6 +834,36 @@ class PreflightReportTest(unittest.TestCase):
         self.assertEqual('advisory', advisory.state)
         self.assertFalse(advisory.blocks_a_train)
 
+    def test_watch_lines_stay_whole_on_a_narrow_console(self):
+        """A log follower greps one report per line; a wrapped heartbeat defeats that."""
+        version = '2.9.3-dev.20260824.1847'
+        workflow = {'databaseId': 13, 'status': 'in_progress', 'conclusion': None}
+        running = {
+            'status': 'in_progress', 'conclusion': None, 'url': 'https://example/run/13',
+            'jobs': [{'name': 'publish-maven', 'status': 'in_progress', 'conclusion': None,
+                      'steps': [{'name': 'Preflight every train source and publication target',
+                                 'status': 'in_progress', 'conclusion': None}]}],
+        }
+        complete = {'status': 'completed', 'conclusion': 'success',
+                    'url': 'https://example/run/13', 'jobs': running['jobs']}
+        from rich.console import Console
+        buffer = io.StringIO()
+        with (
+            patch.object(BuildTrain, '_read', return_value={'version': version}),
+            patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow),
+            patch.object(BuildTrainWorker, '_workflow_progress', side_effect=[running, complete]),
+            patch('org.metadatacenter.worker.BuildTrainWorker.time.sleep'),
+            patch('org.metadatacenter.worker.BuildTrainWorker.console',
+                  Console(file=buffer, width=60, force_terminal=False)),
+        ):
+            BuildTrainWorker.status(version, watch=True)
+
+        heartbeat = [line for line in buffer.getvalue().splitlines()
+                     if line.startswith('Workflow in_progress')]
+        self.assertEqual(1, len(heartbeat), buffer.getvalue())
+        self.assertIn('elapsed 0:00:00', heartbeat[0])
+        self.assertGreater(len(heartbeat[0]), 60)
+
     def _verdict(self, repository, state, **fields):
         from org.metadatacenter.worker.BuildTrainWorker import SourceCIVerdict
         values = {
