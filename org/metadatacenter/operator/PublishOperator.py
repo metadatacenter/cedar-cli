@@ -36,7 +36,7 @@ class PublishOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR:
                 shell_wrapper = PlanTask("Publish Angular project", TaskType.SHELL_WRAPPER, repo)
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
+                shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_ci_legacy_ng_build(repo))
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.ANGULAR_DIST:
                 shell_wrapper = PlanTask("Publish Angular dist project", TaskType.SHELL_WRAPPER, repo)

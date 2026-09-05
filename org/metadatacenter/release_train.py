@@ -18,9 +18,11 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -47,6 +49,7 @@ from org.metadatacenter.npm_policy import (
     unreviewed_install_scripts,
 )
 from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 
 
 app = typer.Typer()
@@ -1345,7 +1348,67 @@ class ReleaseState:
             "manifest": str(path),
             "startedAt": active["startedAt"],
         })
+        # A release attempt is an operational workspace, not an archive. Once the
+        # pointer names this release, older workspaces and ledgers are baggage and
+        # can only make the next train less reliable by consuming disk.
+        self._prune_obsolete()
         return path
+
+    def _prune_obsolete(self) -> dict[str, list[str]]:
+        """Keep only the release named by current.json and its active attempt.
+
+        Paths come only from the state root and the current manifest. A malformed
+        pointer is refused before anything is removed.
+        """
+        current = self.read_current()
+        manifest = Path(current.get("manifest", "")).expanduser().resolve()
+        releases = (self.root / "releases").resolve()
+        if manifest.parent != releases or not manifest.is_file():
+            raise ReleaseError(f"active release manifest is outside the state root: {manifest}")
+
+        try:
+            active = json.loads(manifest.read_bytes())
+        except json.JSONDecodeError as error:
+            raise ReleaseError(f"invalid release manifest at {manifest}") from error
+        if active.get("releaseVersion") != current.get("releaseVersion"):
+            raise ReleaseError("active release pointer and manifest disagree")
+
+        protected_attempt = None
+        workspace = active.get("frontendPreparation", {}).get("workspace")
+        if workspace:
+            candidate = Path(workspace).expanduser().resolve().parent
+            attempts = (self.root / "attempts").resolve()
+            # Only paths inside this state root can need protection: enumeration
+            # below never follows or removes anything outside it.
+            if candidate.parent.parent == attempts:
+                protected_attempt = candidate
+
+        removed_attempts: list[str] = []
+        attempts_root = self.root / "attempts"
+        if attempts_root.is_dir():
+            for version_dir in sorted(attempts_root.iterdir()):
+                if not version_dir.is_dir() or version_dir.is_symlink():
+                    continue
+                for attempt in sorted(version_dir.iterdir()):
+                    if not attempt.is_dir() or attempt.is_symlink():
+                        continue
+                    if protected_attempt is not None and attempt.resolve() == protected_attempt:
+                        continue
+                    shutil.rmtree(attempt)
+                    removed_attempts.append(str(attempt))
+                try:
+                    version_dir.rmdir()
+                except OSError:
+                    pass
+
+        removed_ledgers: list[str] = []
+        if releases.is_dir():
+            for ledger in sorted(releases.iterdir()):
+                if not ledger.is_file() or ledger.resolve() == manifest:
+                    continue
+                ledger.unlink()
+                removed_ledgers.append(str(ledger))
+        return {"attempts": removed_attempts, "ledgers": removed_ledgers}
 
     def conclude(self, outcome: str = "accepted") -> None:
         """Record that the active release has finished, so it no longer holds the slot.
@@ -1449,8 +1512,14 @@ class ReleaseWorkspacePreparer:
             raise ReleaseError(f"cannot run {args[0]}: {error}") from error
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
+            if result.returncode < 0 and not detail:
+                detail = "the process produced no diagnostic output of its own"
             _raise_command_failure(
-                args, f"command failed ({' '.join(args)})", detail)
+                args,
+                f"command {describe_subprocess_failure(result.returncode)} "
+                f"({' '.join(args)})",
+                detail,
+            )
         stdout = (result.stdout or "").strip()
         if stream:
             output = "\n".join(
@@ -1873,10 +1942,11 @@ class ReleaseVersionPreparer:
         if old == next_version:
             raise ReleaseError("next development version must differ from the train source version")
 
+        for repository, revision in repositories.items():
+            self._ensure_clone(repository, revision, next_workspace / repository)
         for repository in release_repositories:
             revision = repositories.get(repository)
             self._ensure_clone(repository, revision, release_workspace / repository)
-            self._ensure_clone(repository, revision, next_workspace / repository)
 
         cee_allowed_by_repo: dict[str, set[str]] = {}
         for consumer in manifest["cee"]["consumers"]:
@@ -1885,8 +1955,6 @@ class ReleaseVersionPreparer:
             })
 
         for repository, relative_paths in cee_allowed_by_repo.items():
-            if repository not in release_repositories:
-                continue
             for relative in relative_paths:
                 source = release_workspace / repository / relative
                 destination = next_workspace / repository / relative
@@ -2074,9 +2142,12 @@ class ReleaseBuildValidator:
                 detail = "\n".join(log.read_text(encoding="utf-8").splitlines()[-80:])
             except OSError:
                 detail = ""
+            if returncode < 0 and not detail:
+                detail = "the process produced no diagnostic output of its own"
             _raise_command_failure(
                 command,
-                f"build command exited {returncode}: {' '.join(command)}; log: {log}",
+                f"build command {describe_subprocess_failure(returncode)}: "
+                f"{' '.join(command)}; log: {log}",
                 detail,
             )
 
@@ -2093,6 +2164,8 @@ class ReleaseBuildValidator:
         )
         environment["npm_config_cache"] = str(attempt / "build-cache" / "npm")
         environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] = "true"
+        environment["CI"] = "true"
+        environment["NG_CLI_ANALYTICS"] = "false"
         started = dt.datetime.now(dt.timezone.utc).isoformat()
         if self.executor is None:
             self._stream_command(
@@ -3535,7 +3608,12 @@ class ReleaseArtifactPublisher:
             raise ReleaseError(f"cannot run npm pack for {task['id']}: {error}") from error
         if pack.returncode:
             detail = (pack.stderr or pack.stdout).strip()
-            raise ReleaseError(f"npm pack failed for {task['id']}: {detail}")
+            if pack.returncode < 0 and not detail:
+                detail = "the process produced no diagnostic output of its own"
+            raise ReleaseError(
+                f"npm pack {describe_subprocess_failure(pack.returncode)} "
+                f"for {task['id']}: {detail}"
+            )
         try:
             packed = json.loads(pack.stdout)
             filename = packed[0]["filename"]
@@ -3589,9 +3667,12 @@ class ReleaseArtifactPublisher:
             if output and self.verbose:
                 console.print(output, markup=False)
             if result.returncode:
+                if result.returncode < 0 and not output:
+                    output = "the process produced no diagnostic output of its own"
                 _raise_command_failure(
                     command,
-                    f"npm publish exited {result.returncode}: {evidence['name']}",
+                    f"npm publish {describe_subprocess_failure(result.returncode)}: "
+                    f"{evidence['name']}",
                     output,
                 )
         if existing is not None:
@@ -4183,6 +4264,7 @@ class ReleaseAcceptance:
         *,
         remote_integrator: "ReleaseRemoteIntegrator | None" = None,
         publisher: "ReleaseArtifactPublisher | None" = None,
+        development_validator=None,
         environment=None,
     ):
         self.state = state
@@ -4191,6 +4273,9 @@ class ReleaseAcceptance:
             state, environment=self.environment)
         self.publisher = publisher or ReleaseArtifactPublisher(
             state, environment=self.environment)
+        self.development_validator = (
+            development_validator or self._run_development_validator
+        )
 
     def _check(self, name: str, detail: str) -> dict:
         return {"check": name, "detail": detail}
@@ -4275,12 +4360,71 @@ class ReleaseAcceptance:
         ))
         return checks
 
+    def _run_development_validator(self, manifest: dict) -> str:
+        workspace = Path(
+            manifest.get("versionPreparation", {})
+            .get("nextDevelopment", {})
+            .get("workspace", "")
+        )
+        script = workspace / "cedar-development" / "ops" / "build_train.py"
+        configuration = workspace / "cedar-development" / "ops"
+        required = [
+            script,
+            configuration / "build-train.json",
+            configuration / "frontend-train.json",
+            configuration / "docker-train.json",
+        ]
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise ReleaseError(
+                "next-development train validation inputs are missing: " + ", ".join(missing)
+            )
+        command = [
+            sys.executable,
+            str(script),
+            "--config", str(configuration / "build-train.json"),
+            "validate-local",
+            "--workspace", str(workspace),
+            "--frontend-config", str(configuration / "frontend-train.json"),
+            "--docker-config", str(configuration / "docker-train.json"),
+            "--expected-source-version", manifest["nextDevelopmentVersion"],
+        ]
+        environment = dict(self.environment)
+        environment.update({
+            "CEDAR_HOME": str(workspace),
+            "CI": "true",
+            "NG_CLI_ANALYTICS": "false",
+        })
+        try:
+            result = subprocess.run(
+                command, check=False, text=True, capture_output=True, env=environment,
+            )
+        except OSError as error:
+            raise ReleaseError(f"cannot validate next-development train state: {error}") from error
+        output = "\n".join(
+            part.strip() for part in (result.stdout, result.stderr) if part and part.strip()
+        )
+        if result.returncode:
+            raise ReleaseError(
+                "next-development train validation "
+                f"{describe_subprocess_failure(result.returncode)}: {output}"
+            )
+        return output.splitlines()[-1] if output else "local train configuration passed"
+
+    def _next_development_can_seed_train(self, manifest: dict) -> list[dict]:
+        detail = self.development_validator(manifest)
+        return [self._check(
+            "next-development-train",
+            f"{manifest['nextDevelopmentVersion']} can seed the next train: {detail}",
+        )]
+
     def run(self, manifest: dict) -> dict:
         self.publisher.ensure_nexus_ready("release acceptance")
         checks = []
         checks.extend(self._remote_state_still_holds(manifest))
         checks.extend(self._published_artifacts_still_hold(manifest))
         checks.extend(self._consumers_pin_the_proven_cee(manifest))
+        checks.extend(self._next_development_can_seed_train(manifest))
         return {
             "acceptedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
             "checks": checks,
@@ -4543,8 +4687,29 @@ PROFILE_COMMAND = ("CEDAR_PROFILE=develop source "
 # Maven failure rather than as a missing toolchain.
 REQUIRED_TOOLS = ("git", "javac", "mvn", "node", "npm")
 REQUIRED_JAVA_MAJOR = 17
-# A train, its attempt tree and the archives of earlier attempts.
-REQUIRED_FREE_BYTES = 40 * 1024 ** 3
+
+
+def java_17_remediation() -> str:
+    """Advice an operator is meant to be able to run, so it has to suit the host giving it.
+
+    macOS resolves a JDK through java_home. A Linux release host has no such tool, so name the
+    location the CLI itself searches instead of a command that cannot work there.
+    """
+    if platform.system() == "Darwin":
+        return "export JAVA_HOME=$(/usr/libexec/java_home -v 17)"
+    return "export JAVA_HOME to a JDK 17, which on this host is usually one of /usr/lib/jvm/java-17-*"
+
+
+# Calibrated allocations for one clean release workspace. The final requirement
+# is derived from the manifest's repository/build counts; these are deliberately
+# named so observed train footprints can tune the model without restoring a
+# single opaque free-space threshold.
+CHECKOUT_BYTES_PER_REPOSITORY = 48 * 1024 ** 2
+MAVEN_BYTES_PER_REPOSITORY_VARIANT = 192 * 1024 ** 2
+FRONTEND_BYTES_PER_SURFACE_VARIANT = 512 * 1024 ** 2
+PUBLICATION_CACHE_AND_LOG_BYTES = 2 * 1024 ** 3
+MINIMUM_SPACE_HEADROOM_BYTES = 4 * 1024 ** 3
+SPACE_HEADROOM_PERCENT = 25
 
 NEXUS_HOST = "https://nexus.bmir.stanford.edu"
 NEXUS_NPM_REGISTRY = f"{NEXUS_HOST}/repository/npm-cedar/"
@@ -4630,6 +4795,53 @@ class PreflightFinding:
         return self.severity == "fail"
 
 
+@dataclasses.dataclass(frozen=True)
+class ReleaseSpaceBudget:
+    components: dict[str, int]
+    headroom_bytes: int
+
+    @property
+    def required_bytes(self) -> int:
+        return sum(self.components.values()) + self.headroom_bytes
+
+    def summary(self) -> str:
+        gib = 1024 ** 3
+        parts = [f"{name} {value / gib:.1f} GiB" for name, value in self.components.items()]
+        parts.append(f"headroom {self.headroom_bytes / gib:.1f} GiB")
+        return ", ".join(parts)
+
+
+class ReleaseSpaceEstimator:
+    """Estimate peak disposable space from the work declared by a release manifest."""
+
+    def __init__(self, manifest: dict):
+        self.manifest = manifest
+
+    def estimate(self) -> ReleaseSpaceBudget:
+        source_repositories = len(self.manifest.get("sourceRepositories", {}))
+        release_repositories = len(self.manifest.get("releaseRepositories", []))
+        maven_repositories = len(self.manifest.get("mavenRepositories", []))
+        frontend_surfaces = len(FRONTEND_BUILD_SURFACES)
+        components = {
+            "clean checkouts": (
+                source_repositories + release_repositories
+            ) * CHECKOUT_BYTES_PER_REPOSITORY,
+            "Maven release/next builds": (
+                maven_repositories * 2 * MAVEN_BYTES_PER_REPOSITORY_VARIANT
+            ),
+            "frontend release/next builds": (
+                frontend_surfaces * 2 * FRONTEND_BYTES_PER_SURFACE_VARIANT
+            ),
+            "publication caches and logs": PUBLICATION_CACHE_AND_LOG_BYTES,
+        }
+        subtotal = sum(components.values())
+        headroom = max(
+            MINIMUM_SPACE_HEADROOM_BYTES,
+            subtotal * SPACE_HEADROOM_PERCENT // 100,
+        )
+        return ReleaseSpaceBudget(components, headroom)
+
+
 class ReleasePreflight:
     """Settle every release precondition that is knowable before the first build.
 
@@ -4670,6 +4882,7 @@ class ReleasePreflight:
         http: HttpClient | None = None,
         environment=None,
         accepted_red_develop: dict[str, str] | None = None,
+        space_estimator: ReleaseSpaceEstimator | None = None,
         ci_sleeper=time.sleep,
         ci_delays: tuple[float, ...] = (2, 5, 10),
     ):
@@ -4679,6 +4892,7 @@ class ReleasePreflight:
         self.command_runner = command_runner or subprocess.run
         self.http = http or HttpClient(environment=self.environment)
         self.accepted_red_develop = dict(accepted_red_develop or {})
+        self.space_estimator = space_estimator or ReleaseSpaceEstimator(manifest)
         self.ci_sleeper = ci_sleeper
         self.ci_delays = ci_delays
         self._source_path_cache: dict[str, list[str]] = {}
@@ -4793,7 +5007,7 @@ class ReleasePreflight:
         if code != 0:
             findings.append(PreflightFinding(
                 "toolchain", "fail", "java is not on PATH",
-                'export JAVA_HOME=$(/usr/libexec/java_home -v 17)',
+                java_17_remediation(),
             ))
             return findings
         match = re.search(r'version "(\d+)', stderr)
@@ -4803,7 +5017,7 @@ class ReleasePreflight:
                 "toolchain", "fail",
                 f"Java {major or 'of unknown version'} is active, and CEDAR builds require "
                 f"Java {REQUIRED_JAVA_MAJOR}",
-                'export JAVA_HOME=$(/usr/libexec/java_home -v 17)',
+                java_17_remediation(),
             ))
         code, node, stderr = self._capture(["node", "--version"])
         if code != 0 or node != REQUIRED_NODE_VERSION:
@@ -4830,13 +5044,14 @@ class ReleasePreflight:
             free = shutil.disk_usage(self.state.root.parent).free
         except OSError as error:
             return [PreflightFinding("disk", "warn", f"cannot measure free space: {error}")]
-        if free >= REQUIRED_FREE_BYTES:
+        budget = self.space_estimator.estimate()
+        if free >= budget.required_bytes:
             return []
         return [PreflightFinding(
             "disk", "fail",
-            f"{free // 1024 ** 3} GiB free, and a release needs "
-            f"{REQUIRED_FREE_BYTES // 1024 ** 3} GiB for the train, the attempt tree and archives",
-            "free space or archive earlier release attempts",
+            f"{free / 1024 ** 3:.1f} GiB free, but this release is estimated to need "
+            f"{budget.required_bytes / 1024 ** 3:.1f} GiB ({budget.summary()})",
+            "free space; obsolete release attempts are removed automatically when a release starts",
         )]
 
     def check_working_trees(self) -> list[PreflightFinding]:
@@ -5205,6 +5420,11 @@ class ReleasePreflight:
                 ))
                 continue
             runs = list(probe.runs)
+            if repository == "cedar-development":
+                runs = [
+                    record for record in runs
+                    if record.get("path") != ".github/workflows/build-train.yml"
+                ]
             if not runs:
                 findings.append(PreflightFinding(
                     "ci", "fail",
@@ -5212,18 +5432,6 @@ class ReleasePreflight:
                     "after bounded indexing grace",
                 ))
                 continue
-            if repository == "cedar-development":
-                runs = [
-                    record for record in runs
-                    if record.get("path") != ".github/workflows/build-train.yml"
-                ]
-                if not runs:
-                    findings.append(PreflightFinding(
-                        "ci", "warn",
-                        "cedar-development has no separate source-validation run; "
-                        "the train executed its captured controller",
-                    ))
-                    continue
             for name, record in latest_runs_by_name(runs).items():
                 conclusion = record.get("conclusion")
                 status = record.get("status")

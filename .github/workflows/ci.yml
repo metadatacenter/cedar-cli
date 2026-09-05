@@ -18,9 +18,15 @@ concurrency:
 
 jobs:
   test:
-    name: pytest (Python 3.12)
-    runs-on: ubuntu-latest
+    name: pytest (${{ matrix.os }}, Python 3.12)
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
 
     steps:
       # Checked out under its own directory so the repositories whose source-of-truth files the
@@ -51,6 +57,14 @@ jobs:
           ref: develop
           path: cedar-development
 
+      # The sourced native controller rejects any JDK except the estate's supported Java 17.
+      # Pin it on both runners so these are platform tests, not runner-image JDK tests.
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
       # requirements.txt names no Python version and the CLI runs under whatever
       # python3 the developer has. 3.12 is the version Read the Docs builds the
       # documentation with, so the repos stay on one interpreter.
@@ -67,8 +81,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
-      # Tests either mock subprocess/filesystem calls or source the native controller in its
-      # inspection-only library mode. Nothing starts a service or reaches the network.
+      # Tests mock subprocess/filesystem calls, source the native controller in its inspection-only
+      # library mode, or inspect a harmless sleeper process. Nothing starts a service or reaches
+      # the network.
       - name: Run tests
         working-directory: cedar-cli
         run: python -m pytest tests -v

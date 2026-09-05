@@ -41,9 +41,17 @@ def microservice_monitor():
     exit_on_failure(StartMicroserviceWorker.monitor())
 
 
-@app.command("open")
+@app.command("openview")
+def microservice_openview():
+    exit_on_failure(StartMicroserviceWorker.openview())
+
+
+# The command was once named for its function rather than for the service it starts, which left it
+# the one name in this group that does not match the service. Keep the old spelling working, and
+# out of the help, for anyone whose fingers or scripts still reach for it.
+@app.command("open", hidden=True)
 def microservice_open():
-    exit_on_failure(StartMicroserviceWorker.open())
+    exit_on_failure(StartMicroserviceWorker.openview())
 
 
 @app.command("repo")

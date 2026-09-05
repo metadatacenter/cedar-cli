@@ -42,9 +42,11 @@ class BuildOperator(Operator):
                 if build_frontends:
                     shell_wrapper = PlanTask("Build angular project", TaskType.SHELL_WRAPPER, repo)
                     if repo.build_command_list:
-                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.repo_build_commands(repo))
+                        build_task = BuildShellTaskFactory.repo_build_commands(repo)
                     else:
-                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install_legacy_ng_build(repo))
+                        build_task = BuildShellTaskFactory.npm_ci_legacy_ng_build(repo)
+                    build_task.parameters["isolated_frontend_build"] = True
+                    shell_wrapper.add_task_as_task(build_task)
                 else:
                     shell_wrapper = PlanTask("Build angular project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER,
                                              repo)
@@ -58,12 +60,15 @@ class BuildOperator(Operator):
                 if build_frontends:
                     shell_wrapper = PlanTask("Build angularJS project", TaskType.SHELL_WRAPPER, repo)
                     if task.get_parameter("server_frontend_payload") is True and repo.server_build_command_list:
-                        shell_wrapper.add_task_as_task(
-                            BuildShellTaskFactory.repo_server_build_commands(repo))
+                        build_task = BuildShellTaskFactory.repo_server_build_commands(repo)
+                        build_task.parameters["in_place_frontend_build"] = True
                     elif repo.build_command_list:
-                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.repo_build_commands(repo))
+                        build_task = BuildShellTaskFactory.repo_build_commands(repo)
                     else:
-                        shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
+                        build_task = BuildShellTaskFactory.npm_ci(repo)
+                    if task.get_parameter("server_frontend_payload") is not True:
+                        build_task.parameters["isolated_frontend_build"] = True
+                    shell_wrapper.add_task_as_task(build_task)
                 else:
                     shell_wrapper = PlanTask("Build angularJS project - skipped because of CEDAR_DEV_BUILD_FRONTENDS",
                                              TaskType.SHELL_WRAPPER, repo)
@@ -71,9 +76,15 @@ class BuildOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.TYPESCRIPT:
                 shell_wrapper = PlanTask("Build TypeScript project", TaskType.SHELL_WRAPPER, repo)
+                commands = []
                 if not repo.skip_npm_install:
-                    shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_install(repo))
-                shell_wrapper.add_task_as_task(BuildShellTaskFactory.npm_run_build(repo))
+                    commands.extend(BuildShellTaskFactory.npm_ci(repo).command_list)
+                commands.extend(BuildShellTaskFactory.npm_run_build(repo).command_list)
+                build_task = PlanTask("Isolated TypeScript build", TaskType.SHELL, repo)
+                build_task.command_list = commands
+                build_task.parameters["isolated_frontend_build"] = True
+                build_task.parameters["reuse_node_modules"] = repo.skip_npm_install
+                shell_wrapper.add_task_as_task(build_task)
                 task.add_task_as_task(shell_wrapper)
             else:
                 not_handled = PlanTask("Skip repo", TaskType.NOOP, repo)

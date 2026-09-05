@@ -33,7 +33,7 @@ class StartMicroserviceWorker(Worker):
         return StartMicroserviceWorker._start("monitor")
 
     @staticmethod
-    def open():
+    def openview():
         return StartMicroserviceWorker._start("openview")
 
     @staticmethod

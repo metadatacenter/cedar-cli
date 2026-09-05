@@ -12,6 +12,7 @@ import inspect
 import re
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import typer
@@ -797,6 +798,52 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseError, "already active"):
                 state.start(manifest_fixture())
 
+    def test_start_prunes_every_previous_attempt_and_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            old = manifest_fixture()
+            old["releaseVersion"] = "2.9.2"
+            old_path = state.start(old)
+            old_attempt = Path(directory) / "attempts" / "2.9.2" / "001"
+            (old_attempt / "workspace").mkdir(parents=True)
+            state.update_current_manifest({
+                "frontendPreparation": {"workspace": str(old_attempt / "workspace")},
+            })
+            state.conclude()
+
+            current_path = state.start(manifest_fixture())
+
+            self.assertFalse(old_attempt.exists())
+            self.assertFalse(old_path.exists())
+            self.assertTrue(current_path.exists())
+            self.assertEqual(
+                [current_path],
+                list((Path(directory) / "releases").iterdir()),
+            )
+
+    def test_internal_pruning_preserves_only_the_current_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            current_path = state.start(manifest_fixture())
+            current_attempt = Path(directory) / "attempts" / "2.9.3" / "002"
+            (current_attempt / "workspace").mkdir(parents=True)
+            stale_attempt = Path(directory) / "attempts" / "2.9.3" / "001"
+            stale_attempt.mkdir(parents=True)
+            state.update_current_manifest({
+                "frontendPreparation": {"workspace": str(current_attempt / "workspace")},
+            })
+            stale_ledger = Path(directory) / "releases" / "2.9.2.json"
+            stale_ledger.write_text("{}\n", encoding="utf-8")
+
+            removed = state._prune_obsolete()
+
+            self.assertTrue(current_attempt.is_dir())
+            self.assertTrue(current_path.is_file())
+            self.assertFalse(stale_attempt.exists())
+            self.assertFalse(stale_ledger.exists())
+            self.assertEqual([str(stale_attempt)], removed["attempts"])
+            self.assertEqual([str(stale_ledger.resolve())], removed["ledgers"])
+
     @patch.object(ReleasePreflight, "run", return_value=[])
     @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
     def test_plan_is_side_effect_free(self, build, _preflight):
@@ -815,6 +862,10 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             self.assertEqual([], list(Path(directory).iterdir()))
         build.assert_called_once()
 
+    @patch.object(
+        ReleaseAcceptance, "_run_development_validator",
+        return_value="local train configuration passed",
+    )
     @patch.object(ReleaseArtifactPublisher, "ensure_nexus_ready", return_value=None)
     @patch.object(ReleaseArtifactPublisher, "snapshot_tasks", return_value=[])
     @patch.object(ReleaseArtifactPublisher, "tasks", return_value=[])
@@ -828,6 +879,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
     def test_start_persists_internal_state_and_status_finds_it(
         self, _build, _preflight, _workspace_prepare, _version_prepare, _build_tasks,
         _ref_tasks, _remote_tasks, _artifact_tasks, _snapshot_tasks, _nexus,
+        _development,
     ):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
@@ -1311,7 +1363,9 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             manifest = manifest_fixture()
             manifest.update({
                 "sourceRepositories": revisions,
-                "releaseRepositories": list(revisions),
+                "releaseRepositories": [
+                    repository for repository in revisions if repository != "cedar-cli"
+                ],
                 "mavenRepositories": [
                     "maven-repo",
                     "cedar-resource-server",
@@ -1342,6 +1396,10 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 (release_workspace / "cedar-template-editor" / "package.json").read_bytes()
             )
             next_workspace = Path(result["nextDevelopment"]["workspace"])
+            self.assertEqual(
+                "plain repository\n",
+                (next_workspace / "cedar-cli" / "README.md").read_text(encoding="utf-8"),
+            )
             next_package = json.loads(
                 (next_workspace / "cedar-template-editor" / "package.json").read_bytes()
             )
@@ -1558,6 +1616,8 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             validator.run_task(manifest, task)
 
             self.assertEqual("true", captured[0][1]["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"])
+            self.assertEqual("true", captured[0][1]["CI"])
+            self.assertEqual("false", captured[0][1]["NG_CLI_ANALYTICS"])
 
     def test_quiet_build_keeps_raw_output_in_its_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2749,7 +2809,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                     patch.object(publisher, "_npm_version_record", return_value=None), \
                     patch.object(release_train.subprocess, "run", return_value=
                                  FakeCompletedProcess(returncode=1, stderr="registry refused")):
-                with self.assertRaisesRegex(ReleaseError, "npm publish exited 1"):
+                with self.assertRaisesRegex(ReleaseError, "npm publish exited with code 1"):
                     publisher._publish_npm(task)
 
             log = attempt / "publication-logs" / "npm-release-frontend.log"
@@ -2929,7 +2989,18 @@ class ReleasePreflightTest(unittest.TestCase):
 
         self.assertTrue(findings)
         self.assertIn("Java 25", findings[0].message)
-        self.assertIn("java_home -v 17", findings[0].remedy)
+        # Whatever the host, the remedy has to say which variable to set and to what. Asserting the
+        # macOS command here made this pass only on a Mac.
+        self.assertIn("JAVA_HOME", findings[0].remedy)
+        self.assertIn("17", findings[0].remedy)
+
+    def test_the_java_remedy_suits_the_host_giving_it(self):
+        with patch("platform.system", return_value="Darwin"):
+            self.assertIn("java_home -v 17", release_train.java_17_remediation())
+        with patch("platform.system", return_value="Linux"):
+            linux = release_train.java_17_remediation()
+        self.assertNotIn("java_home -v 17", linux)
+        self.assertIn("/usr/lib/jvm/java-17", linux)
 
     def test_java_seventeen_passes(self):
         commands = FakeCommands({
@@ -2958,6 +3029,39 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertIn("CEDAR_DEVELOP_HOME", findings[0].message)
         self.assertIn("CEDAR_NET_GATEWAY", findings[0].message)
         self.assertIn("cedar-profile-native.sh", findings[0].remedy)
+
+    def test_disk_budget_is_derived_from_the_release_work_plan(self):
+        small = manifest_fixture()
+        small.update({
+            "sourceRepositories": {"source": "a" * 40},
+            "releaseRepositories": ["source"],
+            "mavenRepositories": ["source"],
+        })
+        large = copy.deepcopy(small)
+        large["sourceRepositories"]["second"] = "b" * 40
+        large["releaseRepositories"].append("second")
+        large["mavenRepositories"].append("second")
+
+        small_budget = release_train.ReleaseSpaceEstimator(small).estimate()
+        large_budget = release_train.ReleaseSpaceEstimator(large).estimate()
+
+        self.assertGreater(large_budget.required_bytes, small_budget.required_bytes)
+        self.assertIn("Maven release/next builds", large_budget.summary())
+
+    def test_disk_failure_reports_the_estimate_breakdown(self):
+        budget = release_train.ReleaseSpaceBudget(
+            {"clean checkouts": 8 * 1024 ** 3}, 4 * 1024 ** 3)
+        estimator = SimpleNamespace(estimate=lambda: budget)
+        preflight = self._preflight()
+        preflight.space_estimator = estimator
+        disk = SimpleNamespace(free=10 * 1024 ** 3)
+
+        with patch.object(release_train.shutil, "disk_usage", return_value=disk):
+            findings = preflight.check_disk_space()
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("estimated to need 12.0 GiB", findings[0].message)
+        self.assertIn("clean checkouts 8.0 GiB", findings[0].message)
 
     def test_preflight_covers_independent_cee_consumers_that_receive_refs(self):
         manifest = self._release_of("repo-one")
@@ -3227,6 +3331,28 @@ class ReleasePreflightTest(unittest.TestCase):
         })
         findings = self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("no CI run", findings[0].message)
+
+    def test_cedar_development_train_run_cannot_replace_controller_ci(self):
+        commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(
+                stdout=".github/workflows/build-train.yml\n"
+                ".github/workflows/release-tooling-ci.yml"),
+            ("gh", "api"): FakeCompletedProcess(stdout=json.dumps({
+                "workflow_runs": [{
+                    "conclusion": None, "status": "in_progress", "id": 1,
+                    "name": "Immutable development build train",
+                    "path": ".github/workflows/build-train.yml",
+                }],
+            })),
+        })
+        findings = self._preflight(
+            commands=commands,
+            manifest=self._release_of("cedar-development"),
+        ).check_develop_is_green()
 
         self.assertEqual(1, len(findings))
         self.assertTrue(findings[0].fatal)
@@ -3550,6 +3676,39 @@ class ReleaseLicenseStampingTest(unittest.TestCase):
 class ReleaseAcceptanceTest(unittest.TestCase):
     """The release proves itself, rather than leaving an operator to prove it by hand."""
 
+    def test_next_development_proof_uses_captured_configuration_and_exact_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "next-workspace"
+            ops = workspace / "cedar-development" / "ops"
+            ops.mkdir(parents=True)
+            for name in (
+                "build_train.py", "build-train.json", "frontend-train.json",
+                "docker-train.json",
+            ):
+                (ops / name).write_text("{}\n", encoding="utf-8")
+            manifest = manifest_fixture()
+            manifest["versionPreparation"] = {
+                "nextDevelopment": {"workspace": str(workspace)},
+            }
+            acceptance = ReleaseAcceptance(
+                ReleaseState(root=Path(directory) / "state"),
+                remote_integrator=object(), publisher=object(), environment={},
+            )
+            completed = subprocess.CompletedProcess(
+                args=[], returncode=0,
+                stdout="Local train configuration passed: 48 repositories.\n",
+                stderr="",
+            )
+            with patch.object(release_train.subprocess, "run", return_value=completed) as run:
+                detail = acceptance._run_development_validator(manifest)
+
+        command = run.call_args.args[0]
+        self.assertIn(str(ops / "build-train.json"), command)
+        self.assertIn("--expected-source-version", command)
+        self.assertIn("2.9.4-SNAPSHOT", command)
+        self.assertEqual("true", run.call_args.kwargs["env"]["CI"])
+        self.assertEqual("Local train configuration passed: 48 repositories.", detail)
+
     def _published(self, directory):
         state = ReleaseState(root=Path(directory))
         manifest = manifest_fixture()
@@ -3609,6 +3768,9 @@ class ReleaseAcceptanceTest(unittest.TestCase):
             state,
             remote_integrator=FakeRemoteIntegrator(),
             publisher=FakePublisher(),
+            development_validator=lambda manifest: (
+                f"validated {manifest['nextDevelopmentVersion']}"
+            ),
         )
 
     def test_a_repository_without_the_release_tag_fails_acceptance(self):
@@ -3634,6 +3796,9 @@ class ReleaseAcceptanceTest(unittest.TestCase):
         details = [check["detail"] for check in manifest["acceptance"]["checks"]]
         self.assertTrue(any(
             "release-2.9.3 present at the recorded commit" in detail
+            for detail in details))
+        self.assertTrue(any(
+            "2.9.4-SNAPSHOT can seed the next train" in detail
             for detail in details))
         self.assertIsNotNone(manifest["acceptance"]["acceptedAt"])
         self.assertEqual(["repo-one", "repo-two"], acceptance.remote_integrator.verified)
@@ -3998,7 +4163,7 @@ class ReleaseCompletionTest(unittest.TestCase):
             self.assertEqual("accepted", state.read_current()["conclusion"])
             self.assertTrue(state.read_current()["concludedAt"])
 
-    def test_abandon_retains_the_failed_attempt_and_allows_the_same_version_again(self):
+    def test_replacing_an_abandoned_release_prunes_its_previous_ledger(self):
         with tempfile.TemporaryDirectory() as directory:
             state = self._finished(directory, "local-ref-creation-failed")
             original_path = state.read_current_manifest()[1]
@@ -4025,7 +4190,7 @@ class ReleaseCompletionTest(unittest.TestCase):
 
             replacement_path = state.start(manifest_fixture())
             self.assertNotEqual(retained_path, replacement_path)
-            self.assertTrue(retained_path.is_file())
+            self.assertFalse(retained_path.exists())
             self.assertTrue(replacement_path.is_file())
 
     def test_abandon_refuses_once_snapshot_publication_may_have_started(self):

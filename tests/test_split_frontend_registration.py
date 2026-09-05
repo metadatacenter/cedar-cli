@@ -57,6 +57,17 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
         BuildPlanner.split_frontends(server_plan, server_payload=True)
         self.assertTrue(all(task.parameters["server_frontend_payload"]
                             for task in server_plan.tasks))
+        server_shell_tasks = [
+            shell
+            for build_task in server_plan.tasks
+            for wrapper in build_task.tasks
+            for shell in wrapper.tasks
+        ]
+        self.assertTrue(server_shell_tasks)
+        self.assertTrue(all(
+            task.get_parameter("in_place_frontend_build") is True
+            for task in server_shell_tasks
+        ))
 
     def test_split_processes_are_non_essential_previews(self):
         servers = ServersFactory.build_servers()

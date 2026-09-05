@@ -1,5 +1,6 @@
 import re
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -111,7 +112,7 @@ class BuildPolicyTest(unittest.TestCase):
                                if repo.name == "cedar-openview-src")
 
         self.assertEqual(
-            ['npm install --legacy-peer-deps', 'npm run build'],
+            ['npm ci --legacy-peer-deps', 'npm run build'],
             openview_source.build_command_list)
 
     @patch.dict("os.environ", {
@@ -125,11 +126,27 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         commands = self.commands(execute.call_args.args[0])
         self.assertIn('npm run build', commands)
+        self.assertIn('npm ci --legacy-peer-deps', commands)
+        self.assertFalse(any(re.match(
+            r"^npm(?:\s+--prefix\s+\S+)?\s+install(?:\s|$)", command)
+            for command in commands))
         self.assertFalse(any(command.startswith(("cp -a ", "cat ")) for command in commands))
         for distribution in (
                 "cedar-monitoring-dist", "cedar-bridging-dist", "cedar-openview-dist",
                 "cedar-cee-demo-angular-dist"):
             self.assertFalse(any(distribution in command for command in commands))
+        isolated = [
+            task for task in execute.call_args.args[0].tasks
+            for task in task.tasks
+            for task in task.tasks
+            if task.command_list
+        ]
+        self.assertTrue(isolated)
+        self.assertTrue(all(
+            task.get_parameter("isolated_frontend_build") is True
+            for task in isolated
+            if task.repo.repo_type in {"angular", "angularJS", "typescript"}
+        ))
 
     @patch.dict("os.environ", {
         "CEDAR_HOME": "/tmp/CEDAR",
@@ -144,6 +161,17 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertTrue(any(command.startswith("./mvnw clean install") for command in commands))
         self.assertIn('npm run build', commands)
         self.assertFalse(any(command.startswith(("cp -a ", "cat ")) for command in commands))
+
+    def test_build_fails_when_tracked_estate_state_changes_from_its_baseline(self):
+        baseline = {Path("/tmp/cedar-example"): b"pre-existing diff"}
+        changed = {Path("/tmp/cedar-example"): b"build-generated diff"}
+        with patch.object(build, "capture_estate_state", side_effect=[baseline, changed]), \
+                patch.object(build.plan_executor, "execute"), \
+                patch.object(Util, "cedar_home", "/tmp"):
+            with self.assertRaises(SystemExit) as raised:
+                build.execute_build(Plan("guarded"), dry_run=False, dump_plan=False)
+
+        self.assertEqual(1, raised.exception.code)
 
     @patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
     @patch.object(Util, "cedar_home", "/tmp/CEDAR")
