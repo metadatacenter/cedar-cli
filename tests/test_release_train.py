@@ -294,6 +294,84 @@ class CeePromotionTest(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
             compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
 
+    def _renamed_pair(self, dev_code, public_code):
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+                suffix=dev_code,
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09", suffix=public_code,
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        return dev, public
+
+    def test_consistently_renamed_minified_identifiers_are_a_promotion(self):
+        dev, public = self._renamed_pair(
+            'function eB(t){return nB(t)}var nB=t=>eB(t);let x="eB";',
+            'function e8(t){return n8(t)}var n8=t=>e8(t);let x="eB";',
+        )
+
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+        self.assertEqual(2, proof["minifiedIdentifierRenames"])
+        self.assertIn(
+            "cedar-embeddable-editor.js:minified identifier names",
+            proof["allowedMetadataChanges"],
+        )
+        self.assertNotEqual(proof["bundleSha256"], proof["publicBundleSha256"])
+
+    def test_one_name_renamed_two_ways_is_rejected(self):
+        dev, public = self._renamed_pair(
+            "function eB(t){return eB(t)}",
+            "function e8(t){return e9(t)}",
+        )
+        with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_a_renamed_name_may_still_stand_unchanged_in_data(self):
+        dev, public = self._renamed_pair(
+            'function eB(t){return eB(t)}var r=/^[-+]?0[eB]/,s="eB";',
+            'function e8(t){return e8(t)}var r=/^[-+]?0[eB]/,s="eB";',
+        )
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+        self.assertEqual(1, proof["minifiedIdentifierRenames"])
+
+    def test_two_names_collapsing_into_one_are_rejected(self):
+        dev, public = self._renamed_pair(
+            "function eB(t){return nB(t)}",
+            "function e8(t){return e8(t)}",
+        )
+        with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_a_renamed_property_or_long_name_is_a_code_change(self):
+        for dev_code, public_code in (
+            ("return t.eB(1)", "return t.e8(1)"),
+            ("function hostElement(){}", "function hostElemenu(){}"),
+            ("let a=1", "var a=1"),
+        ):
+            dev, public = self._renamed_pair(dev_code, public_code)
+            with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+                compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_a_spread_of_a_renamed_name_is_still_a_rename(self):
+        dev, public = self._renamed_pair(
+            "providers:[...qB,...KB],x:qB(KB)",
+            "providers:[...q8,...K8],x:q8(K8)",
+        )
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+        self.assertEqual(2, proof["minifiedIdentifierRenames"])
+
     def test_captured_allow_scripts_policy_is_normalized_out_of_bundle(self):
         allow_scripts = {
             "@parcel/watcher@2.6.0": True,
@@ -533,10 +611,12 @@ class ReleasePlannerTest(unittest.TestCase):
         }
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
         frontend_config = {
+            "dockerCeeVersionVariable": "CEDAR_OPENVIEW_CEE_NPM_VERSION",
             "frontends": [
                 {
                     "id": label,
                     "repository": repository,
+                    "npmVersionVariable": f"CEDAR_{label.upper()}_NPM_VERSION",
                     "ceeConsumer": {"manifest": manifest, "lock": lock},
                 }
                 for label, repository, manifest, lock in (
@@ -595,6 +675,11 @@ class ReleasePlannerTest(unittest.TestCase):
             "version": TRAIN,
             "sourceManifestSha256": hashlib.sha256(source_content).hexdigest(),
             "planSha256": hashlib.sha256(npm_plan_content).hexdigest(),
+            "dockerInputs": {
+                "CEDAR_MAIN_NPM_VERSION": f"{TRAIN.replace('.', '', 0)}.gmain.p4",
+                "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                "CEDAR_OPENVIEW_CEE_NPM_VERSION": DEV_VERSION,
+            },
             "packages": [{
                 "name": DEV_CEE_NAME,
                 "version": DEV_VERSION,
@@ -679,6 +764,61 @@ class ReleasePlannerTest(unittest.TestCase):
             f"docker/completed/{TRAIN}.json",
             manifest["trainState"]["dockerCompletion"],
         )
+        defaults = manifest["dockerFrontendDefaults"]
+        self.assertEqual(
+            "2.9.3-dev.202608262030.gwork.p4",
+            defaults["nextDevelopment"]["CEDAR_WORKSPACE_NPM_VERSION"],
+        )
+        self.assertEqual(DEV_VERSION, defaults["nextDevelopment"]["CEDAR_OPENVIEW_CEE_NPM_VERSION"])
+        # The fixture's frontends are not release surfaces, so only the Editor moves to its
+        # public version on the release side.
+        self.assertEqual(PUBLIC_VERSION, defaults["release"]["CEDAR_OPENVIEW_CEE_NPM_VERSION"])
+        self.assertEqual(
+            defaults["nextDevelopment"]["CEDAR_WORKSPACE_NPM_VERSION"],
+            defaults["release"]["CEDAR_WORKSPACE_NPM_VERSION"],
+        )
+
+    def test_release_docker_defaults_name_released_frontends_and_the_public_editor(self):
+        frontend_config = {
+            "dockerCeeVersionVariable": "CEDAR_OPENVIEW_CEE_NPM_VERSION",
+            "frontends": [
+                {"id": "main", "repository": "cedar-template-editor",
+                 "npmVersionVariable": "CEDAR_TEMPLATE_EDITOR_NPM_VERSION"},
+                {"id": "workspace", "repository": "cedar-workspace",
+                 "npmVersionVariable": "CEDAR_WORKSPACE_NPM_VERSION"},
+                {"id": "openview", "repository": "cedar-openview",
+                 "npmVersionVariable": "CEDAR_OPENVIEW_NPM_VERSION"},
+            ],
+        }
+        inputs = {
+            "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8-dev.202609050436.gf2431e27c276.p4",
+            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8-dev.202609050436.g3bf71549e097.p4",
+            "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.7-dev.202609050436.g9503db76a96f",
+            "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
+        }
+        plan = {"npm": {"surfaces": [
+            {"repository": "cedar-template-editor"}, {"repository": "cedar-openview"},
+        ]}}
+
+        defaults = ReleasePlanner._docker_frontend_defaults(
+            frontend_config, {"dockerInputs": inputs}, plan, "2.9.8", "2.0.6")
+
+        self.assertEqual(inputs, defaults["nextDevelopment"])
+        self.assertEqual({
+            "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8",
+            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8",
+            "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.6",
+            "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
+        }, defaults["release"])
+
+    def test_a_train_without_recorded_docker_inputs_leaves_the_defaults_alone(self):
+        self.assertEqual({}, ReleasePlanner._docker_frontend_defaults(
+            {}, {}, {"npm": {"surfaces": []}}, "2.9.8", "2.0.6"))
+        with self.assertRaisesRegex(ReleaseError, "dockerInputs"):
+            ReleasePlanner._docker_frontend_defaults(
+                {}, {"dockerInputs": {"CEDAR_X": 7}}, {"npm": {"surfaces": []}}, "2.9.8", "2.0.6")
 
     def test_plan_binds_embedded_allow_scripts_to_captured_cee_source(self):
         allow_scripts = {
@@ -1309,6 +1449,9 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     f"export IMAGE_VERSION={source_version}\n"
                     f"export CEDAR_MAVEN_VERSION={source_version}\n"
                     f"export CEDAR_APPLICATION_VERSION={source_version}\n"
+                    "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+                    "export CEDAR_WORKSPACE_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+                    "export CEDAR_OPENVIEW_CEE_NPM_VERSION=2.0.2-dev.202608010000.gold\n"
                 ),
             },
             "cedar-docker-deploy": {
@@ -1388,6 +1531,18 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 "manifest": "package.json",
                 "lock": "package-lock.json",
             }]
+            manifest["dockerFrontendDefaults"] = {
+                "release": {
+                    "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.3",
+                    "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                    "CEDAR_OPENVIEW_CEE_NPM_VERSION": PUBLIC_VERSION,
+                },
+                "nextDevelopment": {
+                    "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.3-dev.202608262030.gmain.p4",
+                    "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                    "CEDAR_OPENVIEW_CEE_NPM_VERSION": DEV_VERSION,
+                },
+            }
             result = ReleaseVersionPreparer(
                 state, workspace_preparer=workspace_preparer,
             ).prepare(manifest)
@@ -1504,6 +1659,21 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             ):
                 self.assertIn(f"export {variable}=2.9.3", release_docker_versions)
                 self.assertIn(f"export {variable}=2.9.4-SNAPSHOT", next_docker_versions)
+            self.assertIn(
+                "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.3\n", release_docker_versions)
+            self.assertIn(
+                f"export CEDAR_OPENVIEW_CEE_NPM_VERSION={PUBLIC_VERSION}\n",
+                release_docker_versions)
+            self.assertIn(
+                "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.3-dev.202608262030.gmain.p4\n",
+                next_docker_versions)
+            self.assertIn(
+                f"export CEDAR_OPENVIEW_CEE_NPM_VERSION={DEV_VERSION}\n", next_docker_versions)
+            for content in (release_docker_versions, next_docker_versions):
+                self.assertIn(
+                    "export CEDAR_WORKSPACE_NPM_VERSION=2.9.3-dev.202608262030.gwork.p4\n",
+                    content)
+                self.assertNotIn("gold", content)
             original_package = json.loads(
                 (cedar_home / "cedar-template-editor" / "package.json").read_bytes()
             )
@@ -1594,10 +1764,13 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             surface["id"]: surface["install"]
             for surface in release_train.FRONTEND_BUILD_SURFACES
         }
-        self.assertEqual(["--legacy-peer-deps"], install_options["openview"])
+        # Each surface installs in the mode its own CI uses, so a lock the release regenerates is
+        # one that repository's plain `npm ci` accepts. Only Monitoring's CI still asks for the
+        # legacy peer resolution.
+        self.assertEqual([], install_options["openview"])
         self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
-        self.assertEqual(["--legacy-peer-deps"], install_options["content"])
-        self.assertEqual(["--legacy-peer-deps"], install_options["cee-demo-angular"])
+        self.assertEqual([], install_options["content"])
+        self.assertEqual([], install_options["cee-demo-angular"])
 
     def test_release_npm_tasks_force_strict_install_script_policy(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3246,6 +3419,35 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertIn("Maven releases already contains", findings[0].message)
         self.assertIn("cedar-ui@2.9.3", findings[1].message)
 
+    def test_source_contract_requires_the_docker_script_to_declare_every_train_input(self):
+        """A variable the train's inputs name but the script lacks would fail in the versions phase."""
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "cedar-docker-build")
+            manifest = self._release_of("cedar-docker-build")
+            manifest["dockerFrontendDefaults"] = {"nextDevelopment": {
+                "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.3-dev.202608262030.gmain.p4",
+                "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+            }}
+            script = (
+                "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
+                "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
+                "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n"
+                "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+            )
+            commands = FakeCommands({
+                ("git", "-C", str(Path(directory) / "cedar-docker-build"), "show"):
+                    FakeCompletedProcess(stdout=script),
+            })
+            findings = self._preflight(
+                manifest=manifest, root=directory, commands=commands,
+            ).check_source_contract()
+
+        messages = [finding.message for finding in findings]
+        self.assertTrue(any(
+            "does not declare CEDAR_WORKSPACE_NPM_VERSION" in message for message in messages))
+        self.assertFalse(any("CEDAR_TEMPLATE_EDITOR_NPM_VERSION" in message for message in messages))
+        self.assertFalse(any("does not contain" in message for message in messages))
+
     def test_missing_preserved_distribution_input_fails_source_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             self._checked_out(directory, "repo-one")
@@ -4252,6 +4454,179 @@ class ReleaseCompletionTest(unittest.TestCase):
                 environment=dict(PREFLIGHT_ENVIRONMENT),
             )
             self.assertEqual([], preflight.check_no_release_in_progress())
+
+
+class ToolchainResolverTest(unittest.TestCase):
+    """The CLI follows the runbook's two export lines itself before it asks the toolchain check."""
+
+    JAVA_HOME_17 = "/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home"
+    NODE_DIR = "/opt/homebrew/opt/node@24/bin"
+
+    def _commands(self, java="23.0.1", node="v22.22.0", java_home_code=0):
+        return FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(
+                stderr=f'java version "{java}" 2025-01-21 LTS'),
+            ("/usr/libexec/java_home", "-v", "17"): FakeCompletedProcess(
+                returncode=java_home_code, stdout=self.JAVA_HOME_17 if not java_home_code else ""),
+            (f"{self.JAVA_HOME_17}/bin/java", "-version"): FakeCompletedProcess(
+                stderr='java version "17.0.14" 2025-01-21 LTS'),
+            ("node", "--version"): FakeCompletedProcess(stdout=node),
+            (f"{self.NODE_DIR}/node", "--version"): FakeCompletedProcess(stdout="v24.19.0"),
+        })
+
+    def test_macos_substitutes_java_17_and_node_24_when_the_shell_offers_others(self):
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=self._commands(), system="Darwin",
+            exists=lambda _path: True)
+
+        notes = resolver.resolve()
+
+        self.assertEqual(2, len(notes))
+        self.assertIn("Java 17 from " + self.JAVA_HOME_17, notes[0])
+        self.assertIn("the shell offered Java 23", notes[0])
+        self.assertIn("Node v24.19.0 from " + self.NODE_DIR, notes[1])
+        self.assertIn("the shell offered Node v22.22.0", notes[1])
+        self.assertEqual(self.JAVA_HOME_17, environment["JAVA_HOME"])
+        entries = environment["PATH"].split(os.pathsep)
+        self.assertLess(entries.index(self.NODE_DIR), entries.index("/usr/bin"))
+        self.assertLess(entries.index(f"{self.JAVA_HOME_17}/bin"), entries.index("/usr/bin"))
+
+    def test_a_matching_toolchain_is_left_alone(self):
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=self._commands(java="17.0.14", node="v24.19.0"),
+            system="Darwin", exists=lambda _path: True)
+
+        self.assertEqual([], resolver.resolve())
+        self.assertEqual({"PATH": "/usr/bin"}, environment)
+
+    def test_missing_candidates_leave_the_environment_for_the_check_to_refuse(self):
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=self._commands(java_home_code=1), system="Darwin",
+            exists=lambda _path: False)
+
+        self.assertEqual([], resolver.resolve())
+        self.assertEqual({"PATH": "/usr/bin"}, environment)
+
+    def test_a_java_home_that_is_not_seventeen_is_not_trusted(self):
+        commands = self._commands()
+        commands.answers[(f"{self.JAVA_HOME_17}/bin/java", "-version")] = FakeCompletedProcess(
+            stderr='java version "21.0.2" 2024-01-16 LTS')
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=commands, system="Darwin", exists=lambda _path: True)
+
+        notes = resolver.resolve()
+
+        self.assertNotIn("JAVA_HOME", environment)
+        self.assertEqual(1, len(notes))
+        self.assertIn("Node v24.19.0", notes[0])
+
+    def test_linux_searches_the_jvm_directory(self):
+        home = "/usr/lib/jvm/java-17-openjdk-amd64"
+        commands = FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(stderr='openjdk version "21.0.2"'),
+            (f"{home}/bin/java", "-version"): FakeCompletedProcess(
+                stderr='openjdk version "17.0.13" 2024-10-15'),
+            ("node", "--version"): FakeCompletedProcess(stdout="v24.19.0"),
+        })
+        environment = {"PATH": "/usr/bin"}
+        resolver = release_train.ToolchainResolver(
+            environment, command_runner=commands, system="Linux",
+            exists=lambda _path: True, jvms=lambda: [home])
+
+        notes = resolver.resolve()
+
+        self.assertEqual(home, environment["JAVA_HOME"])
+        self.assertEqual(1, len(notes))
+        self.assertTrue(environment["PATH"].startswith(f"{home}/bin{os.pathsep}"))
+
+    def test_the_node_remedy_suits_the_host_giving_it(self):
+        with patch("platform.system", return_value="Darwin"):
+            self.assertIn("/opt/homebrew/opt/node@24/bin", release_train.node_24_remediation())
+        with patch("platform.system", return_value="Linux"):
+            linux = release_train.node_24_remediation()
+        self.assertNotIn("/opt/homebrew", linux)
+        self.assertIn("nvm use 24.19.0", linux)
+
+    def test_the_toolchain_check_names_the_node_remedy(self):
+        commands = FakeCommands({
+            ("java", "-version"): FakeCompletedProcess(
+                stderr='openjdk version "17.0.13" 2024-10-15'),
+            ("node", "--version"): FakeCompletedProcess(stdout="v22.22.0"),
+        })
+        preflight = ReleasePreflight(
+            manifest_fixture(),
+            state=ReleaseState(root=Path(tempfile.gettempdir()) / "preflight-state"),
+            command_runner=commands, http=FakeNexus(), environment=dict(PREFLIGHT_ENVIRONMENT),
+            ci_sleeper=lambda _delay: None, ci_delays=(),
+        )
+        with patch("platform.system", return_value="Darwin"):
+            findings = preflight.check_toolchain()
+        self.assertEqual(1, len(findings))
+        self.assertIn("node@24", findings[0].remedy)
+
+    def test_plan_activates_the_toolchain_before_it_plans(self):
+        runner = CliRunner()
+        with (
+            patch.object(release_train.ToolchainResolver, "resolve",
+                         return_value=["Java 17 from /jdk17; the shell offered Java 23"]),
+            patch.object(release_train, "_build_or_exit",
+                         side_effect=typer.Exit(1)) as build,
+        ):
+            result = runner.invoke(release_train.app, [
+                "plan", "--version", "2.9.9", "--next-version", "2.9.10-SNAPSHOT",
+                "--from-train", "2.9.9-dev.20260905.1200", "--cee-version", "2.0.6",
+            ])
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("Toolchain:           Java 17 from /jdk17; the shell offered Java 23",
+                      result.output)
+        build.assert_called_once()
+
+
+class DockerDefaultStampingTest(unittest.TestCase):
+    """The release rewrites the frontend defaults it can prove the script declares, and no others."""
+
+    @staticmethod
+    def _script(directory, extra=""):
+        root = Path(directory)
+        (root / "bin").mkdir()
+        (root / "bin" / "cedar-images-base.sh").write_text(
+            "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
+            "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
+            "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n" + extra,
+            encoding="utf-8",
+        )
+        return root
+
+    def test_a_default_the_train_names_but_the_script_lacks_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._script(directory)
+            with self.assertRaisesRegex(ReleaseError, "CEDAR_WORKSPACE_NPM_VERSION exactly once"):
+                ReleaseVersionPreparer._stamp_docker_build(
+                    root, "2.9.3-SNAPSHOT", "2.9.3", {"CEDAR_WORKSPACE_NPM_VERSION": "x"})
+
+    def test_defaults_are_rewritten_whatever_they_named_before(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._script(
+                directory,
+                "export CEDAR_WORKSPACE_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
+                "export CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION=2.8.0\n",
+            )
+            changed = ReleaseVersionPreparer._stamp_docker_build(
+                root, "2.9.3-SNAPSHOT", "2.9.3", {
+                    "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+                    "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
+                })
+            content = (root / "bin" / "cedar-images-base.sh").read_text(encoding="utf-8")
+
+        self.assertEqual({"bin/cedar-images-base.sh"}, changed)
+        self.assertIn("export CEDAR_WORKSPACE_NPM_VERSION=2.9.3-dev.202608262030.gwork.p4\n", content)
+        self.assertIn("export CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION=2.8.0\n", content)
+        self.assertIn("export IMAGE_VERSION=2.9.3\n", content)
+        self.assertNotIn("gold", content)
 
 
 if __name__ == "__main__":

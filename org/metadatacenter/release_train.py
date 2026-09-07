@@ -220,7 +220,7 @@ FRONTEND_BUILD_SURFACES = [
     {"id": "workspace", "repository": "cedar-workspace", "directory": ".",
      "install": [], "build": []},
     {"id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-src",
-     "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build"],
+     "install": [], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-openview-src/dist/cedar-openview"},
     {"id": "bridging", "repository": "cedar-bridging", "directory": "cedar-bridging-src",
      "install": [], "build": ["npm", "run", "build"],
@@ -229,9 +229,9 @@ FRONTEND_BUILD_SURFACES = [
      "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-monitoring-src/dist/cedar-monitoring"},
     {"id": "content", "repository": "cedar-content-distribution", "directory": ".",
-     "install": ["--legacy-peer-deps"], "build": []},
+     "install": [], "build": []},
     {"id": "cee-demo-angular", "repository": "cedar-component-demo",
-     "directory": "cedar-cee-demo-angular-src", "install": ["--legacy-peer-deps"],
+     "directory": "cedar-cee-demo-angular-src", "install": [],
      "build": ["npm", "run", "build"],
      "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src/browser"},
     {"id": "cee-demo-ember", "repository": "cedar-component-demo",
@@ -740,6 +740,67 @@ def _normalize_bundle_provenance(
     return normalized_dev, normalized_public
 
 
+MINIFIED_TOKEN_SPLIT = re.compile(rb"([A-Za-z_$][A-Za-z0-9_$]*)")
+MINIFIED_NAME_RE = re.compile(rb"^[A-Za-z_$][A-Za-z0-9_$]{0,2}$")
+# Words a minifier never hands to a local, so a difference in one is a code change however short.
+RESERVED_SHORT_WORDS = frozenset({
+    b"do", b"if", b"in", b"for", b"let", b"new", b"try", b"var", b"of", b"NaN",
+})
+
+
+def _canonicalize_minified_renames(
+    dev_identity: str,
+    dev_bundle: bytes,
+    public_identity: str,
+    public_bundle: bytes,
+) -> tuple[bytes, int]:
+    """Spell the development bundle with the public bundle's minified names, or refuse.
+
+    esbuild draws short identifier names from an alphabet it orders by how often each character
+    occurs in the output. The provenance strings a train stamps into a bundle change those counts,
+    so two builds of the same code can differ in every name at one rank of that alphabet while
+    agreeing everywhere else. This accepts exactly that: the two bundles must match byte for byte
+    outside identifiers, and every identifier that differs must be a short minified name rather
+    than a property or a reserved word, renamed the same way at every position where the bundles
+    differ, in both directions. The same short string may still stand unchanged elsewhere, because
+    it also occurs inside data such as regex classes, version strings and base64 text, and nothing
+    short of parsing the bundle can tell those from code. Two kinds of source change therefore pass
+    as renames: one that permutes short local names consistently and changes nothing else, and one
+    that leaves a renamed name in place at a single site. Both bundles have passed the complete CEE
+    gate before they meet here, which is the defence that remains.
+    """
+    refusal = ReleaseError(
+        "CEE promotion changes executable JavaScript outside declared release provenance"
+    )
+    dev_parts = MINIFIED_TOKEN_SPLIT.split(dev_bundle)
+    public_parts = MINIFIED_TOKEN_SPLIT.split(public_bundle)
+    if len(dev_parts) != len(public_parts):
+        raise refusal
+    forward: dict[bytes, bytes] = {}
+    backward: dict[bytes, bytes] = {}
+    canonical = list(dev_parts)
+    for index, (dev_part, public_part) in enumerate(zip(dev_parts, public_parts)):
+        if index % 2 == 0:
+            if dev_part != public_part:
+                raise refusal
+            continue
+        if dev_part == public_part:
+            continue
+        if not (MINIFIED_NAME_RE.match(dev_part) and MINIFIED_NAME_RE.match(public_part)):
+            raise refusal
+        if dev_part in RESERVED_SHORT_WORDS or public_part in RESERVED_SHORT_WORDS:
+            raise refusal
+        preceding = dev_parts[index - 1]
+        if preceding.endswith(b".") and not preceding.endswith(b"..."):
+            raise refusal
+        if forward.setdefault(dev_part, public_part) != public_part:
+            raise refusal
+        if backward.setdefault(public_part, dev_part) != dev_part:
+            raise refusal
+        canonical[index] = public_part
+    return b"".join(canonical), len(forward)
+
+
 def _normalized_bundle_manifest(bundle: bytes) -> bytes:
     return _json_bytes({"bytes": len(bundle), "sha256": _sha256(bundle)})
 
@@ -781,6 +842,7 @@ def compare_cee_packages(
             "CEE promotion changes the package file set: "
             f"development-only={only_dev}, public-only={only_public}"
         )
+    minified_renames = 0
     changed = [
         name for name in sorted(normalized_dev)
         if normalized_dev[name] != normalized_public[name]
@@ -836,8 +898,8 @@ def compare_cee_packages(
                 development_allow_scripts,
             )
             if dev_bundle != public_bundle:
-                raise ReleaseError(
-                    "CEE promotion changes executable JavaScript outside declared release provenance"
+                dev_bundle, minified_renames = _canonicalize_minified_renames(
+                    dev_identity, dev_bundle, public_identity, public_bundle,
                 )
             normalized_dev["cedar-embeddable-editor.js"] = dev_bundle
             normalized_public["cedar-embeddable-editor.js"] = public_bundle
@@ -860,6 +922,7 @@ def compare_cee_packages(
         "bundleSha256": _sha256(dev_files["cedar-embeddable-editor.js"]),
         "publicBundleSha256": _sha256(public_files["cedar-embeddable-editor.js"]),
         "normalizedBundleSha256": _sha256(normalized_dev["cedar-embeddable-editor.js"]),
+        "minifiedIdentifierRenames": minified_renames,
         "allowedMetadataChanges": [
             "package.json:name",
             "package.json:version",
@@ -876,6 +939,9 @@ def compare_cee_packages(
         ] + (
             ["cedar-embeddable-editor.js:embedded allowScripts install policy"]
             if development_allow_scripts else []
+        ) + (
+            ["cedar-embeddable-editor.js:minified identifier names"]
+            if minified_renames else []
         ),
     }
 
@@ -995,6 +1061,46 @@ class ReleasePlanner:
                 "surfaces": npm_surfaces,
             },
         }
+
+    @staticmethod
+    def _docker_frontend_defaults(
+        frontend_config: dict,
+        npm_completion: dict,
+        publication_plan: dict,
+        release_version: str,
+        cee_version: str,
+    ) -> dict:
+        """The frontend package each stamped tree's Docker build defaults should name.
+
+        The train records under dockerInputs the exact package behind every frontend build
+        argument it verified. The next-development tree takes those as they are: they exist the
+        moment the release pushes, so the Docker build's CI at the post-release commit resolves
+        them, and they are the newest development packages there are. The release tree takes what
+        outlives them. Nexus keeps only the last couple of trains' development packages and never
+        removes a release, so the released frontends are named at the release version and
+        OpenView's Editor at the public CEE version. Workspace and the Designer publish
+        independently and keep the train's packages in both trees.
+        """
+        inputs = npm_completion.get("dockerInputs")
+        if inputs is None:
+            return {}
+        if not isinstance(inputs, dict) or not inputs or not all(
+            isinstance(name, str) and name and isinstance(value, str) and value
+            for name, value in inputs.items()
+        ):
+            raise ReleaseError("npm completion dockerInputs must map variable names to versions")
+        released = {
+            surface["repository"] for surface in publication_plan["npm"]["surfaces"]
+        }
+        release_values = dict(inputs)
+        for frontend in frontend_config.get("frontends", []):
+            variable = frontend.get("npmVersionVariable")
+            if variable in inputs and frontend.get("repository") in released:
+                release_values[variable] = release_version
+        cee_variable = frontend_config.get("dockerCeeVersionVariable")
+        if isinstance(cee_variable, str) and cee_variable in inputs:
+            release_values[cee_variable] = cee_version
+        return {"release": release_values, "nextDevelopment": dict(inputs)}
 
     @staticmethod
     def _cee_consumers(config: dict, npm_plan: dict, source: dict) -> list[dict]:
@@ -1179,6 +1285,9 @@ class ReleasePlanner:
         maven_phases = self._maven_phases(build_config, maven_repositories)
         publication_plan = self._publication_plan(build_config, release_repositories)
         consumers = self._cee_consumers(frontend_config, npm_plan, source)
+        docker_frontend_defaults = self._docker_frontend_defaults(
+            frontend_config, npm_completion, publication_plan, release_version, cee_version,
+        )
 
         planned_cee = npm_plan.get("cee", {})
         dev_version = planned_cee.get("version")
@@ -1264,6 +1373,7 @@ class ReleasePlanner:
             "mavenRepositories": maven_repositories,
             "mavenPhases": maven_phases,
             "publicationPlan": publication_plan,
+            "dockerFrontendDefaults": docker_frontend_defaults,
             "cee": {
                 "development": {
                     "name": DEV_CEE_NAME,
@@ -1772,7 +1882,9 @@ class ReleaseVersionPreparer:
         return {relative}
 
     @classmethod
-    def _stamp_docker_build(cls, root: Path, old: str, new: str) -> set[str]:
+    def _stamp_docker_build(
+        cls, root: Path, old: str, new: str, frontend_defaults: dict | None = None,
+    ) -> set[str]:
         changed = set()
         for path in sorted(root.rglob("Dockerfile")):
             if cls._replace_exact(
@@ -1793,9 +1905,33 @@ class ReleaseVersionPreparer:
                 raise ReleaseError(
                     f"{base} does not declare {variable} at train source version {old}")
             changed.add(base.relative_to(root).as_posix())
+        for variable, value in sorted((frontend_defaults or {}).items()):
+            cls._replace_default(base, variable, value)
         if not changed:
             raise ReleaseError(f"{root.name} has no Docker version {old} to stamp")
         return changed
+
+    @staticmethod
+    def _replace_default(base: Path, variable: str, value: str) -> bool:
+        """Point one `export VARIABLE=` line at a new value, whatever it named before.
+
+        The compatibility defaults name whichever development packages the last operator pinned,
+        so unlike the three version variables they cannot be matched by their old value. A
+        variable the train's inputs name but the script does not declare is a configuration
+        drift the release must not paper over.
+        """
+        content = base.read_text(encoding="utf-8")
+        pattern = re.compile(rf"^export {re.escape(variable)}=.*$", re.MULTILINE)
+        matches = pattern.findall(content)
+        if len(matches) != 1:
+            raise ReleaseError(
+                f"{base} must declare {variable} exactly once; the train's Docker inputs name it "
+                f"and found {len(matches)} declaration(s)")
+        replacement = f"export {variable}={value}"
+        if matches[0] == replacement:
+            return False
+        base.write_text(pattern.sub(replacement, content), encoding="utf-8")
+        return True
 
     @classmethod
     def _stamp_docker_deploy(cls, root: Path, old: str, new: str) -> set[str]:
@@ -1837,9 +1973,12 @@ class ReleaseVersionPreparer:
         new: str,
         maven_repositories: set[str],
         copyright_year: str,
+        docker_frontend_defaults: dict | None = None,
     ) -> set[str]:
         changed = cls._stamp_license(root, copyright_year)
-        return changed | cls._stamp_versions(repository, root, old, new, maven_repositories)
+        return changed | cls._stamp_versions(
+            repository, root, old, new, maven_repositories, docker_frontend_defaults,
+        )
 
     @classmethod
     def _stamp_versions(
@@ -1849,6 +1988,7 @@ class ReleaseVersionPreparer:
         old: str,
         new: str,
         maven_repositories: set[str],
+        docker_frontend_defaults: dict | None = None,
     ) -> set[str]:
         if repository in maven_repositories:
             return cls._stamp_maven(root, old, new)
@@ -1860,7 +2000,7 @@ class ReleaseVersionPreparer:
         if repository == "cedar-development":
             return cls._stamp_development(root, old, new)
         if repository == "cedar-docker-build":
-            return cls._stamp_docker_build(root, old, new)
+            return cls._stamp_docker_build(root, old, new, docker_frontend_defaults)
         if repository == "cedar-docker-deploy":
             return cls._stamp_docker_deploy(root, old, new)
         return set()
@@ -1970,6 +2110,7 @@ class ReleaseVersionPreparer:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
 
+        docker_frontend_defaults = manifest.get("dockerFrontendDefaults") or {}
         variants = {}
         for variant, workspace, target in (
             ("release", release_workspace, release_version),
@@ -1980,7 +2121,8 @@ class ReleaseVersionPreparer:
             for repository in release_repositories:
                 root = workspace / repository
                 stamped_by_repository[repository] = self._stamp_repository(
-                    repository, root, old, target, maven_repositories, copyright_year
+                    repository, root, old, target, maven_repositories, copyright_year,
+                    docker_frontend_defaults.get(variant),
                 )
             if self._refresh_train_audit_baselines(workspace):
                 stamped_by_repository.setdefault("cedar-development", set()).add(
@@ -4700,6 +4842,107 @@ def java_17_remediation() -> str:
     return "export JAVA_HOME to a JDK 17, which on this host is usually one of /usr/lib/jvm/java-17-*"
 
 
+# Where Homebrew keeps the release's Node when the shell's default node is another version:
+# Apple silicon first, then Intel.
+NODE_24_CANDIDATE_DIRECTORIES = (
+    "/opt/homebrew/opt/node@24/bin",
+    "/usr/local/opt/node@24/bin",
+)
+LINUX_JVM_ROOT = "/usr/lib/jvm"
+
+
+def node_24_remediation() -> str:
+    """The one line that puts the release's Node first on PATH, phrased for the host giving it."""
+    wanted = REQUIRED_NODE_VERSION.removeprefix("v")
+    if platform.system() == "Darwin":
+        return f'export PATH="{NODE_24_CANDIDATE_DIRECTORIES[0]}:$PATH"'
+    return f"put a Node {wanted} bin directory first on PATH, for example with nvm use {wanted}"
+
+
+class ToolchainResolver:
+    """Put the release's Java and Node first on PATH when the shell offers other versions.
+
+    A developer shell pins whatever the day's work needs, and a release needs Java 17 and Node
+    24.19.0 exactly. The runbook tells the operator to export both before starting; the CLI can
+    follow those two instructions itself. It changes only the environment it is given, which for
+    a command is this process and its children, says what it substituted, and leaves the toolchain
+    check to refuse whatever it could not find.
+    """
+
+    def __init__(self, environment, *, command_runner=None, system=None, exists=None, jvms=None):
+        self.environment = environment
+        self.command_runner = command_runner or subprocess.run
+        self.system = system or platform.system()
+        self.exists = exists or (lambda path: Path(path).is_file())
+        self.jvms = jvms or (lambda: sorted(
+            str(path) for path in Path(LINUX_JVM_ROOT).glob(f"*{REQUIRED_JAVA_MAJOR}*")))
+
+    def _capture(self, args: list[str]) -> tuple[int, str, str]:
+        try:
+            result = self.command_runner(
+                args, env=self.environment, text=True, capture_output=True, check=False)
+        except OSError as error:
+            return 127, "", str(error)
+        return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
+
+    @staticmethod
+    def _java_major(version_output: str) -> int | None:
+        match = re.search(r'version "(\d+)', version_output)
+        return int(match.group(1)) if match else None
+
+    def _prepend_path(self, directory: str) -> None:
+        current = self.environment.get("PATH", "")
+        self.environment["PATH"] = f"{directory}{os.pathsep}{current}" if current else directory
+
+    def resolve(self) -> list[str]:
+        """Substitute what the release needs and report each substitution in one line."""
+        return [*self._resolve_java(), *self._resolve_node()]
+
+    def _resolve_java(self) -> list[str]:
+        code, _, stderr = self._capture(["java", "-version"])
+        major = self._java_major(stderr) if code == 0 else None
+        if major == REQUIRED_JAVA_MAJOR:
+            return []
+        home = self._java_17_home()
+        if not home:
+            return []
+        self.environment["JAVA_HOME"] = home
+        self._prepend_path(str(Path(home) / "bin"))
+        offered = f"Java {major}" if major else "no working java"
+        return [f"Java {REQUIRED_JAVA_MAJOR} from {home}; the shell offered {offered}"]
+
+    def _java_17_home(self) -> str | None:
+        if self.system == "Darwin":
+            code, home, _ = self._capture(
+                ["/usr/libexec/java_home", "-v", str(REQUIRED_JAVA_MAJOR)])
+            candidates = [home] if code == 0 and home else []
+        else:
+            candidates = list(self.jvms())
+        for candidate in candidates:
+            java = str(Path(candidate) / "bin" / "java")
+            if not self.exists(java):
+                continue
+            code, _, stderr = self._capture([java, "-version"])
+            if code == 0 and self._java_major(stderr) == REQUIRED_JAVA_MAJOR:
+                return candidate
+        return None
+
+    def _resolve_node(self) -> list[str]:
+        code, version, _ = self._capture(["node", "--version"])
+        if code == 0 and version == REQUIRED_NODE_VERSION:
+            return []
+        for directory in NODE_24_CANDIDATE_DIRECTORIES:
+            binary = str(Path(directory) / "node")
+            if not self.exists(binary):
+                continue
+            candidate_code, candidate_version, _ = self._capture([binary, "--version"])
+            if candidate_code == 0 and candidate_version == REQUIRED_NODE_VERSION:
+                self._prepend_path(directory)
+                offered = f"Node {version}" if code == 0 and version else "no working node"
+                return [f"Node {REQUIRED_NODE_VERSION} from {directory}; the shell offered {offered}"]
+        return []
+
+
 # Calibrated allocations for one clean release workspace. The final requirement
 # is derived from the manifest's repository/build counts; these are deliberately
 # named so observed train footprints can tune the model without restoring a
@@ -5025,7 +5268,7 @@ class ReleasePreflight:
                 "toolchain", "fail",
                 f"Node {node or 'of unknown version'} is active, and release builds require "
                 f"{REQUIRED_NODE_VERSION}",
-                f"activate Node {REQUIRED_NODE_VERSION.removeprefix('v')}",
+                node_24_remediation(),
             ))
         return findings
 
@@ -5599,6 +5842,20 @@ class ReleasePreflight:
                         "source", "fail",
                         f"train source {repository}:{relative} does not contain {marker!r}",
                     ))
+            if repository == "cedar-docker-build":
+                defaults = (self.manifest.get("dockerFrontendDefaults") or {}).get(
+                    "nextDevelopment", {})
+                for variable in sorted(defaults):
+                    declared = content is not None and re.search(
+                        rf"^export {re.escape(variable)}=", content, re.MULTILINE)
+                    if not declared:
+                        findings.append(PreflightFinding(
+                            "source", "fail",
+                            f"train source {repository}:{relative} does not declare {variable}, "
+                            "which the train's Docker inputs name",
+                            "declare the variable in the images base script, or drop it from "
+                            "frontend-train.json, and build a new train",
+                        ))
         if "cedar-docker-deploy" in self.manifest.get("releaseRepositories", []):
             matches = 0
             for relative in self._source_paths("cedar-docker-deploy"):
@@ -5925,7 +6182,7 @@ def _watch_release(
             ),
         )
         if signature != previous or now - last_report >= heartbeat:
-            console.print(summary, markup=False)
+            console.print(summary, markup=False, soft_wrap=True)
             previous = signature
             last_report = now
         phase = manifest.get("phase")
@@ -5934,6 +6191,12 @@ def _watch_release(
         if phase == "abandoned" or (manifest.get("failure") and not manifest.get("retry")):
             return manifest, path, 1
         sleeper(interval)
+
+
+def _activate_toolchain() -> None:
+    """Give this process the release's Java and Node before any check or build asks for them."""
+    for note in ToolchainResolver(os.environ).resolve():
+        console.print(f"Toolchain:           {note}")
 
 
 def _build_or_exit(
@@ -6080,6 +6343,7 @@ def plan(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
 ):
     """Settle every release precondition without changing release state."""
+    _activate_toolchain()
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
     _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
@@ -6098,6 +6362,7 @@ def start(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Run a manifest-owned train release through verified Git and publication stages."""
+    _activate_toolchain()
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
     _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
@@ -6122,6 +6387,7 @@ def resume(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Resume the active train-backed release from its recorded phase."""
+    _activate_toolchain()
     state = ReleaseState()
     try:
         active, path = state.read_current_manifest()

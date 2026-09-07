@@ -6,6 +6,7 @@ from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.PublishPlanner import PublishPlanner
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
+from org.metadatacenter.worker.LockBaselineWorker import LockBaselineWorker
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -30,7 +31,10 @@ def train(
 
 @app.command("train-status")
 def train_status(
-        version: str = typer.Argument(..., help="Immutable train identifier."),
+        version: str = typer.Argument(
+            None,
+            help="Immutable train identifier. Defaults to the newest dispatched train.",
+        ),
         watch: bool = typer.Option(
             False,
             "--watch",
@@ -38,6 +42,28 @@ def train_status(
         )):
     """Show persisted stages, workflow progress, and the safe recovery decision."""
     raise typer.Exit(code=BuildTrainWorker.status(version, watch=watch))
+
+
+@app.command("baselines")
+def baselines(
+        refresh: bool = typer.Option(
+            False,
+            "--refresh",
+            help="Recompute the digest and npm audit counts of every stale lock and write them "
+                 "to frontend-train.json for review.",
+        ),
+        repository: list[str] = typer.Option(
+            None,
+            "--repository",
+            help="Only this repository's locks; may be repeated.",
+        ),
+        show_all: bool = typer.Option(
+            False, "--all", help="List every baseline, not only the stale ones.",
+        )):
+    """Show which reviewed npm lock baselines no longer match their lockfiles, or refresh them."""
+    if refresh:
+        raise typer.Exit(code=LockBaselineWorker.refresh(repositories=repository))
+    raise typer.Exit(code=LockBaselineWorker.report(show_all=show_all, repositories=repository))
 
 
 @app.command("this")

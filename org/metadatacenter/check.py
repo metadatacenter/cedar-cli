@@ -1,6 +1,7 @@
 import typer
 
 from org.metadatacenter.util.CliResult import exit_on_failure
+from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.SnapshotWorker import DEFAULT_NEXUS, SnapshotWorker
 from org.metadatacenter.worker.VersionWorker import VersionWorker
@@ -35,3 +36,12 @@ def snapshots(
     """Check that each repository's published snapshot was built from its current source."""
     exit_on_failure(SnapshotWorker.check_snapshots(
         version=version, grace_hours=grace_hours, nexus=nexus))
+
+
+@app.command("ci")
+def ci(
+        show_all: bool = typer.Option(
+            False, "--all",
+            help="List every repository, not only those whose CI is not green.")):
+    """Check GitHub CI at the exact develop commit of every repository a train would capture."""
+    exit_on_failure(BuildTrainWorker.report_source_ci(show_all=show_all))
