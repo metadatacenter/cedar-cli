@@ -3804,6 +3804,56 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertIn("2 unpushed commit", findings[0].message)
 
+    def test_the_smoke_gate_is_part_of_the_complete_gate_and_of_every_build_stage(self):
+        """A release is refused, not merely warned, when no smoke run covers its source."""
+        self.assertIn("check_smoke_gate", ReleasePreflight.CHECKS)
+        for phase in ("started", "frontends-prepared", "versions-prepared"):
+            manifest = manifest_fixture()
+            manifest["phase"] = phase
+            preflight = self._preflight(manifest=manifest)
+            called = []
+            names = [name for name in ReleasePreflight.CHECKS]
+
+            def check(name):
+                def run():
+                    called.append(name)
+                    return []
+                return run
+
+            with patch.multiple(preflight, **{name: check(name) for name in names}):
+                preflight.run_resume()
+            self.assertIn("check_smoke_gate", called, phase)
+
+    def test_the_smoke_gate_is_asked_about_the_train_source(self):
+        manifest = self._release_of("repo-one", "repo-two")
+        with patch("org.metadatacenter.smoke_gate.findings_for", return_value=[]) as findings:
+            result = self._preflight(manifest=manifest).check_smoke_gate()
+
+        self.assertEqual([], result)
+        findings.assert_called_once_with(
+            PREFLIGHT_ENVIRONMENT["CEDAR_HOME"], manifest["sourceRepositories"])
+
+    def test_a_source_no_smoke_run_covers_blocks_the_release(self):
+        manifest = self._release_of("repo-one")
+        with patch("org.metadatacenter.smoke_gate.findings_for", return_value=[
+            "repo-one: the smoke run at T tested 11111111, this source is aaaaaaaa",
+        ]):
+            findings = self._preflight(manifest=manifest).check_smoke_gate()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertEqual("smoke", findings[0].check)
+        self.assertIn("tested 11111111", findings[0].message)
+        self.assertIn("cedarcli test e2e", findings[0].remedy)
+
+    def test_a_manifest_without_sources_cannot_pass_the_smoke_gate(self):
+        manifest = manifest_fixture()
+        manifest["sourceRepositories"] = {}
+        findings = self._preflight(manifest=manifest).check_smoke_gate()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+
     def test_start_and_plan_settle_the_same_preconditions(self):
         """A release must not be startable from a state that plan would have refused."""
         for command in (release_train.plan, release_train.start):

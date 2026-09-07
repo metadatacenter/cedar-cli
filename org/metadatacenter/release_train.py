@@ -48,6 +48,7 @@ from org.metadatacenter.npm_policy import (
     npm_user_config_findings,
     unreviewed_install_scripts,
 )
+from org.metadatacenter import smoke_gate
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
@@ -5139,6 +5140,7 @@ class ReleasePreflight:
         "check_target_version_unused",
         "check_target_artifacts_unused",
         "check_develop_is_green",
+        "check_smoke_gate",
         "check_source_contract",
         "check_generated_version_files",
         "check_license_files",
@@ -5219,7 +5221,7 @@ class ReleasePreflight:
                 "check_nexus_authorization", "check_npm_authorization",
                 "check_push_permission", "check_target_version_unused",
                 "check_target_artifacts_unused", "check_source_contract",
-                "check_develop_is_green",
+                "check_develop_is_green", "check_smoke_gate",
                 "check_generated_version_files", "check_license_files",
                 "check_remote_survey",
             ])
@@ -5761,6 +5763,26 @@ class ReleasePreflight:
                     f"--accept-red-develop {repository}={run_id}",
                 ))
         return findings
+
+    def check_smoke_gate(self) -> list[PreflightFinding]:
+        """Refuse to release a source that no passing whole-stack smoke run covers.
+
+        The question is asked of the train's source commits, for the reason the CI check gives:
+        develop moves on between a train and its release, and the run that answers for what is
+        being released is the one made against exactly that. `cedarcli test e2e` records each run
+        under the heads it tested, so a later rerun against newer heads does not disturb the answer
+        here, and no flag skips the check: a flaky run is rerun, not accepted.
+        """
+        expected = self.manifest.get("sourceRepositories") or {}
+        if not expected:
+            return [PreflightFinding(
+                "smoke", "fail",
+                "the manifest records no source repositories to match a smoke run against",
+            )]
+        return [
+            PreflightFinding("smoke", "fail", message, smoke_gate.REMEDY)
+            for message in smoke_gate.findings_for(self.environment.get("CEDAR_HOME"), expected)
+        ]
 
     def check_source_contract(self) -> list[PreflightFinding]:
         """Validate build and publication topology in the exact immutable train commits."""

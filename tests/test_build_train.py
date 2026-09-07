@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from org.metadatacenter import build, publish
+from org.metadatacenter import build, publish, smoke_gate
 from org.metadatacenter.util.BuildTrain import BuildTrain, DockerTrain, NpmTrain
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
@@ -186,6 +186,7 @@ class BuildTrainTest(unittest.TestCase):
             patch.object(BuildTrainWorker, '_local_configuration_preflight') as local_config,
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
             patch.object(BuildTrainWorker, '_source_ci_preflight') as source_ci,
+            patch.object(BuildTrainWorker, '_smoke_gate_preflight') as smoke_gate,
             patch.object(BuildTrainWorker, '_npm_configuration_preflight') as npm_config,
             patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
@@ -203,6 +204,7 @@ class BuildTrainTest(unittest.TestCase):
         local_config.assert_called_once_with()
         targets.assert_called_once_with()
         source_ci.assert_called_once_with(None)
+        smoke_gate.assert_called_once_with(None)
         npm_config.assert_called_once_with()
         self.assertFalse(any(call.args[0][1:3] == ['workflow', 'run'] for call in run.call_args_list))
 
@@ -241,6 +243,7 @@ class BuildTrainTest(unittest.TestCase):
             ),
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
             patch.object(BuildTrainWorker, '_source_ci_preflight'),
+            patch.object(BuildTrainWorker, '_smoke_gate_preflight') as smoke_gate,
             patch.object(BuildTrainWorker, '_npm_configuration_preflight'),
             patch.object(BuildTrainWorker, '_publication_targets_preflight'),
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
@@ -249,6 +252,7 @@ class BuildTrainTest(unittest.TestCase):
             result = self.runner.invoke(publish.app, [
                 'train', '--resume', version, '--dry-run',
             ])
+        smoke_gate.assert_called_once_with({'version': version})
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn('Mode: resume', result.output)
         self.assertIn('Next incomplete stage: npm plan', result.output)
@@ -731,6 +735,7 @@ class PreflightReportTest(unittest.TestCase):
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
             patch.object(BuildTrainWorker, '_source_ci_preflight', side_effect=ValueError(
                 'train source CI is not settled: cedar-y: CI concluded failure')) as source_ci,
+            patch.object(BuildTrainWorker, '_smoke_gate_preflight'),
             patch.object(BuildTrainWorker, '_npm_configuration_preflight') as npm_config,
             patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
         ):
@@ -765,6 +770,7 @@ class PreflightReportTest(unittest.TestCase):
             patch.object(BuildTrainWorker, '_source_alignment', return_value=[
                 'cedar-z local develop is 11111111, but GitHub develop is 22222222']),
             patch.object(BuildTrainWorker, '_source_ci_preflight') as source_ci,
+            patch.object(BuildTrainWorker, '_smoke_gate_preflight'),
             patch.object(BuildTrainWorker, '_npm_configuration_preflight'),
             patch.object(BuildTrainWorker, '_publication_targets_preflight'),
         ):
@@ -921,3 +927,65 @@ class PreflightReportTest(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn('cedar-a', output)
         self.assertIn('a train may be dispatched', output)
+
+
+class SmokeGatePreflightTest(unittest.TestCase):
+    """A train ships only a source a passing whole-stack smoke run has covered."""
+
+    HEADS = {'cedar-a': 'a' * 40, 'cedar-b': 'b' * 40}
+
+    def test_a_new_train_is_judged_by_the_local_develop_heads(self):
+        with (
+            patch.object(Util, 'cedar_home', '/tmp/cedar-smoke'),
+            patch.object(smoke_gate, 'train_repositories', return_value=['cedar-a', 'cedar-b']),
+            patch.object(smoke_gate, 'develop_heads', return_value=(self.HEADS, [], [])) as heads,
+            patch.object(smoke_gate, 'findings_for', return_value=[]) as findings,
+        ):
+            BuildTrainWorker._smoke_gate_preflight(None)
+
+        heads.assert_called_once_with('/tmp/cedar-smoke', ['cedar-a', 'cedar-b'])
+        findings.assert_called_once_with('/tmp/cedar-smoke', self.HEADS)
+
+    def test_a_resumed_train_is_judged_by_its_recorded_source(self):
+        recorded = {'cedar-a': 'c' * 40}
+        with (
+            patch.object(Util, 'cedar_home', '/tmp/cedar-smoke'),
+            patch.object(smoke_gate, 'develop_heads') as heads,
+            patch.object(smoke_gate, 'findings_for', return_value=[]) as findings,
+        ):
+            BuildTrainWorker._smoke_gate_preflight({'version': 'x', 'repositories': recorded})
+
+        heads.assert_not_called()
+        findings.assert_called_once_with('/tmp/cedar-smoke', recorded)
+
+    def test_an_uncovered_source_refuses_with_every_reason(self):
+        with (
+            patch.object(Util, 'cedar_home', '/tmp/cedar-smoke'),
+            patch.object(smoke_gate, 'train_repositories', return_value=['cedar-a']),
+            patch.object(smoke_gate, 'develop_heads', return_value=(self.HEADS, [], [])),
+            patch.object(smoke_gate, 'findings_for', return_value=[
+                'cedar-a: the smoke run at T tested 11111111, this source is aaaaaaaa',
+                'the browser smoke was FAIL at T',
+            ]),
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._smoke_gate_preflight(None)
+
+        message = str(refused.exception)
+        self.assertTrue(message.startswith('no passing whole-stack smoke run covers this source: '))
+        self.assertIn('cedar-a: the smoke run at T', message)
+        self.assertIn('the browser smoke was FAIL', message)
+
+    def test_a_head_that_cannot_be_resolved_refuses_before_the_record_is_read(self):
+        with (
+            patch.object(Util, 'cedar_home', '/tmp/cedar-smoke'),
+            patch.object(smoke_gate, 'train_repositories', return_value=['cedar-a']),
+            patch.object(smoke_gate, 'develop_heads', return_value=(
+                {}, [], ['cedar-a has no local develop branch'])),
+            patch.object(smoke_gate, 'findings_for') as findings,
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._smoke_gate_preflight(None)
+
+        self.assertIn('cedar-a has no local develop branch', str(refused.exception))
+        findings.assert_not_called()

@@ -5,11 +5,18 @@ import time
 import typer
 from rich.console import Console
 
+from org.metadatacenter.smoke_gate import run_smoke
 from org.metadatacenter.util.BuildSafety import embedded_mongo_processes
 
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
+
+
+@app.command("e2e")
+def e2e():
+    """Run both whole-stack smoke tiers and record the evidence the train and release gates require."""
+    raise typer.Exit(run_smoke())
 
 
 @app.command("status")
