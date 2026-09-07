@@ -294,6 +294,84 @@ class CeePromotionTest(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
             compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
 
+    def _renamed_pair(self, dev_code, public_code):
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            bundle=provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+                suffix=dev_code,
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09", suffix=public_code,
+            ),
+            changelog=PUBLIC_CHANGELOG,
+        )
+        return dev, public
+
+    def test_consistently_renamed_minified_identifiers_are_a_promotion(self):
+        dev, public = self._renamed_pair(
+            'function eB(t){return nB(t)}var nB=t=>eB(t);let x="eB";',
+            'function e8(t){return n8(t)}var n8=t=>e8(t);let x="eB";',
+        )
+
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+        self.assertEqual(2, proof["minifiedIdentifierRenames"])
+        self.assertIn(
+            "cedar-embeddable-editor.js:minified identifier names",
+            proof["allowedMetadataChanges"],
+        )
+        self.assertNotEqual(proof["bundleSha256"], proof["publicBundleSha256"])
+
+    def test_one_name_renamed_two_ways_is_rejected(self):
+        dev, public = self._renamed_pair(
+            "function eB(t){return eB(t)}",
+            "function e8(t){return e9(t)}",
+        )
+        with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_a_renamed_name_may_still_stand_unchanged_in_data(self):
+        dev, public = self._renamed_pair(
+            'function eB(t){return eB(t)}var r=/^[-+]?0[eB]/,s="eB";',
+            'function e8(t){return e8(t)}var r=/^[-+]?0[eB]/,s="eB";',
+        )
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+        self.assertEqual(1, proof["minifiedIdentifierRenames"])
+
+    def test_two_names_collapsing_into_one_are_rejected(self):
+        dev, public = self._renamed_pair(
+            "function eB(t){return nB(t)}",
+            "function e8(t){return e8(t)}",
+        )
+        with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_a_renamed_property_or_long_name_is_a_code_change(self):
+        for dev_code, public_code in (
+            ("return t.eB(1)", "return t.e8(1)"),
+            ("function hostElement(){}", "function hostElemenu(){}"),
+            ("let a=1", "var a=1"),
+        ):
+            dev, public = self._renamed_pair(dev_code, public_code)
+            with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
+                compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_a_spread_of_a_renamed_name_is_still_a_rename(self):
+        dev, public = self._renamed_pair(
+            "providers:[...qB,...KB],x:qB(KB)",
+            "providers:[...q8,...K8],x:q8(K8)",
+        )
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+        self.assertEqual(2, proof["minifiedIdentifierRenames"])
+
     def test_captured_allow_scripts_policy_is_normalized_out_of_bundle(self):
         allow_scripts = {
             "@parcel/watcher@2.6.0": True,

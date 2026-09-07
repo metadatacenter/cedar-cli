@@ -740,6 +740,67 @@ def _normalize_bundle_provenance(
     return normalized_dev, normalized_public
 
 
+MINIFIED_TOKEN_SPLIT = re.compile(rb"([A-Za-z_$][A-Za-z0-9_$]*)")
+MINIFIED_NAME_RE = re.compile(rb"^[A-Za-z_$][A-Za-z0-9_$]{0,2}$")
+# Words a minifier never hands to a local, so a difference in one is a code change however short.
+RESERVED_SHORT_WORDS = frozenset({
+    b"do", b"if", b"in", b"for", b"let", b"new", b"try", b"var", b"of", b"NaN",
+})
+
+
+def _canonicalize_minified_renames(
+    dev_identity: str,
+    dev_bundle: bytes,
+    public_identity: str,
+    public_bundle: bytes,
+) -> tuple[bytes, int]:
+    """Spell the development bundle with the public bundle's minified names, or refuse.
+
+    esbuild draws short identifier names from an alphabet it orders by how often each character
+    occurs in the output. The provenance strings a train stamps into a bundle change those counts,
+    so two builds of the same code can differ in every name at one rank of that alphabet while
+    agreeing everywhere else. This accepts exactly that: the two bundles must match byte for byte
+    outside identifiers, and every identifier that differs must be a short minified name rather
+    than a property or a reserved word, renamed the same way at every position where the bundles
+    differ, in both directions. The same short string may still stand unchanged elsewhere, because
+    it also occurs inside data such as regex classes, version strings and base64 text, and nothing
+    short of parsing the bundle can tell those from code. Two kinds of source change therefore pass
+    as renames: one that permutes short local names consistently and changes nothing else, and one
+    that leaves a renamed name in place at a single site. Both bundles have passed the complete CEE
+    gate before they meet here, which is the defence that remains.
+    """
+    refusal = ReleaseError(
+        "CEE promotion changes executable JavaScript outside declared release provenance"
+    )
+    dev_parts = MINIFIED_TOKEN_SPLIT.split(dev_bundle)
+    public_parts = MINIFIED_TOKEN_SPLIT.split(public_bundle)
+    if len(dev_parts) != len(public_parts):
+        raise refusal
+    forward: dict[bytes, bytes] = {}
+    backward: dict[bytes, bytes] = {}
+    canonical = list(dev_parts)
+    for index, (dev_part, public_part) in enumerate(zip(dev_parts, public_parts)):
+        if index % 2 == 0:
+            if dev_part != public_part:
+                raise refusal
+            continue
+        if dev_part == public_part:
+            continue
+        if not (MINIFIED_NAME_RE.match(dev_part) and MINIFIED_NAME_RE.match(public_part)):
+            raise refusal
+        if dev_part in RESERVED_SHORT_WORDS or public_part in RESERVED_SHORT_WORDS:
+            raise refusal
+        preceding = dev_parts[index - 1]
+        if preceding.endswith(b".") and not preceding.endswith(b"..."):
+            raise refusal
+        if forward.setdefault(dev_part, public_part) != public_part:
+            raise refusal
+        if backward.setdefault(public_part, dev_part) != dev_part:
+            raise refusal
+        canonical[index] = public_part
+    return b"".join(canonical), len(forward)
+
+
 def _normalized_bundle_manifest(bundle: bytes) -> bytes:
     return _json_bytes({"bytes": len(bundle), "sha256": _sha256(bundle)})
 
@@ -781,6 +842,7 @@ def compare_cee_packages(
             "CEE promotion changes the package file set: "
             f"development-only={only_dev}, public-only={only_public}"
         )
+    minified_renames = 0
     changed = [
         name for name in sorted(normalized_dev)
         if normalized_dev[name] != normalized_public[name]
@@ -836,8 +898,8 @@ def compare_cee_packages(
                 development_allow_scripts,
             )
             if dev_bundle != public_bundle:
-                raise ReleaseError(
-                    "CEE promotion changes executable JavaScript outside declared release provenance"
+                dev_bundle, minified_renames = _canonicalize_minified_renames(
+                    dev_identity, dev_bundle, public_identity, public_bundle,
                 )
             normalized_dev["cedar-embeddable-editor.js"] = dev_bundle
             normalized_public["cedar-embeddable-editor.js"] = public_bundle
@@ -860,6 +922,7 @@ def compare_cee_packages(
         "bundleSha256": _sha256(dev_files["cedar-embeddable-editor.js"]),
         "publicBundleSha256": _sha256(public_files["cedar-embeddable-editor.js"]),
         "normalizedBundleSha256": _sha256(normalized_dev["cedar-embeddable-editor.js"]),
+        "minifiedIdentifierRenames": minified_renames,
         "allowedMetadataChanges": [
             "package.json:name",
             "package.json:version",
@@ -876,6 +939,9 @@ def compare_cee_packages(
         ] + (
             ["cedar-embeddable-editor.js:embedded allowScripts install policy"]
             if development_allow_scripts else []
+        ) + (
+            ["cedar-embeddable-editor.js:minified identifier names"]
+            if minified_renames else []
         ),
     }
 
