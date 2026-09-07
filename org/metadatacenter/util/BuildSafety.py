@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 
 
 FRONTEND_RUNTIME_MARKERS = (
@@ -21,6 +24,124 @@ FRONTEND_RUNTIME_MARKERS = (
 
 class BuildSafetyError(RuntimeError):
     pass
+
+
+@dataclasses.dataclass(frozen=True)
+class EmbeddedMongoProcess:
+    pid: int
+    executable: Path
+    listeners: tuple[str, ...] = ()
+
+    def describe(self) -> str:
+        endpoints = f"; listening on {', '.join(self.listeners)}" if self.listeners else ""
+        return f"PID {self.pid} ({self.executable}{endpoints})"
+
+
+def _is_embedded_mongod(path: Path) -> bool:
+    return path.name == "mongod" and ".embedmongo" in path.parts
+
+
+def _parse_lsof_embedded_mongods(output: str) -> dict[int, Path]:
+    processes = {}
+    pid = None
+    for line in output.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith("n") and pid is not None:
+            executable = Path(line[1:])
+            if _is_embedded_mongod(executable):
+                processes[pid] = executable
+    return processes
+
+
+def _listening_endpoints(pid: int, command_runner=subprocess.run) -> tuple[str, ...]:
+    try:
+        result = command_runner(
+            ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
+            check=False, text=True, capture_output=True,
+        )
+    except OSError:
+        return ()
+    return tuple(sorted({
+        line[1:] for line in (result.stdout or "").splitlines()
+        if line.startswith("n")
+    }))
+
+
+def embedded_mongo_processes(
+    *, command_runner=subprocess.run, proc_root: Path = Path("/proc"),
+) -> list[EmbeddedMongoProcess]:
+    """Return only Flapdoodle mongods, never the workstation's native MongoDB."""
+    found = {}
+    if proc_root.is_dir():
+        for candidate in proc_root.iterdir():
+            if not candidate.name.isdigit():
+                continue
+            try:
+                executable = (candidate / "exe").resolve(strict=True)
+            except OSError:
+                continue
+            if _is_embedded_mongod(executable):
+                found[int(candidate.name)] = executable
+    else:
+        try:
+            result = command_runner(
+                ["lsof", "-nP", "-c", "mongod", "-a", "-d", "txt", "-Fpcn"],
+                check=False, text=True, capture_output=True,
+            )
+        except OSError as error:
+            raise BuildSafetyError(
+                f"cannot inspect embedded Mongo test processes: {error}") from error
+        if result.returncode not in {0, 1}:
+            detail = (result.stderr or "").strip()
+            raise BuildSafetyError(
+                "cannot inspect embedded Mongo test processes"
+                + (f": {detail}" if detail else ""))
+        found = _parse_lsof_embedded_mongods(result.stdout or "")
+    return [
+        EmbeddedMongoProcess(pid, executable, _listening_endpoints(pid, command_runner))
+        for pid, executable in sorted(found.items())
+    ]
+
+
+def _embedded_mongo_failure(context: str, processes: list[EmbeddedMongoProcess]) -> BuildSafetyError:
+    detail = ", ".join(process.describe() for process in processes)
+    return BuildSafetyError(
+        f"refusing {context}: embedded Mongo test process(es) remain: {detail}. "
+        "End the owning test, or run `cedarcli test cleanup`."
+    )
+
+
+def require_no_embedded_mongo_processes(context: str) -> None:
+    processes = embedded_mongo_processes()
+    if processes:
+        raise _embedded_mongo_failure(context, processes)
+
+
+def wait_for_no_embedded_mongo_processes(
+    context: str, *, timeout_seconds: float = 5.0, poll_seconds: float = 0.1,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        processes = embedded_mongo_processes()
+        if not processes:
+            return
+        if time.monotonic() >= deadline:
+            raise _embedded_mongo_failure(context, processes)
+        time.sleep(poll_seconds)
+
+
+def is_test_bearing_maven_command(command: str) -> bool:
+    try:
+        arguments = shlex.split(command)
+    except ValueError:
+        arguments = command.split()
+    executable = arguments[0] if arguments else ""
+    is_maven = executable in {"mvn", "./mvnw"} or executable.endswith("/mvnw")
+    skips_tests = any(argument in {
+        "-DskipTests", "-DskipTests=true", "-Dmaven.test.skip=true",
+    } for argument in arguments[1:])
+    return is_maven and not skips_tests
 
 
 def tracked_state(root: Path) -> bytes:

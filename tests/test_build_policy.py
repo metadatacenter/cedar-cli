@@ -210,6 +210,32 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertEqual(7, return_code)
         self.assertEqual(2, execute.call_count)
 
+    def test_test_bearing_maven_task_checks_for_mongods_before_and_after(self):
+        executor = ShellTaskExecutor()
+        task = SimpleNamespace(
+            node_id=3,
+            repo=SimpleNamespace(name="cedar-example", repo_type="JAVA"),
+            command_list=["./mvnw clean install"],
+        )
+
+        with patch("org.metadatacenter.taskexecutor.ShellTaskExecutor.Util.get_wd",
+                   return_value="/tmp"), \
+                patch.object(executor, "execute_shell_command", return_value=([], 0)), \
+                patch(
+                    "org.metadatacenter.taskexecutor.ShellTaskExecutor."
+                    "require_no_embedded_mongo_processes") as before, \
+                patch(
+                    "org.metadatacenter.taskexecutor.ShellTaskExecutor."
+                    "wait_for_no_embedded_mongo_processes") as after:
+            return_code = executor.execute_shell_command_list(
+                task, Mock(), dry_run=False)
+
+        self.assertEqual(0, return_code)
+        before.assert_called_once_with(
+            "test-bearing Maven task for cedar-example")
+        after.assert_called_once_with(
+            "completion of test-bearing Maven task for cedar-example")
+
     def test_a_failing_task_halts_the_plan_nonzero(self):
         """
         The default. `fail_on_error` is on unless something turns it off, and

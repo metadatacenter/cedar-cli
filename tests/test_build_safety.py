@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from org.metadatacenter.util.BuildSafety import (
@@ -10,6 +11,8 @@ from org.metadatacenter.util.BuildSafety import (
     _process_cwd,
     capture_estate_state,
     changed_repositories,
+    embedded_mongo_processes,
+    is_test_bearing_maven_command,
     isolated_frontend_workspace,
     require_no_frontend_runtime_collision,
 )
@@ -73,6 +76,65 @@ class BuildSafetyTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(BuildSafetyError, "PID 17"):
                 require_no_frontend_runtime_collision(Path("/tmp/frontend"))
+
+    def test_embedded_mongo_inventory_excludes_the_native_server(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            embedded = root / "cache" / ".embedmongo" / "5.0" / "mongod"
+            native = root / "homebrew" / "mongodb" / "mongod"
+            embedded.parent.mkdir(parents=True)
+            native.parent.mkdir(parents=True)
+            embedded.touch()
+            native.touch()
+            proc = root / "proc"
+            (proc / "42").mkdir(parents=True)
+            (proc / "84").mkdir(parents=True)
+            (proc / "42" / "exe").symlink_to(embedded)
+            (proc / "84" / "exe").symlink_to(native)
+
+            def commands(*_args, **_kwargs):
+                return SimpleNamespace(
+                    returncode=0, stdout="n127.0.0.1:42317\n", stderr="")
+
+            processes = embedded_mongo_processes(
+                command_runner=commands, proc_root=proc)
+
+        self.assertEqual([42], [process.pid for process in processes])
+        self.assertEqual(("127.0.0.1:42317",), processes[0].listeners)
+
+    def test_only_test_bearing_maven_commands_get_the_process_gate(self):
+        self.assertTrue(is_test_bearing_maven_command("./mvnw clean install"))
+        self.assertTrue(is_test_bearing_maven_command("/tmp/repo/mvnw verify"))
+        self.assertFalse(is_test_bearing_maven_command(
+            "./mvnw clean install -DskipTests"))
+        self.assertTrue(is_test_bearing_maven_command(
+            "./mvnw clean install -DskipTests=false"))
+        self.assertFalse(is_test_bearing_maven_command("npm test"))
+
+    def test_macos_inventory_uses_the_executable_path_not_the_process_name(self):
+        def commands(args, **_kwargs):
+            if "txt" in args:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        "p42\ncmongod\nftxt\n"
+                        "n/Users/test/.embedmongo/5.0/mongod\n"
+                        "p84\ncmongod\nftxt\n"
+                        "n/opt/homebrew/opt/mongodb-community/bin/mongod\n"
+                    ),
+                    stderr="",
+                )
+            return SimpleNamespace(
+                returncode=0, stdout="n127.0.0.1:42317\n", stderr="")
+
+        processes = embedded_mongo_processes(
+            command_runner=commands, proc_root=Path("/not-a-real-proc"))
+
+        self.assertEqual([42], [process.pid for process in processes])
+        self.assertEqual(
+            Path("/Users/test/.embedmongo/5.0/mongod"),
+            processes[0].executable,
+        )
 
     def test_process_cwd_reads_a_real_platform_process(self):
         """Exercise Linux /proc and the macOS lsof fallback on their real runners."""

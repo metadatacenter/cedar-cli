@@ -1792,6 +1792,27 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertEqual("true", captured[0][1]["CI"])
             self.assertEqual("false", captured[0][1]["NG_CLI_ANALYTICS"])
 
+    def test_release_maven_task_checks_for_mongods_before_and_after(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory)
+            validator = ReleaseBuildValidator(
+                ReleaseState(root=Path(directory) / "state"),
+                executor=lambda _task, _environment: "built\n",
+            )
+            task = next(
+                item for item in validator.tasks(manifest)
+                if item["id"] == "release:maven:parent"
+            )
+            with patch.object(
+                release_train, "require_no_embedded_mongo_processes") as before, \
+                    patch.object(
+                        release_train, "wait_for_no_embedded_mongo_processes") as after:
+                validator.run_task(manifest, task)
+
+            before.assert_called_once_with("release Maven task release:maven:parent")
+            after.assert_called_once_with(
+                "completion of release Maven task release:maven:parent")
+
     def test_quiet_build_keeps_raw_output_in_its_log(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "task.log"
@@ -3183,6 +3204,18 @@ class ReleasePreflightTest(unittest.TestCase):
         })
         self.assertEqual([], self._preflight(commands=commands).check_toolchain())
 
+    def test_embedded_mongo_process_blocks_release_before_building(self):
+        process = SimpleNamespace(
+            describe=lambda: "PID 42 (/Users/test/.embedmongo/5.0/mongod; "
+            "listening on 127.0.0.1:42317)")
+        with patch.object(release_train, "embedded_mongo_processes", return_value=[process]):
+            findings = self._preflight().check_embedded_test_processes()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("PID 42", findings[0].message)
+        self.assertIn("cedarcli test cleanup", findings[0].remedy)
+
     def test_node_other_than_the_release_pin_is_refused(self):
         commands = FakeCommands({
             ("java", "-version"): FakeCompletedProcess(
@@ -3791,7 +3824,8 @@ class ReleasePreflightTest(unittest.TestCase):
             return run
 
         names = {
-            "check_toolchain", "check_profile", "check_disk_space",
+            "check_toolchain", "check_embedded_test_processes",
+            "check_profile", "check_disk_space",
             "check_npm_configuration",
             "check_nexus_authorization", "check_npm_authorization",
             "check_push_permission", "check_target_version_unused",

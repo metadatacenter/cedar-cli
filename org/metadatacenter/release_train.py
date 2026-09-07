@@ -49,6 +49,12 @@ from org.metadatacenter.npm_policy import (
     unreviewed_install_scripts,
 )
 from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.BuildSafety import (
+    BuildSafetyError,
+    embedded_mongo_processes,
+    require_no_embedded_mongo_processes,
+    wait_for_no_embedded_mongo_processes,
+)
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 
 
@@ -2309,14 +2315,36 @@ class ReleaseBuildValidator:
         environment["CI"] = "true"
         environment["NG_CLI_ANALYTICS"] = "false"
         started = dt.datetime.now(dt.timezone.utc).isoformat()
-        if self.executor is None:
-            self._stream_command(
-                task["command"], Path(task["cwd"]), environment, log, verbose=self.verbose,
-            )
-        else:
-            log.parent.mkdir(parents=True, exist_ok=True)
-            output = self.executor(task, environment)
-            log.write_text(output or "", encoding="utf-8")
+        guarded_maven = task.get("kind") == "maven" and task.get("tests") is True
+        if guarded_maven:
+            try:
+                require_no_embedded_mongo_processes(
+                    f"release Maven task {task['id']}")
+            except BuildSafetyError as error:
+                raise ReleaseError(str(error)) from error
+        command_failure = None
+        try:
+            if self.executor is None:
+                self._stream_command(
+                    task["command"], Path(task["cwd"]), environment, log,
+                    verbose=self.verbose,
+                )
+            else:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                output = self.executor(task, environment)
+                log.write_text(output or "", encoding="utf-8")
+        except ReleaseError as error:
+            command_failure = error
+        if guarded_maven:
+            try:
+                wait_for_no_embedded_mongo_processes(
+                    f"completion of release Maven task {task['id']}")
+            except BuildSafetyError as error:
+                if command_failure is not None:
+                    raise ReleaseError(f"{command_failure}\n{error}") from command_failure
+                raise ReleaseError(str(error)) from error
+        if command_failure is not None:
+            raise command_failure
         record = {
             **task,
             "startedAt": started,
@@ -5099,6 +5127,7 @@ class ReleasePreflight:
     CHECKS = (
         "check_no_release_in_progress",
         "check_toolchain",
+        "check_embedded_test_processes",
         "check_profile",
         "check_disk_space",
         "check_working_trees",
@@ -5178,7 +5207,10 @@ class ReleasePreflight:
     def run_resume(self) -> list[PreflightFinding]:
         """Recheck only conditions still relevant to the recorded next stage."""
         stage = _next_release_stage(self.manifest)
-        checks = ["check_toolchain", "check_profile", "check_disk_space"]
+        checks = [
+            "check_toolchain", "check_embedded_test_processes",
+            "check_profile", "check_disk_space",
+        ]
         if stage != "acceptance":
             checks.append("check_npm_configuration")
         if stage in {"frontends", "versions", "builds"}:
@@ -5271,6 +5303,20 @@ class ReleasePreflight:
                 node_24_remediation(),
             ))
         return findings
+
+    def check_embedded_test_processes(self) -> list[PreflightFinding]:
+        try:
+            processes = embedded_mongo_processes()
+        except BuildSafetyError as error:
+            return [PreflightFinding("test-processes", "fail", str(error))]
+        if not processes:
+            return []
+        detail = ", ".join(process.describe() for process in processes)
+        return [PreflightFinding(
+            "test-processes", "fail",
+            f"embedded Mongo test process(es) remain before the release build: {detail}",
+            "cedarcli test status; cedarcli test cleanup",
+        )]
 
     def check_profile(self) -> list[PreflightFinding]:
         missing = [name for name in PROFILE_REQUIRED_VARIABLES if not self.environment.get(name)]
