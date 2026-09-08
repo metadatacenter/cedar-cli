@@ -115,6 +115,15 @@ class BuildPolicyTest(unittest.TestCase):
             ['npm ci --legacy-peer-deps', 'npm run build'],
             openview_source.build_command_list)
 
+    def test_retired_typescript_roundtrip_is_not_registered(self):
+        repos = ReposFactory.build_repos()
+
+        self.assertNotIn("cedar-model-typescript-library-roundtrip", repos.map)
+        self.assertNotIn(
+            "cedar-model-typescript-library-roundtrip",
+            [repo.name for repo in repos.get_frontends()],
+        )
+
     @patch.dict("os.environ", {
         "CEDAR_HOME": "/tmp/CEDAR",
         "CEDAR_DEV_BUILD_FRONTENDS": "true",

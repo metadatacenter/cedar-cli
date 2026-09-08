@@ -50,10 +50,7 @@ class ShellTaskExecutor(TaskExecutor):
             try:
                 parameter = getattr(task, "get_parameter", lambda _name: None)
                 if parameter("isolated_frontend_build") is True:
-                    with isolated_frontend_workspace(
-                        Path(cwd),
-                        reuse_node_modules=parameter("reuse_node_modules") is True,
-                    ) as (isolated_cwd, environment, collisions):
+                    with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions):
                         if collisions:
                             processes = ", ".join(f"PID {pid}" for pid, _ in collisions)
                             job_progress.print(

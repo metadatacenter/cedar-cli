@@ -223,7 +223,7 @@ def frontend_runtime_collisions(source: Path) -> list[tuple[int, str]]:
 
 
 @contextlib.contextmanager
-def isolated_frontend_workspace(source: Path, *, reuse_node_modules: bool = False):
+def isolated_frontend_workspace(source: Path):
     """Build a checkout copy with private dependencies, npm cache, and Angular cache."""
     source = source.resolve()
     before_root = repository_root(source)
@@ -238,13 +238,6 @@ def isolated_frontend_workspace(source: Path, *, reuse_node_modules: bool = Fals
                 return {name for name in names if name in {".git", "node_modules", ".angular"}}
 
             shutil.copytree(source, build_root, symlinks=True, ignore=ignore)
-            if reuse_node_modules:
-                dependencies = source / "node_modules"
-                if not dependencies.is_dir():
-                    raise BuildSafetyError(
-                        f"{source} requires its existing node_modules, but none is installed"
-                    )
-                (build_root / "node_modules").symlink_to(dependencies, target_is_directory=True)
             environment = dict(os.environ)
             existing_path = environment.get("PATH", "")
             local_binaries = str(build_root / "node_modules" / ".bin")

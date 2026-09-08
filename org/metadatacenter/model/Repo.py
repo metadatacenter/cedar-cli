@@ -10,7 +10,7 @@ class Repo:
     def __init__(self, name: str, repo_type: RepoType, version_list: List[VersionType],
                  is_library=False, is_microservice=False, is_private=False, for_docker=False,
                  is_frontend=False,
-                 allow_different_version=False, skip_from_release=False, skip_npm_install=False,
+                 allow_different_version=False, skip_from_release=False,
                  build_command_list: List[str] = None, server_build_command_list: List[str] = None,
                  publish_command_list: List[str] = None,
                  skip_from_default_publish=False):
@@ -28,7 +28,6 @@ class Repo:
         self.pre_post_type: PrePostType = PrePostType.NONE
         self.allow_different_version = allow_different_version
         self.skip_from_release = skip_from_release
-        self.skip_npm_install = skip_npm_install
         self.skip_from_default_publish = skip_from_default_publish
         # Shell commands that build this repo, replacing the ones its repo type implies.
         # A repo that owns its own packaging pipeline sets this so the CLI drives that
