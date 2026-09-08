@@ -2,6 +2,7 @@ import typer
 
 from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
+from org.metadatacenter.worker.OpenApiWorker import OpenApiWorker
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.SnapshotWorker import DEFAULT_NEXUS, SnapshotWorker
 from org.metadatacenter.worker.VersionWorker import VersionWorker
@@ -36,6 +37,15 @@ def snapshots(
     """Check that each repository's published snapshot was built from its current source."""
     exit_on_failure(SnapshotWorker.check_snapshots(
         version=version, grace_hours=grace_hours, nexus=nexus))
+
+
+@app.command("openapi")
+def openapi(
+        show_all: bool = typer.Option(
+            False, "--all",
+            help="List every document in the detail section, not only those with findings.")):
+    """Check that every committed OpenAPI document describes what a generated client needs."""
+    exit_on_failure(OpenApiWorker.check_openapi(show_all=show_all))
 
 
 @app.command("ci")

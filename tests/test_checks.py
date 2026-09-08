@@ -98,6 +98,22 @@ class CheckCommandsTest(unittest.TestCase):
         version_console.print.assert_called_once()
         write_report.assert_called_once()
 
+    def test_openapi_command_propagates_failure(self):
+        with patch("org.metadatacenter.check.OpenApiWorker.check_openapi",
+                   return_value=1) as check_openapi:
+            result = self.runner.invoke(check.app, ["openapi"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        check_openapi.assert_called_once_with(show_all=False)
+
+    def test_openapi_command_can_list_every_document(self):
+        with patch("org.metadatacenter.check.OpenApiWorker.check_openapi",
+                   return_value=0) as check_openapi:
+            result = self.runner.invoke(check.app, ["openapi", "--all"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        check_openapi.assert_called_once_with(show_all=True)
+
     def test_ci_check_reports_through_the_train_worker_and_keeps_its_exit_code(self):
         with patch("org.metadatacenter.check.BuildTrainWorker.report_source_ci",
                    return_value=1) as report:
