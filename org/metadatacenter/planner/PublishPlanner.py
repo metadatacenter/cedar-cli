@@ -51,16 +51,7 @@ class PublishPlanner(Planner):
         plan.add_task(
             "Publish frontends",
             TaskType.PUBLISH,
-            GlobalContext.repos.get_frontends_for_default_publish(),
-            parameters
-        )
-
-    @staticmethod
-    def split_frontends(plan: Plan, parameters: dict = None):
-        plan.add_task(
-            "Publish split frontends",
-            TaskType.PUBLISH,
-            GlobalContext.repos.get_split_frontends(),
+            GlobalContext.repos.get_frontends(),
             parameters
         )
 

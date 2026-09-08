@@ -607,6 +607,9 @@ class ReleasePlannerTest(unittest.TestCase):
                 "cedar-monitoring": "9" * 40,
                 "cedar-bridging": "0" * 40,
                 "cedar-component-demo": "c" * 40,
+                "cedar-workspace": "d" * 40,
+                "cedar-template-designer": "e" * 40,
+                "cedar-model-typescript-library-demo": "f" * 40,
             },
         }
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
@@ -786,6 +789,8 @@ class ReleasePlannerTest(unittest.TestCase):
                  "npmVersionVariable": "CEDAR_TEMPLATE_EDITOR_NPM_VERSION"},
                 {"id": "workspace", "repository": "cedar-workspace",
                  "npmVersionVariable": "CEDAR_WORKSPACE_NPM_VERSION"},
+                {"id": "designer", "repository": "cedar-template-designer",
+                 "npmVersionVariable": "CEDAR_TEMPLATE_DESIGNER_NPM_VERSION"},
                 {"id": "openview", "repository": "cedar-openview",
                  "npmVersionVariable": "CEDAR_OPENVIEW_NPM_VERSION"},
             ],
@@ -793,12 +798,14 @@ class ReleasePlannerTest(unittest.TestCase):
         inputs = {
             "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8-dev.202609050436.gf2431e27c276.p4",
             "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_TEMPLATE_DESIGNER_NPM_VERSION": "2.9.3-dev.202609050436.g123456789abc.p4",
             "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8-dev.202609050436.g3bf71549e097.p4",
             "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.7-dev.202609050436.g9503db76a96f",
             "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
         }
         plan = {"npm": {"surfaces": [
-            {"repository": "cedar-template-editor"}, {"repository": "cedar-openview"},
+            {"repository": "cedar-template-editor"}, {"repository": "cedar-workspace"},
+            {"repository": "cedar-template-designer"}, {"repository": "cedar-openview"},
         ]}}
 
         defaults = ReleasePlanner._docker_frontend_defaults(
@@ -807,7 +814,8 @@ class ReleasePlannerTest(unittest.TestCase):
         self.assertEqual(inputs, defaults["nextDevelopment"])
         self.assertEqual({
             "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8",
-            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.8",
+            "CEDAR_TEMPLATE_DESIGNER_NPM_VERSION": "2.9.8",
             "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8",
             "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.6",
             "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
@@ -849,19 +857,25 @@ class ReleasePlannerTest(unittest.TestCase):
                 cee_version=PUBLIC_VERSION,
             )
 
-    def test_independent_packages_are_not_platform_release_repositories(self):
+    def test_only_public_npmjs_packages_are_not_platform_release_repositories(self):
         source = {"repositories": {
             "cedar-parent": "1" * 40,
             "cedar-workspace": "2" * 40,
             "cedar-template-designer": "3" * 40,
             "cedar-embeddable-editor": "4" * 40,
             "cedar-model-typescript-library": "5" * 40,
+            "cedar-model-typescript-library-demo": "6" * 40,
         }}
         release, maven = ReleasePlanner._release_repositories({
             "repositories": list(source["repositories"]),
             "mavenRepositories": ["cedar-parent"],
         }, source)
-        self.assertEqual(["cedar-parent"], release)
+        self.assertEqual([
+            "cedar-parent",
+            "cedar-workspace",
+            "cedar-template-designer",
+            "cedar-model-typescript-library-demo",
+        ], release)
         self.assertEqual(["cedar-parent"], maven)
 
     def test_release_version_is_verified_not_inferred_from_train(self):
@@ -1366,6 +1380,36 @@ class ReleaseWorkspaceTest(unittest.TestCase):
 
 
 class ReleaseVersionPreparationTest(unittest.TestCase):
+    def test_platform_npm_repositories_have_root_version_surfaces(self):
+        repositories = (
+            "cedar-workspace",
+            "cedar-template-designer",
+            "cedar-model-typescript-library-demo",
+        )
+        for repository in repositories:
+            with self.subTest(repository=repository), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package = {"name": repository, "version": "2.9.10-SNAPSHOT"}
+                lock = {
+                    "name": repository,
+                    "version": "2.9.10-SNAPSHOT",
+                    "packages": {"": {"name": repository, "version": "2.9.10-SNAPSHOT"}},
+                }
+                (root / "package.json").write_text(
+                    json.dumps(package) + "\n", encoding="utf-8")
+                (root / "package-lock.json").write_text(
+                    json.dumps(lock) + "\n", encoding="utf-8")
+
+                changed = ReleaseVersionPreparer._stamp_versions(
+                    repository, root, "2.9.10-SNAPSHOT", "2.9.10", set())
+
+                self.assertEqual({"package.json", "package-lock.json"}, changed)
+                self.assertEqual(
+                    "2.9.10", json.loads((root / "package.json").read_bytes())["version"])
+                stamped_lock = json.loads((root / "package-lock.json").read_bytes())
+                self.assertEqual("2.9.10", stamped_lock["version"])
+                self.assertEqual("2.9.10", stamped_lock["packages"][""]["version"])
+
     def test_version_stamping_refreshes_train_lock_baselines(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -1768,6 +1812,9 @@ class ReleaseBuildValidationTest(unittest.TestCase):
         # one that repository's plain `npm ci` accepts. Only Monitoring's CI still asks for the
         # legacy peer resolution.
         self.assertEqual([], install_options["openview"])
+        self.assertEqual([], install_options["workspace"])
+        self.assertEqual([], install_options["template-designer"])
+        self.assertEqual([], install_options["model-typescript-library-demo"])
         self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
         self.assertEqual([], install_options["content"])
         self.assertEqual([], install_options["cee-demo-angular"])
@@ -3051,6 +3098,63 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             )
             publisher._verify_npm_tarball_files(
                 "packed frontend", tarball.read_bytes(), evidence["runtimeFiles"],
+            )
+
+    def test_npm_pack_includes_the_demo_build_proven_by_release_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            root = workspace / "cedar-model-typescript-library-demo"
+            root.mkdir(parents=True)
+            (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+            (root / "package.json").write_text(json.dumps({
+                "name": "cedar-model-typescript-library-demo",
+                "version": "2.9.10",
+                "main": "dist/index.js",
+                "files": ["dist"],
+                "publishConfig": {"registry": "https://nexus.example/repository/npm/"},
+            }) + "\n", encoding="utf-8")
+            commit = ReleaseWorkspaceTest._commit_repository(root)
+            tree = ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}")
+            generated = root / "dist" / "index.js"
+            generated.parent.mkdir()
+            generated.write_text("module.exports = {};\n", encoding="utf-8")
+            log = Path(directory) / "build.log"
+            log.write_text("build passed\n", encoding="utf-8")
+            build_record = {
+                "id": "release:npm:model-typescript-library-demo:build",
+                "buildOutput": str(root / "dist"),
+                "outputFiles": release_train._directory_file_hashes(root / "dist"),
+                "log": str(log),
+                "logSha256": release_train._file_sha256(log),
+            }
+            state = SimpleNamespace(read_current_manifest=lambda: ({
+                "buildValidation": {"completedTasks": {
+                    build_record["id"]: build_record,
+                }},
+            }, None))
+            task = {
+                "id": "npm:release:model-typescript-library-demo",
+                "kind": "npm-release",
+                "repository": "cedar-model-typescript-library-demo",
+                "directory": ".",
+                "version": "2.9.10",
+                "registry": "https://nexus.example/repository/npm/",
+                "workspace": str(workspace),
+                "expectedCommit": commit,
+                "expectedTree": tree,
+                "generatedBuildOutput": "dist",
+                "buildEvidenceId": build_record["id"],
+            }
+            publisher = ReleaseArtifactPublisher(state)
+
+            tarball, evidence = publisher._pack_npm(task)
+
+            self.assertEqual(
+                release_train._file_sha256(generated),
+                evidence["runtimeFiles"]["dist/index.js"],
+            )
+            publisher._verify_npm_tarball_files(
+                "packed demo", tarball.read_bytes(), evidence["runtimeFiles"],
             )
 
 

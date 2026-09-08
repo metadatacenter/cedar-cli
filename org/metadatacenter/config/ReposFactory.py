@@ -50,29 +50,19 @@ class ReposFactory:
 
         repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, [V.PACKAGE_OWN], is_frontend=True))
 
-        # The split frontends have explicit native build and Nexus publication commands, but remain
-        # outside the ordinary release/publish selectors until migration acceptance. Registering
-        # them here must not make a generic publication include or activate them accidentally.
+        # The split frontends use the ordinary platform release and Nexus publication path. Their
+        # native static-payload build remains explicit because nginx serves these repositories
+        # directly rather than through the legacy Template Editor tree.
         repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],
-                            is_frontend=True, allow_different_version=True, skip_from_release=True,
+                            is_frontend=True,
                             build_command_list=['npm ci'],
                             server_build_command_list=[
-                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace'],
-                            publish_command_list=[
-                                'npm ci',
-                                'bash "$CEDAR_HOME/cedar-development/ops/'
-                                'publish-frontend-package.sh" workspace'],
-                            skip_from_default_publish=True))
+                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace']))
         repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],
-                            is_frontend=True, allow_different_version=True, skip_from_release=True,
+                            is_frontend=True,
                             build_command_list=['npm ci'],
                             server_build_command_list=[
-                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" designer'],
-                            publish_command_list=[
-                                'npm ci',
-                                'bash "$CEDAR_HOME/cedar-development/ops/'
-                                'publish-frontend-package.sh" designer'],
-                            skip_from_default_publish=True))
+                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" designer']))
 
         monitoring_multi = Repo("cedar-monitoring", RepoType.MULTI, [], is_frontend=True)
         monitoring_src = Repo("cedar-monitoring-src", RepoType.ANGULAR,
@@ -169,9 +159,8 @@ class ReposFactory:
         repos.add_repo(model_typescript_library)
 
         model_typescript_library_demo = Repo("cedar-model-typescript-library-demo", RepoType.TYPESCRIPT,
-                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
-                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                                 allow_different_version=True, skip_from_release=True)
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN,
+                                  V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(model_typescript_library_demo)
 
         repos.add_repo(Repo("cedar-model-typescript-library-python", RepoType.PYTHON, []))

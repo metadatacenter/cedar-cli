@@ -12,8 +12,7 @@ class Repo:
                  is_frontend=False,
                  allow_different_version=False, skip_from_release=False,
                  build_command_list: List[str] = None, server_build_command_list: List[str] = None,
-                 publish_command_list: List[str] = None,
-                 skip_from_default_publish=False):
+                 publish_command_list: List[str] = None):
         self.name = name
         self.repo_type = repo_type
         self.version_list = version_list
@@ -28,7 +27,6 @@ class Repo:
         self.pre_post_type: PrePostType = PrePostType.NONE
         self.allow_different_version = allow_different_version
         self.skip_from_release = skip_from_release
-        self.skip_from_default_publish = skip_from_default_publish
         # Shell commands that build this repo, replacing the ones its repo type implies.
         # A repo that owns its own packaging pipeline sets this so the CLI drives that
         # pipeline instead of reproducing it from outside.

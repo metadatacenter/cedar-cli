@@ -86,12 +86,13 @@ REQUIRED_CEE_FILES = {
 INDEPENDENT_RELEASE_REPOSITORIES = {
     "cedar-embeddable-editor",
     "cedar-model-typescript-library",
-    "cedar-template-designer",
-    "cedar-workspace",
 }
 REQUIRED_NODE_VERSION = "v24.19.0"
 NPM_VERSION_SURFACES = {
     "cedar-template-editor": ["."],
+    "cedar-workspace": ["."],
+    "cedar-template-designer": ["."],
+    "cedar-model-typescript-library-demo": ["."],
     "cedar-openview": ["cedar-openview-src", "cedar-openview-dist"],
     "cedar-content-distribution": ["."],
     "cedar-monitoring": ["cedar-monitoring-src", "cedar-monitoring-dist"],
@@ -226,6 +227,12 @@ FRONTEND_BUILD_SURFACES = [
      "install": [], "build": []},
     {"id": "workspace", "repository": "cedar-workspace", "directory": ".",
      "install": [], "build": []},
+    {"id": "template-designer", "repository": "cedar-template-designer", "directory": ".",
+     "install": [], "build": []},
+    {"id": "model-typescript-library-demo",
+     "repository": "cedar-model-typescript-library-demo", "directory": ".",
+     "install": [], "build": ["npm", "run", "build"],
+     "buildOutput": "dist"},
     {"id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-src",
      "install": [], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-openview-src/dist/cedar-openview"},
@@ -252,6 +259,11 @@ MAVEN_RELEASE_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/releases/
 MAVEN_SNAPSHOT_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/snapshots/"
 NPM_RELEASE_SURFACES = [
     {"id": "template-editor", "repository": "cedar-template-editor", "directory": "."},
+    {"id": "workspace", "repository": "cedar-workspace", "directory": "."},
+    {"id": "template-designer", "repository": "cedar-template-designer", "directory": "."},
+    {"id": "model-typescript-library-demo",
+     "repository": "cedar-model-typescript-library-demo", "directory": ".",
+     "generatedBuildOutput": "dist"},
     {
         "id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-dist",
         "buildOutput": "cedar-openview-src/dist/cedar-openview",
@@ -1085,8 +1097,7 @@ class ReleasePlanner:
         them, and they are the newest development packages there are. The release tree takes what
         outlives them. Nexus keeps only the last couple of trains' development packages and never
         removes a release, so the released frontends are named at the release version and
-        OpenView's Editor at the public CEE version. Workspace and the Designer publish
-        independently and keep the train's packages in both trees.
+        OpenView's Editor at the public CEE version.
         """
         inputs = npm_completion.get("dockerInputs")
         if inputs is None:
@@ -3264,6 +3275,8 @@ class ReleaseArtifactPublisher:
                 task["distributionEvidenceId"] = (
                     f"release:npm:{surface['id']}:distribution"
                 )
+            elif surface.get("generatedBuildOutput"):
+                task["buildEvidenceId"] = f"release:npm:{surface['id']}:build"
             tasks.append(task)
         return self._checked(tasks)
 
@@ -3705,7 +3718,7 @@ class ReleaseArtifactPublisher:
         ):
             raise ReleaseError(f"npm package provenance differs for {evidence['name']}@{task['version']}")
         runtime_files = evidence.get("runtimeFiles")
-        if task.get("packedRuntimeDirectories"):
+        if task.get("packedRuntimeDirectories") or task.get("generatedBuildOutput"):
             if not isinstance(runtime_files, dict) or not runtime_files:
                 raise ReleaseError(f"npm package has no runtime asset evidence for {task['id']}")
             self._verify_npm_tarball_files(
@@ -3755,6 +3768,31 @@ class ReleaseArtifactPublisher:
         except (OSError, tarfile.TarError) as error:
             raise ReleaseError(f"cannot extract {task['repository']} release source") from error
         package_root = source_root if task["directory"] == "." else source_root / task["directory"]
+        generated_files = {}
+        generated_output = task.get("generatedBuildOutput")
+        if generated_output:
+            generated_relative = PurePosixPath(generated_output)
+            if generated_relative.is_absolute() or ".." in generated_relative.parts:
+                raise ReleaseError(f"unsafe generated npm output for {task['id']}")
+            manifest, _ = self.state.read_current_manifest()
+            build_record = manifest.get("buildValidation", {}).get(
+                "completedTasks", {}).get(task.get("buildEvidenceId"))
+            expected_output = str(root / generated_output)
+            if (
+                not isinstance(build_record, dict)
+                or build_record.get("buildOutput") != expected_output
+            ):
+                raise ReleaseError(f"release has no generated build-output proof for {task['id']}")
+            ReleaseBuildValidator.verify_completed_task(build_record)
+            destination = package_root / generated_relative
+            if destination.exists():
+                raise ReleaseError(
+                    f"generated npm output collides with archived source for {task['id']}")
+            shutil.copytree(Path(build_record["buildOutput"]), destination)
+            generated_files = {
+                f"{generated_output}/{relative}": digest
+                for relative, digest in build_record["outputFiles"].items()
+            }
         package_path = package_root / "package.json"
         try:
             package = json.loads(package_path.read_bytes())
@@ -3796,6 +3834,11 @@ class ReleaseArtifactPublisher:
         runtime_files = self._include_runtime_assets(
             tarball_path, package_root, task.get("packedRuntimeDirectories", []),
         )
+        runtime_files.update(generated_files)
+        if generated_files:
+            self._verify_npm_tarball_files(
+                f"packed {task['id']}", tarball_path.read_bytes(), generated_files,
+            )
         try:
             content = tarball_path.read_bytes()
         except OSError as error:
