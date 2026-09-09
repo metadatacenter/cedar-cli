@@ -727,6 +727,7 @@ class ReleasePreflight:
                     repository,
                     source,
                     runner=self.command_runner,
+                    environment=self.environment,
                     sleeper=self.ci_sleeper,
                     delays=self.ci_delays,
                     reporter=lambda message: console.print(f"  [yellow]ci: {message}[/yellow]"),
