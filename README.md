@@ -42,6 +42,12 @@ The main implementation areas are:
   repository virtual environment, preserves the caller's working directory for `build this` and
   `publish this`, and returns the Python process's exit status.
 
+Release `start`, `resume`, and `abandon` hold an exclusive process lock in the release state
+directory for the whole operation, including preflight and retries. A competing modifying command
+refuses immediately; `release status --watch` remains available. The OS releases ownership when
+the command exits, including after a crash. The persistent `release.lock` file must not be deleted
+while a release command is running.
+
 ## Contributor Setup
 
 The installation guides establish `CEDAR_HOME`, clone the companion repositories, and create the

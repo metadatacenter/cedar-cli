@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import copy
+from contextlib import contextmanager
+import fcntl
 import dataclasses
 import datetime as dt
 import fnmatch
@@ -1424,6 +1426,28 @@ class ReleaseState:
             if configured
             else Path.home() / ".cedar" / "train-releases"
         )
+
+    @contextmanager
+    def exclusive(self):
+        """Own all release mutations until completion, failure, or process exit.
+
+        Keep the lock file in place: unlinking it would let another process lock a
+        different inode. Status readers use atomically replaced manifests without
+        acquiring this lock. File descriptors are not inherited by child commands.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        with (self.root / "release.lock").open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise ReleaseError(
+                    "Another release command is running; use cedarcli release status "
+                    "to inspect it and wait for it to finish before modifying the release."
+                ) from error
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
     @property
     def current_path(self) -> Path:
@@ -6514,20 +6538,21 @@ def start(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Run a manifest-owned train release through verified Git and publication stages."""
-    _activate_toolchain()
-    manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
-    _render_plan(manifest)
-    _release_gate_or_exit(
-        manifest,
-        _parse_accepted_red_develop(accept_red_develop),
-        {value.strip() for value in (accept_main_only or []) if value.strip()},
-    )
     state = ReleaseState()
     try:
-        path = state.start(manifest)
-        console.print("Compact progress is shown below; full task output is retained in attempt logs.")
-        console.print("A second terminal may run: cedarcli release status --watch")
-        active = _drive_release(state, verbose=verbose)
+        with state.exclusive():
+            _activate_toolchain()
+            manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
+            _render_plan(manifest)
+            _release_gate_or_exit(
+                manifest,
+                _parse_accepted_red_develop(accept_red_develop),
+                {value.strip() for value in (accept_main_only or []) if value.strip()},
+            )
+            path = state.start(manifest)
+            console.print("Compact progress is shown below; full task output is retained in attempt logs.")
+            console.print("A second terminal may run: cedarcli release status --watch")
+            active = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         if state.current_path.exists():
@@ -6543,14 +6568,15 @@ def resume(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Resume the active train-backed release from its recorded phase."""
-    _activate_toolchain()
     state = ReleaseState()
     try:
-        active, path = state.read_current_manifest()
-        _release_resume_gate_or_exit(active)
-        console.print("Compact progress is shown below; full task output is retained in attempt logs.")
-        console.print("A second terminal may run: cedarcli release status --watch")
-        manifest = _drive_release(state, verbose=verbose)
+        with state.exclusive():
+            _activate_toolchain()
+            active, path = state.read_current_manifest()
+            _release_resume_gate_or_exit(active)
+            console.print("Compact progress is shown below; full task output is retained in attempt logs.")
+            console.print("A second terminal may run: cedarcli release status --watch")
+            manifest = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
@@ -6567,8 +6593,10 @@ def abandon(
         ..., "--reason", help="Why this local-only attempt cannot be resumed"),
 ):
     """Retain and close an attempt that has not begun external publication."""
+    state = ReleaseState()
     try:
-        manifest, path = abandon_active_release(release_version, reason)
+        with state.exclusive():
+            manifest, path = abandon_active_release(release_version, reason, state)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
