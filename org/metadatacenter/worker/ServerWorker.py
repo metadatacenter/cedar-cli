@@ -201,6 +201,11 @@ class ServerWorker(Worker):
         stale_jars = [service for service in stale if service not in EDITOR_FRONTENDS]
         if stale_jars:
             warnings.append(f"stale binaries: {', '.join(stale_jars)}; restart them")
+        # `current` says a process is not older than its jar. It says nothing about whether the
+        # jar holds the repository's current source, and an operator reads the column as though
+        # it did: every row read `current` while one jar sat half an hour behind its own head.
+        for finding in ServerWorker.source_currency_warnings(native_rows):
+            warnings.append(finding)
         for service in stale:
             if service in EDITOR_FRONTENDS:
                 warnings.append(
@@ -224,6 +229,39 @@ class ServerWorker(Worker):
             console.print(Text(
                 f"Login    https://cedar.{cedar_host} once frontend, resource, and user are healthy",
                 style="dim"))
+
+    @staticmethod
+    def source_currency_warnings(native_rows):
+        """Which services run a jar written before their repository's develop head.
+
+        The BINARY column compares a process with its jar. This compares the jar with the source
+        it is taken to serve, which is the question a redeploy is meant to settle and the one a
+        smoke run is recorded against.
+        """
+        services = [
+            row["service"] for row in native_rows
+            if row["service"] in ServerWorker.NATIVE_MICROSERVICES
+            and row["binary"] in {"current", "STALE"}
+        ]
+        if not services:
+            return []
+        cedar_home = Util.cedar_home or os.environ.get("CEDAR_HOME")
+        if not cedar_home:
+            return []
+        # Imported here because smoke_gate reads this module's status parser, and the pair would
+        # not import at all if each named the other at module level.
+        from org.metadatacenter import smoke_gate
+        try:
+            findings = smoke_gate.source_currency_findings(cedar_home, services)
+        except OSError:
+            return []
+        behind = [finding.split(" was built", 1)[0] for finding in findings]
+        if not behind:
+            return []
+        return [
+            f"built before their source: {', '.join(behind)}; rebuild and restart, or a smoke "
+            f"run records heads these binaries do not carry"
+        ]
 
     @staticmethod
     def check_status_of(tag: ServerTag, server_status_map: dict):
