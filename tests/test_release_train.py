@@ -3249,7 +3249,7 @@ class ReleasePreflightTest(unittest.TestCase):
     """Every check answers a question that once cost a release its build phase."""
 
     def _preflight(self, *, environment=None, commands=None, http=None,
-                   manifest=None, root=None, accepted=None):
+                   manifest=None, root=None, accepted=None, accepted_main_only=None):
         values = dict(PREFLIGHT_ENVIRONMENT)
         if root is not None:
             values["CEDAR_HOME"] = str(root)
@@ -3262,6 +3262,7 @@ class ReleasePreflightTest(unittest.TestCase):
             http=http or FakeNexus(),
             environment=values,
             accepted_red_develop=accepted,
+            accepted_main_only=accepted_main_only,
             ci_sleeper=lambda _delay: None,
             ci_delays=(),
         )
@@ -3989,6 +3990,46 @@ class ReleasePreflightTest(unittest.TestCase):
             self.assertEqual([], preflight.run_resume())
 
         self.assertEqual(names, set(called))
+
+
+class ReleaseMainOnlyFilesTest(unittest.TestCase):
+    """Work that exists only on main is not something a release may quietly replace."""
+
+    def _preflight_with_survey(self, replaced, *, accepted_main_only=None):
+        preflight = ReleasePreflightTest._preflight(
+            ReleasePreflightTest(), accepted_main_only=accepted_main_only)
+        with patch.object(release_train.ReleaseRemoteIntegrator, "survey", return_value=replaced):
+            return preflight.check_remote_survey()
+
+    def test_main_only_files_stop_the_release(self):
+        findings = self._preflight_with_survey(
+            {"cedar-template-editor": ["app/one.html", "app/two.js"]})
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal, "replacing main-only work must block the release")
+        self.assertIn("app/one.html", findings[0].message)
+        self.assertIn("--accept-main-only cedar-template-editor", findings[0].remedy)
+
+    def test_naming_the_repository_accepts_the_replacement(self):
+        findings = self._preflight_with_survey(
+            {"cedar-template-editor": ["app/one.html"]},
+            accepted_main_only={"cedar-template-editor"})
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal)
+        self.assertIn("explicit acceptance", findings[0].message)
+
+    def test_acceptance_is_per_repository(self):
+        findings = self._preflight_with_survey(
+            {"cedar-template-editor": ["app/one.html"], "cedar-workspace": ["app/two.js"]},
+            accepted_main_only={"cedar-template-editor"})
+
+        fatal = [finding for finding in findings if finding.fatal]
+        self.assertEqual(1, len(fatal))
+        self.assertIn("cedar-workspace", fatal[0].message)
+
+    def test_a_clean_survey_reports_nothing(self):
+        self.assertEqual([], self._preflight_with_survey({}))
 
 
 class ReleaseLicenseStampingTest(unittest.TestCase):

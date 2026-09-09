@@ -5199,6 +5199,7 @@ class ReleasePreflight:
         http: HttpClient | None = None,
         environment=None,
         accepted_red_develop: dict[str, str] | None = None,
+        accepted_main_only: set[str] | None = None,
         space_estimator: ReleaseSpaceEstimator | None = None,
         ci_sleeper=time.sleep,
         ci_delays: tuple[float, ...] = (2, 5, 10),
@@ -5209,6 +5210,7 @@ class ReleasePreflight:
         self.command_runner = command_runner or subprocess.run
         self.http = http or HttpClient(environment=self.environment)
         self.accepted_red_develop = dict(accepted_red_develop or {})
+        self.accepted_main_only = set(accepted_main_only or ())
         self.space_estimator = space_estimator or ReleaseSpaceEstimator(manifest)
         self.ci_sleeper = ci_sleeper
         self.ci_delays = ci_delays
@@ -6053,6 +6055,18 @@ class ReleasePreflight:
         return findings
 
     def check_remote_survey(self) -> list[PreflightFinding]:
+        """Refuse to publish over work that exists only on main.
+
+        A file that main carries and the train's develop does not is a commit someone made
+        straight to main, or a hotfix nobody back-merged. The release replaces it, and the
+        replacement is a push: the work is gone from the branch that carries it, and the
+        release that removed it says nothing at the time. This was an advisory once, and a
+        hotfix and the unit test guarding it came within one reading of that line of being
+        deleted by a release nobody would have thought to question.
+
+        Naming the repository accepts the replacement, for the case where develop deleted the
+        file deliberately and main is simply behind.
+        """
         try:
             replaced = ReleaseRemoteIntegrator(self.state, environment=self.environment).survey(
                 self.manifest)
@@ -6060,10 +6074,20 @@ class ReleasePreflight:
             return [PreflightFinding("remote", "fail", str(error))]
         findings = []
         for repository, paths in sorted(replaced.items()):
+            listing = ", ".join(paths)
+            if repository in self.accepted_main_only:
+                findings.append(PreflightFinding(
+                    "remote", "warn",
+                    f"{repository} carries {len(paths)} file(s) on main alone, replaced with "
+                    f"this release by explicit acceptance: {listing}",
+                ))
+                continue
             findings.append(PreflightFinding(
-                "remote", "warn",
+                "remote", "fail",
                 f"{repository} carries {len(paths)} file(s) on main alone, which the release "
-                "replaces: " + ", ".join(paths),
+                f"replaces: {listing}",
+                f"port main's commits to develop and build a new train, or accept the "
+                f"replacement with --accept-main-only {repository}",
             ))
         return findings
 
@@ -6418,11 +6442,17 @@ def _render_preflight_findings(findings: list[PreflightFinding]) -> None:
         raise typer.Exit(1)
 
 
-def _release_gate_or_exit(manifest: dict, accepted_red_develop: dict[str, str]) -> None:
+def _release_gate_or_exit(
+    manifest: dict,
+    accepted_red_develop: dict[str, str],
+    accepted_main_only: set[str] | None = None,
+) -> None:
     """Report every settled precondition, and stop before any state changes if one failed."""
     try:
         findings = ReleasePreflight(
-            manifest, accepted_red_develop=accepted_red_develop,
+            manifest,
+            accepted_red_develop=accepted_red_develop,
+            accepted_main_only=accepted_main_only,
         ).run()
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
@@ -6442,6 +6472,9 @@ def _release_resume_gate_or_exit(manifest: dict) -> None:
 ACCEPT_RED_DEVELOP_HELP = (
     "Accept one repository's red develop by naming the exact run, as <repository>=<run-id>"
 )
+ACCEPT_MAIN_ONLY_HELP = (
+    "Accept replacing one repository's main-only files by naming the repository"
+)
 
 
 @app.command("plan")
@@ -6452,12 +6485,18 @@ def plan(
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
     accept_red_develop: list[str] = typer.Option(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
+    accept_main_only: list[str] = typer.Option(
+        None, "--accept-main-only", help=ACCEPT_MAIN_ONLY_HELP),
 ):
     """Settle every release precondition without changing release state."""
     _activate_toolchain()
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
-    _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
+    _release_gate_or_exit(
+        manifest,
+        _parse_accepted_red_develop(accept_red_develop),
+        {value.strip() for value in (accept_main_only or []) if value.strip()},
+    )
     console.print("No changes made.")
 
 
@@ -6469,6 +6508,8 @@ def start(
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
     accept_red_develop: list[str] = typer.Option(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
+    accept_main_only: list[str] = typer.Option(
+        None, "--accept-main-only", help=ACCEPT_MAIN_ONLY_HELP),
     verbose: bool = typer.Option(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
@@ -6476,7 +6517,11 @@ def start(
     _activate_toolchain()
     manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
     _render_plan(manifest)
-    _release_gate_or_exit(manifest, _parse_accepted_red_develop(accept_red_develop))
+    _release_gate_or_exit(
+        manifest,
+        _parse_accepted_red_develop(accept_red_develop),
+        {value.strip() for value in (accept_main_only or []) if value.strip()},
+    )
     state = ReleaseState()
     try:
         path = state.start(manifest)
