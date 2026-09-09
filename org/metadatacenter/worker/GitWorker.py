@@ -89,7 +89,7 @@ class GitWorker(Worker):
                 try:
                     cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
                     # print(commands_to_execute)
-                    process = subprocess.Popen(commands_to_execute, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd,
+                    process = subprocess.Popen(["set -e -o pipefail\n" + "\n".join(commands_to_execute)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd,
                                                executable=GlobalContext.get_shell())
                     stdout, stderr = process.communicate()
                     out = stdout.decode(UTF_8).strip()
@@ -99,8 +99,6 @@ class GitWorker(Worker):
                     exception = str(e)
                 except OSError as e:
                     exception = str(e)
-                except:
-                    exception = "Error in subprocess"
 
                 out_data = out
                 error_data = ""
@@ -112,7 +110,9 @@ class GitWorker(Worker):
                     error_data += "\n" + exception
                 out_data = out_data.strip()
                 error_data = error_data.strip()
-                result.add_result(RepoResultTriple(repo, out_data, error_data))
+                if return_code != 0 and not error_data:
+                    error_data = f"Command exited {return_code}"
+                result.add_result(RepoResultTriple(repo, out_data, error_data, return_code))
                 progress.print(out_data)
                 if len(error_data) > 0:
                     progress.print(error_data)
@@ -122,39 +122,43 @@ class GitWorker(Worker):
         return result
 
     def branch(self):
-        self.execute_shell_on_all_repos_with_table(
-            command_list=["echo $(git rev-parse --abbrev-ref HEAD)"],
+        return self.execute_shell_on_all_repos_with_table(
+            command_list=["git rev-parse --abbrev-ref HEAD"],
             headers=["Repo", "Branch", "Error"],
             show_lines=False,
             status_line="Checking",
         )
 
     def pull(self):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             command_list=["git pull"],
             status_line="Pulling",
         )
 
     def fetch(self):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             command_list=["git fetch"],
             status_line="Fetching",
         )
 
-    def status(self):
+    def _status(self):
         result = self.execute_shell_on_all_repos_with_table(
             command_list=["git status"],
         )
-        return self.render_status_table(result)
+        return result, self.render_status_table(result)
+
+    def status(self):
+        result, _ = self._status()
+        return result
 
     def checkout(self, branch: str):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             command_list=["git checkout " + branch],
             status_line="Checking out",
         )
 
     def clone_docker(self):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             status_line="Cloning",
             repo_list=GlobalContext.repos.get_for_docker_list(),
             command_list=["git clone " + ReposFactory.git_base + "{0}"],
@@ -162,14 +166,16 @@ class GitWorker(Worker):
         )
 
     def clone_all(self):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             status_line="Cloning",
             command_list=["git clone " + ReposFactory.git_base + "{0}"],
             cwd_is_home=True,
         )
 
     def next(self):
-        active_repos = self.status()
+        result, active_repos = self._status()
+        if result.returncode:
+            return result
         if len(active_repos) > 0:
             last_repo_path = Util.read_cedar_file('last_git_repo')
             found_idx = -1
@@ -191,30 +197,32 @@ class GitWorker(Worker):
             Util.delete_cedar_file(Util.LAST_GIT_FILE)
             Util.delete_cedar_file(Util.NEXT_GIT_FILE)
 
+        return result
+
     def remote(self):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             status_line="Checking remote",
             command_list=["git remote -v"],
         )
 
     def list_tag(self):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             command_list=[
                 "echo Local\n" +
-                "git --no-pager branch --sort=-creatordate | head -4\n" +
+                "git --no-pager branch --sort=-creatordate | sed -n '1,4p'\n" +
                 "echo Remote\n" +
-                "git --no-pager ls-remote --tag --sort=-creatordate | head -4 | awk '{{ print \" \",$2}}'"
+                "git --no-pager ls-remote --tag --sort=-creatordate | sed -n '1,4p' | awk '{{ print \" \",$2}}'"
             ],
             status_line="Listing tags",
         )
 
     def list_branch(self):
-        self.execute_shell_on_all_repos_with_table(
+        return self.execute_shell_on_all_repos_with_table(
             command_list=[
                 "echo Local\n" +
-                "git --no-pager branch --sort=-creatordate | head -4\n" +
+                "git --no-pager branch --sort=-creatordate | sed -n '1,4p'\n" +
                 "echo Remote\n" +
-                "git --no-pager branch -r --sort=-creatordate | head -4"
+                "git --no-pager branch -r --sort=-creatordate | sed -n '1,4p'"
             ],
             status_line="Listing branches",
         )
@@ -250,7 +258,7 @@ class GitWorker(Worker):
                     output.append(completed.stdout.strip())
                 if completed.returncode != 0:
                     error = completed.stderr.strip() or "Git command failed: " + " ".join(command[:2])
-                    result.add_result(RepoResultTriple(repo, "\n".join(output), error))
+                    result.add_result(RepoResultTriple(repo, "\n".join(output), error, completed.returncode))
                     result.print_table()
                     return result
                 if completed.stderr.strip():

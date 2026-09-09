@@ -17,5 +17,10 @@ class ResultTable:
         self.table.add_row(triple.repo.name, triple.out, triple.err)
         self.results.append(triple)
 
+    @property
+    def returncode(self):
+        """Aggregate failure without losing individual repository exit statuses."""
+        return 1 if any(result.returncode for result in self.results) else 0
+
     def print_table(self):
         console.print(self.table)

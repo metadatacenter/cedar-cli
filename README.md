@@ -48,6 +48,10 @@ refuses immediately; `release status --watch` remains available. The OS releases
 the command exits, including after a crash. The persistent `release.lock` file must not be deleted
 while a release command is running.
 
+Estate-wide Git commands visit every selected repository and return a nonzero exit status if
+any repository fails. Their result records retain each repository's process exit code, including
+failures that produce no stderr. A failed status scan does not update `git next` navigation.
+
 ## Contributor Setup
 
 The installation guides establish `CEDAR_HOME`, clone the companion repositories, and create the
