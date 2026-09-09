@@ -51,6 +51,7 @@ from org.metadatacenter.npm_policy import (
     unreviewed_install_scripts,
 )
 from org.metadatacenter import smoke_gate
+from org.metadatacenter.util.NexusCredentials import CredentialError, environment_with_nexus_credentials
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
@@ -108,7 +109,6 @@ NPM_VERSION_SURFACES = {
 }
 LICENSE_FILE_NAME = "license.txt"
 LICENSE_COPYRIGHT_RE = re.compile(r"^Copyright \(c\) (\d{4}),", re.MULTILINE)
-MAVEN_RELEASE_SERVER_ID = "bmir-nexus-releases"
 
 MAVEN_GENERATED_VERSION_FILES = {
     "cedar-artifact-server": {
@@ -416,57 +416,12 @@ def _stable_version_key(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in value.split("."))
 
 
-def _maven_settings_credentials(environment: dict) -> tuple[str, str] | None:
-    """Read the release server without assuming Maven's optional XML namespace.
-
-    An explicitly supplied environment is deliberately hermetic: if it has no HOME,
-    do not fall through to the process user's settings and make tests or automation
-    depend on an unrelated account.
-    """
-    home = environment.get("HOME")
-    if not home:
-        return None
-    settings = Path(home).expanduser() / ".m2" / "settings.xml"
-    if not settings.is_file():
-        return None
-    try:
-        root = ET.parse(settings).getroot()
-    except (OSError, ET.ParseError) as error:
-        raise ReleaseError(f"cannot read Maven settings {settings}: {error}") from error
-
-    def local_name(element: ET.Element) -> str:
-        return element.tag.rsplit("}", 1)[-1]
-
-    for server in root.iter():
-        if local_name(server) != "server":
-            continue
-        values = {
-            local_name(child): (child.text or "").strip()
-            for child in server
-        }
-        if values.get("id") != MAVEN_RELEASE_SERVER_ID:
-            continue
-        username = values.get("username", "")
-        password = values.get("password", "")
-        if username and password:
-            return username, password
-        return None
-    return None
-
-
 def _environment_with_nexus_credentials(environment=None) -> dict:
-    """Prefer explicit credentials and fill only missing values from Maven settings."""
-    values = dict(os.environ if environment is None else environment)
-    if values.get("BMIR_NEXUS_USERNAME") and values.get("BMIR_NEXUS_PASSWORD"):
-        return values
-    credentials = _maven_settings_credentials(values)
-    if credentials is not None:
-        username, password = credentials
-        if not values.get("BMIR_NEXUS_USERNAME"):
-            values["BMIR_NEXUS_USERNAME"] = username
-        if not values.get("BMIR_NEXUS_PASSWORD"):
-            values["BMIR_NEXUS_PASSWORD"] = password
-    return values
+    """Translate shared configuration errors into the release error contract."""
+    try:
+        return environment_with_nexus_credentials(environment)
+    except CredentialError as error:
+        raise ReleaseError(str(error)) from error
 
 
 class HttpClient:

@@ -23,7 +23,7 @@ from org.metadatacenter import smoke_gate
 from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.Util import Util
-from org.metadatacenter.release_train import _environment_with_nexus_credentials
+from org.metadatacenter.util.NexusCredentials import environment_with_nexus_credentials
 
 
 console = Console()
@@ -600,7 +600,7 @@ class BuildTrainWorker:
         if not cedar_home:
             raise ValueError('CEDAR_HOME is not set')
         try:
-            environment = _environment_with_nexus_credentials()
+            environment = environment_with_nexus_credentials()
         except (OSError, RuntimeError, ValueError) as error:
             raise ValueError(f'cannot load Nexus credentials: {error}') from error
         if (
