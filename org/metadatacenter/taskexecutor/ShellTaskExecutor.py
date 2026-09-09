@@ -12,8 +12,11 @@ from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
+    is_test_bearing_maven_command,
     isolated_frontend_workspace,
+    require_no_embedded_mongo_processes,
     require_no_frontend_runtime_collision,
+    wait_for_no_embedded_mongo_processes,
 )
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from org.metadatacenter.util.Util import Util
@@ -47,10 +50,7 @@ class ShellTaskExecutor(TaskExecutor):
             try:
                 parameter = getattr(task, "get_parameter", lambda _name: None)
                 if parameter("isolated_frontend_build") is True:
-                    with isolated_frontend_workspace(
-                        Path(cwd),
-                        reuse_node_modules=parameter("reuse_node_modules") is True,
-                    ) as (isolated_cwd, environment, collisions):
+                    with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions):
                         if collisions:
                             processes = ", ".join(f"PID {pid}" for pid, _ in collisions)
                             job_progress.print(
@@ -76,9 +76,16 @@ class ShellTaskExecutor(TaskExecutor):
     def _execute_commands(self, task, repo, commands, cwd, job_progress, environment):
         first_failure = 0
         for command in commands:
+            guarded_maven = is_test_bearing_maven_command(command)
+            if guarded_maven:
+                require_no_embedded_mongo_processes(
+                    f"test-bearing Maven task for {repo.name}")
             stdout_parts, return_code = self.execute_shell_command(
                 task, repo, command, cwd, job_progress, environment=environment,
             )
+            if guarded_maven:
+                wait_for_no_embedded_mongo_processes(
+                    f"completion of test-bearing Maven task for {repo.name}")
             if return_code != 0:
                 if first_failure == 0:
                     first_failure = return_code

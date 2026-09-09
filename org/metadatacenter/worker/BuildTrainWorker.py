@@ -19,6 +19,7 @@ from org.metadatacenter.github_ci import (
     probe_exact_commit,
     run_url,
 )
+from org.metadatacenter import smoke_gate
 from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.Util import Util
@@ -876,6 +877,34 @@ class BuildTrainWorker:
             raise ValueError(f'{message}: {detail}' if detail else message)
 
     @classmethod
+    def _smoke_gate_preflight(cls, source=None):
+        """Require a passing whole-stack smoke run against the exact source the train captures.
+
+        A new train captures GitHub `develop`, which the alignment check requires the local checkouts
+        to equal, so the local heads are the source to match; a resumed train has its recorded
+        manifest. Either way the run is judged by the heads it tested, never by its age, so a run
+        made before an unrelated repository moved still refuses: the train would carry that move.
+        """
+        cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        if not cedar_home:
+            raise ValueError('CEDAR_HOME is not set')
+        recorded = source.get('repositories') if isinstance(source, dict) else None
+        if recorded:
+            expected = dict(recorded)
+        else:
+            try:
+                repositories = smoke_gate.train_repositories(cedar_home)
+            except smoke_gate.SmokeGateError as error:
+                raise ValueError(str(error)) from error
+            expected, _dirty, problems = smoke_gate.develop_heads(cedar_home, repositories)
+            if problems:
+                raise ValueError('source heads cannot be resolved: ' + '; '.join(problems))
+        findings = smoke_gate.findings_for(cedar_home, expected)
+        if findings:
+            raise ValueError(
+                'no passing whole-stack smoke run covers this source: ' + '; '.join(findings))
+
+    @classmethod
     def _preflight(cls, selected, resume):
         source_path = f'trains/{selected}.json'
         try:
@@ -925,6 +954,7 @@ class BuildTrainWorker:
                 'local source checkouts do not match GitHub develop: ' + '; '.join(alignment))
         if github_ready:
             settle(cls._source_ci_preflight, source)
+        settle(cls._smoke_gate_preflight, source)
         settle(cls._npm_configuration_preflight)
         settle(cls._publication_targets_preflight)
         if findings:

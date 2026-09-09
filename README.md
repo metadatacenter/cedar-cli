@@ -22,6 +22,11 @@ Git, Maven, npm, Docker Compose, and the native process controllers while preser
 dependency order and deployment-mode boundaries. It is not a daemon and does not replace those
 underlying tools.
 
+Backend test builds also guard their process boundary. `cedarcli test status` inventories orphaned
+embedded MongoDB processes, and `cedarcli test cleanup` terminates only `mongod` executables under
+`.embedmongo`; ordinary CLI and release Maven test tasks enforce the same check before and after
+they run.
+
 The main implementation areas are:
 
 - `cedar.py` registers the top-level command groups.

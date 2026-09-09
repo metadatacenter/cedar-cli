@@ -76,14 +76,11 @@ class BuildOperator(Operator):
                 task.add_task_as_task(shell_wrapper)
             elif repo.repo_type == RepoType.TYPESCRIPT:
                 shell_wrapper = PlanTask("Build TypeScript project", TaskType.SHELL_WRAPPER, repo)
-                commands = []
-                if not repo.skip_npm_install:
-                    commands.extend(BuildShellTaskFactory.npm_ci(repo).command_list)
+                commands = BuildShellTaskFactory.npm_ci(repo).command_list
                 commands.extend(BuildShellTaskFactory.npm_run_build(repo).command_list)
                 build_task = PlanTask("Isolated TypeScript build", TaskType.SHELL, repo)
                 build_task.command_list = commands
                 build_task.parameters["isolated_frontend_build"] = True
-                build_task.parameters["reuse_node_modules"] = repo.skip_npm_install
                 shell_wrapper.add_task_as_task(build_task)
                 task.add_task_as_task(shell_wrapper)
             else:

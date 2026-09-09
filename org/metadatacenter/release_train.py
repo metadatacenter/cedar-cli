@@ -48,7 +48,14 @@ from org.metadatacenter.npm_policy import (
     npm_user_config_findings,
     unreviewed_install_scripts,
 )
+from org.metadatacenter import smoke_gate
 from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.BuildSafety import (
+    BuildSafetyError,
+    embedded_mongo_processes,
+    require_no_embedded_mongo_processes,
+    wait_for_no_embedded_mongo_processes,
+)
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 
 
@@ -79,12 +86,13 @@ REQUIRED_CEE_FILES = {
 INDEPENDENT_RELEASE_REPOSITORIES = {
     "cedar-embeddable-editor",
     "cedar-model-typescript-library",
-    "cedar-template-designer",
-    "cedar-workspace",
 }
 REQUIRED_NODE_VERSION = "v24.19.0"
 NPM_VERSION_SURFACES = {
     "cedar-template-editor": ["."],
+    "cedar-workspace": ["."],
+    "cedar-template-designer": ["."],
+    "cedar-model-typescript-library-demo": ["."],
     "cedar-openview": ["cedar-openview-src", "cedar-openview-dist"],
     "cedar-content-distribution": ["."],
     "cedar-monitoring": ["cedar-monitoring-src", "cedar-monitoring-dist"],
@@ -219,6 +227,12 @@ FRONTEND_BUILD_SURFACES = [
      "install": [], "build": []},
     {"id": "workspace", "repository": "cedar-workspace", "directory": ".",
      "install": [], "build": []},
+    {"id": "template-designer", "repository": "cedar-template-designer", "directory": ".",
+     "install": [], "build": []},
+    {"id": "model-typescript-library-demo",
+     "repository": "cedar-model-typescript-library-demo", "directory": ".",
+     "install": [], "build": ["npm", "run", "build"],
+     "buildOutput": "dist"},
     {"id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-src",
      "install": [], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-openview-src/dist/cedar-openview"},
@@ -245,6 +259,11 @@ MAVEN_RELEASE_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/releases/
 MAVEN_SNAPSHOT_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/snapshots/"
 NPM_RELEASE_SURFACES = [
     {"id": "template-editor", "repository": "cedar-template-editor", "directory": "."},
+    {"id": "workspace", "repository": "cedar-workspace", "directory": "."},
+    {"id": "template-designer", "repository": "cedar-template-designer", "directory": "."},
+    {"id": "model-typescript-library-demo",
+     "repository": "cedar-model-typescript-library-demo", "directory": ".",
+     "generatedBuildOutput": "dist"},
     {
         "id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-dist",
         "buildOutput": "cedar-openview-src/dist/cedar-openview",
@@ -1078,8 +1097,7 @@ class ReleasePlanner:
         them, and they are the newest development packages there are. The release tree takes what
         outlives them. Nexus keeps only the last couple of trains' development packages and never
         removes a release, so the released frontends are named at the release version and
-        OpenView's Editor at the public CEE version. Workspace and the Designer publish
-        independently and keep the train's packages in both trees.
+        OpenView's Editor at the public CEE version.
         """
         inputs = npm_completion.get("dockerInputs")
         if inputs is None:
@@ -2309,14 +2327,36 @@ class ReleaseBuildValidator:
         environment["CI"] = "true"
         environment["NG_CLI_ANALYTICS"] = "false"
         started = dt.datetime.now(dt.timezone.utc).isoformat()
-        if self.executor is None:
-            self._stream_command(
-                task["command"], Path(task["cwd"]), environment, log, verbose=self.verbose,
-            )
-        else:
-            log.parent.mkdir(parents=True, exist_ok=True)
-            output = self.executor(task, environment)
-            log.write_text(output or "", encoding="utf-8")
+        guarded_maven = task.get("kind") == "maven" and task.get("tests") is True
+        if guarded_maven:
+            try:
+                require_no_embedded_mongo_processes(
+                    f"release Maven task {task['id']}")
+            except BuildSafetyError as error:
+                raise ReleaseError(str(error)) from error
+        command_failure = None
+        try:
+            if self.executor is None:
+                self._stream_command(
+                    task["command"], Path(task["cwd"]), environment, log,
+                    verbose=self.verbose,
+                )
+            else:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                output = self.executor(task, environment)
+                log.write_text(output or "", encoding="utf-8")
+        except ReleaseError as error:
+            command_failure = error
+        if guarded_maven:
+            try:
+                wait_for_no_embedded_mongo_processes(
+                    f"completion of release Maven task {task['id']}")
+            except BuildSafetyError as error:
+                if command_failure is not None:
+                    raise ReleaseError(f"{command_failure}\n{error}") from command_failure
+                raise ReleaseError(str(error)) from error
+        if command_failure is not None:
+            raise command_failure
         record = {
             **task,
             "startedAt": started,
@@ -3235,6 +3275,8 @@ class ReleaseArtifactPublisher:
                 task["distributionEvidenceId"] = (
                     f"release:npm:{surface['id']}:distribution"
                 )
+            elif surface.get("generatedBuildOutput"):
+                task["buildEvidenceId"] = f"release:npm:{surface['id']}:build"
             tasks.append(task)
         return self._checked(tasks)
 
@@ -3676,7 +3718,7 @@ class ReleaseArtifactPublisher:
         ):
             raise ReleaseError(f"npm package provenance differs for {evidence['name']}@{task['version']}")
         runtime_files = evidence.get("runtimeFiles")
-        if task.get("packedRuntimeDirectories"):
+        if task.get("packedRuntimeDirectories") or task.get("generatedBuildOutput"):
             if not isinstance(runtime_files, dict) or not runtime_files:
                 raise ReleaseError(f"npm package has no runtime asset evidence for {task['id']}")
             self._verify_npm_tarball_files(
@@ -3726,6 +3768,31 @@ class ReleaseArtifactPublisher:
         except (OSError, tarfile.TarError) as error:
             raise ReleaseError(f"cannot extract {task['repository']} release source") from error
         package_root = source_root if task["directory"] == "." else source_root / task["directory"]
+        generated_files = {}
+        generated_output = task.get("generatedBuildOutput")
+        if generated_output:
+            generated_relative = PurePosixPath(generated_output)
+            if generated_relative.is_absolute() or ".." in generated_relative.parts:
+                raise ReleaseError(f"unsafe generated npm output for {task['id']}")
+            manifest, _ = self.state.read_current_manifest()
+            build_record = manifest.get("buildValidation", {}).get(
+                "completedTasks", {}).get(task.get("buildEvidenceId"))
+            expected_output = str(root / generated_output)
+            if (
+                not isinstance(build_record, dict)
+                or build_record.get("buildOutput") != expected_output
+            ):
+                raise ReleaseError(f"release has no generated build-output proof for {task['id']}")
+            ReleaseBuildValidator.verify_completed_task(build_record)
+            destination = package_root / generated_relative
+            if destination.exists():
+                raise ReleaseError(
+                    f"generated npm output collides with archived source for {task['id']}")
+            shutil.copytree(Path(build_record["buildOutput"]), destination)
+            generated_files = {
+                f"{generated_output}/{relative}": digest
+                for relative, digest in build_record["outputFiles"].items()
+            }
         package_path = package_root / "package.json"
         try:
             package = json.loads(package_path.read_bytes())
@@ -3767,6 +3834,11 @@ class ReleaseArtifactPublisher:
         runtime_files = self._include_runtime_assets(
             tarball_path, package_root, task.get("packedRuntimeDirectories", []),
         )
+        runtime_files.update(generated_files)
+        if generated_files:
+            self._verify_npm_tarball_files(
+                f"packed {task['id']}", tarball_path.read_bytes(), generated_files,
+            )
         try:
             content = tarball_path.read_bytes()
         except OSError as error:
@@ -5099,6 +5171,7 @@ class ReleasePreflight:
     CHECKS = (
         "check_no_release_in_progress",
         "check_toolchain",
+        "check_embedded_test_processes",
         "check_profile",
         "check_disk_space",
         "check_working_trees",
@@ -5110,6 +5183,7 @@ class ReleasePreflight:
         "check_target_version_unused",
         "check_target_artifacts_unused",
         "check_develop_is_green",
+        "check_smoke_gate",
         "check_source_contract",
         "check_generated_version_files",
         "check_license_files",
@@ -5178,7 +5252,10 @@ class ReleasePreflight:
     def run_resume(self) -> list[PreflightFinding]:
         """Recheck only conditions still relevant to the recorded next stage."""
         stage = _next_release_stage(self.manifest)
-        checks = ["check_toolchain", "check_profile", "check_disk_space"]
+        checks = [
+            "check_toolchain", "check_embedded_test_processes",
+            "check_profile", "check_disk_space",
+        ]
         if stage != "acceptance":
             checks.append("check_npm_configuration")
         if stage in {"frontends", "versions", "builds"}:
@@ -5187,7 +5264,7 @@ class ReleasePreflight:
                 "check_nexus_authorization", "check_npm_authorization",
                 "check_push_permission", "check_target_version_unused",
                 "check_target_artifacts_unused", "check_source_contract",
-                "check_develop_is_green",
+                "check_develop_is_green", "check_smoke_gate",
                 "check_generated_version_files", "check_license_files",
                 "check_remote_survey",
             ])
@@ -5271,6 +5348,20 @@ class ReleasePreflight:
                 node_24_remediation(),
             ))
         return findings
+
+    def check_embedded_test_processes(self) -> list[PreflightFinding]:
+        try:
+            processes = embedded_mongo_processes()
+        except BuildSafetyError as error:
+            return [PreflightFinding("test-processes", "fail", str(error))]
+        if not processes:
+            return []
+        detail = ", ".join(process.describe() for process in processes)
+        return [PreflightFinding(
+            "test-processes", "fail",
+            f"embedded Mongo test process(es) remain before the release build: {detail}",
+            "cedarcli test status; cedarcli test cleanup",
+        )]
 
     def check_profile(self) -> list[PreflightFinding]:
         missing = [name for name in PROFILE_REQUIRED_VARIABLES if not self.environment.get(name)]
@@ -5715,6 +5806,26 @@ class ReleasePreflight:
                     f"--accept-red-develop {repository}={run_id}",
                 ))
         return findings
+
+    def check_smoke_gate(self) -> list[PreflightFinding]:
+        """Refuse to release a source that no passing whole-stack smoke run covers.
+
+        The question is asked of the train's source commits, for the reason the CI check gives:
+        develop moves on between a train and its release, and the run that answers for what is
+        being released is the one made against exactly that. `cedarcli test e2e` records each run
+        under the heads it tested, so a later rerun against newer heads does not disturb the answer
+        here, and no flag skips the check: a flaky run is rerun, not accepted.
+        """
+        expected = self.manifest.get("sourceRepositories") or {}
+        if not expected:
+            return [PreflightFinding(
+                "smoke", "fail",
+                "the manifest records no source repositories to match a smoke run against",
+            )]
+        return [
+            PreflightFinding("smoke", "fail", message, smoke_gate.REMEDY)
+            for message in smoke_gate.findings_for(self.environment.get("CEDAR_HOME"), expected)
+        ]
 
     def check_source_contract(self) -> list[PreflightFinding]:
         """Validate build and publication topology in the exact immutable train commits."""

@@ -13,7 +13,10 @@ except ModeError as error:
     typer.echo(str(error), err=True)
     raise SystemExit(1)
 
-from org.metadatacenter import git, build, publish, repo, env, release, release_train, check, docker, dev, cert, prod, native, mode
+from org.metadatacenter import (
+    build, cert, check, dev, docker, env, git, mode, native, prod, publish, release,
+    release_train, repo, test_processes,
+)
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.CheatWorker import CheatWorker
 
@@ -33,6 +36,7 @@ app.add_typer(native.app, name="native", help="Inspect and manage headless nativ
 app.add_typer(dev.app, name="dev", help="Development related operations...")
 app.add_typer(prod.app, name="prod", help="Production server related operations...")
 app.add_typer(cert.app, name="cert", help="Self-signed certificates...")
+app.add_typer(test_processes.app, name="test", help="Inspect and clean test-owned processes...")
 app.command("mode")(mode.mode)
 
 

@@ -607,6 +607,9 @@ class ReleasePlannerTest(unittest.TestCase):
                 "cedar-monitoring": "9" * 40,
                 "cedar-bridging": "0" * 40,
                 "cedar-component-demo": "c" * 40,
+                "cedar-workspace": "d" * 40,
+                "cedar-template-designer": "e" * 40,
+                "cedar-model-typescript-library-demo": "f" * 40,
             },
         }
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
@@ -786,6 +789,8 @@ class ReleasePlannerTest(unittest.TestCase):
                  "npmVersionVariable": "CEDAR_TEMPLATE_EDITOR_NPM_VERSION"},
                 {"id": "workspace", "repository": "cedar-workspace",
                  "npmVersionVariable": "CEDAR_WORKSPACE_NPM_VERSION"},
+                {"id": "designer", "repository": "cedar-template-designer",
+                 "npmVersionVariable": "CEDAR_TEMPLATE_DESIGNER_NPM_VERSION"},
                 {"id": "openview", "repository": "cedar-openview",
                  "npmVersionVariable": "CEDAR_OPENVIEW_NPM_VERSION"},
             ],
@@ -793,12 +798,14 @@ class ReleasePlannerTest(unittest.TestCase):
         inputs = {
             "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8-dev.202609050436.gf2431e27c276.p4",
             "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_TEMPLATE_DESIGNER_NPM_VERSION": "2.9.3-dev.202609050436.g123456789abc.p4",
             "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8-dev.202609050436.g3bf71549e097.p4",
             "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.7-dev.202609050436.g9503db76a96f",
             "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
         }
         plan = {"npm": {"surfaces": [
-            {"repository": "cedar-template-editor"}, {"repository": "cedar-openview"},
+            {"repository": "cedar-template-editor"}, {"repository": "cedar-workspace"},
+            {"repository": "cedar-template-designer"}, {"repository": "cedar-openview"},
         ]}}
 
         defaults = ReleasePlanner._docker_frontend_defaults(
@@ -807,7 +814,8 @@ class ReleasePlannerTest(unittest.TestCase):
         self.assertEqual(inputs, defaults["nextDevelopment"])
         self.assertEqual({
             "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8",
-            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+            "CEDAR_WORKSPACE_NPM_VERSION": "2.9.8",
+            "CEDAR_TEMPLATE_DESIGNER_NPM_VERSION": "2.9.8",
             "CEDAR_OPENVIEW_NPM_VERSION": "2.9.8",
             "CEDAR_OPENVIEW_CEE_NPM_VERSION": "2.0.6",
             "CEDAR_OPENVIEW_WEBCOMPONENTS_NPM_VERSION": "2.8.0",
@@ -849,19 +857,25 @@ class ReleasePlannerTest(unittest.TestCase):
                 cee_version=PUBLIC_VERSION,
             )
 
-    def test_independent_packages_are_not_platform_release_repositories(self):
+    def test_only_public_npmjs_packages_are_not_platform_release_repositories(self):
         source = {"repositories": {
             "cedar-parent": "1" * 40,
             "cedar-workspace": "2" * 40,
             "cedar-template-designer": "3" * 40,
             "cedar-embeddable-editor": "4" * 40,
             "cedar-model-typescript-library": "5" * 40,
+            "cedar-model-typescript-library-demo": "6" * 40,
         }}
         release, maven = ReleasePlanner._release_repositories({
             "repositories": list(source["repositories"]),
             "mavenRepositories": ["cedar-parent"],
         }, source)
-        self.assertEqual(["cedar-parent"], release)
+        self.assertEqual([
+            "cedar-parent",
+            "cedar-workspace",
+            "cedar-template-designer",
+            "cedar-model-typescript-library-demo",
+        ], release)
         self.assertEqual(["cedar-parent"], maven)
 
     def test_release_version_is_verified_not_inferred_from_train(self):
@@ -1366,6 +1380,36 @@ class ReleaseWorkspaceTest(unittest.TestCase):
 
 
 class ReleaseVersionPreparationTest(unittest.TestCase):
+    def test_platform_npm_repositories_have_root_version_surfaces(self):
+        repositories = (
+            "cedar-workspace",
+            "cedar-template-designer",
+            "cedar-model-typescript-library-demo",
+        )
+        for repository in repositories:
+            with self.subTest(repository=repository), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package = {"name": repository, "version": "2.9.10-SNAPSHOT"}
+                lock = {
+                    "name": repository,
+                    "version": "2.9.10-SNAPSHOT",
+                    "packages": {"": {"name": repository, "version": "2.9.10-SNAPSHOT"}},
+                }
+                (root / "package.json").write_text(
+                    json.dumps(package) + "\n", encoding="utf-8")
+                (root / "package-lock.json").write_text(
+                    json.dumps(lock) + "\n", encoding="utf-8")
+
+                changed = ReleaseVersionPreparer._stamp_versions(
+                    repository, root, "2.9.10-SNAPSHOT", "2.9.10", set())
+
+                self.assertEqual({"package.json", "package-lock.json"}, changed)
+                self.assertEqual(
+                    "2.9.10", json.loads((root / "package.json").read_bytes())["version"])
+                stamped_lock = json.loads((root / "package-lock.json").read_bytes())
+                self.assertEqual("2.9.10", stamped_lock["version"])
+                self.assertEqual("2.9.10", stamped_lock["packages"][""]["version"])
+
     def test_version_stamping_refreshes_train_lock_baselines(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -1768,6 +1812,9 @@ class ReleaseBuildValidationTest(unittest.TestCase):
         # one that repository's plain `npm ci` accepts. Only Monitoring's CI still asks for the
         # legacy peer resolution.
         self.assertEqual([], install_options["openview"])
+        self.assertEqual([], install_options["workspace"])
+        self.assertEqual([], install_options["template-designer"])
+        self.assertEqual([], install_options["model-typescript-library-demo"])
         self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
         self.assertEqual([], install_options["content"])
         self.assertEqual([], install_options["cee-demo-angular"])
@@ -1791,6 +1838,27 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertEqual("true", captured[0][1]["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"])
             self.assertEqual("true", captured[0][1]["CI"])
             self.assertEqual("false", captured[0][1]["NG_CLI_ANALYTICS"])
+
+    def test_release_maven_task_checks_for_mongods_before_and_after(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory)
+            validator = ReleaseBuildValidator(
+                ReleaseState(root=Path(directory) / "state"),
+                executor=lambda _task, _environment: "built\n",
+            )
+            task = next(
+                item for item in validator.tasks(manifest)
+                if item["id"] == "release:maven:parent"
+            )
+            with patch.object(
+                release_train, "require_no_embedded_mongo_processes") as before, \
+                    patch.object(
+                        release_train, "wait_for_no_embedded_mongo_processes") as after:
+                validator.run_task(manifest, task)
+
+            before.assert_called_once_with("release Maven task release:maven:parent")
+            after.assert_called_once_with(
+                "completion of release Maven task release:maven:parent")
 
     def test_quiet_build_keeps_raw_output_in_its_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3032,6 +3100,63 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 "packed frontend", tarball.read_bytes(), evidence["runtimeFiles"],
             )
 
+    def test_npm_pack_includes_the_demo_build_proven_by_release_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            root = workspace / "cedar-model-typescript-library-demo"
+            root.mkdir(parents=True)
+            (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+            (root / "package.json").write_text(json.dumps({
+                "name": "cedar-model-typescript-library-demo",
+                "version": "2.9.10",
+                "main": "dist/index.js",
+                "files": ["dist"],
+                "publishConfig": {"registry": "https://nexus.example/repository/npm/"},
+            }) + "\n", encoding="utf-8")
+            commit = ReleaseWorkspaceTest._commit_repository(root)
+            tree = ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}")
+            generated = root / "dist" / "index.js"
+            generated.parent.mkdir()
+            generated.write_text("module.exports = {};\n", encoding="utf-8")
+            log = Path(directory) / "build.log"
+            log.write_text("build passed\n", encoding="utf-8")
+            build_record = {
+                "id": "release:npm:model-typescript-library-demo:build",
+                "buildOutput": str(root / "dist"),
+                "outputFiles": release_train._directory_file_hashes(root / "dist"),
+                "log": str(log),
+                "logSha256": release_train._file_sha256(log),
+            }
+            state = SimpleNamespace(read_current_manifest=lambda: ({
+                "buildValidation": {"completedTasks": {
+                    build_record["id"]: build_record,
+                }},
+            }, None))
+            task = {
+                "id": "npm:release:model-typescript-library-demo",
+                "kind": "npm-release",
+                "repository": "cedar-model-typescript-library-demo",
+                "directory": ".",
+                "version": "2.9.10",
+                "registry": "https://nexus.example/repository/npm/",
+                "workspace": str(workspace),
+                "expectedCommit": commit,
+                "expectedTree": tree,
+                "generatedBuildOutput": "dist",
+                "buildEvidenceId": build_record["id"],
+            }
+            publisher = ReleaseArtifactPublisher(state)
+
+            tarball, evidence = publisher._pack_npm(task)
+
+            self.assertEqual(
+                release_train._file_sha256(generated),
+                evidence["runtimeFiles"]["dist/index.js"],
+            )
+            publisher._verify_npm_tarball_files(
+                "packed demo", tarball.read_bytes(), evidence["runtimeFiles"],
+            )
+
 
 class FakeNexus:
     """Stand in for HttpClient, failing only the URLs a test names."""
@@ -3182,6 +3307,18 @@ class ReleasePreflightTest(unittest.TestCase):
             ("node", "--version"): FakeCompletedProcess(stdout="v24.19.0"),
         })
         self.assertEqual([], self._preflight(commands=commands).check_toolchain())
+
+    def test_embedded_mongo_process_blocks_release_before_building(self):
+        process = SimpleNamespace(
+            describe=lambda: "PID 42 (/Users/test/.embedmongo/5.0/mongod; "
+            "listening on 127.0.0.1:42317)")
+        with patch.object(release_train, "embedded_mongo_processes", return_value=[process]):
+            findings = self._preflight().check_embedded_test_processes()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("PID 42", findings[0].message)
+        self.assertIn("cedarcli test cleanup", findings[0].remedy)
 
     def test_node_other_than_the_release_pin_is_refused(self):
         commands = FakeCommands({
@@ -3771,6 +3908,56 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertIn("2 unpushed commit", findings[0].message)
 
+    def test_the_smoke_gate_is_part_of_the_complete_gate_and_of_every_build_stage(self):
+        """A release is refused, not merely warned, when no smoke run covers its source."""
+        self.assertIn("check_smoke_gate", ReleasePreflight.CHECKS)
+        for phase in ("started", "frontends-prepared", "versions-prepared"):
+            manifest = manifest_fixture()
+            manifest["phase"] = phase
+            preflight = self._preflight(manifest=manifest)
+            called = []
+            names = [name for name in ReleasePreflight.CHECKS]
+
+            def check(name):
+                def run():
+                    called.append(name)
+                    return []
+                return run
+
+            with patch.multiple(preflight, **{name: check(name) for name in names}):
+                preflight.run_resume()
+            self.assertIn("check_smoke_gate", called, phase)
+
+    def test_the_smoke_gate_is_asked_about_the_train_source(self):
+        manifest = self._release_of("repo-one", "repo-two")
+        with patch("org.metadatacenter.smoke_gate.findings_for", return_value=[]) as findings:
+            result = self._preflight(manifest=manifest).check_smoke_gate()
+
+        self.assertEqual([], result)
+        findings.assert_called_once_with(
+            PREFLIGHT_ENVIRONMENT["CEDAR_HOME"], manifest["sourceRepositories"])
+
+    def test_a_source_no_smoke_run_covers_blocks_the_release(self):
+        manifest = self._release_of("repo-one")
+        with patch("org.metadatacenter.smoke_gate.findings_for", return_value=[
+            "repo-one: the smoke run at T tested 11111111, this source is aaaaaaaa",
+        ]):
+            findings = self._preflight(manifest=manifest).check_smoke_gate()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertEqual("smoke", findings[0].check)
+        self.assertIn("tested 11111111", findings[0].message)
+        self.assertIn("cedarcli test e2e", findings[0].remedy)
+
+    def test_a_manifest_without_sources_cannot_pass_the_smoke_gate(self):
+        manifest = manifest_fixture()
+        manifest["sourceRepositories"] = {}
+        findings = self._preflight(manifest=manifest).check_smoke_gate()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+
     def test_start_and_plan_settle_the_same_preconditions(self):
         """A release must not be startable from a state that plan would have refused."""
         for command in (release_train.plan, release_train.start):
@@ -3791,7 +3978,8 @@ class ReleasePreflightTest(unittest.TestCase):
             return run
 
         names = {
-            "check_toolchain", "check_profile", "check_disk_space",
+            "check_toolchain", "check_embedded_test_processes",
+            "check_profile", "check_disk_space",
             "check_npm_configuration",
             "check_nexus_authorization", "check_npm_authorization",
             "check_push_permission", "check_target_version_unused",
