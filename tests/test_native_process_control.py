@@ -1,5 +1,6 @@
 import subprocess
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -68,9 +69,11 @@ class NativeProcessControlTest(unittest.TestCase):
                 result = runner.invoke(command_group, [alias, "--help"])
                 self.assertEqual(2, result.exit_code)
 
+    @patch.object(NativeWorker, "infrastructure_gaps", return_value=None)
     @patch.object(NativeWorker, "start")
     @patch.object(StartInfrastructureWorker, "all")
-    def test_aggregate_start_uses_one_application_controller_invocation(self, infrastructure, applications):
+    def test_aggregate_start_uses_one_application_controller_invocation(
+            self, infrastructure, applications, _gaps):
         start.all_all()
 
         infrastructure.assert_called_once_with()
@@ -86,7 +89,8 @@ class NativeProcessControlTest(unittest.TestCase):
 
     def test_backend_start_uses_dependency_order(self):
         order = []
-        with patch.object(StartInfrastructureWorker, "all", side_effect=lambda: order.append("infra")), \
+        with patch.object(NativeWorker, "infrastructure_gaps", return_value=None), \
+                patch.object(StartInfrastructureWorker, "all", side_effect=lambda: order.append("infra")), \
                 patch.object(StartMicroserviceWorker, "all", side_effect=lambda: order.append("microservices")):
             start.backend_all()
 
@@ -297,3 +301,89 @@ class FrontendNamingTest(unittest.TestCase):
         for name in NativeWorker.FRONTENDS:
             self.assertTrue(name.startswith("ui-"), name)
             self.assertNotIn(name, NativeWorker.MICROSERVICES)
+
+
+class InfrastructureAlreadyRunningTest(unittest.TestCase):
+    """Starting infrastructure that already runs fails; asking first is the difference."""
+
+    CONTROLLER = (
+        'INFRASTRUCTURE_PORTS=(\n'
+        '  "nginx-http 80"\n'
+        '  "mongodb 27017"\n'
+        '  # a comment the list carries\n'
+        '  "keycloak 8080"\n'
+        ')\n'
+    )
+
+    def _ports(self, tmp):
+        path = Path(tmp) / "cedar-services.sh"
+        path.write_text(self.CONTROLLER, encoding="utf-8")
+        return path
+
+    def test_the_managed_ports_come_from_the_controller(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(NativeWorker, "controller_path", return_value=str(self._ports(tmp))):
+                self.assertEqual(
+                    {"nginx-http": "80", "mongodb": "27017", "keycloak": "8080"},
+                    NativeWorker.infrastructure_ports())
+
+    def _gaps(self, listening, returncode=0):
+        result = unittest.mock.MagicMock()
+        result.returncode = returncode
+        result.__iter__ = lambda _self: iter(listening)
+        with patch.object(
+            NativeWorker, "infrastructure_ports",
+            return_value={"nginx-http": "80", "mongodb": "27017", "keycloak": "8080"},
+        ), patch.object(NativeWorker, "execute", return_value=result):
+            return NativeWorker.infrastructure_gaps()
+
+    def test_every_port_listening_is_no_gap_at_all(self):
+        self.assertEqual([], self._gaps([
+            "nginx-http (port 80, pid 1)",
+            "mongodb (port 27017, pid 2)",
+            "keycloak (port 8080, pid 3)",
+        ]))
+
+    def test_a_silent_port_is_named(self):
+        self.assertEqual(["keycloak"], self._gaps([
+            "nginx-http (port 80, pid 1)",
+            "mongodb (port 27017, pid 2)",
+        ]))
+
+    def test_an_unreadable_controller_answers_nothing(self):
+        """None means 'cannot say', which must start infrastructure rather than skip it."""
+        self.assertIsNone(self._gaps([], returncode=1))
+
+    def test_start_all_skips_infrastructure_that_is_already_listening(self):
+        with (
+            patch.object(NativeWorker, "infrastructure_gaps", return_value=[]),
+            patch.object(StartInfrastructureWorker, "all") as infrastructure,
+            patch.object(NativeWorker, "start") as applications,
+        ):
+            start.all_all()
+
+        infrastructure.assert_not_called()
+        applications.assert_called_once_with()
+
+    def test_start_all_starts_infrastructure_when_a_port_is_silent(self):
+        with (
+            patch.object(NativeWorker, "infrastructure_gaps", return_value=["keycloak"]),
+            patch.object(StartInfrastructureWorker, "all") as infrastructure,
+            patch.object(NativeWorker, "start") as applications,
+        ):
+            start.all_all()
+
+        infrastructure.assert_called_once_with()
+        applications.assert_called_once_with()
+
+    def test_start_all_starts_infrastructure_when_the_controller_cannot_say(self):
+        with (
+            patch.object(NativeWorker, "infrastructure_gaps", return_value=None),
+            patch.object(StartInfrastructureWorker, "all") as infrastructure,
+            patch.object(NativeWorker, "start"),
+        ):
+            start.all_all()
+
+        infrastructure.assert_called_once_with()
+
