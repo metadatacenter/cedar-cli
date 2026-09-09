@@ -52,6 +52,12 @@ Estate-wide Git commands visit every selected repository and return a nonzero ex
 any repository fails. Their result records retain each repository's process exit code, including
 failures that produce no stderr. A failed status scan does not update `git next` navigation.
 
+Shared streamed subprocess execution lives in `util/ProcessRunner.py`: `run_process` takes
+literal arguments, and `run_shell` takes one explicit script. Both return output lines with a
+`returncode`. Worker script lists run in order and stop at the first failed script; shell state
+is local to each script. Output preserves indentation and replaces invalid UTF-8 bytes. An
+interrupted reader kills its owned process group, reaps the child, and closes the pipe.
+
 ## Contributor Setup
 
 The installation guides establish `CEDAR_HOME`, clone the companion repositories, and create the

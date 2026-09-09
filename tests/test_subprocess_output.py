@@ -29,7 +29,7 @@ class SubprocessOutputTest(unittest.TestCase):
         process.wait.return_value = return_code
         return process
 
-    @patch("org.metadatacenter.taskexecutor.ShellTaskExecutor.subprocess.Popen")
+    @patch("org.metadatacenter.util.ProcessRunner.subprocess.Popen")
     def test_shell_task_streams_output_and_waits_without_polling(self, popen):
         process = self.process_with_output(b"first line\n\nsecond line without newline", return_code=7)
         popen.return_value = process
@@ -47,7 +47,7 @@ class SubprocessOutputTest(unittest.TestCase):
         self.assertEqual(2, len(progress.updates))
 
     @patch("org.metadatacenter.worker.Worker.console")
-    @patch("org.metadatacenter.worker.Worker.subprocess.Popen")
+    @patch("org.metadatacenter.util.ProcessRunner.subprocess.Popen")
     def test_generic_worker_streams_output_and_waits_without_polling(self, popen, worker_console):
         process = self.process_with_output(b"first line\nsecond line\n")
         popen.return_value = process
@@ -62,7 +62,7 @@ class SubprocessOutputTest(unittest.TestCase):
         worker_console.print.assert_any_call("second line", markup=False)
 
     @patch("org.metadatacenter.worker.Worker.console")
-    @patch("org.metadatacenter.worker.Worker.subprocess.Popen")
+    @patch("org.metadatacenter.util.ProcessRunner.subprocess.Popen")
     def test_generic_worker_can_hide_an_inline_implementation(self, popen, worker_console):
         popen.return_value = self.process_with_output(b"OK   cedar-infrastructure\n")
 

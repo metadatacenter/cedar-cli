@@ -1,4 +1,3 @@
-import subprocess
 import time
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from org.metadatacenter.util.BuildSafety import (
 )
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.util.ProcessRunner import run_shell
 
 console = Console()
 
@@ -104,13 +104,16 @@ class ShellTaskExecutor(TaskExecutor):
             title="Shell subprocess #" + str(task.node_id),
             title_align="left"),
             style=Style(color="bright_cyan"))
-        proc = subprocess.Popen([command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
-                                executable=GlobalContext.get_shell(), env=environment)
 
-        stdout_parts = []
-        self.handle_shell_stdout(proc.stdout, stdout_parts, job_progress)
+        def report(line):
+            job_progress.print(line, markup=False)
+            job_progress.update(1, advance=1)
 
-        return_code = proc.wait()
+        stdout_parts = run_shell(
+            command, shell=GlobalContext.get_shell(), cwd=cwd,
+            env=environment, on_line=report,
+        )
+        return_code = stdout_parts.returncode
         description = describe_subprocess_failure(return_code)
         if return_code < 0 and not stdout_parts:
             description += "; the process produced no diagnostic output of its own"
@@ -118,13 +121,3 @@ class ShellTaskExecutor(TaskExecutor):
         msg = f"[{color}]Processing {repo.name} done: {description}."
         job_progress.print(Panel(msg, style=Style(color="green"), subtitle="Shell subprocess"))
         return stdout_parts, return_code
-
-    @staticmethod
-    def handle_shell_stdout(proc_stream, my_buffer, job_progress: Progress, echo_streams=True):
-        for s in iter(proc_stream.readline, b''):
-            out = s.decode('utf-8').strip()
-            if len(out) > 0:
-                my_buffer.append(out)
-                if echo_streams:
-                    job_progress.print(out, markup=False)
-                job_progress.update(1, advance=1)
