@@ -64,13 +64,16 @@ class GitWorker(Worker):
         return active_repos
 
     @staticmethod
-    def execute_shell_on_all_repos_with_table(command_list,
+    def execute_shell_on_all_repos_with_table(command_list=None,
                                               cwd_is_home=False,
                                               headers=None,
                                               show_lines=True,
                                               status_line="Processing",
-                                              repo_list=None
+                                              repo_list=None,
+                                              argv=None,
                                               ):
+        if (command_list is None) == (argv is None):
+            raise ValueError("Provide either shell commands or literal process arguments")
         if headers is None:
             headers = ["Repo", "Output", "Error"]
         result = ResultTable(headers, show_lines)
@@ -79,7 +82,11 @@ class GitWorker(Worker):
         with Progress() as progress:
             task = progress.add_task("[red]" + status_line + "...", total=len(repo_list))
             for repo in repo_list:
-                commands_to_execute = [cmd.format(repo.name) for cmd in command_list]
+                if argv is None:
+                    commands = [cmd.format(repo.name) for cmd in command_list]
+                    arguments = ["set -e -o pipefail\n" + "\n".join(commands)]
+                else:
+                    arguments = list(argv)
                 rule = Rule("[bold red]" + repo.name)
                 progress.print(rule)
                 out = ""
@@ -88,9 +95,10 @@ class GitWorker(Worker):
                 return_code = -1
                 try:
                     cwd = Util.get_wd(repo) if cwd_is_home is False else Util.cedar_home
-                    # print(commands_to_execute)
-                    process = subprocess.Popen(["set -e -o pipefail\n" + "\n".join(commands_to_execute)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd,
-                                               executable=GlobalContext.get_shell())
+                    process = subprocess.Popen(
+                        arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        shell=argv is None, cwd=cwd,
+                        executable=GlobalContext.get_shell() if argv is None else None)
                     stdout, stderr = process.communicate()
                     out = stdout.decode(UTF_8).strip()
                     err = stderr.decode(UTF_8).strip()
@@ -153,7 +161,7 @@ class GitWorker(Worker):
 
     def checkout(self, branch: str):
         return self.execute_shell_on_all_repos_with_table(
-            command_list=["git checkout " + branch],
+            argv=["git", "checkout", "--end-of-options", branch, "--"],
             status_line="Checking out",
         )
 
