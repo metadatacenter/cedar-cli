@@ -52,7 +52,7 @@ class DockerDeploymentTest(unittest.TestCase):
         self.surface_patch.stop()
 
     @patch.object(DockerTrain, 'resolve', return_value='2.9.3-dev.20260824.1847')
-    @patch.object(DockerWorker, 'start_all', return_value=0)
+    @patch.object(DockerWorker, "start_all", return_value=0)
     def test_start_all_cli_uses_configured_mode_pull_and_timeout(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
             'all', '--pull', 'missing', '--timeout', '42',
@@ -68,7 +68,7 @@ class DockerDeploymentTest(unittest.TestCase):
         resolve.assert_called_once_with(None)
 
     @patch.object(DockerTrain, 'resolve')
-    @patch.object(DockerWorker, 'start_all', return_value=0)
+    @patch.object(DockerWorker, "start_all", return_value=0)
     def test_start_all_local_does_not_resolve_a_published_train(self, start_all, resolve):
         result = self.runner.invoke(docker_start.app, [
             'all', '--local',
@@ -79,9 +79,9 @@ class DockerDeploymentTest(unittest.TestCase):
         self.assertIsNone(start_all.call_args.kwargs['train'])
 
     @patch.object(DockerTrain, 'resolve')
-    @patch.object(DockerWorker, 'start_infrastructure', return_value=0)
-    @patch.object(DockerWorker, 'active_train', return_value='2.9.3-dev.20260824.1847')
-    @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.FULL)
+    @patch("org.metadatacenter.docker_support.lifecycle.start_infrastructure", return_value=0)
+    @patch("org.metadatacenter.docker_support.state.active_train", return_value='2.9.3-dev.20260824.1847')
+    @patch("org.metadatacenter.docker_support.state.active_deployment", return_value=DockerDeploymentMode.FULL)
     def test_individual_start_preserves_the_active_train(
             self, _active, _active_train, start, resolve):
         result = self.runner.invoke(docker_start.app, ['infra'])
@@ -96,7 +96,7 @@ class DockerDeploymentTest(unittest.TestCase):
             self.assertEqual(2, self.runner.invoke(
                 command_group, ['infrastructure', '--help']).exit_code)
 
-    @patch.object(DockerWorker, 'start_frontend', return_value=0)
+    @patch("org.metadatacenter.docker_support.lifecycle.start_frontend", return_value=0)
     @patch.object(DockerTrain, 'resolve')
     def test_individual_frontend_cli_uses_validated_target(self, resolve, start):
         result = self.runner.invoke(docker_start.app, [
@@ -115,14 +115,14 @@ class DockerDeploymentTest(unittest.TestCase):
         self.assertIn('--detach', ANSI_ESCAPE.sub('', help_result.output))
         self.assertEqual(2, short_result.exit_code, short_result.output)
 
-    @patch.object(DockerWorker, 'stop_microservice', return_value=0)
+    @patch("org.metadatacenter.docker_support.lifecycle.stop_microservice", return_value=0)
     def test_individual_microservice_cli_uses_validated_target(self, stop):
         result = self.runner.invoke(docker_stop.app, ['microservice', 'open'])
 
         self.assertEqual(0, result.exit_code, result.output)
         stop.assert_called_once_with('open')
 
-    @patch.object(DockerWorker, 'start_keycloak', return_value=0)
+    @patch("org.metadatacenter.docker_support.lifecycle.start_keycloak", return_value=0)
     @patch.object(DockerTrain, 'resolve')
     def test_keycloak_start_accepts_long_and_short_names(self, resolve, start):
         for target in ('keycloak', 'kk'):
@@ -132,7 +132,7 @@ class DockerDeploymentTest(unittest.TestCase):
         resolve.assert_not_called()
         self.assertEqual(2, start.call_count)
 
-    @patch.object(DockerWorker, 'stop_keycloak', return_value=0)
+    @patch("org.metadatacenter.docker_support.lifecycle.stop_keycloak", return_value=0)
     def test_keycloak_stop_accepts_long_and_short_names(self, stop):
         for target in ('keycloak', 'kk'):
             result = self.runner.invoke(docker_stop.app, [target])
@@ -140,7 +140,7 @@ class DockerDeploymentTest(unittest.TestCase):
 
         self.assertEqual(2, stop.call_count)
 
-    @patch.object(DockerWorker, 'status', return_value=True)
+    @patch.object(DockerWorker, "status", return_value=True)
     def test_status_cli_uses_the_configured_mode(self, status):
         self.topology.return_value = DockerDeploymentMode.HYBRID
         result = self.runner.invoke(docker.app, ['status'])
@@ -181,9 +181,9 @@ class DockerDeploymentTest(unittest.TestCase):
         old_path = self.runner.invoke(docker.app, ['one-time-setup'])
         self.assertEqual(2, old_path.exit_code, old_path.output)
 
-    @patch.object(DockerWorker, 'copy_certificates', return_value=0)
-    @patch.object(DockerWorker, 'create_certificates_volume', return_value=0)
-    @patch.object(DockerWorker, 'create_network', return_value=0)
+    @patch("org.metadatacenter.docker_support.setup.copy_certificates", return_value=0)
+    @patch("org.metadatacenter.docker_support.setup.create_certificates_volume", return_value=0)
+    @patch("org.metadatacenter.docker_support.setup.create_network", return_value=0)
     def test_one_time_setup_runs_bootstrap_operations_in_order(
             self, create_network, create_volumes, copy_certificates):
         manager = Mock()
@@ -235,7 +235,7 @@ class DockerDeploymentTest(unittest.TestCase):
             errors,
         )
 
-    @patch.object(DockerWorker, '_docker_command')
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
     def test_backend_authentication_probe_accepts_the_local_certificate(self, command):
         command.return_value = type(
             'Result', (), {'returncode': 0, 'stdout': '', 'stderr': ''},
@@ -248,16 +248,16 @@ class DockerDeploymentTest(unittest.TestCase):
             'https://auth.metadatacenter.orgx/realms/CEDAR/.well-known/openid-configuration',
         ])
 
-    @patch.object(DockerWorker, '_prepare_frontend_volumes', return_value=True)
-    @patch.object(DockerWorker, '_prepare_microservice_volumes', return_value=True)
+    @patch("org.metadatacenter.docker_support.images._prepare_frontend_volumes", return_value=True)
+    @patch("org.metadatacenter.docker_support.images._prepare_microservice_volumes", return_value=True)
     @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
            return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
-    @patch.object(DockerWorker, '_record_active_deployment')
-    @patch.object(DockerWorker, '_wait_for_acceptance', return_value=True)
-    @patch.object(DockerWorker, '_wait_for_stacks', return_value=True)
-    @patch.object(DockerWorker, 'compose', return_value=0)
-    @patch.object(DockerWorker, 'preflight', return_value=True)
-    @patch.object(DockerWorker, 'mode_environment', return_value=({'MODE': 'full'}, []))
+    @patch("org.metadatacenter.docker_support.state._record_active_deployment")
+    @patch("org.metadatacenter.docker_support.lifecycle._wait_for_acceptance", return_value=True)
+    @patch("org.metadatacenter.docker_support.lifecycle._wait_for_stacks", return_value=True)
+    @patch("org.metadatacenter.docker_support.lifecycle.compose", return_value=0)
+    @patch("org.metadatacenter.docker_support.lifecycle.preflight", return_value=True)
+    @patch("org.metadatacenter.docker_support.environment.mode_environment", return_value=({'MODE': 'full'}, []))
     def test_full_start_orders_all_selected_stacks(
             self, _environment, _preflight, compose, wait, _acceptance, record,
             _manifest, prepare_microservice_volumes, prepare_frontend_volumes):
@@ -281,7 +281,7 @@ class DockerDeploymentTest(unittest.TestCase):
         prepare_microservice_volumes.assert_called_once()
         prepare_frontend_volumes.assert_called_once()
 
-    @patch.object(DockerWorker, '_docker_command')
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
     @patch.object(DockerTrain, 'completion')
     def test_train_image_gate_pulls_then_requires_the_recorded_repo_digest(
             self, completion, command):
@@ -322,7 +322,7 @@ class DockerDeploymentTest(unittest.TestCase):
             call(['image', 'inspect', reference]),
         ], command.call_args_list)
 
-    @patch.object(DockerWorker, '_docker_command')
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
     @patch.object(DockerTrain, 'completion')
     def test_train_image_gate_rejects_a_preexisting_wrong_digest(
             self, completion, command):
@@ -351,7 +351,7 @@ class DockerDeploymentTest(unittest.TestCase):
         ))
         command.assert_called_once_with(['image', 'inspect', reference])
 
-    @patch.object(DockerWorker, '_docker_command')
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
     def test_volume_preparation_runs_as_root_only_for_fixed_volume_ownership(self, command):
         command.return_value = type('Result', (), {
             'returncode': 0, 'stdout': '', 'stderr': '',
@@ -371,7 +371,7 @@ class DockerDeploymentTest(unittest.TestCase):
             'chown 10001:10001 /volume/.cedar-owner-10001; fi',
         ]), command.call_args_list)
 
-    @patch.object(DockerWorker, '_docker_command')
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
     def test_frontend_log_volumes_are_prepared_for_the_nginx_user(self, command):
         command.return_value = type('Result', (), {
             'returncode': 0, 'stdout': '', 'stderr': '',
@@ -391,15 +391,15 @@ class DockerDeploymentTest(unittest.TestCase):
             'chown 101:101 /volume/.cedar-owner-101; fi',
         ]), command.call_args_list)
 
-    @patch.object(DockerWorker, '_prepare_microservice_volumes', return_value=True)
+    @patch("org.metadatacenter.docker_support.images._prepare_microservice_volumes", return_value=True)
     @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
            return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
-    @patch.object(DockerWorker, '_record_active_deployment')
-    @patch.object(DockerWorker, '_wait_for_acceptance', return_value=True)
-    @patch.object(DockerWorker, '_wait_for_stacks', return_value=True)
-    @patch.object(DockerWorker, 'compose', return_value=0)
-    @patch.object(DockerWorker, 'preflight', return_value=True)
-    @patch.object(DockerWorker, 'mode_environment', return_value=({'MODE': 'hybrid'}, []))
+    @patch("org.metadatacenter.docker_support.state._record_active_deployment")
+    @patch("org.metadatacenter.docker_support.lifecycle._wait_for_acceptance", return_value=True)
+    @patch("org.metadatacenter.docker_support.lifecycle._wait_for_stacks", return_value=True)
+    @patch("org.metadatacenter.docker_support.lifecycle.compose", return_value=0)
+    @patch("org.metadatacenter.docker_support.lifecycle.preflight", return_value=True)
+    @patch("org.metadatacenter.docker_support.environment.mode_environment", return_value=({'MODE': 'hybrid'}, []))
     def test_hybrid_stops_docker_frontends_then_starts_only_the_backend(
             self, _environment, _preflight, compose, _wait, _acceptance, record,
             _manifest, _prepare_volumes):
@@ -412,19 +412,19 @@ class DockerDeploymentTest(unittest.TestCase):
         ], compose.call_args_list)
         record.assert_called_once_with(DockerDeploymentMode.HYBRID)
 
-    @patch.object(DockerWorker, 'compose')
-    @patch.object(DockerWorker, 'preflight', return_value=False)
-    @patch.object(DockerWorker, 'mode_environment', return_value=({}, []))
+    @patch("org.metadatacenter.docker_support.lifecycle.compose")
+    @patch("org.metadatacenter.docker_support.lifecycle.preflight", return_value=False)
+    @patch("org.metadatacenter.docker_support.environment.mode_environment", return_value=({}, []))
     def test_preflight_failure_does_not_change_containers(self, _environment, _preflight, compose):
         self.assertEqual(1, DockerWorker.start_all(DockerDeploymentMode.HYBRID))
         compose.assert_not_called()
 
-    @patch.object(DockerWorker, '_port_owned_by_selected_compose_project', return_value=False)
-    @patch.object(DockerWorker, '_port_has_listener', return_value=True)
-    @patch.object(DockerWorker, '_published_ports', return_value=([443], []))
-    @patch.object(DockerWorker, '_docker_command')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
-    @patch.object(DockerWorker, 'validate', return_value=0)
+    @patch("org.metadatacenter.docker_support.engine._port_owned_by_selected_compose_project", return_value=False)
+    @patch("org.metadatacenter.docker_support.lifecycle._port_has_listener", return_value=True)
+    @patch("org.metadatacenter.docker_support.engine._published_ports", return_value=([443], []))
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=('29.6.2', None))
+    @patch("org.metadatacenter.docker_support.setup.validate", return_value=0)
     def test_preflight_rejects_a_port_owned_outside_the_selected_projects(
             self, _validate, _version, command, _ports, _listener, _owner):
         command.return_value = type('Result', (), {'returncode': 0, 'stdout': '', 'stderr': ''})()
@@ -434,11 +434,11 @@ class DockerDeploymentTest(unittest.TestCase):
             environment={},
         ))
 
-    @patch.object(DockerWorker, '_clear_active_deployment')
-    @patch.object(DockerWorker, 'compose', return_value=0)
-    @patch.object(DockerWorker, 'mode_environment', return_value=({}, []))
-    @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.HYBRID)
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch("org.metadatacenter.docker_support.state._clear_active_deployment")
+    @patch("org.metadatacenter.docker_support.lifecycle.compose", return_value=0)
+    @patch("org.metadatacenter.docker_support.environment.mode_environment", return_value=({}, []))
+    @patch("org.metadatacenter.docker_support.state.active_deployment", return_value=DockerDeploymentMode.HYBRID)
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=('29.6.2', None))
     def test_stop_all_uses_reverse_dependency_order(
             self, _daemon, _active, _environment, compose, clear):
         self.assertEqual(0, DockerWorker.stop_all(DockerDeploymentMode.HYBRID))
@@ -449,15 +449,14 @@ class DockerDeploymentTest(unittest.TestCase):
         ], compose.call_args_list)
         clear.assert_called_once()
 
-    @patch.object(DockerWorker, 'compose')
-    @patch.object(
-        DockerWorker, '_docker_server_version', return_value=(None, 'daemon unavailable'))
+    @patch("org.metadatacenter.docker_support.lifecycle.compose")
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=(None, 'daemon unavailable'))
     def test_stop_all_reports_an_unavailable_daemon_once(self, _daemon, compose):
         self.assertEqual(1, DockerWorker.stop_all(DockerDeploymentMode.FULL))
         compose.assert_not_called()
 
-    @patch.object(DockerWorker, 'compose')
-    @patch.object(DockerWorker, 'active_deployment', return_value=DockerDeploymentMode.HYBRID)
+    @patch("org.metadatacenter.docker_support.lifecycle.compose")
+    @patch("org.metadatacenter.docker_support.state.active_deployment", return_value=DockerDeploymentMode.HYBRID)
     def test_individual_frontend_start_cannot_contradict_active_mode(self, _active, compose):
         self.assertEqual(1, DockerWorker.start_frontends(detach=True))
         compose.assert_not_called()
@@ -479,7 +478,7 @@ class DockerDeploymentTest(unittest.TestCase):
             DockerWorker._clear_active_deployment()
             self.assertIsNone(DockerWorker.active_deployment())
 
-    @patch.object(DockerWorker, '_docker_command')
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
     def test_running_compose_projects_returns_only_known_running_projects(self, command):
         command.return_value = type('Result', (), {
             'returncode': 0,

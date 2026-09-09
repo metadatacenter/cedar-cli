@@ -35,6 +35,10 @@ The main implementation areas are:
   workspaces, version stamping, validation, Git integration, publication, preflight, and
   presentation in separate modules. `release_train.py` registers commands and explicitly
   re-exports the existing component API; components never import that command facade.
+- `org/metadatacenter/docker_support/` separates engine calls, deployment state, images,
+  setup, lifecycle, health checks, and status reporting. `train_support/` separates source
+  surveys, GitHub workflow access, preflight, dispatch, and reporting. The existing worker
+  classes delegate to these components with their original call signatures.
 - `org/metadatacenter/config/` and `org/metadatacenter/model/` describe repositories, images,
   targets, and plans.
 - `org/metadatacenter/planner/`, `org/metadatacenter/executor/`, and

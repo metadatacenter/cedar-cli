@@ -32,17 +32,15 @@ class DockerStatusTest(unittest.TestCase):
     def setUp(self):
         self.output = StringIO()
         self.console_patch = patch(
-            'org.metadatacenter.worker.DockerWorker.console',
+            'org.metadatacenter.docker_support.output.console',
             Console(file=self.output, force_terminal=False),
         )
         self.console_patch.start()
-        self.mode_environment_patch = patch.object(
-            DockerWorker,
-            'mode_environment',
+        self.mode_environment_patch = patch("org.metadatacenter.docker_support.environment.mode_environment",
             return_value=({}, []),
         )
         self.mode_environment_patch.start()
-        self.acceptance_patch = patch.object(DockerWorker, '_acceptance_errors', return_value=[])
+        self.acceptance_patch = patch("org.metadatacenter.docker_support.acceptance._acceptance_errors", return_value=[])
         self.acceptance = self.acceptance_patch.start()
 
     def tearDown(self):
@@ -50,9 +48,9 @@ class DockerStatusTest(unittest.TestCase):
         self.mode_environment_patch.stop()
         self.console_patch.stop()
 
-    @patch.object(DockerWorker, '_compose_containers')
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch("org.metadatacenter.docker_support.engine._compose_containers")
+    @patch("org.metadatacenter.docker_support.engine._expected_compose_services")
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_core_status_is_green_without_optional_admin(self, _version, expected, actual):
         expected.return_value = (['one'], None)
@@ -64,9 +62,9 @@ class DockerStatusTest(unittest.TestCase):
         checked_projects = [call.args[0] for call in actual.call_args_list]
         self.assertNotIn('cedar-admin', checked_projects)
 
-    @patch.object(DockerWorker, '_compose_containers')
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch("org.metadatacenter.docker_support.engine._compose_containers")
+    @patch("org.metadatacenter.docker_support.engine._expected_compose_services")
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_hybrid_checks_backend_containers_and_frontend_routes(self, _version, expected, actual):
         expected.return_value = (['one'], None)
@@ -77,15 +75,15 @@ class DockerStatusTest(unittest.TestCase):
         self.assertNotIn('cedar-frontend', [call.args[0] for call in actual.call_args_list])
         self.acceptance.assert_called_once_with(DockerDeploymentMode.HYBRID)
 
-    @patch.object(DockerWorker, '_compose_containers', return_value=({}, None))
-    @patch.object(DockerWorker, '_expected_compose_services', return_value=(['missing'], None))
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch("org.metadatacenter.docker_support.engine._compose_containers", return_value=({}, None))
+    @patch("org.metadatacenter.docker_support.engine._expected_compose_services", return_value=(['missing'], None))
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_missing_required_container_fails(self, _version, _expected, _actual):
         self.assertFalse(DockerWorker.status())
 
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=(None, 'daemon unavailable'))
+    @patch("org.metadatacenter.docker_support.engine._expected_compose_services")
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=(None, 'daemon unavailable'))
     def test_unavailable_daemon_fails_before_reading_compose(self, _version, expected):
         self.assertFalse(DockerWorker.status())
         expected.assert_not_called()
@@ -123,9 +121,9 @@ class DockerStatusTest(unittest.TestCase):
         self.assertEqual(expected, first)
         self.assertEqual(expected, second)
 
-    @patch.object(DockerWorker, '_compose_containers')
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch("org.metadatacenter.docker_support.engine._compose_containers")
+    @patch("org.metadatacenter.docker_support.engine._expected_compose_services")
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_snapshot_reports_ports_restarts_and_current_image(self, _version, expected, actual):
         expected.return_value = (['server-artifact'], None)
@@ -149,9 +147,9 @@ class DockerStatusTest(unittest.TestCase):
         self.assertEqual('9001 int', row[6])
         self.assertEqual('2', row[7])
 
-    @patch.object(DockerWorker, '_compose_containers')
-    @patch.object(DockerWorker, '_expected_compose_services')
-    @patch.object(DockerWorker, '_docker_server_version', return_value=('29.6.2', None))
+    @patch("org.metadatacenter.docker_support.engine._compose_containers")
+    @patch("org.metadatacenter.docker_support.engine._expected_compose_services")
+    @patch("org.metadatacenter.docker_support.engine._docker_server_version", return_value=('29.6.2', None))
     @patch.object(Util, 'cedar_home', '/tmp/CEDAR')
     def test_healthy_container_on_wrong_image_is_not_ready(self, _version, expected, actual):
         expected.return_value = (['server-resource'], None)
@@ -195,7 +193,7 @@ class DockerStatusTest(unittest.TestCase):
         self.assertIn('9001 int', rendered)
         self.assertIn('WARNING  server-worker: unhealthy', rendered)
 
-    @patch.object(DockerWorker, '_docker_command')
+    @patch("org.metadatacenter.docker_support.engine._docker_command")
     def test_compose_container_inventory_uses_labels(self, command):
         inspected = [container('one'), container('two')]
         command.side_effect = [

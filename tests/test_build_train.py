@@ -110,7 +110,7 @@ class BuildTrainTest(unittest.TestCase):
         )
 
     @patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847')
-    @patch.object(BuildTrainWorker, '_preflight', return_value=((44, 'model', 'cee', 7, 3), None))
+    @patch("org.metadatacenter.train_support.preflight._preflight", return_value=((44, 'model', 'cee', 7, 3), None))
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_allocates_and_dispatches_a_new_train(self, run, preflight, allocate):
         run.return_value.returncode = 0
@@ -138,7 +138,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotIn('Detailed live output: gh run list', result.output)
 
     @patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847')
-    @patch.object(BuildTrainWorker, '_preflight', return_value=((44, 'model', 'cee', 7, 3), None))
+    @patch("org.metadatacenter.train_support.preflight._preflight", return_value=((44, 'model', 'cee', 7, 3), None))
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_does_not_call_a_run_listing_a_follow_command(self, run, _allocate, _preflight):
         run.return_value.returncode = 0
@@ -157,7 +157,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotEqual(0, result.exit_code)
         self.assertIn('No such option', result.output)
 
-    @patch.object(BuildTrainWorker, '_preflight', return_value=((44, 'model', 'cee', 7, 3), None))
+    @patch("org.metadatacenter.train_support.preflight._preflight", return_value=((44, 'model', 'cee', 7, 3), None))
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
     def test_cli_resume_uses_recorded_id(self, run, _preflight):
         run.return_value.returncode = 0
@@ -167,7 +167,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn('resume=true', run.call_args.args[0])
 
-    @patch.object(BuildTrainWorker, '_open_work', return_value=[])
+    @patch("org.metadatacenter.train_support.survey._open_work", return_value=[])
     def test_cli_dry_run_checks_but_never_dispatches(self, _open_work):
         subprocess_result = type('Result', (), {
             'returncode': 0, 'stdout': '', 'stderr': '',
@@ -178,17 +178,16 @@ class BuildTrainTest(unittest.TestCase):
                 BuildTrain, '_read',
                 side_effect=ValueError('build-train state does not exist'),
             ),
-            patch.object(
-                BuildTrainWorker, '_configuration_summary',
+            patch("org.metadatacenter.train_support.preflight._configuration_summary",
                 return_value=(44, 'cedar-model-typescript-library',
                               'cedar-embeddable-editor', 7, 3),
             ),
-            patch.object(BuildTrainWorker, '_local_configuration_preflight') as local_config,
-            patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
-            patch.object(BuildTrainWorker, '_source_ci_preflight') as source_ci,
-            patch.object(BuildTrainWorker, '_smoke_gate_preflight') as smoke_gate,
-            patch.object(BuildTrainWorker, '_npm_configuration_preflight') as npm_config,
-            patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
+            patch("org.metadatacenter.train_support.preflight._local_configuration_preflight") as local_config,
+            patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
+            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight") as smoke_gate,
+            patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight") as npm_config,
+            patch("org.metadatacenter.train_support.preflight._publication_targets_preflight") as targets,
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
         ):
@@ -222,7 +221,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('already exists', result.output)
         run.assert_not_called()
 
-    @patch.object(BuildTrainWorker, '_open_work', return_value=[])
+    @patch("org.metadatacenter.train_support.survey._open_work", return_value=[])
     def test_cli_resume_dry_run_reports_the_next_incomplete_stage(self, _open_work):
         version = '2.9.3-dev.20260824.1847'
 
@@ -236,16 +235,15 @@ class BuildTrainTest(unittest.TestCase):
         })()
         with (
             patch.object(BuildTrain, '_read', side_effect=state),
-            patch.object(
-                BuildTrainWorker, '_configuration_summary',
+            patch("org.metadatacenter.train_support.preflight._configuration_summary",
                 return_value=(44, 'cedar-model-typescript-library',
                               'cedar-embeddable-editor', 7, 3),
             ),
-            patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
-            patch.object(BuildTrainWorker, '_source_ci_preflight'),
-            patch.object(BuildTrainWorker, '_smoke_gate_preflight') as smoke_gate,
-            patch.object(BuildTrainWorker, '_npm_configuration_preflight'),
-            patch.object(BuildTrainWorker, '_publication_targets_preflight'),
+            patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._source_ci_preflight"),
+            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight") as smoke_gate,
+            patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
+            patch("org.metadatacenter.train_support.preflight._publication_targets_preflight"),
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
                   return_value=subprocess_result) as run,
         ):
@@ -299,7 +297,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotEqual(0, result.exit_code)
         self.assertIn('No such command', result.output)
 
-    @patch.object(BuildTrainWorker, '_workflow_run', return_value=None)
+    @patch("org.metadatacenter.train_support.workflow._workflow_run", return_value=None)
     @patch.object(BuildTrain, '_read')
     def test_cli_reports_each_persisted_train_stage(self, read, _workflow):
         read.side_effect = lambda path: (
@@ -375,8 +373,8 @@ class BuildTrainTest(unittest.TestCase):
             }],
         }
         with patch.object(BuildTrain, '_read', side_effect=state), \
-                patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow), \
-                patch.object(BuildTrainWorker, '_workflow_progress', return_value=progress):
+                patch("org.metadatacenter.train_support.workflow._workflow_run", return_value=workflow), \
+                patch("org.metadatacenter.train_support.workflow._workflow_progress", return_value=progress):
             result = self.runner.invoke(publish.app, ['train-status', version])
 
         self.assertEqual(1, result.exit_code, result.output)
@@ -390,7 +388,7 @@ class BuildTrainTest(unittest.TestCase):
         version = '2.9.3-dev.20260824.1847'
         with patch.object(
                 BuildTrain, '_read', side_effect=ValueError('build-train state does not exist')), \
-                patch.object(BuildTrainWorker, '_workflow_run', return_value=None):
+                patch("org.metadatacenter.train_support.workflow._workflow_run", return_value=None):
             result = self.runner.invoke(publish.app, ['train-status', version])
 
         self.assertEqual(0, result.exit_code, result.output)
@@ -414,9 +412,8 @@ class BuildTrainTest(unittest.TestCase):
             'jobs': running['jobs'],
         }
         with patch.object(BuildTrain, '_read', return_value={'version': version}), \
-                patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow), \
-                patch.object(
-                    BuildTrainWorker, '_workflow_progress', side_effect=[running, complete]), \
+                patch("org.metadatacenter.train_support.workflow._workflow_run", return_value=workflow), \
+                patch("org.metadatacenter.train_support.workflow._workflow_progress", side_effect=[running, complete]), \
                 patch('org.metadatacenter.worker.BuildTrainWorker.time.sleep') as sleep:
             result = self.runner.invoke(publish.app, ['train-status', version, '--watch'])
 
@@ -447,9 +444,8 @@ class BuildTrainTest(unittest.TestCase):
             }],
         }
         with patch.object(BuildTrain, '_read', return_value={'version': version}), \
-                patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow), \
-                patch.object(
-                    BuildTrainWorker, '_workflow_progress',
+                patch("org.metadatacenter.train_support.workflow._workflow_run", return_value=workflow), \
+                patch("org.metadatacenter.train_support.workflow._workflow_progress",
                     side_effect=[running, running, complete]), \
                 patch('org.metadatacenter.worker.BuildTrainWorker.time.monotonic',
                       side_effect=[0, 0, 61]), \
@@ -489,7 +485,7 @@ class OpenWorkRefusalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self._home(directory, ['cedar-a', 'cedar-b'])
             with patch.object(Util, 'cedar_home', directory), \
-                    patch.object(BuildTrainWorker, '_git', return_value=(0, '', '')):
+                    patch("org.metadatacenter.train_support.git._git", return_value=(0, '', '')):
                 self.assertEqual([], BuildTrainWorker._open_work())
 
     def test_an_uncommitted_change_is_named(self):
@@ -502,7 +498,7 @@ class OpenWorkRefusalTest(unittest.TestCase):
                 return 0, '0', ''
 
             with patch.object(Util, 'cedar_home', directory), \
-                    patch.object(BuildTrainWorker, '_git', side_effect=git):
+                    patch("org.metadatacenter.train_support.git._git", side_effect=git):
                 findings = BuildTrainWorker._open_work()
             self.assertEqual(1, len(findings))
             self.assertIn('cedar-a has 2 uncommitted change(s)', findings[0])
@@ -517,7 +513,7 @@ class OpenWorkRefusalTest(unittest.TestCase):
                 return 0, '2', ''
 
             with patch.object(Util, 'cedar_home', directory), \
-                    patch.object(BuildTrainWorker, '_git', side_effect=git):
+                    patch("org.metadatacenter.train_support.git._git", side_effect=git):
                 findings = BuildTrainWorker._open_work()
             self.assertEqual(1, len(findings))
             self.assertIn('cedar-a has 2 unpushed commit(s) on develop', findings[0])
@@ -549,7 +545,7 @@ class OpenWorkRefusalTest(unittest.TestCase):
                 return 0, '', ''
 
             with patch.object(Util, 'cedar_home', directory), \
-                    patch.object(BuildTrainWorker, '_git', side_effect=git):
+                    patch("org.metadatacenter.train_support.git._git", side_effect=git):
                 findings = BuildTrainWorker._source_alignment()
 
         self.assertEqual(2, len(findings))
@@ -581,10 +577,10 @@ class OpenWorkRefusalTest(unittest.TestCase):
             }
             with (
                     patch.object(Util, 'cedar_home', directory),
-                    patch.object(BuildTrainWorker, '_git', return_value=(
+                    patch("org.metadatacenter.train_support.git._git", return_value=(
                         0, f"{'a' * 40}\trefs/heads/develop", '')),
                     patch(
-                        'org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                        'org.metadatacenter.train_support.survey.probe_exact_commit',
                         return_value=SimpleNamespace(runs=(run,)),
                     ) as probe,
             ):
@@ -606,10 +602,10 @@ class OpenWorkRefusalTest(unittest.TestCase):
             }
             with (
                     patch.object(Util, 'cedar_home', directory),
-                    patch.object(BuildTrainWorker, '_git', return_value=(
+                    patch("org.metadatacenter.train_support.git._git", return_value=(
                         0, f"{'a' * 40}\trefs/heads/develop", '')),
                     patch(
-                        'org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                        'org.metadatacenter.train_support.survey.probe_exact_commit',
                         return_value=SimpleNamespace(runs=(run,)),
                     ),
             ):
@@ -629,10 +625,10 @@ class OpenWorkRefusalTest(unittest.TestCase):
             }
             with (
                     patch.object(Util, 'cedar_home', directory),
-                    patch.object(BuildTrainWorker, '_git', return_value=(
+                    patch("org.metadatacenter.train_support.git._git", return_value=(
                         0, f"{'a' * 40}\trefs/heads/develop", '')),
                     patch(
-                        'org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                        'org.metadatacenter.train_support.survey.probe_exact_commit',
                         return_value=SimpleNamespace(runs=(only_train,)),
                     ),
             ):
@@ -651,7 +647,7 @@ class OpenWorkRefusalTest(unittest.TestCase):
                     BuildTrainWorker._npm_configuration_preflight()
 
     def test_dispatch_refuses_and_runs_no_workflow(self):
-        with patch.object(BuildTrainWorker, '_preflight', side_effect=ValueError(
+        with patch("org.metadatacenter.train_support.preflight._preflight", side_effect=ValueError(
                 'source repositories hold work the train cannot see')), \
                 patch.object(BuildTrain, 'allocate', return_value='2.9.4-dev.20260901.0400'), \
                 patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run') as run:
@@ -701,8 +697,8 @@ class PreflightReportTest(unittest.TestCase):
     def test_train_status_without_an_id_reports_the_newest_train(self):
         version = '2.9.8-dev.20260905.0436'
         with (
-            patch.object(BuildTrainWorker, '_newest_dispatched_train', return_value=version),
-            patch.object(BuildTrainWorker, '_workflow_run', return_value=None),
+            patch("org.metadatacenter.train_support.workflow._newest_dispatched_train", return_value=version),
+            patch("org.metadatacenter.train_support.workflow._workflow_run", return_value=None),
             patch.object(BuildTrain, '_read', side_effect=ValueError(
                 'build-train state does not exist')),
         ):
@@ -723,21 +719,21 @@ class PreflightReportTest(unittest.TestCase):
         with (
             patch.object(BuildTrain, '_read', side_effect=ValueError(
                 'build-train state does not exist')),
-            patch.object(BuildTrainWorker, '_configuration_summary',
+            patch("org.metadatacenter.train_support.preflight._configuration_summary",
                          return_value=(43, 'model', 'cee', 7, 3)),
-            patch.object(BuildTrainWorker, '_local_configuration_preflight', side_effect=ValueError(
+            patch("org.metadatacenter.train_support.preflight._local_configuration_preflight", side_effect=ValueError(
                 'local train configuration preflight failed:\n'
                 '2 npm lock baselines fail review:\n  first lock\n  second lock')),
-            patch.object(BuildTrainWorker, '_github_preflight'),
-            patch.object(BuildTrainWorker, '_active_workflow_runs', return_value=[]),
-            patch.object(BuildTrainWorker, '_open_work', return_value=[
+            patch("org.metadatacenter.train_support.preflight._github_preflight"),
+            patch("org.metadatacenter.train_support.workflow._active_workflow_runs", return_value=[]),
+            patch("org.metadatacenter.train_support.survey._open_work", return_value=[
                 'cedar-x has 1 uncommitted change(s), which the train cannot see']),
-            patch.object(BuildTrainWorker, '_source_alignment', return_value=[]),
-            patch.object(BuildTrainWorker, '_source_ci_preflight', side_effect=ValueError(
+            patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._source_ci_preflight", side_effect=ValueError(
                 'train source CI is not settled: cedar-y: CI concluded failure')) as source_ci,
-            patch.object(BuildTrainWorker, '_smoke_gate_preflight'),
-            patch.object(BuildTrainWorker, '_npm_configuration_preflight') as npm_config,
-            patch.object(BuildTrainWorker, '_publication_targets_preflight') as targets,
+            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
+            patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight") as npm_config,
+            patch("org.metadatacenter.train_support.preflight._publication_targets_preflight") as targets,
         ):
             with self.assertRaises(ValueError) as refused:
                 BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None)
@@ -760,19 +756,19 @@ class PreflightReportTest(unittest.TestCase):
         with (
             patch.object(BuildTrain, '_read', side_effect=ValueError(
                 'build-train state does not exist')),
-            patch.object(BuildTrainWorker, '_configuration_summary',
+            patch("org.metadatacenter.train_support.preflight._configuration_summary",
                          return_value=(43, 'model', 'cee', 7, 3)),
-            patch.object(BuildTrainWorker, '_local_configuration_preflight'),
-            patch.object(BuildTrainWorker, '_github_preflight', side_effect=ValueError(
+            patch("org.metadatacenter.train_support.preflight._local_configuration_preflight"),
+            patch("org.metadatacenter.train_support.preflight._github_preflight", side_effect=ValueError(
                 'GitHub CLI authentication failed: not logged in')),
-            patch.object(BuildTrainWorker, '_active_workflow_runs') as active,
-            patch.object(BuildTrainWorker, '_open_work', return_value=[]),
-            patch.object(BuildTrainWorker, '_source_alignment', return_value=[
+            patch("org.metadatacenter.train_support.workflow._active_workflow_runs") as active,
+            patch("org.metadatacenter.train_support.survey._open_work", return_value=[]),
+            patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[
                 'cedar-z local develop is 11111111, but GitHub develop is 22222222']),
-            patch.object(BuildTrainWorker, '_source_ci_preflight') as source_ci,
-            patch.object(BuildTrainWorker, '_smoke_gate_preflight'),
-            patch.object(BuildTrainWorker, '_npm_configuration_preflight'),
-            patch.object(BuildTrainWorker, '_publication_targets_preflight'),
+            patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
+            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
+            patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
+            patch("org.metadatacenter.train_support.preflight._publication_targets_preflight"),
         ):
             with self.assertRaises(ValueError) as refused:
                 BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None)
@@ -823,8 +819,8 @@ class PreflightReportTest(unittest.TestCase):
             self._home(directory, ['cedar-a', 'cedar-b', 'cedar-c'], workflows=('cedar-a', 'cedar-b'))
             with (
                 patch.object(Util, 'cedar_home', directory),
-                patch.object(BuildTrainWorker, '_git', side_effect=git),
-                patch('org.metadatacenter.worker.BuildTrainWorker.probe_exact_commit',
+                patch("org.metadatacenter.train_support.git._git", side_effect=git),
+                patch('org.metadatacenter.train_support.survey.probe_exact_commit',
                       side_effect=lambda repository, *_a, **_k: SimpleNamespace(
                           runs=runs[repository])),
             ):
@@ -856,10 +852,10 @@ class PreflightReportTest(unittest.TestCase):
         buffer = io.StringIO()
         with (
             patch.object(BuildTrain, '_read', return_value={'version': version}),
-            patch.object(BuildTrainWorker, '_workflow_run', return_value=workflow),
-            patch.object(BuildTrainWorker, '_workflow_progress', side_effect=[running, complete]),
+            patch("org.metadatacenter.train_support.workflow._workflow_run", return_value=workflow),
+            patch("org.metadatacenter.train_support.workflow._workflow_progress", side_effect=[running, complete]),
             patch('org.metadatacenter.worker.BuildTrainWorker.time.sleep'),
-            patch('org.metadatacenter.worker.BuildTrainWorker.console',
+            patch('org.metadatacenter.train_support.output.console',
                   Console(file=buffer, width=60, force_terminal=False)),
         ):
             BuildTrainWorker.status(version, watch=True)
@@ -892,8 +888,8 @@ class PreflightReportTest(unittest.TestCase):
         from rich.console import Console
         buffer = io.StringIO()
         with (
-            patch.object(BuildTrainWorker, 'source_ci_survey', return_value=verdicts),
-            patch('org.metadatacenter.worker.BuildTrainWorker.console',
+            patch("org.metadatacenter.train_support.survey.source_ci_survey", return_value=verdicts),
+            patch('org.metadatacenter.train_support.output.console',
                   Console(file=buffer, width=200, force_terminal=False)),
         ):
             code = BuildTrainWorker.report_source_ci()
@@ -917,8 +913,8 @@ class PreflightReportTest(unittest.TestCase):
         from rich.console import Console
         buffer = io.StringIO()
         with (
-            patch.object(BuildTrainWorker, 'source_ci_survey', return_value=verdicts),
-            patch('org.metadatacenter.worker.BuildTrainWorker.console',
+            patch("org.metadatacenter.train_support.survey.source_ci_survey", return_value=verdicts),
+            patch('org.metadatacenter.train_support.output.console',
                   Console(file=buffer, width=200, force_terminal=False)),
         ):
             code = BuildTrainWorker.report_source_ci(show_all=True)
@@ -1029,7 +1025,7 @@ class MainAheadSurveyTest(unittest.TestCase):
             self._home(directory, sorted(changed))
             with (
                 patch.object(Util, 'cedar_home', directory),
-                patch.object(BuildTrainWorker, '_git', side_effect=self._git_for(changed)),
+                patch("org.metadatacenter.train_support.git._git", side_effect=self._git_for(changed)),
             ):
                 return {verdict.repository: verdict for verdict in
                         BuildTrainWorker.main_ahead_survey()}
@@ -1074,8 +1070,8 @@ class MainAheadSurveyTest(unittest.TestCase):
                                                   'ahead')
         merged = BuildTrainWorker.BranchDivergence('cedar-b', (), 'develop carries everything '
                                                    'main does', 'merged')
-        with patch.object(BuildTrainWorker, 'main_ahead_survey', return_value=[ahead, merged]):
+        with patch("org.metadatacenter.train_support.survey.main_ahead_survey", return_value=[ahead, merged]):
             self.assertEqual(1, BuildTrainWorker.report_main_ahead())
-        with patch.object(BuildTrainWorker, 'main_ahead_survey', return_value=[merged]):
+        with patch("org.metadatacenter.train_support.survey.main_ahead_survey", return_value=[merged]):
             self.assertEqual(0, BuildTrainWorker.report_main_ahead())
 

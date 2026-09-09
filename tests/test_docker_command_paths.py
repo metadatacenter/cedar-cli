@@ -51,7 +51,7 @@ class DockerCommandPathsTest(unittest.TestCase):
         self.assertEqual('immutable-train-version', versions['CEDAR_WORKSPACE_NPM_VERSION'])
         self.assertEqual('1.2.3', versions['NGINX_VERSION'])
 
-    @patch.object(DockerWorker, '_prepare_frontend_volumes', return_value=True)
+    @patch("org.metadatacenter.docker_support.images._prepare_frontend_volumes", return_value=True)
     @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
            return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
@@ -67,7 +67,7 @@ class DockerCommandPathsTest(unittest.TestCase):
         self.assertEqual('docker compose up --detach --pull never', command)
         self.assertTrue(execute.call_args.kwargs['cwd'].endswith('cedar-docker-deploy/cedar-frontend'))
 
-    @patch.object(DockerWorker, '_prepare_frontend_volumes', return_value=True)
+    @patch("org.metadatacenter.docker_support.images._prepare_frontend_volumes", return_value=True)
     @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
            return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
@@ -123,7 +123,7 @@ class DockerCommandPathsTest(unittest.TestCase):
         command = execute.call_args.args[0][0]
         self.assertIn('nexus.example.org:5000/cedar/cedar-', command)
 
-    @patch.object(DockerWorker, '_clear_active_deployment')
+    @patch("org.metadatacenter.docker_support.state._clear_active_deployment")
     @patch('org.metadatacenter.worker.DockerWorker.Worker.execute_generic_shell_commands')
     @patch.object(DockerImages, 'image_prefix', return_value='nexus.example.org:5000/cedar')
     def test_container_removal_clears_deployment_state_only_after_success(
