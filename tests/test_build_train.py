@@ -989,3 +989,93 @@ class SmokeGatePreflightTest(unittest.TestCase):
 
         self.assertIn('cedar-a has no local develop branch', str(refused.exception))
         findings.assert_not_called()
+
+
+class MainAheadSurveyTest(unittest.TestCase):
+    """A release replaces what main carries alone, so it is worth asking between releases."""
+
+    @staticmethod
+    def _home(directory, repositories):
+        ops = Path(directory) / 'cedar-development' / 'ops'
+        ops.mkdir(parents=True, exist_ok=True)
+        (ops / 'build-train.json').write_text(json.dumps({
+            'organization': 'metadatacenter',
+            'sourceBranch': 'develop',
+            'repositories': repositories,
+        }), encoding='utf-8')
+        for repository in repositories:
+            (Path(directory) / repository / '.git').mkdir(parents=True, exist_ok=True)
+        return directory
+
+    @staticmethod
+    def _git_for(changed):
+        """A fake git whose diffs answer from `changed[repository][branch]`."""
+
+        def git(root, *arguments):
+            repository = Path(root).name
+            if arguments[0] == 'fetch':
+                return 0, '', ''
+            if arguments[0] == 'merge-base':
+                return 0, 'b' * 40, ''
+            if arguments[0] == 'diff':
+                branch = arguments[-1].rsplit('/', 1)[-1]
+                return 0, '\n'.join(changed[repository][branch]), ''
+            raise AssertionError(arguments)
+
+        return git
+
+    def _survey(self, changed):
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, sorted(changed))
+            with (
+                patch.object(Util, 'cedar_home', directory),
+                patch.object(BuildTrainWorker, '_git', side_effect=self._git_for(changed)),
+            ):
+                return {verdict.repository: verdict for verdict in
+                        BuildTrainWorker.main_ahead_survey()}
+
+    def test_a_file_changed_on_main_alone_is_reported(self):
+        verdicts = self._survey({
+            'cedar-a': {'main': ['app/fix.html', 'app/fix_test.js'], 'develop': ['app/other.js']},
+        })
+
+        verdict = verdicts['cedar-a']
+        self.assertTrue(verdict.unmerged)
+        self.assertEqual(('app/fix.html', 'app/fix_test.js'), verdict.paths)
+
+    def test_a_file_both_branches_changed_is_not_main_only(self):
+        verdicts = self._survey({
+            'cedar-a': {'main': ['app/fix.html'], 'develop': ['app/fix.html']},
+        })
+
+        self.assertEqual('merged', verdicts['cedar-a'].state)
+
+    def test_release_version_stamps_are_not_divergence(self):
+        """Every release leaves these differing in every repository, and they mean nothing here."""
+        verdicts = self._survey({
+            'cedar-a': {'main': ['pom.xml', 'package.json', 'package-lock.json'],
+                        'develop': []},
+        })
+
+        self.assertEqual('merged', verdicts['cedar-a'].state)
+
+    def test_a_repository_absent_from_this_machine_is_not_an_answer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-a'])
+            (Path(directory) / 'cedar-a' / '.git').rmdir()
+            with patch.object(Util, 'cedar_home', directory):
+                verdicts = BuildTrainWorker.main_ahead_survey()
+
+        self.assertEqual('missing', verdicts[0].state)
+        self.assertFalse(verdicts[0].unmerged)
+
+    def test_the_report_fails_when_any_repository_is_ahead(self):
+        ahead = BuildTrainWorker.BranchDivergence('cedar-a', ('app/fix.html',), 'app/fix.html',
+                                                  'ahead')
+        merged = BuildTrainWorker.BranchDivergence('cedar-b', (), 'develop carries everything '
+                                                   'main does', 'merged')
+        with patch.object(BuildTrainWorker, 'main_ahead_survey', return_value=[ahead, merged]):
+            self.assertEqual(1, BuildTrainWorker.report_main_ahead())
+        with patch.object(BuildTrainWorker, 'main_ahead_survey', return_value=[merged]):
+            self.assertEqual(0, BuildTrainWorker.report_main_ahead())
+

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
@@ -851,6 +851,138 @@ class BuildTrainWorker:
         console.print(
             '[green]Every captured head with a workflow is green; a train may be dispatched.'
             '[/green]')
+        return 0
+
+    @dataclass(frozen=True)
+    class BranchDivergence:
+        """One repository's answer to whether main holds file content develop does not."""
+
+        repository: str
+        paths: tuple
+        detail: str
+        state: str  # 'merged', 'ahead', 'missing' or 'error'
+
+        @property
+        def unmerged(self) -> bool:
+            return self.state == 'ahead'
+
+    # A release stamps versions onto main and the next development versions onto develop, so
+    # these differ in every repository after every release and mean nothing here. The release
+    # planner's own survey ignores the same names.
+    VERSION_FILES = frozenset({
+        'pom.xml', 'package.json', 'package-lock.json', 'npm-shrinkwrap.json',
+    })
+
+    @classmethod
+    def main_ahead_survey(cls, repositories=None):
+        """One verdict per train repository on what main carries that develop does not.
+
+        The measure is changed files rather than commits. A release puts commits on main that
+        never reach develop by design, so counting commits reports every repository after every
+        release. What matters is content: a path main changed since the branches diverged and
+        develop did not, which is what a release would replace.
+        """
+        cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        if not cedar_home:
+            raise ValueError('CEDAR_HOME is not set')
+        if repositories is None:
+            ops = Path(cedar_home) / 'cedar-development' / 'ops'
+            try:
+                build = json.loads((ops / 'build-train.json').read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError) as error:
+                raise ValueError(f'cannot read build-train configuration: {error}') from error
+            repositories = build.get('repositories', [])
+        verdicts = []
+        for repository in repositories:
+            root = Path(cedar_home) / repository
+            if not (root / '.git').exists():
+                verdicts.append(cls.BranchDivergence(
+                    repository, (), 'not checked out on this machine', 'missing'))
+                continue
+            code, _output, detail = cls._git(
+                root, 'fetch', '--quiet', '--no-tags', 'origin',
+                '+refs/heads/main:refs/remotes/cedar-check/main',
+                '+refs/heads/develop:refs/remotes/cedar-check/develop',
+            )
+            if code != 0:
+                verdicts.append(cls.BranchDivergence(
+                    repository, (), f'cannot fetch both branches'
+                    + (f' ({detail.splitlines()[-1]})' if detail else ''), 'missing'))
+                continue
+            code, base, detail = cls._git(
+                root, 'merge-base',
+                'refs/remotes/cedar-check/main', 'refs/remotes/cedar-check/develop')
+            if code != 0 or not base:
+                verdicts.append(cls.BranchDivergence(
+                    repository, (), 'main and develop share no history', 'error'))
+                continue
+            changed = {}
+            for branch in ('main', 'develop'):
+                code, output, _detail = cls._git(
+                    root, 'diff', '--name-only', base.strip(),
+                    f'refs/remotes/cedar-check/{branch}')
+                if code != 0:
+                    changed = None
+                    break
+                changed[branch] = {line for line in output.splitlines() if line}
+            if changed is None:
+                verdicts.append(cls.BranchDivergence(
+                    repository, (), 'cannot compare the two branches', 'error'))
+                continue
+            replaced = tuple(sorted(
+                path for path in changed['main'] - changed['develop']
+                if PurePosixPath(path).name not in cls.VERSION_FILES
+            ))
+            if not replaced:
+                verdicts.append(cls.BranchDivergence(
+                    repository, (), 'develop carries everything main does', 'merged'))
+                continue
+            verdicts.append(cls.BranchDivergence(
+                repository, replaced, ', '.join(replaced[:4]), 'ahead'))
+        return verdicts
+
+    @classmethod
+    def report_main_ahead(cls, show_all=False):
+        """Show every repository whose main carries file content develop does not.
+
+        A release publishes what a train captured from develop, so a change that reached main
+        alone is replaced by it. The release gate refuses such a source, but only once someone
+        is already mid-release. Asked between releases, this is a question with a cheap answer:
+        port the change, or confirm develop dropped it deliberately.
+        """
+        try:
+            verdicts = cls.main_ahead_survey()
+        except ValueError as error:
+            console.print(f'[red]{error}[/red]')
+            return 1
+        styles = {'merged': 'green', 'ahead': 'red', 'missing': 'yellow', 'error': 'red'}
+        shown = [verdict for verdict in verdicts if show_all or verdict.state != 'merged']
+        if shown:
+            table = Table(
+                Column('Repository', no_wrap=True),
+                Column('Files', no_wrap=True),
+                Column('What main changed and develop did not', overflow='fold'),
+                title='Content on main that a release would replace',
+            )
+            for verdict in shown:
+                table.add_row(
+                    verdict.repository,
+                    str(len(verdict.paths)) if verdict.paths else '',
+                    Text(verdict.detail, style=styles[verdict.state]),
+                )
+            console.print(table)
+        unmerged = [verdict for verdict in verdicts if verdict.unmerged]
+        console.print(
+            f'{sum(1 for v in verdicts if v.state == "merged")} merged, {len(unmerged)} ahead, '
+            f'{sum(1 for v in verdicts if v.state == "missing")} unreadable branches, '
+            f'{sum(1 for v in verdicts if v.state == "error")} in error'
+        )
+        if unmerged:
+            console.print(
+                '[red]A release would replace this content. Port it to develop, then build a '
+                'train from that source.[/red]')
+            return 1
+        console.print('[green]No repository carries content on main alone.[/green]')
         return 0
 
     @classmethod

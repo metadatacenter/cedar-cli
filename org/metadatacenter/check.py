@@ -48,6 +48,15 @@ def openapi(
     exit_on_failure(OpenApiWorker.check_openapi(show_all=show_all))
 
 
+@app.command("main")
+def main(
+        show_all: bool = typer.Option(
+            False, "--all",
+            help="List every repository, not only those whose main is ahead of develop.")):
+    """Check whether any repository's main carries commits develop does not."""
+    exit_on_failure(BuildTrainWorker.report_main_ahead(show_all=show_all))
+
+
 @app.command("ci")
 def ci(
         show_all: bool = typer.Option(
