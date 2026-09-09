@@ -1,4 +1,5 @@
 """Review and refresh the npm lock baselines a build train is bound to."""
+from org.metadatacenter.util.InvocationContext import invocation_environment
 
 from dataclasses import dataclass
 import hashlib
@@ -57,7 +58,7 @@ class LockBaselineWorker:
 
     @staticmethod
     def _cedar_home():
-        cedar_home = Util.cedar_home or os.environ.get("CEDAR_HOME")
+        cedar_home = Util.cedar_home or invocation_environment().get("CEDAR_HOME")
         if not cedar_home:
             raise ValueError("CEDAR_HOME is not set")
         return Path(cedar_home)
@@ -111,7 +112,7 @@ class LockBaselineWorker:
             result = runner(
                 ["npm", "audit", "--json"],
                 cwd=str(directory),
-                env=environment if environment is not None else os.environ,
+                env=environment if environment is not None else invocation_environment(),
                 text=True,
                 capture_output=True,
                 check=False,
@@ -131,7 +132,7 @@ class LockBaselineWorker:
     @classmethod
     def _activate_toolchain(cls):
         """The counts are only comparable when the same npm produced them, so use the estate's Node."""
-        for note in ToolchainResolver(os.environ).resolve():
+        for note in ToolchainResolver(invocation_environment()).resolve():
             console.print(f"Toolchain: {note}")
 
     @classmethod

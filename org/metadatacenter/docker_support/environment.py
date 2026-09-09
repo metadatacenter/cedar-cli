@@ -1,5 +1,6 @@
 """CEDAR docker environment."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 import os
 from org.metadatacenter.docker_support import policy as _policy_component
@@ -18,7 +19,7 @@ def _mode_label(mode):
 
 def mode_environment(mode):
     """Build a child environment for one Docker deployment mode without changing the shell."""
-    environment = os.environ.copy()
+    environment = invocation_environment().copy()
     errors = []
     nginx_host = environment.get('CEDAR_NGINX_HOST')
     cedar_host = environment.get('CEDAR_HOST')

@@ -1,5 +1,6 @@
 """CEDAR train preflight."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
 from org.metadatacenter import smoke_gate
 from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.util.BuildTrain import BuildTrain
@@ -17,7 +18,7 @@ from org.metadatacenter.train_support import workflow as _workflow_component
 
 
 def _configuration_summary():
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     ops = Path(cedar_home) / 'cedar-development' / 'ops'
@@ -111,6 +112,7 @@ def _github_preflight():
                 text=True,
                 capture_output=True,
                 check=False,
+                env=invocation_environment(),
             )
         except OSError as error:
             raise ValueError(f'cannot run GitHub CLI: {error}') from error
@@ -122,7 +124,7 @@ def _github_preflight():
 
 
 def _publication_targets_preflight():
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     try:
@@ -143,7 +145,7 @@ def _publication_targets_preflight():
     try:
         result = subprocess.run(
             [sys.executable, str(controller), 'probe-publication'],
-            env=environment,
+            env=process_environment(environment),
             text=True,
             capture_output=True,
             check=False,
@@ -161,8 +163,8 @@ def _publication_targets_preflight():
 
 
 def _npm_configuration_preflight():
-    configured = os.environ.get('NPM_CONFIG_USERCONFIG') \
-        or os.environ.get('npm_config_userconfig')
+    configured = invocation_environment().get('NPM_CONFIG_USERCONFIG') \
+        or invocation_environment().get('npm_config_userconfig')
     if configured:
         path = Path(configured).expanduser()
     else:
@@ -170,6 +172,7 @@ def _npm_configuration_preflight():
             result = subprocess.run(
                 ['npm', 'config', 'get', 'userconfig'],
                 text=True, capture_output=True, check=False,
+                env=invocation_environment(),
             )
         except OSError as error:
             raise ValueError(f'cannot inspect npm user configuration: {error}') from error
@@ -207,7 +210,7 @@ def _source_ci_preflight(source=None):
 
 
 def _local_configuration_preflight():
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     controller = Path(cedar_home) / 'cedar-development' / 'ops' / 'build_train.py'
@@ -218,6 +221,7 @@ def _local_configuration_preflight():
             text=True,
             capture_output=True,
             check=False,
+            env=invocation_environment(),
         )
     except OSError as error:
         raise ValueError(f'cannot run local train configuration preflight: {error}') from error
@@ -237,7 +241,7 @@ def _smoke_gate_preflight(source=None):
         manifest. Either way the run is judged by the heads it tested, never by its age, so a run
         made before an unrelated repository moved still refuses: the train would carry that move.
         """
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     recorded = source.get('repositories') if isinstance(source, dict) else None

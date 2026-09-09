@@ -1,5 +1,6 @@
 """CEDAR release workspace."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from pathlib import Path, PurePosixPath
 import datetime as dt
@@ -35,7 +36,7 @@ class ReleaseWorkspacePreparer:
     ):
         self.state = state
         self.command_runner = command_runner or subprocess.run
-        self.environment = dict(os.environ if environment is None else environment)
+        self.environment = dict(invocation_environment() if environment is None else environment)
         self.verbose = verbose
 
     def next_attempt(self, release_version: str) -> Path:
@@ -62,7 +63,7 @@ class ReleaseWorkspacePreparer:
             result = self.command_runner(
                 args,
                 cwd=str(cwd) if cwd else None,
-                env=environment,
+                env=self.environment if environment is None else environment,
                 text=True,
                 capture_output=True,
                 check=False,

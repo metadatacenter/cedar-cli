@@ -1,5 +1,6 @@
 """CEDAR docker images."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.BuildTrain import DockerTrain
 from org.metadatacenter.util.DockerImages import DockerImages
 from org.metadatacenter.worker.Worker import Worker
@@ -144,7 +145,7 @@ def build_images(images, local=False, train=None):
     from org.metadatacenter.util.DockerImages import DockerImages
 
     try:
-        environment = os.environ.copy()
+        environment = invocation_environment().copy()
         if train:
             environment['CEDAR_TRAIN_VERSION'] = train
         _, version, prefix = DockerImages.manifest(environment)

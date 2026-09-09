@@ -1,5 +1,6 @@
 """CEDAR release state."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 import copy
@@ -18,7 +19,7 @@ from org.metadatacenter.release_support.hashes import (
 
 class ReleaseState:
     def __init__(self, root: Path | None = None, environment=None):
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         configured = environment.get("CEDAR_RELEASE_STATE_DIR")
         self.root = root or (
             Path(configured).expanduser()

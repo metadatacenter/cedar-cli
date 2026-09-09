@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import csv
 import os
 import socket
@@ -224,7 +225,7 @@ class ServerWorker(Worker):
         for warning in warnings:
             console.print(Text(f"WARNING  {warning}", style="yellow"))
 
-        cedar_host = os.environ.get("CEDAR_HOST")
+        cedar_host = invocation_environment().get("CEDAR_HOST")
         if cedar_host:
             console.print(Text(
                 f"Login    https://cedar.{cedar_host} once frontend, resource, and user are healthy",
@@ -245,7 +246,7 @@ class ServerWorker(Worker):
         ]
         if not services:
             return []
-        cedar_home = Util.cedar_home or os.environ.get("CEDAR_HOME")
+        cedar_home = Util.cedar_home or invocation_environment().get("CEDAR_HOME")
         if not cedar_home:
             return []
         # Imported here because smoke_gate reads this module's status parser, and the pair would

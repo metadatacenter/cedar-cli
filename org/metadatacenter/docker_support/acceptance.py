@@ -1,5 +1,6 @@
 """CEDAR docker acceptance."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 import ssl
 import urllib.request
@@ -8,7 +9,7 @@ from org.metadatacenter.docker_support import policy as _policy_component
 
 
 def _backend_auth_error(timeout=10):
-    cedar_host = os.environ.get('CEDAR_HOST')
+    cedar_host = invocation_environment().get('CEDAR_HOST')
     if not cedar_host:
         return 'CEDAR_HOST is not defined; cannot check backend authentication routing'
     url = f'https://auth.{cedar_host}/realms/CEDAR/.well-known/openid-configuration'
@@ -38,7 +39,7 @@ def _url_error(url, timeout=10):
 
 
 def _frontend_route_errors(timeout=10):
-    cedar_host = os.environ.get('CEDAR_HOST')
+    cedar_host = invocation_environment().get('CEDAR_HOST')
     if not cedar_host:
         return ['CEDAR_HOST is not defined; cannot check frontend routes']
     errors = []

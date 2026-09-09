@@ -68,6 +68,15 @@ literal arguments, and `run_shell` takes one explicit script. Both return output
 is local to each script. Output preserves indentation and replaces invalid UTF-8 bytes. An
 interrupted reader kills its owned process group, reaps the child, and closes the pipe.
 
+Each root CLI invocation binds an `InvocationContext` containing its environment, settings,
+repository/server catalogs, and task registries. Profile resolution updates that environment;
+subprocesses receive it explicitly. `create_app()` registers commands without host inspection,
+and importing `cedar` does not bootstrap a profile. `GlobalContext`, `Util.cedar_home`, and
+`CedarCliSettings` remain compatibility accessors rather than owners of mutable process state.
+Library callers can use `with use_context(InvocationContext(environment=...)):` or supply a
+context as the root application's `obj`. Calls made outside a bound context retain ambient
+library behavior. Change settings on `context.settings`, rather than assigning class attributes.
+
 ## Contributor Setup
 
 The installation guides establish `CEDAR_HOME`, clone the companion repositories, and create the

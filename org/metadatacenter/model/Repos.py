@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 from typing import List
 
@@ -17,7 +18,7 @@ class Repos:
     def __init__(self):
         self.map = {}
         self.relations: List[RepoRelation] = []
-        self.use_private_repos = Const.CEDAR_DEV_USE_PRIVATE_REPOS in os.environ and os.environ[Const.CEDAR_DEV_USE_PRIVATE_REPOS] == 'true'
+        self.use_private_repos = Const.CEDAR_DEV_USE_PRIVATE_REPOS in invocation_environment() and invocation_environment()[Const.CEDAR_DEV_USE_PRIVATE_REPOS] == 'true'
 
     def add_repo(self, repo):
         if repo.is_private and not self.use_private_repos:

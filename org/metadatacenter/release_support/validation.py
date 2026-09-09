@@ -1,5 +1,6 @@
 """CEDAR release validation."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
     embedded_mongo_processes,
@@ -38,7 +39,7 @@ class ReleaseBuildValidator:
     ):
         self.state = state
         self.executor = executor
-        self.environment = dict(os.environ if environment is None else environment)
+        self.environment = dict(invocation_environment() if environment is None else environment)
         self.verbose = verbose
 
     @staticmethod
@@ -133,7 +134,7 @@ class ReleaseBuildValidator:
                 process = subprocess.Popen(
                     command,
                     cwd=str(cwd),
-                    env=environment,
+                    env=process_environment(environment),
                     text=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,

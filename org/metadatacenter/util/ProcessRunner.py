@@ -1,4 +1,5 @@
 """Stream an owned subprocess; keep shell interpretation explicit at the call site."""
+from org.metadatacenter.util.InvocationContext import process_environment
 import os
 import signal
 import subprocess
@@ -36,7 +37,7 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
         foreground = os.getpgrp()
     process = subprocess.Popen(
         list(argv), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        cwd=cwd, env=env, shell=False, process_group=0,
+        cwd=cwd, env=process_environment(env), shell=False, process_group=0,
     )
     lines = []
     try:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 
 import contextlib
 import dataclasses
@@ -59,6 +60,7 @@ def _listening_endpoints(pid: int, command_runner=subprocess.run) -> tuple[str, 
         result = command_runner(
             ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
             check=False, text=True, capture_output=True,
+            env=invocation_environment(),
         )
     except OSError:
         return ()
@@ -88,6 +90,7 @@ def embedded_mongo_processes(
             result = command_runner(
                 ["lsof", "-nP", "-c", "mongod", "-a", "-d", "txt", "-Fpcn"],
                 check=False, text=True, capture_output=True,
+                env=invocation_environment(),
             )
         except OSError as error:
             raise BuildSafetyError(
@@ -149,10 +152,12 @@ def tracked_state(root: Path) -> bytes:
     status = subprocess.run(
         ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=no"],
         check=True, capture_output=True,
+        env=invocation_environment(),
     ).stdout
     diff = subprocess.run(
         ["git", "-C", str(root), "diff", "--binary", "HEAD", "--"],
         check=True, capture_output=True,
+        env=invocation_environment(),
     ).stdout
     return status + b"\0" + diff
 
@@ -161,6 +166,7 @@ def repository_root(path: Path) -> Path | None:
     result = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
         check=False, text=True, capture_output=True,
+        env=invocation_environment(),
     )
     return Path(result.stdout.strip()).resolve() if result.returncode == 0 else None
 
@@ -189,6 +195,7 @@ def _process_cwd(pid: int) -> Path | None:
         result = subprocess.run(
             ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
             check=False, text=True, capture_output=True,
+            env=invocation_environment(),
         )
     except OSError:
         return None
@@ -203,6 +210,7 @@ def frontend_runtime_collisions(source: Path) -> list[tuple[int, str]]:
     try:
         result = subprocess.run(
             ["ps", "-axo", "pid=,command="], check=True, text=True, capture_output=True,
+            env=invocation_environment(),
         )
     except (OSError, subprocess.CalledProcessError):
         return []
@@ -238,7 +246,7 @@ def isolated_frontend_workspace(source: Path):
                 return {name for name in names if name in {".git", "node_modules", ".angular"}}
 
             shutil.copytree(source, build_root, symlinks=True, ignore=ignore)
-            environment = dict(os.environ)
+            environment = dict(invocation_environment())
             existing_path = environment.get("PATH", "")
             local_binaries = str(build_root / "node_modules" / ".bin")
             environment.update({

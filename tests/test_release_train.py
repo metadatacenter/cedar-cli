@@ -1744,6 +1744,12 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
 
 
 class ReleaseBuildValidationTest(unittest.TestCase):
+    def setUp(self):
+        # These tests inject simulated Maven execution. A separate developer test
+        # run must not change their verdict through the host's process inventory.
+        self.enterContext(patch(
+            "org.metadatacenter.util.BuildSafety.embedded_mongo_processes", return_value=[]))
+
     def make_manifest(self, directory, include_frontend=False):
         attempt = Path(directory) / "attempt"
         variants = {}

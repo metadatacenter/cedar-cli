@@ -1,5 +1,6 @@
 """CEDAR train dispatch."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.BuildTrain import BuildTrain
 import shlex
 import subprocess
@@ -98,6 +99,7 @@ def dispatch(resume=None, dry_run=False):
             text=True,
             capture_output=True,
             check=False,
+            env=invocation_environment(),
         )
     except OSError as error:
         _output_component.console.print(f'[red]Could not run GitHub CLI: {error}[/red]')

@@ -1,5 +1,6 @@
 """CEDAR release distribution."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from pathlib import Path, PurePosixPath
 import copy
 import datetime as dt
@@ -32,7 +33,7 @@ class ReleaseDistributionMaterializer:
 
     def __init__(self, state: ReleaseState, git_runner=None, environment=None):
         self.state = state
-        self.environment = dict(os.environ if environment is None else environment)
+        self.environment = dict(invocation_environment() if environment is None else environment)
         self.git = git_runner or ReleaseWorkspacePreparer(
             state, environment=self.environment,
         )

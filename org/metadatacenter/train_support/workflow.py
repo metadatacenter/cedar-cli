@@ -1,5 +1,6 @@
 """CEDAR train workflow."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.BuildTrain import BuildTrain
 import json
 import re
@@ -51,7 +52,7 @@ def _workflow_runs():
         '--json', 'databaseId,status,conclusion,url,displayTitle,createdAt',
     ]
     try:
-        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        result = subprocess.run(command, text=True, capture_output=True, check=False, env=invocation_environment())
     except OSError as error:
         raise ValueError(f'cannot inspect the build-train workflow: {error}') from error
     if result.returncode:
@@ -99,7 +100,7 @@ def _workflow_progress(run_id):
         '--json', 'status,conclusion,url,jobs',
     ]
     try:
-        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        result = subprocess.run(command, text=True, capture_output=True, check=False, env=invocation_environment())
     except OSError as error:
         raise ValueError(f'cannot inspect workflow run {run_id}: {error}') from error
     if result.returncode:
@@ -122,7 +123,7 @@ def _active_workflow_runs():
                 ' | [.databaseId, .status, .displayTitle] | @tsv',
     ]
     try:
-        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        result = subprocess.run(command, text=True, capture_output=True, check=False, env=invocation_environment())
     except OSError as error:
         raise ValueError(f'cannot inspect active build trains: {error}') from error
     if result.returncode:

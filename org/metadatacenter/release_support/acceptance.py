@@ -1,5 +1,6 @@
 """CEDAR release acceptance."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from pathlib import Path, PurePosixPath
 import datetime as dt
@@ -88,7 +89,7 @@ class ReleaseAcceptance:
         environment=None,
     ):
         self.state = state
-        self.environment = dict(os.environ if environment is None else environment)
+        self.environment = dict(invocation_environment() if environment is None else environment)
         self.remote_integrator = remote_integrator or ReleaseRemoteIntegrator(
             state, environment=self.environment)
         self.publisher = publisher or ReleaseArtifactPublisher(
@@ -217,7 +218,7 @@ class ReleaseAcceptance:
         })
         try:
             result = subprocess.run(
-                command, check=False, text=True, capture_output=True, env=environment,
+                command, check=False, text=True, capture_output=True, env=process_environment(environment),
             )
         except OSError as error:
             raise ReleaseError(f"cannot validate next-development train state: {error}") from error

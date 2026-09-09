@@ -1,5 +1,6 @@
 """CEDAR train survey."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from dataclasses import dataclass
 from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
@@ -33,7 +34,7 @@ def _open_work():
         A repository that is not checked out here holds no local work by definition, so it is not a
         finding — the train reads GitHub, not this machine.
         """
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     ops = Path(cedar_home) / 'cedar-development' / 'ops'
@@ -65,7 +66,7 @@ def _open_work():
 
 def _source_alignment():
     """Require every local source checkout to describe the remote train source exactly."""
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     ops = Path(cedar_home) / 'cedar-development' / 'ops'
@@ -109,7 +110,7 @@ def source_ci_survey(source=None, reporter=None):
         A train captures `develop` on GitHub, so the question is asked of the remote head, or of
         the commit an existing source manifest recorded, never of the local checkout.
         """
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     ops = Path(cedar_home) / 'cedar-development' / 'ops'
@@ -150,7 +151,7 @@ def source_ci_survey(source=None, reporter=None):
                 response = subprocess.run([
                     'gh', 'api',
                     f'repos/metadatacenter/{repository}/contents/.github/workflows?ref={revision}',
-                ], text=True, capture_output=True, check=False)
+                ], text=True, capture_output=True, check=False, env=invocation_environment())
             except OSError as error:
                 verdicts.append(_policy_component.SourceCIVerdict(
                     repository, revision, '', 'error',
@@ -170,7 +171,8 @@ def source_ci_survey(source=None, reporter=None):
                 f'{repository} has no workflow contract; the train gates its outputs.'))
             continue
         try:
-            probe = probe_exact_commit(repository, revision, reporter=report)
+            probe = probe_exact_commit(
+                repository, revision, reporter=report, environment=invocation_environment())
         except GithubCIProbeError as error:
             verdicts.append(_policy_component.SourceCIVerdict(repository, revision, '', 'error', str(error)))
             continue
@@ -230,7 +232,7 @@ def main_ahead_survey(repositories=None):
         release. What matters is content: a path main changed since the branches diverged and
         develop did not, which is what a release would replace.
         """
-    cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
     if repositories is None:

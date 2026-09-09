@@ -1,5 +1,6 @@
 """CEDAR docker setup."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.worker.CertificateWorker import CertificateError, CertificateWorker
 from org.metadatacenter.worker.Worker import Worker
 import os
@@ -17,7 +18,7 @@ def validate(environment=None):
         _output_component.console.print(f'[red]FAIL Docker image configuration: {error}[/red]')
         return 1
 
-    validation_environment = (os.environ if environment is None else environment).copy()
+    validation_environment = (invocation_environment() if environment is None else environment).copy()
     validation_environment['CEDAR_IMAGE_PREFIX'] = prefix
     validation_environment['CEDAR_BASE_IMAGE_PREFIX'] = base_prefix
 

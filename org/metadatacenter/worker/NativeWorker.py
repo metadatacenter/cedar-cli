@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 import re
 import shlex
@@ -29,7 +30,7 @@ class NativeWorker(Worker):
 
     @staticmethod
     def controller_path() -> str:
-        cedar_home = Util.cedar_home or os.environ["CEDAR_HOME"]
+        cedar_home = Util.cedar_home or invocation_environment()["CEDAR_HOME"]
         return os.path.join(cedar_home, "cedar-development", "ops", "cedar-services.sh")
 
     @classmethod
@@ -135,4 +136,4 @@ class NativeWorker(Worker):
         appender = "Dropwizard log" if dropwizard else "log"
         console.print(f"[yellow]Following native CEDAR {appender}: {service}[/yellow]")
         sys.stdout.flush()
-        os.execv(controller, arguments)
+        os.execve(controller, arguments, invocation_environment())

@@ -1,4 +1,5 @@
 """Load Nexus credentials independently of train or release orchestration."""
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -50,7 +51,7 @@ def maven_settings_credentials(environment: dict) -> tuple[str, str] | None:
 
 def environment_with_nexus_credentials(environment=None) -> dict:
     """Prefer explicit credentials and fill only missing values from Maven settings."""
-    values = dict(os.environ if environment is None else environment)
+    values = dict(invocation_environment() if environment is None else environment)
     if values.get("BMIR_NEXUS_USERNAME") and values.get("BMIR_NEXUS_PASSWORD"):
         return values
     credentials = maven_settings_credentials(values)

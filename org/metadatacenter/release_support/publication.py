@@ -1,5 +1,6 @@
 """CEDAR release publication."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from pathlib import Path, PurePosixPath
 import base64
@@ -209,10 +210,12 @@ class ReleaseArtifactPublisher:
             commit = subprocess.run(
                 ["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
                 text=True, capture_output=True,
+                env=invocation_environment(),
             ).stdout.strip()
             tree = subprocess.run(
                 ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], check=True,
                 text=True, capture_output=True,
+                env=invocation_environment(),
             ).stdout.strip()
         except (OSError, subprocess.CalledProcessError) as error:
             raise ReleaseError(f"cannot verify publication workspace {root}: {error}") from error
@@ -609,7 +612,7 @@ class ReleaseArtifactPublisher:
             subprocess.run([
                 "git", "-C", str(root), "archive", "--format=tar", f"--output={archive}",
                 task["expectedCommit"],
-            ], check=True, capture_output=True, text=True)
+            ], check=True, capture_output=True, text=True, env=invocation_environment())
         except (OSError, subprocess.CalledProcessError) as error:
             detail = getattr(error, "stderr", None) or str(error)
             raise ReleaseError(f"cannot archive {task['repository']}: {detail.strip()}") from error

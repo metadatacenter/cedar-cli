@@ -42,6 +42,7 @@ def probe_exact_commit(
     revision: str,
     *,
     runner=None,
+    environment=None,
     sleeper: Callable[[float], None] = time.sleep,
     delays: tuple[float, ...] = (2, 5, 10),
     reporter: Callable[[str], None] | None = None,
@@ -61,6 +62,7 @@ def probe_exact_commit(
                 text=True,
                 capture_output=True,
                 check=False,
+                env=environment,
             )
         except OSError as error:
             detail = str(error)

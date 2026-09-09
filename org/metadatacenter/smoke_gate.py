@@ -23,6 +23,7 @@ is not running.
 """
 
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 
 import datetime as dt
 import hashlib
@@ -89,6 +90,7 @@ def _capture(runner, args, cwd=None) -> tuple[int, str, str]:
     try:
         result = runner(
             list(args), cwd=str(cwd) if cwd else None, text=True, capture_output=True, check=False,
+            env=invocation_environment(),
         )
     except OSError as error:
         return 127, "", str(error)
@@ -227,8 +229,8 @@ def run_smoke(
     stack is a reason to stop, not evidence about the source. Both tiers run even when the first
     fails, so one command yields one complete answer.
     """
-    home = _home(cedar_home or os.environ.get("CEDAR_HOME"))
-    environment = dict(environment if environment is not None else os.environ)
+    home = _home(cedar_home or invocation_environment().get("CEDAR_HOME"))
+    environment = dict(environment if environment is not None else invocation_environment())
     e2e = home / E2E
     if not (e2e / "package.json").exists():
         console.print(f"[red]{e2e} is not the e2e checkout; nothing to run[/red]")

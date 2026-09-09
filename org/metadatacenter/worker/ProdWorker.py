@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 import re
 from pathlib import Path
@@ -22,7 +23,7 @@ class ProdWorker(Worker):
 
     @staticmethod
     def configure_frontends():
-        domain = os.environ.get(Const.CEDAR_HOST)
+        domain = invocation_environment().get(Const.CEDAR_HOST)
         if not domain:
             raise ProdError("CEDAR_HOST is not set. Load the production CEDAR profile first.")
         if not re.fullmatch(r"[A-Za-z0-9.-]+", domain):

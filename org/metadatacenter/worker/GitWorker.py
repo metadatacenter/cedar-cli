@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import subprocess
 from pathlib import PurePosixPath
 
@@ -98,7 +99,7 @@ class GitWorker(Worker):
                     process = subprocess.Popen(
                         arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         shell=argv is None, cwd=cwd,
-                        executable=GlobalContext.get_shell() if argv is None else None)
+                        executable=GlobalContext.get_shell() if argv is None else None, env=invocation_environment())
                     stdout, stderr = process.communicate()
                     out = stdout.decode(UTF_8).strip()
                     err = stderr.decode(UTF_8).strip()
@@ -261,7 +262,7 @@ class GitWorker(Worker):
                     ["git", "commit", "-m", comment, "--", *explicit_paths],
                     ["git", "push"],
             ):
-                completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
+                completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False, env=invocation_environment())
                 if completed.stdout.strip():
                     output.append(completed.stdout.strip())
                 if completed.returncode != 0:
@@ -305,7 +306,7 @@ class GitWorker(Worker):
         )
         changed_paths = set()
         for command in commands:
-            completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
+            completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False, env=invocation_environment())
             if completed.returncode != 0:
                 raise ValueError(completed.stderr.strip() or "Unable to inspect repository changes")
             changed_paths.update(path for path in completed.stdout.split("\0") if path)

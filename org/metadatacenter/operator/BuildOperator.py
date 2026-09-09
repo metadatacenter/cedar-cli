@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 
 from rich.console import Console
@@ -24,8 +25,8 @@ class BuildOperator(Operator):
         repo_list = [task.repo]
         repo_list_flat = Util.get_flat_repo_list(repo_list)
         build_frontends = (task.get_parameter("force_frontend_build") is True or
-                           (Const.CEDAR_DEV_BUILD_FRONTENDS in os.environ and
-                            os.environ[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'))
+                           (Const.CEDAR_DEV_BUILD_FRONTENDS in invocation_environment() and
+                            invocation_environment()[Const.CEDAR_DEV_BUILD_FRONTENDS] == 'true'))
         java_build = (BuildShellTaskFactory.maven_clean_install_skip_tests
                       if GlobalContext.should_skip_tests()
                       else BuildShellTaskFactory.maven_clean_install)

@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import datetime as dt
 import json
 import os
@@ -31,7 +32,7 @@ class BuildTrain:
 
     @staticmethod
     def development_base_version():
-        cedar_home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
         if not cedar_home:
             raise ValueError('CEDAR_HOME is not set')
         pom = Path(cedar_home) / 'cedar-parent' / 'pom.xml'
@@ -75,7 +76,7 @@ class BuildTrain:
 
     @classmethod
     def current(cls, environment=None, opener=None):
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         override = environment.get('CEDAR_TRAIN_VERSION')
         if override:
             return cls.validate(override)
@@ -102,7 +103,7 @@ class DockerTrain(BuildTrain):
 
     @classmethod
     def current(cls, environment=None, opener=None):
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         override = environment.get('CEDAR_DOCKER_TRAIN_VERSION')
         if override:
             return cls.validate(override)
@@ -154,7 +155,7 @@ class NpmTrain(BuildTrain):
 
     @classmethod
     def current(cls, environment=None, opener=None):
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         override = environment.get('CEDAR_NPM_TRAIN_VERSION')
         if override:
             return cls.validate(override)

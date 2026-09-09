@@ -1,5 +1,6 @@
 """CEDAR docker engine."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import process_environment
 from org.metadatacenter.util.Util import Util
 import json
 import os
@@ -15,7 +16,7 @@ def _docker_command(arguments, cwd=None, environment=None):
             capture_output=True,
             text=True,
             check=False,
-            env=environment,
+            env=process_environment(environment),
         )
     except OSError as error:
         return subprocess.CompletedProcess(

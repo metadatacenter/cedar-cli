@@ -1,4 +1,5 @@
 """Reads what Nexus serves and what develop holds, and reports where the two disagree."""
+from org.metadatacenter.util.InvocationContext import invocation_environment
 
 import base64
 import shutil
@@ -128,7 +129,7 @@ class SnapshotWorker:
         completed = subprocess.run(
             ["gh", "api", f"repos/{ORGANIZATION}/{repository}/commits/develop",
              "--jq", ".commit.committer.date"],
-            capture_output=True, text=True, check=False)
+            capture_output=True, text=True, check=False, env=invocation_environment())
         if completed.returncode != 0:
             return None
         return parse_commit_time(completed.stdout)
@@ -145,7 +146,7 @@ class SnapshotWorker:
         completed = subprocess.run(
             ["gh", "api", f"repos/{ORGANIZATION}/cedar-parent/contents/pom.xml?ref=develop",
              "--jq", ".content"],
-            capture_output=True, text=True, check=False)
+            capture_output=True, text=True, check=False, env=invocation_environment())
         if completed.returncode != 0:
             return None
         try:

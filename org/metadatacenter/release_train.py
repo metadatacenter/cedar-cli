@@ -1,5 +1,6 @@
 """Release commands and compatibility exports for the release component API."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment
 
 import base64
 import copy
@@ -235,8 +236,8 @@ app = typer.Typer()
 
 
 def _activate_toolchain() -> None:
-    """Give this process the release's Java and Node before any check or build asks for them."""
-    for note in ToolchainResolver(os.environ).resolve():
+    """Give this invocation the release's Java and Node before any check or build asks for them."""
+    for note in ToolchainResolver(invocation_environment()).resolve():
         console.print(f"Toolchain:           {note}")
 
 

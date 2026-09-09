@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
 import json
 import os
 import subprocess
@@ -34,12 +35,12 @@ class ModeManager:
 
     @classmethod
     def cedar_home(cls) -> Path:
-        configured = os.environ.get("CEDAR_HOME")
+        configured = invocation_environment().get("CEDAR_HOME")
         if configured:
             home = Path(configured).expanduser().resolve()
         else:
             home = Path(__file__).resolve().parents[4]
-            os.environ["CEDAR_HOME"] = str(home)
+            invocation_environment()["CEDAR_HOME"] = str(home)
         return home
 
     @classmethod
@@ -192,7 +193,7 @@ class ModeManager:
                 "cedar-development at CEDAR_HOME is incomplete"
             )
 
-        base_environment = {**os.environ, "CEDAR_HOME": str(cls.cedar_home())}
+        base_environment = {**invocation_environment(), "CEDAR_HOME": str(cls.cedar_home())}
         if surface == "native":
             base_environment["CEDAR_PROFILE"] = (profile or cls.require_profile()).value
         state = cls.state()
@@ -269,6 +270,7 @@ class ModeManager:
                 capture_output=True,
                 text=True,
                 check=False,
+                env=invocation_environment(),
             )
             if java.returncode or not java.stdout.strip():
                 raise ModeError("Java 17 is required for CEDAR native mode")
@@ -288,7 +290,7 @@ class ModeManager:
     @classmethod
     def apply_profile(cls, surface: str, check_runtime=True):
         mode = cls.require_surface(surface, check_runtime=check_runtime)
-        os.environ.update(cls.profile_environment(surface, mode))
+        invocation_environment().update(cls.profile_environment(surface, mode))
         return mode
 
     @classmethod
@@ -390,13 +392,13 @@ class ModeManager:
         if not controller.is_file():
             return set()
         environment = {
-            **os.environ,
+            **invocation_environment(),
             "CEDAR_HOME": str(cls.cedar_home()),
             "CEDAR_SERVICES_INSPECT_ONLY": "true",
         }
         result = subprocess.run(
             [str(controller), "running"],
-            env=environment,
+            env=process_environment(environment),
             capture_output=True,
             text=True,
             check=False,
@@ -415,13 +417,13 @@ class ModeManager:
         if not controller.is_file():
             return set()
         environment = {
-            **os.environ,
+            **invocation_environment(),
             "CEDAR_HOME": str(cls.cedar_home()),
             "CEDAR_SERVICES_INSPECT_ONLY": "true",
         }
         result = subprocess.run(
             [str(controller), "running-infra"],
-            env=environment,
+            env=process_environment(environment),
             capture_output=True,
             text=True,
             check=False,
@@ -606,9 +608,9 @@ class ModeManager:
         if mode in (CedarMode.HYBRID, CedarMode.DOCKER):
             cls.require_docker_start_compatible(mode)
         requested_environment = {
-            name: os.environ[name]
+            name: invocation_environment()[name]
             for name in cls.PERSISTED_ENVIRONMENT
-            if name in os.environ
+            if name in invocation_environment()
         }
         environments = cls.validate_mode(mode, profile)
         persisted_environment = environments.get("docker", {})
@@ -635,4 +637,4 @@ class ModeManager:
         mode = cls.current()
         if mode is not None:
             default_surface = "docker" if mode is CedarMode.DOCKER else "native"
-            os.environ.update(cls.profile_environment(default_surface, mode))
+            invocation_environment().update(cls.profile_environment(default_surface, mode))

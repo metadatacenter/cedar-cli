@@ -1,5 +1,6 @@
 """CEDAR docker lifecycle."""
 from __future__ import annotations
+from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
 from org.metadatacenter.model.DockerDeploymentMode import DockerDeploymentMode
 from org.metadatacenter.util.DockerImages import DockerImages
 from org.metadatacenter.util.Util import Util
@@ -211,7 +212,7 @@ def stop_all(mode=None):
         mode = DockerDeploymentMode(mode)
     environment, errors = _environment_component.mode_environment(mode)
     if errors:
-        environment = os.environ.copy()
+        environment = invocation_environment().copy()
 
     stacks = ['frontends', 'microservices', 'infrastructure']
     first_failure = 0
@@ -246,13 +247,13 @@ def compose(stack, action, detach=False, pull=None, environment=None, services=(
         [command],
         title=("Starting" if action == 'up' else "Stopping") + " CEDAR " + label,
         cwd=os.path.join(Util.cedar_home, 'cedar-docker-deploy', directory),
-        env=environment,
+        env=process_environment(environment),
     )
     return output.returncode
 
 
 def _individual_start(stack, detach=False, pull='never', train=None):
-    environment = os.environ.copy()
+    environment = invocation_environment().copy()
     if train:
         environment['CEDAR_DOCKER_VERSION'] = train
         if not _images_component._prepare_train_images(train, [stack], pull, environment):
@@ -274,7 +275,7 @@ def _individual_start(stack, detach=False, pull='never', train=None):
 
 
 def _individual_service_start(stack, service, detach=False, pull='never', train=None):
-    environment = os.environ.copy()
+    environment = invocation_environment().copy()
     if train:
         environment['CEDAR_DOCKER_VERSION'] = train
         if not _images_component._prepare_train_images(
