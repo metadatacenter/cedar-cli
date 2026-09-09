@@ -31,6 +31,10 @@ The main implementation areas are:
 
 - `cedar.py` registers the top-level command groups.
 - `org/metadatacenter/*.py` defines the Typer command surfaces.
+- `org/metadatacenter/release_support/` owns release planning, state, package comparison,
+  workspaces, version stamping, validation, Git integration, publication, preflight, and
+  presentation in separate modules. `release_train.py` registers commands and explicitly
+  re-exports the existing component API; components never import that command facade.
 - `org/metadatacenter/config/` and `org/metadatacenter/model/` describe repositories, images,
   targets, and plans.
 - `org/metadatacenter/planner/`, `org/metadatacenter/executor/`, and

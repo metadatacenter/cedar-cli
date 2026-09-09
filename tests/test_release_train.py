@@ -19,6 +19,7 @@ import typer
 from typer.testing import CliRunner
 
 from org.metadatacenter import release_train
+from org.metadatacenter.release_support import lifecycle, preflight, validation
 from org.metadatacenter.release_train import (
     DEV_CEE_NAME,
     PUBLIC_CEE_NAME,
@@ -1851,9 +1852,9 @@ class ReleaseBuildValidationTest(unittest.TestCase):
                 if item["id"] == "release:maven:parent"
             )
             with patch.object(
-                release_train, "require_no_embedded_mongo_processes") as before, \
+                validation, "require_no_embedded_mongo_processes") as before, \
                     patch.object(
-                        release_train, "wait_for_no_embedded_mongo_processes") as after:
+                        validation, "wait_for_no_embedded_mongo_processes") as after:
                 validator.run_task(manifest, task)
 
             before.assert_called_once_with("release Maven task release:maven:parent")
@@ -3313,7 +3314,7 @@ class ReleasePreflightTest(unittest.TestCase):
         process = SimpleNamespace(
             describe=lambda: "PID 42 (/Users/test/.embedmongo/5.0/mongod; "
             "listening on 127.0.0.1:42317)")
-        with patch.object(release_train, "embedded_mongo_processes", return_value=[process]):
+        with patch.object(preflight, "embedded_mongo_processes", return_value=[process]):
             findings = self._preflight().check_embedded_test_processes()
 
         self.assertEqual(1, len(findings))
@@ -4278,7 +4279,7 @@ class TransientRetryTest(unittest.TestCase):
             return outcome
 
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "advance_active_release", advance):
+                patch.object(lifecycle, "advance_active_release", advance):
             manifest = release_train._drive_release(
                 self._state(directory), sleeper=slept.append)
 
@@ -4292,7 +4293,7 @@ class TransientRetryTest(unittest.TestCase):
             raise ReleaseError("integration commit changed the prepared tree")
 
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "advance_active_release", advance):
+                patch.object(lifecycle, "advance_active_release", advance):
             with self.assertRaisesRegex(ReleaseError, "changed the prepared tree"):
                 release_train._drive_release(
                     self._state(directory), sleeper=slept.append)
@@ -4306,7 +4307,7 @@ class TransientRetryTest(unittest.TestCase):
             raise RetryableReleaseError("connection reset")
 
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "advance_active_release", advance):
+                patch.object(lifecycle, "advance_active_release", advance):
             with self.assertRaises(RetryableReleaseError):
                 release_train._drive_release(
                     self._state(directory), sleeper=slept.append)
@@ -4384,8 +4385,8 @@ class ReleaseResumptionTest(unittest.TestCase):
 
         stages = tuple(stub(stage) for stage in release_train.RELEASE_STAGES)
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "RELEASE_STAGES", stages), \
-                patch.object(release_train, "RELEASE_TERMINAL_PHASE", stages[-1].done_phase):
+                patch.object(lifecycle, "RELEASE_STAGES", stages), \
+                patch.object(lifecycle, "RELEASE_TERMINAL_PHASE", stages[-1].done_phase):
             manifest = advance_active_release(self._state(directory, phase))
         return ran, manifest
 
