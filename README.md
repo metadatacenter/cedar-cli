@@ -39,8 +39,10 @@ The main implementation areas are:
   safeguards.
 - `tests/` exercises command paths without starting a real CEDAR deployment.
 - `cli.sh` is the shell wrapper the `cedarcli` alias sources, and the only one. It activates the
-  repository virtual environment, preserves the caller's working directory for `build this` and
-  `publish this`, and returns the Python process's exit status.
+  repository virtual environment in a subshell, preserves the caller's working directory for
+  `build this` and `publish this`, and returns the Python process's exit status without exiting
+  the caller's shell. Setup failures stop before Python runs; only successful commands may
+  consume a pending Git navigation record.
 
 Release `start`, `resume`, and `abandon` hold an exclusive process lock in the release state
 directory for the whole operation, including preflight and retries. A competing modifying command

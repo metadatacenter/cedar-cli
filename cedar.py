@@ -19,6 +19,7 @@ from org.metadatacenter import (
 )
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.CheatWorker import CheatWorker
+from org.metadatacenter.util.CliResult import exit_on_failure
 
 GlobalContext()
 
@@ -42,7 +43,7 @@ app.command("mode")(mode.mode)
 
 @app.command("cheat", help="Open cheatsheet")
 def cheat():
-    CheatWorker.cheat()
+    exit_on_failure(CheatWorker.cheat())
 
 
 # @app.command("test")
