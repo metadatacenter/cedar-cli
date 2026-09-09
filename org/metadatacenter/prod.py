@@ -8,6 +8,12 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
+@app.command("provision-artifact-key")
+def provision_artifact_key():
+    """Create/reuse the private key on a native production application host; no restart."""
+    run_prod_action(ProdWorker.provision_artifact_key)
+
+
 def run_prod_action(action):
     try:
         exit_on_failure(action())
