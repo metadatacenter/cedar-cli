@@ -14,10 +14,12 @@ latest file, because a train is released hours or days after it is dispatched an
 on in between: a rerun after a documentation commit must not erase the evidence the release still
 needs.
 
-What the record cannot prove is that the running jars were built from those heads. The controller's
-own `current` column establishes that no process predates its jar, and the run refuses to start
-while any service is stale or unhealthy. Building and restarting from the heads it records remains
-the operator's discipline, as it is for every other native check.
+The record must also answer for the jars. The controller's own `current` column establishes that
+no process predates its jar, which is a narrower question than it looks: a jar can itself predate
+the commit the record names, and every row reads `current` while it does. A run therefore refuses
+to start while any service is stale or unhealthy, and equally while any deployed jar was written
+before its repository's develop head, because the evidence would otherwise certify code the stack
+is not running.
 """
 
 from __future__ import annotations
@@ -150,6 +152,57 @@ def stack_findings(cedar_home, runner=subprocess.run) -> list[str]:
             findings.append(f"{service} is {row['health']}")
         if row["binary"] == "STALE":
             findings.append(f"{service} is stale: its process predates the code it should serve")
+    findings.extend(source_currency_findings(
+        cedar_home,
+        [row["service"] for row in rows if row["binary"] in {"current", "STALE"}],
+        runner=runner,
+    ))
+    return findings
+
+
+def application_jar(cedar_home, service: str) -> Path | None:
+    """The jar the controller would run for a microservice, or None when it has not been built."""
+    target = (_home(cedar_home) / f"cedar-{service}-server"
+              / f"cedar-{service}-server-application" / "target")
+    jars = [
+        path for path in target.glob(f"cedar-{service}-server-application-*.jar")
+        if not path.name.startswith("original-")
+    ]
+    return max(jars, key=lambda path: path.stat().st_mtime) if jars else None
+
+
+def source_currency_findings(cedar_home, services, runner=subprocess.run) -> list[str]:
+    """Which deployed jars were written before the source the record will say they covered.
+
+    The controller's `current` column compares a process with its jar, which answers whether a
+    redeploy happened, not whether the jar holds the commit the record names. A jar written
+    before its repository's develop head cannot contain that head, and a run recorded against
+    it certifies code the stack is not running. That is the failure this module's own note
+    called the operator's discipline; it is cheap enough to ask.
+    """
+    findings = []
+    for service in services:
+        repository = f"cedar-{service}-server"
+        root = _home(cedar_home) / repository
+        if not (root / ".git").exists():
+            continue
+        jar = application_jar(cedar_home, service)
+        if jar is None:
+            continue
+        code, head, _detail = _capture(
+            runner, ["git", "log", "-1", "--format=%ct %H", "refs/heads/develop"], cwd=root)
+        if code != 0 or not head.strip():
+            continue
+        committed, _, revision = head.strip().partition(" ")
+        try:
+            committed_at = int(committed)
+        except ValueError:
+            continue
+        if jar.stat().st_mtime < committed_at:
+            findings.append(
+                f"{service} was built before its source: its jar predates {repository} "
+                f"develop {revision[:8]}"
+            )
     return findings
 
 
