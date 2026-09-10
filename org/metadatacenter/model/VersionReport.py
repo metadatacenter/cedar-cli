@@ -61,7 +61,7 @@ class VersionReport:
             caption += ", [green]" + str(self.cnt_allowed_diff) + " allowed non-matching"
         return caption
 
-    def get_remedy_lines(self) -> List[str]:
+    def get_remedy_lines(self, strict: bool = False) -> List[str]:
         """
         What to do about each kind of finding, named rather than left to be inferred.
 
@@ -72,10 +72,11 @@ class VersionReport:
         lines = []
         stale_repos = self.repos_with(lambda entry: entry.cnt_stale > 0)
         if stale_repos:
+            verdict = "This is fatal under --strict" if strict else "This does not fail the check"
             lines.append(
                 f"{len(stale_repos)} repositories are behind their remote, which accounts for "
                 f"{self.cnt_stale} of the versions above. The release published these; this workspace "
-                f"has not pulled them. Run `cedarcli git pull`.")
+                f"has not pulled them. Run `cedarcli git pull`. {verdict}.")
         divergent_repos = self.repos_with(lambda entry: entry.cnt_nok > 0)
         if divergent_repos:
             lines.append(

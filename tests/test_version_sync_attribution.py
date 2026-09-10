@@ -29,7 +29,7 @@ class VersionSyncAttributionTest(unittest.TestCase):
     """
 
     @staticmethod
-    def run_check(worker, repo_versions, sync_by_repo, by_file=False):
+    def run_check(worker, repo_versions, sync_by_repo, by_file=False, strict=False):
         repos = [Repo(name, RepoType.MISC, []) for name in repo_versions]
 
         def add_version(repo, report):
@@ -46,7 +46,7 @@ class VersionSyncAttributionTest(unittest.TestCase):
                 patch("org.metadatacenter.worker.VersionWorker.console") as console, \
                 patch.object(worker, "get_version_report", side_effect=add_version):
             global_repos.get_list_all.return_value = repos
-            returncode = worker.check_versions(by_file=by_file)
+            returncode = worker.check_versions(by_file=by_file, strict=strict)
         printed = [str(call.args[0]) for call in console.print.call_args_list]
         objects = [call.args[0] for call in console.print.call_args_list]
         return returncode, printed, objects
@@ -87,6 +87,35 @@ class VersionSyncAttributionTest(unittest.TestCase):
         self.assertTrue(any("half-applied bump" in line for line in printed))
         self.assertTrue(any("half-bumped" in line for line in printed))
         self.assertEqual(0, returncode, "the stale half is still explained by the clone")
+
+    def test_strict_makes_a_stale_clone_fatal(self):
+        worker = VersionWorker()
+        estate = {"current-repo": [TARGET, TARGET], "unpulled-repo": [STALE, STALE]}
+
+        lenient, lenient_printed, _ = self.run_check(worker, estate, {"unpulled-repo": behind()})
+        strict, strict_printed, _ = self.run_check(
+            worker, estate, {"unpulled-repo": behind()}, strict=True)
+
+        self.assertEqual(0, lenient, "an interactive run judges the estate, not this workspace")
+        self.assertEqual(1, strict, "a gate judges this workspace, where an unpulled clone is wrong")
+        self.assertTrue(any("does not fail the check" in line for line in lenient_printed))
+        self.assertTrue(any("fatal under --strict" in line for line in strict_printed))
+
+    def test_strict_does_not_change_a_clean_estate(self):
+        worker = VersionWorker()
+        estate = {"a-repo": [TARGET, TARGET], "b-repo": [TARGET]}
+
+        self.assertEqual(0, self.run_check(worker, estate, {})[0])
+        self.assertEqual(0, self.run_check(worker, estate, {}, strict=True)[0])
+
+    def test_strict_reports_a_real_divergence_the_same_way(self):
+        worker = VersionWorker()
+        estate = {"current-repo": [TARGET, TARGET], "wrong-repo": [STALE]}
+
+        returncode, printed, _ = self.run_check(worker, estate, {"wrong-repo": current()}, strict=True)
+
+        self.assertEqual(1, returncode)
+        self.assertTrue(any("wrong-repo" in line for line in printed))
 
     def test_the_report_carries_one_row_per_repository(self):
         worker = VersionWorker()

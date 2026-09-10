@@ -27,7 +27,7 @@ class VersionWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def check_versions(self, by_file: bool = False):
+    def check_versions(self, by_file: bool = False, strict: bool = False):
         report = VersionReport()
         for repo in GlobalContext.repos.get_list_all():
             self.get_version_report(repo, report)
@@ -41,10 +41,17 @@ class VersionWorker(Worker):
         table = self.build_file_table(report) if by_file else self.build_repo_table(report)
         table.caption = report.get_caption()
         console.print(table)
-        for line in report.get_remedy_lines():
+        for line in report.get_remedy_lines(strict=strict):
             console.print(line)
         Util.write_rich_cedar_file('last_version_check.rich.txt', table)
-        return 1 if report.cnt_nok else 0
+        # An interactive run judges the estate, so a clone nobody pulled is not its verdict. A gate
+        # judges this workspace, where an unpulled clone means the answer was read from the wrong
+        # source, so --strict makes that fatal too.
+        if report.cnt_nok:
+            return 1
+        if strict and report.cnt_stale:
+            return 1
+        return 0
 
     @staticmethod
     def entry_dir(entry) -> str:

@@ -16,9 +16,13 @@ version_worker = VersionWorker()
 def versions(
         by_file: bool = typer.Option(
             False, "--by-file",
-            help="One row per version-carrying file instead of one per repository.")):
+            help="One row per version-carrying file instead of one per repository."),
+        strict: bool = typer.Option(
+            False, "--strict",
+            help="Also fail when a repository is behind its remote. For a gate, which judges this "
+                 "workspace rather than the estate.")):
     """Check version declarations across configured repositories."""
-    exit_on_failure(version_worker.check_versions(by_file=by_file))
+    exit_on_failure(version_worker.check_versions(by_file=by_file, strict=strict))
 
 
 @app.command("repos")

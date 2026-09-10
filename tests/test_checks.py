@@ -55,7 +55,7 @@ class CheckCommandsTest(unittest.TestCase):
         result = self.runner.invoke(check.app, ["versions"])
 
         self.assertEqual(4, result.exit_code)
-        check_versions.assert_called_once_with(by_file=False)
+        check_versions.assert_called_once_with(by_file=False, strict=False)
 
     def test_docker_build_ignores_train_supplied_maven_version(self):
         with tempfile.TemporaryDirectory() as temp_dir:
