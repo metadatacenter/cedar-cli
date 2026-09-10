@@ -13,9 +13,12 @@ version_worker = VersionWorker()
 
 
 @app.command("versions")
-def versions():
+def versions(
+        by_file: bool = typer.Option(
+            False, "--by-file",
+            help="One row per version-carrying file instead of one per repository.")):
     """Check version declarations across configured repositories."""
-    exit_on_failure(version_worker.check_versions())
+    exit_on_failure(version_worker.check_versions(by_file=by_file))
 
 
 @app.command("repos")
