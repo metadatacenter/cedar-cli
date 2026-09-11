@@ -1,3 +1,4 @@
+from contextlib import ExitStack, contextmanager
 import base64
 import copy
 import hashlib
@@ -20,6 +21,8 @@ from typer.testing import CliRunner
 
 from org.metadatacenter import release_train
 from org.metadatacenter.release_support import lifecycle, preflight, validation
+from org.metadatacenter.release_support import publication
+from org.metadatacenter.release_support.publication import _extract_source_archive
 from org.metadatacenter.release_train import (
     DEV_CEE_NAME,
     PUBLIC_CEE_NAME,
@@ -1747,7 +1750,9 @@ class ReleaseBuildValidationTest(unittest.TestCase):
     def setUp(self):
         # These tests inject simulated Maven execution. A separate developer test
         # run must not change their verdict through the host's process inventory.
-        self.enterContext(patch(
+        contexts = ExitStack()
+        self.addCleanup(contexts.close)
+        contexts.enter_context(patch(
             "org.metadatacenter.util.BuildSafety.embedded_mongo_processes", return_value=[]))
 
     def make_manifest(self, directory, include_frontend=False):
@@ -2701,6 +2706,75 @@ class ReleaseMavenSettingsCredentialsTest(unittest.TestCase):
 
         expected = base64.b64encode(b"settings-user:settings-secret").decode()
         self.assertEqual({"Authorization": f"Basic {expected}"}, headers)
+
+
+@contextmanager
+def _tarfile_without_data_filter():
+    """Take the path a Python without tarfile's data filter takes, as 3.10.11 does."""
+    with patch.object(publication, "_TARFILE_HAS_DATA_FILTER", False):
+        yield
+
+
+class ReleaseSourceArchiveExtractionTest(unittest.TestCase):
+    """Extraction on a Python whose tarfile predates `extractall(filter=...)`."""
+
+    @staticmethod
+    def _archive(directory, members):
+        path = Path(directory) / "source.tar"
+        with tarfile.open(path, mode="w") as archive:
+            for member, payload in members:
+                if payload is None:
+                    archive.addfile(member)
+                else:
+                    member.size = len(payload)
+                    archive.addfile(member, io.BytesIO(payload))
+        return path
+
+    def test_extracts_tracked_source_without_the_data_filter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = self._archive(directory, [(tarfile.TarInfo("pom.xml"), b"<project/>")])
+            destination = Path(directory) / "source"
+            destination.mkdir()
+            with _tarfile_without_data_filter():
+                _extract_source_archive(archive, destination)
+            self.assertEqual((destination / "pom.xml").read_bytes(), b"<project/>")
+
+    def test_refuses_a_member_that_leaves_the_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = self._archive(directory, [(tarfile.TarInfo("../escaped.xml"), b"x")])
+            destination = Path(directory) / "source"
+            destination.mkdir()
+            with _tarfile_without_data_filter():
+                with self.assertRaises(ReleaseError):
+                    _extract_source_archive(archive, destination)
+            self.assertFalse((Path(directory) / "escaped.xml").exists())
+
+    def test_refuses_a_link_that_leaves_the_destination(self):
+        link = tarfile.TarInfo("key.pem")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../etc/passwd"
+        with tempfile.TemporaryDirectory() as directory:
+            archive = self._archive(directory, [(link, None)])
+            destination = Path(directory) / "source"
+            destination.mkdir()
+            with _tarfile_without_data_filter():
+                with self.assertRaises(ReleaseError):
+                    _extract_source_archive(archive, destination)
+
+    def test_keeps_a_link_that_stays_inside_the_destination(self):
+        link = tarfile.TarInfo("module/pom.xml")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../pom.xml"
+        with tempfile.TemporaryDirectory() as directory:
+            archive = self._archive(directory, [
+                (tarfile.TarInfo("pom.xml"), b"<project/>"),
+                (link, None),
+            ])
+            destination = Path(directory) / "source"
+            destination.mkdir()
+            with _tarfile_without_data_filter():
+                _extract_source_archive(archive, destination)
+            self.assertEqual((destination / "module" / "pom.xml").read_bytes(), b"<project/>")
 
 
 class ReleaseArtifactPublicationTest(unittest.TestCase):

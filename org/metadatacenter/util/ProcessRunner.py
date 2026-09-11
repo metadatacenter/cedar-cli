@@ -3,6 +3,54 @@ from org.metadatacenter.util.InvocationContext import process_environment
 import os
 import signal
 import subprocess
+import sys
+
+
+def _spawn(argv, *, cwd, env):
+    options = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                   cwd=cwd, env=env, shell=False)
+    if sys.version_info >= (3, 11):
+        return subprocess.Popen(argv, process_group=0, **options)
+
+    # Python 3.10 lacks Popen(process_group). Establish the group in a fresh
+    # interpreter, then exec the requested command, preserving its PID and status.
+    # Unlike preexec_fn, this is safe when the caller has other threads. Wait for
+    # the group to exist before handing it the controlling terminal.
+    reader, writer = os.pipe()
+    bootstrap = '''import os, signal, sys
+os.setpgid(0, 0)
+fd = int(sys.argv[1])
+os.write(fd, b"1")
+os.close(fd)
+# Match Popen's restore_signals default after this interpreter's startup.
+for name in ('SIGPIPE', 'SIGXFZ', 'SIGXFSZ'):
+    if hasattr(signal, name):
+        signal.signal(getattr(signal, name), signal.SIG_DFL)
+os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
+'''
+    try:
+        process = subprocess.Popen(
+            [sys.executable, '-c', bootstrap, str(writer), *argv],
+            pass_fds=(writer,), **options)
+    except BaseException:
+        os.close(reader)
+        raise
+    finally:
+        os.close(writer)
+    try:
+        if os.read(reader, 1) != b'1':
+            raise RuntimeError('Could not establish subprocess process group')
+    except BaseException:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            process.kill()
+        process.wait()
+        process.stdout.close()
+        raise
+    finally:
+        os.close(reader)
+    return process
 
 
 class CommandOutput(list):
@@ -35,10 +83,7 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
     foreground = None
     if os.isatty(0) and os.tcgetpgrp(0) == os.getpgrp():
         foreground = os.getpgrp()
-    process = subprocess.Popen(
-        list(argv), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        cwd=cwd, env=process_environment(env), shell=False, process_group=0,
-    )
+    process = _spawn(list(argv), cwd=cwd, env=process_environment(env))
     lines = []
     try:
         if foreground is not None:

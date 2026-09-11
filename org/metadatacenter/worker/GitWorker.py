@@ -161,8 +161,13 @@ class GitWorker(Worker):
         return result
 
     def checkout(self, branch: str):
+        # Git 2.34 (Ubuntu 22.04) does not understand checkout's --end-of-options.
+        # Reject options explicitly; argv keeps shell metacharacters literal and
+        # the trailing -- prevents an unknown branch becoming a path checkout.
+        if not branch or branch.startswith('-'):
+            raise ValueError('Checkout requires a branch or revision that does not start with a dash')
         return self.execute_shell_on_all_repos_with_table(
-            argv=["git", "checkout", "--end-of-options", branch, "--"],
+            argv=["git", "checkout", branch, "--"],
             status_line="Checking out",
         )
 

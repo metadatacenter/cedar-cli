@@ -39,3 +39,13 @@ class LiteralCheckoutTest(unittest.TestCase):
                 result = CliRunner().invoke(commands.app, ['checkout', '--', '--detach'])
                 self.assertEqual(1, result.exit_code, result.output)
                 self.assertEqual(original, git('symbolic-ref', '--short', 'HEAD'))
+                # A missing revision must never become a checkout of a tracked path.
+                tracked = cwd / 'tracked.txt'
+                tracked.write_text('original')
+                git('add', 'tracked.txt')
+                git('-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                    'commit', '-m', 'Tracked path')
+                tracked.write_text('local edit')
+                result = CliRunner().invoke(commands.app, ['checkout', 'tracked.txt'])
+                self.assertEqual(1, result.exit_code, result.output)
+                self.assertEqual('local edit', tracked.read_text())

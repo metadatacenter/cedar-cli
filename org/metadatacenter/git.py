@@ -39,6 +39,9 @@ def remote():
 
 @app.command("checkout")
 def checkout(branch: str):
+    if not branch or branch.startswith('-'):
+        typer.echo('Checkout requires a branch or revision that does not start with a dash', err=True)
+        raise typer.Exit(code=1)
     exit_on_failure(git_worker.checkout(branch))
 
 

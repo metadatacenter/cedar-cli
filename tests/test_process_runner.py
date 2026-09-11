@@ -77,6 +77,8 @@ class ProcessRunnerTest(unittest.TestCase):
 
 
 class ProcessTerminalTest(unittest.TestCase):
+    force_python310 = False
+
     def test_child_can_read_controlling_terminal_and_cli_gets_it_back(self):
         child = "import sys; print('READY', flush=True); print(input(), flush=True)"
         driver = (
@@ -84,6 +86,8 @@ class ProcessTerminalTest(unittest.TestCase):
             "run_process([sys.executable,'-c',sys.argv[1]], on_line=lambda s: print(s,flush=True)); "
             "print('RESTORED='+str(os.tcgetpgrp(0)==os.getpgrp()),flush=True)"
         )
+        if self.force_python310:
+            driver = 'import sys; sys.version_info=(3,10); ' + driver
         pid, master = pty.fork()
         if pid == 0:
             os.execv(sys.executable, [sys.executable, '-c', driver, child])
@@ -120,3 +124,16 @@ class ProcessTerminalTest(unittest.TestCase):
             except ProcessLookupError:
                 pass
             os.waitpid(pid, 0)
+
+
+class Python310ProcessRunnerTest(ProcessRunnerTest):
+    """Run every process lifecycle assertion through the 3.10 path on newer CI too."""
+
+    def setUp(self):
+        patcher = patch('org.metadatacenter.util.ProcessRunner.sys.version_info', (3, 10))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class Python310ProcessTerminalTest(ProcessTerminalTest):
+    force_python310 = True

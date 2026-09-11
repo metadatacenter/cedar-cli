@@ -18,12 +18,13 @@ concurrency:
 
 jobs:
   test:
-    name: pytest (${{ matrix.os }}, Python 3.12)
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
+        python: ["3.10", "3.12"]
         os:
           - ubuntu-latest
           - macos-latest
@@ -65,13 +66,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # requirements.txt names no Python version and the CLI runs under whatever
-      # python3 the developer has. 3.12 is the version Read the Docs builds the
-      # documentation with, so the repos stay on one interpreter.
-      - name: Set up Python 3.12
+      # Ubuntu 22.04 deployment hosts use Python 3.10; keep that baseline covered.
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: cedar-cli/requirements.txt
 
@@ -87,3 +86,17 @@ jobs:
       - name: Run tests
         working-directory: cedar-cli
         run: python -m pytest tests -v
+
+      - name: Verify checkout with staging Git 2.34.1
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.10'
+        working-directory: cedar-cli
+        run: |
+          curl --fail --location https://www.kernel.org/pub/software/scm/git/git-2.34.1.tar.gz -o "$RUNNER_TEMP/git-2.34.1.tar.gz"
+          tar -xzf "$RUNNER_TEMP/git-2.34.1.tar.gz" -C "$RUNNER_TEMP"
+          flags="NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_CURL=YesPlease NO_OPENSSL=YesPlease"
+          # builtin/bugreport.c includes the generated hook-list.h, and 2.34.1's Makefile
+          # declares that dependency for hook.o and builtin/help.o alone. A parallel build
+          # therefore reaches bugreport.o before the header exists, so generate it first.
+          make -C "$RUNNER_TEMP/git-2.34.1" $flags hook-list.h
+          make -C "$RUNNER_TEMP/git-2.34.1" $flags -j2 git
+          PATH="$RUNNER_TEMP/git-2.34.1:$PATH" python -m pytest tests/test_git_checkout.py tests/test_git_failures.py -v

@@ -79,6 +79,10 @@ library behavior. Change settings on `context.settings`, rather than assigning c
 
 ## Contributor Setup
 
+Python 3.10 is the minimum supported version (including Ubuntu 22.04 deployment hosts).
+CI tests Python 3.10 and 3.12. Git checkout supports Git 2.34.1; deployment does not
+require replacing the system Python or adding a newer Git package repository.
+
 The installation guides establish `CEDAR_HOME`, clone the companion repositories, and create the
 normal alias. For work on cedarcli itself, create its isolated Python environment and install the
 runtime and test dependencies:
