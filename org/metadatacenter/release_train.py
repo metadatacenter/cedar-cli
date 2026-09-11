@@ -195,6 +195,7 @@ from org.metadatacenter.release_support.presentation import (
 
 from org.metadatacenter.release_support.publication import (
     ReleaseArtifactPublisher,
+    _extract_source_archive,
 )
 
 from org.metadatacenter.release_support.refs import (
