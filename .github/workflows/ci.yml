@@ -85,7 +85,19 @@ jobs:
       # the network.
       - name: Run tests
         working-directory: cedar-cli
+        env:
+          CEDAR_HOME: ${{ github.workspace }}
         run: python -m pytest tests -v
+
+      - name: Build with noexec temporary storage
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.10'
+        working-directory: cedar-cli
+        run: |
+          noexec_root="$RUNNER_TEMP/cedar-noexec"
+          mkdir -p "$noexec_root"
+          sudo mount -t tmpfs -o noexec,nosuid,nodev,mode=1777 tmpfs "$noexec_root"
+          trap 'sudo umount "$noexec_root"' EXIT
+          TMPDIR="$noexec_root" CEDAR_TEST_NOEXEC=1 CEDAR_BUILD_TEMP_INTEGRATION=1 python -m pytest tests/test_build_temp_integration.py -v
 
       - name: Verify checkout with staging Git 2.34.1
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.10'

@@ -27,6 +27,54 @@ class BuildSafetyError(RuntimeError):
     pass
 
 
+@contextlib.contextmanager
+def executable_build_workspace(environment=None, *, java=False):
+    """Private, executable scratch space scoped to build children, never the host."""
+    environment = dict(invocation_environment() if environment is None else environment)
+    configured = environment.get('CEDAR_BUILD_TMPDIR')
+    home = environment.get('CEDAR_HOME')
+    if not configured and not home:
+        raise BuildSafetyError('CEDAR_HOME is required for build temporary storage')
+    root = Path(configured) if configured else Path(home) / '.cedar' / 'build-tmp'
+    if not root.is_absolute():
+        raise BuildSafetyError('CEDAR_BUILD_TMPDIR must be an absolute path')
+    try:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary = tempfile.TemporaryDirectory(prefix='build-', dir=root)
+    except OSError as error:
+        raise BuildSafetyError(f'Cannot create build workspace in {root}: {error}') from error
+    with temporary as directory:
+        workspace = Path(directory).resolve()
+        probe = workspace / 'exec-probe'
+        try:
+            probe.write_text('#!/bin/sh\nexit 0\n')
+            probe.chmod(0o700)
+            subprocess.run([str(probe)], check=True, capture_output=True, env=environment)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise BuildSafetyError(
+                f'Build temporary directory {root} does not permit execution. '
+                'Set CEDAR_BUILD_TMPDIR to an executable, writable filesystem; '
+                'the system /tmp mount need not change.') from error
+        finally:
+            probe.unlink(missing_ok=True)
+        scratch = workspace / 'tmp'
+        scratch.mkdir(mode=0o700)
+        environment.update({key: str(scratch) for key in ('TMPDIR', 'TMP', 'TEMP')})
+        if java:
+            # JAVA_TOOL_OPTIONS reaches Maven and every forked test JVM. Keep all
+            # other options, but reject higher-precedence overrides of our path.
+            for key in ('_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'MAVEN_OPTS'):
+                if '-Djava.io.tmpdir=' in environment.get(key, ''):
+                    raise BuildSafetyError(
+                        f'{key} overrides java.io.tmpdir; use CEDAR_BUILD_TMPDIR instead')
+            if any(char in str(scratch) for char in ('"', '\n', '\r')):
+                raise BuildSafetyError('Build temporary path cannot contain quotes or newlines')
+            option = f'"-Djava.io.tmpdir={scratch}"'
+            environment['JAVA_TOOL_OPTIONS'] = (
+                environment.get('JAVA_TOOL_OPTIONS', '') + ' ' + option).strip()
+        yield workspace, environment
+
+
 @dataclasses.dataclass(frozen=True)
 class EmbeddedMongoProcess:
     pid: int
@@ -147,6 +195,14 @@ def is_test_bearing_maven_command(command: str) -> bool:
     return is_maven and not skips_tests
 
 
+def is_maven_command(command: str) -> bool:
+    try:
+        executable = shlex.split(command)[0]
+    except (ValueError, IndexError):
+        return False
+    return Path(executable).name in {'mvn', 'mvnw'}
+
+
 def tracked_state(root: Path) -> bytes:
     """Capture tracked worktree and index state, including pre-existing changes."""
     status = subprocess.run(
@@ -238,15 +294,13 @@ def isolated_frontend_workspace(source: Path):
     before = tracked_state(before_root) if before_root is not None else None
     collisions = frontend_runtime_collisions(source)
     try:
-        with tempfile.TemporaryDirectory(prefix=f"cedarcli-build-{source.name}-") as temporary:
-            temporary_root = Path(temporary)
+        with executable_build_workspace() as (temporary_root, environment):
             build_root = temporary_root / source.name
 
             def ignore(_directory, names):
                 return {name for name in names if name in {".git", "node_modules", ".angular"}}
 
             shutil.copytree(source, build_root, symlinks=True, ignore=ignore)
-            environment = dict(invocation_environment())
             existing_path = environment.get("PATH", "")
             local_binaries = str(build_root / "node_modules" / ".bin")
             environment.update({
