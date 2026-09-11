@@ -124,3 +124,11 @@ and the
 [cheat-sheet generator](https://github.com/metadatacenter/cedar-mkdocs/blob/main/tools/generate_cedarcli_cheatsheet.py).
 Regenerate `assets/docs/cedar-cli.pdf` and `assets/docs/cedar-cli.png` rather than editing those
 artifacts directly.
+
+## Native Restart Targets
+
+Use `cedarcli native restart microservice repo` or `restart frontend openview` for one application,
+and `restart microservices` or `restart frontends` for a group. `restart frontend split-frontends`
+selects Workspace and Designer. `restart all` restarts all managed applications and leaves
+infrastructure running; bare `restart` retains that behavior. The old flat syntax, such as
+`restart repo ui-openview`, remains supported. Hybrid mode permits only frontend targets.

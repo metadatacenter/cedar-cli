@@ -182,13 +182,13 @@ class NativeProcessControlTest(unittest.TestCase):
     @patch.object(ModeManager, "require_surface", return_value=CedarMode.NATIVE)
     @patch.object(NativeWorker, "restart")
     def test_restart_refuses_a_name_no_application_answers_to(self, restart, _surface):
-        """Unlike start and stop, restart takes free text, so it can be handed anything."""
+        """Reject an invalid name before the native controller runs."""
         runner = CliRunner()
 
-        result = runner.invoke(native.app, ["restart", "microservice", "monitor"])
+        result = runner.invoke(native.app, ["restart", "monitor", "unknown-service"])
 
         self.assertEqual(1, result.exit_code, result.output)
-        self.assertIn("microservice", result.output)
+        self.assertIn("unknown-service", result.output)
         restart.assert_not_called()
 
     @patch.object(ModeManager, "require_surface", return_value=CedarMode.NATIVE)

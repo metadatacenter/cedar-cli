@@ -1,9 +1,7 @@
-from typing import List, Optional
-
 import typer
 from rich.console import Console
 
-from org.metadatacenter import start, stop
+from org.metadatacenter import start, stop, restart
 from org.metadatacenter.model.CedarMode import CedarMode
 from org.metadatacenter.util.ModeManager import ModeError, ModeManager
 from org.metadatacenter.util.CliResult import exit_on_failure
@@ -27,6 +25,7 @@ def require_native_mode(ctx: typer.Context):
 
 app.add_typer(start.app, name="start", help="Start native CEDAR components.")
 app.add_typer(stop.app, name="stop", help="Stop native CEDAR components.")
+app.add_typer(restart.app, name="restart", help="Restart native CEDAR applications.")
 
 
 @app.command("status")
@@ -50,17 +49,6 @@ def watch():
     """Continuously refresh native application status."""
     _require_native_backend("watch")
     exit_on_failure(NativeWorker.watch())
-
-
-@app.command("restart")
-def restart(services: Optional[List[str]] = typer.Argument(None)):
-    """Restart all managed applications, or only the named applications."""
-    requested = services or ()
-    _require_known_native_services(requested, "restart")
-    mode = ModeManager.require_surface("native")
-    if mode is CedarMode.HYBRID:
-        _require_native_frontend_services(requested, "restart")
-    exit_on_failure(NativeWorker.restart(requested))
 
 
 @app.command("logs")
@@ -90,25 +78,6 @@ def _require_native_backend(operation):
     except ModeError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1)
-
-
-def _require_known_native_services(services, operation):
-    """Reject a name no native application answers to.
-
-    The controller takes service names verbatim, so an unknown one reaches it as a service whose
-    jar was never built, and the operator is told to build something that cannot exist. Unlike
-    start and stop, which name each service in their own command, restart takes free text, so the
-    check belongs here.
-    """
-    known = set(NativeWorker.MICROSERVICES) | set(NativeWorker.FRONTENDS)
-    unknown = [service for service in services if service not in known]
-    if not unknown:
-        return
-    console.print(
-        f"[red]Not a native CEDAR application, so nothing to {operation}: "
-        f"{', '.join(unknown)}[/red]")
-    console.print(f"Known applications: {', '.join(sorted(known))}")
-    raise typer.Exit(code=1)
 
 
 def _require_native_frontend_services(services, operation):
