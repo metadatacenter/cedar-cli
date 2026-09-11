@@ -55,7 +55,7 @@ class CheckCommandsTest(unittest.TestCase):
         result = self.runner.invoke(check.app, ["versions"])
 
         self.assertEqual(4, result.exit_code)
-        check_versions.assert_called_once_with()
+        check_versions.assert_called_once_with(by_file=False, strict=False)
 
     def test_docker_build_ignores_train_supplied_maven_version(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -95,8 +95,10 @@ class CheckCommandsTest(unittest.TestCase):
             returncode = worker.check_versions()
 
         self.assertEqual(1, returncode)
-        version_console.print.assert_called_once()
         write_report.assert_called_once()
+        printed = [str(call.args[0]) for call in version_console.print.call_args_list]
+        self.assertTrue(any("mismatched" in line for line in printed),
+                        "a real divergence should name the repository it is in")
 
     def test_openapi_command_propagates_failure(self):
         with patch("org.metadatacenter.check.OpenApiWorker.check_openapi",

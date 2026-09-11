@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -415,3 +416,81 @@ class ReadReportTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourceCurrencyTest(unittest.TestCase):
+    """A jar older than the commit the record names cannot contain it."""
+
+    def _service(self, home, service, *, jar_epoch, head_epoch):
+        root = home / f"cedar-{service}-server"
+        (root / ".git").mkdir(parents=True, exist_ok=True)
+        target = root / f"cedar-{service}-server-application" / "target"
+        target.mkdir(parents=True, exist_ok=True)
+        jar = target / f"cedar-{service}-server-application-2.9.10-SNAPSHOT.jar"
+        jar.write_bytes(b"jar")
+        os.utime(jar, (jar_epoch, jar_epoch))
+        return FakeRunner(answers=[
+            (["git", "log"], FakeResult(stdout=f"{head_epoch} {'a' * 40}\n")),
+        ])
+
+    def test_a_jar_written_before_its_head_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            runner = self._service(home, "resource", jar_epoch=1_000, head_epoch=2_000)
+
+            findings = smoke_gate.source_currency_findings(home, ["resource"], runner=runner)
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("resource was built before its source", findings[0])
+        self.assertIn("cedar-resource-server develop aaaaaaaa", findings[0])
+
+    def test_a_jar_written_after_its_head_is_current(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            runner = self._service(home, "resource", jar_epoch=3_000, head_epoch=2_000)
+
+            self.assertEqual(
+                [], smoke_gate.source_currency_findings(home, ["resource"], runner=runner))
+
+    def test_a_service_with_no_jar_is_not_an_accusation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "cedar-resource-server" / ".git").mkdir(parents=True)
+
+            self.assertEqual(
+                [], smoke_gate.source_currency_findings(home, ["resource"], runner=FakeRunner()))
+
+    def test_the_original_jar_maven_leaves_behind_is_not_the_deployed_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            runner = self._service(home, "resource", jar_epoch=3_000, head_epoch=2_000)
+            target = home / "cedar-resource-server" / "cedar-resource-server-application" / "target"
+            original = target / "original-cedar-resource-server-application-2.9.10-SNAPSHOT.jar"
+            original.write_bytes(b"shaded input")
+            os.utime(original, (1_000, 1_000))
+
+            self.assertEqual(
+                [], smoke_gate.source_currency_findings(home, ["resource"], runner=runner))
+
+    def test_a_stale_jar_stops_a_smoke_run_before_it_records_anything(self):
+        tsv = (
+            "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
+            "resource\t101\t9007\tup\thealthy\tcurrent\t0\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            root = home / "cedar-resource-server"
+            (root / ".git").mkdir(parents=True, exist_ok=True)
+            target = root / "cedar-resource-server-application" / "target"
+            target.mkdir(parents=True, exist_ok=True)
+            jar = target / "cedar-resource-server-application-2.9.10-SNAPSHOT.jar"
+            jar.write_bytes(b"jar")
+            os.utime(jar, (1_000, 1_000))
+            runner = runner_for(home, tsv=tsv)
+            runner.answers.insert(0, (["git", "log"], FakeResult(stdout=f"2000 {'b' * 40}\n")))
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(1, code)
+            self.assertEqual([], runner.commands("npm"))
+

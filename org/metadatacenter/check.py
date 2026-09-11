@@ -13,9 +13,16 @@ version_worker = VersionWorker()
 
 
 @app.command("versions")
-def versions():
+def versions(
+        by_file: bool = typer.Option(
+            False, "--by-file",
+            help="One row per version-carrying file instead of one per repository."),
+        strict: bool = typer.Option(
+            False, "--strict",
+            help="Also fail when a repository is behind its remote. For a gate, which judges this "
+                 "workspace rather than the estate.")):
     """Check version declarations across configured repositories."""
-    exit_on_failure(version_worker.check_versions())
+    exit_on_failure(version_worker.check_versions(by_file=by_file, strict=strict))
 
 
 @app.command("repos")
@@ -46,6 +53,15 @@ def openapi(
             help="List every document in the detail section, not only those with findings.")):
     """Check that every committed OpenAPI document describes what a generated client needs."""
     exit_on_failure(OpenApiWorker.check_openapi(show_all=show_all))
+
+
+@app.command("main")
+def main(
+        show_all: bool = typer.Option(
+            False, "--all",
+            help="List every repository, not only those whose main is ahead of develop.")):
+    """Check whether any repository's main carries commits develop does not."""
+    exit_on_failure(BuildTrainWorker.report_main_ahead(show_all=show_all))
 
 
 @app.command("ci")

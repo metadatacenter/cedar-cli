@@ -1,4 +1,5 @@
 import re
+import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
 
-from CedarCliSettings import CedarCliSettings
+from org.metadatacenter.util.InvocationContext import InvocationContext, use_context
 from org.metadatacenter import build, clean_maven, publish
 from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
@@ -25,14 +26,9 @@ class BuildPolicyTest(unittest.TestCase):
         return re.sub(r"\x1b\[[0-9;]*m", "", output)
 
     def setUp(self):
-        CedarCliSettings.skip_tests = False
-        CedarCliSettings.do_fail_on_error = True
+        self.enterContext(use_context(InvocationContext(environment=os.environ)))
         GlobalContext.init_task_operators()
         self.runner = CliRunner()
-
-    def tearDown(self):
-        CedarCliSettings.skip_tests = False
-        CedarCliSettings.do_fail_on_error = True
 
     @staticmethod
     def commands(plan):

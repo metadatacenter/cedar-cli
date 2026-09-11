@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import binascii
 import hashlib
 import os
@@ -48,7 +49,7 @@ class DevWorker(Worker):
 
     @staticmethod
     def add_hosts():
-        domain = os.environ.get(Const.CEDAR_HOST)
+        domain = invocation_environment().get(Const.CEDAR_HOST)
         if not domain:
             raise DevError("CEDAR_HOST is not set. Load a CEDAR profile before adding hostnames.")
         if not re.fullmatch(r"[A-Za-z0-9.-]+", domain):
@@ -109,7 +110,7 @@ echo
     @staticmethod
     def copy_keycloak_listener():
         cedar_home = Path(Util.cedar_home)
-        keycloak_home_value = os.environ.get('CEDAR_KEYCLOAK_HOME')
+        keycloak_home_value = invocation_environment().get('CEDAR_KEYCLOAK_HOME')
         if not keycloak_home_value:
             raise DevError("CEDAR_KEYCLOAK_HOME is not set. Load the target CEDAR profile first.")
         source = cedar_home / 'cedar-keycloak-event-listener' / 'target' / 'cedar-keycloak-event-listener.jar'
@@ -138,8 +139,8 @@ echo
 
     @staticmethod
     def generate_api_key(user_id: str):
-        if Const.CEDAR_SALT_API_KEY in os.environ:
-            salt = os.environ[Const.CEDAR_SALT_API_KEY]
+        if Const.CEDAR_SALT_API_KEY in invocation_environment():
+            salt = invocation_environment()[Const.CEDAR_SALT_API_KEY]
         else:
             salt = 'saltme'
 

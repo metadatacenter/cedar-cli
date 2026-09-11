@@ -52,7 +52,7 @@ class CliWrapperTest(unittest.TestCase):
         wrapper = (ROOT / WRAPPER).read_text(encoding='utf-8')
         wrapper = wrapper.replace(
             'NEXT_GIT_FILE=$HOME/.cedar/next_git_repo',
-            f'NEXT_GIT_FILE={next_git_file}',
+            f'NEXT_GIT_FILE="{next_git_file}"',
         )
         script = cli / WRAPPER
         script.write_text(wrapper, encoding='utf-8')
@@ -91,6 +91,40 @@ class CliWrapperTest(unittest.TestCase):
 
     def test_preserves_success(self):
         self.assert_status(exits=0, expected=0)
+
+    def test_paths_with_spaces_and_sourced_failure_preserve_the_calling_shell(self):
+        with tempfile.TemporaryDirectory(prefix='cedar space ') as directory:
+            home, script = self.make_fixture(directory, 37)
+            result = subprocess.run(
+                ['bash', '-c', 'source "$1" status; rc=$?; echo "SURVIVED:$rc:$PWD"',
+                 'test', str(script)], cwd=directory,
+                env={**os.environ, 'CEDAR_HOME': str(home)}, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode)
+            self.assertIn(f'SURVIVED:37:{Path(directory).resolve()}', result.stdout)
+
+    def test_setup_failures_never_invoke_python_or_change_cwd(self):
+        for failure in ('directory', 'activation', 'interpreter'):
+            with tempfile.TemporaryDirectory() as directory:
+                home, script = self.make_fixture(directory, 0)
+                marker = home / 'called'
+                (home / 'cedar-cli' / 'cedar.py').write_text(
+                    f'from pathlib import Path; Path({str(marker)!r}).touch()')
+                if failure == 'directory':
+                    home = home / 'missing'
+                elif failure == 'activation':
+                    (home / 'cedar-cli/.venv/bin/activate').write_text('return 9\n')
+                else:
+                    (home / 'cedar-cli/.venv/bin/python3').unlink()
+                self.assertNotEqual(0, self.run_wrapper(home, script, True))
+                self.assertFalse(marker.exists())
+
+    def test_navigation_handles_spaces(self):
+        with tempfile.TemporaryDirectory(prefix='cedar space ') as directory:
+            home, script = self.make_fixture(directory, 0, with_next_git=True)
+            result = subprocess.run(
+                ['bash', '-c', 'source "$1" git next; echo "$PWD"', 'test', str(script)],
+                env={**os.environ, 'CEDAR_HOME': str(home)}, capture_output=True, text=True)
+            self.assertIn(str(home / 'next'), result.stdout)
 
     def test_only_one_wrapper_exists(self):
         """

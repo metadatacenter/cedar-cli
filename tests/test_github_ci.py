@@ -1,5 +1,8 @@
 import json
 import unittest
+import subprocess
+import sys
+from pathlib import Path
 
 from org.metadatacenter.github_ci import GithubCIProbeError, probe_exact_commit
 
@@ -12,6 +15,11 @@ class Result:
 
 
 class GithubCIProbeTest(unittest.TestCase):
+    def test_captured_policy_imports_without_the_cli_package_on_sys_path(self):
+        path = Path(__file__).resolve().parents[1] / 'org/metadatacenter/github_ci.py'
+        result = subprocess.run([sys.executable, '-I', '-c', "import importlib.util,sys\nspec=importlib.util.spec_from_file_location('captured_github_ci',sys.argv[1])\nmodule=importlib.util.module_from_spec(spec)\nsys.modules[spec.name]=module\nspec.loader.exec_module(module)\nassert callable(module.probe_exact_commit)\nassert 'org.metadatacenter' not in sys.modules\n", str(path)], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_empty_result_is_retried_until_the_commit_is_indexed(self):
         outcomes = [
             Result(payload={"workflow_runs": []}),

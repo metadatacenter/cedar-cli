@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 from pathlib import Path
 from typing import List, Optional
@@ -148,7 +149,7 @@ class EnvWorker(Worker):
         present_cnt = 0
         missing_cnt = 0
         var_map = {}
-        source_environment = os.environ if environment is None else environment
+        source_environment = invocation_environment() if environment is None else environment
         for name, value in sorted(source_environment.items()):
             if name.startswith(CEDAR_ENV_PREFIX):
                 var_map[name] = value

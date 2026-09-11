@@ -1,4 +1,3 @@
-import subprocess
 from typing import List
 
 from rich.console import Console
@@ -7,16 +6,9 @@ from rich.style import Style
 
 from org.metadatacenter.model.WorkerType import WorkerType
 from org.metadatacenter.util.GlobalContext import GlobalContext
+from org.metadatacenter.util.ProcessRunner import CommandOutput, run_shell
 
 console = Console()
-
-
-class CommandOutput(list):
-    """List-compatible streamed output that also preserves the process exit code."""
-
-    def __init__(self, lines, returncode):
-        super().__init__(lines)
-        self.returncode = returncode
 
 
 class Worker:
@@ -37,6 +29,8 @@ class Worker:
             command_list: List[str], title: str, cwd: str = None, env=None,
             show_command: bool = True, echo_streams: bool = True,
             show_title: bool = True):
+        if isinstance(command_list, (str, bytes)):
+            raise ValueError("Shell command lists must contain separate script strings")
         if show_command:
             panel = Panel(
                 "[yellow]" +
@@ -47,32 +41,20 @@ class Worker:
             console.print(panel, style=Style(color="yellow"))
         elif show_title:
             console.print(f"[yellow]{title}[/yellow]")
-        proc = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, cwd=cwd,
-                                executable=GlobalContext.get_shell(), env=env)
-
-        stdout_parts = []
-        Worker.handle_shell_stdout(proc.stdout, stdout_parts, echo_streams=echo_streams)
-        returncode = proc.wait()
-
-        return CommandOutput(stdout_parts, returncode)
-
-    @staticmethod
-    def handle_shell_stdout(proc_stream, my_buffer, echo_streams=True):
-        for s in iter(proc_stream.readline, b''):
-            out = s.decode('utf-8').strip()
-            if len(out) > 0:
-                my_buffer.append(out)
-                if echo_streams:
-                    console.print(out, markup=False)
+        # Each entry is one script. Run all entries in order and stop at the first
+        # failure; never pass a sequence of scripts as shell positional arguments.
+        output = CommandOutput([], 0)
+        for script in command_list:
+            result = run_shell(
+                script, shell=GlobalContext.get_shell(), cwd=cwd, env=env,
+                on_line=(lambda line: console.print(line, markup=False)) if echo_streams else None,
+            )
+            output.extend(result)
+            output.returncode = result.returncode
+            if result.returncode:
+                break
+        return output
 
     @staticmethod
     def command_list_as_string(command_list):
-        s = ""
-        sep = ""
-        for command in command_list:
-            s += command + sep
-            sep = "\n"
-        s = s.strip()
-        if "\n" in s:
-            s = "\n" + s
-        return s
+        return "\n".join(command_list)

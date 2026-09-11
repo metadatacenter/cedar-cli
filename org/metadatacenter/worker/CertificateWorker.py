@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 import shlex
 import shutil
@@ -22,7 +23,7 @@ class CertificateWorker(Worker):
 
     @classmethod
     def set_paths(cls):
-        cedar_ca_home = os.environ.get(Const.CEDAR_CA_HOME)
+        cedar_ca_home = invocation_environment().get(Const.CEDAR_CA_HOME)
         if not cedar_ca_home:
             raise CertificateError(
                 "CEDAR_CA_HOME is not set. Load a CEDAR profile before managing certificates."
@@ -32,7 +33,7 @@ class CertificateWorker(Worker):
 
     @classmethod
     def require_ca_environment(cls):
-        missing = [name for name in cls.REQUIRED_CA_ENVIRONMENT if not os.environ.get(name)]
+        missing = [name for name in cls.REQUIRED_CA_ENVIRONMENT if not invocation_environment().get(name)]
         if missing:
             raise CertificateError(
                 f"Missing certificate environment variables: {', '.join(missing)}. "

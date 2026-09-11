@@ -70,3 +70,61 @@ class ServerStatusTableTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourceCurrencyWarningTest(unittest.TestCase):
+    """`current` answers a narrower question than an operator reads into it."""
+
+    STATUS = [
+        "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors",
+        "resource\t101\t9007\tup\thealthy\tcurrent\t0",
+        "artifact\t102\t9001\tup\thealthy\tcurrent\t0",
+        "ui-main\t-\t4200\tdown\tdown\t-\t0",
+    ]
+
+    def _summary(self, findings):
+        output = StringIO()
+        with (
+            patch.object(Util, "get_servers", return_value=[]),
+            patch("org.metadatacenter.smoke_gate.source_currency_findings",
+                  return_value=findings),
+            patch.object(Util, "cedar_home", "/tmp/CEDAR"),
+            patch("org.metadatacenter.worker.ServerWorker.console",
+                  Console(file=output, width=200, color_system=None)),
+        ):
+            ServerWorker.status(list(self.STATUS))
+        return output.getvalue()
+
+    def test_a_jar_behind_its_head_is_named_even_though_the_column_reads_current(self):
+        summary = self._summary([
+            "resource was built before its source: its jar predates cedar-resource-server "
+            "develop abcdef12",
+        ])
+
+        self.assertIn("built before their source: resource", summary)
+        self.assertIn("rebuild and restart", summary)
+
+    def test_current_binaries_leave_the_summary_quiet(self):
+        self.assertNotIn("built before their source", self._summary([]))
+
+    def test_only_microservices_are_asked(self):
+        """A frontend has no jar, and its BINARY column already answers a different question."""
+        captured = {}
+
+        def record(_home, services, **_kwargs):
+            captured["services"] = list(services)
+            return []
+
+        output = StringIO()
+        with (
+            patch.object(Util, "get_servers", return_value=[]),
+            patch("org.metadatacenter.smoke_gate.source_currency_findings",
+                  side_effect=record),
+            patch.object(Util, "cedar_home", "/tmp/CEDAR"),
+            patch("org.metadatacenter.worker.ServerWorker.console",
+                  Console(file=output, width=200, color_system=None)),
+        ):
+            ServerWorker.status(list(self.STATUS))
+
+        self.assertEqual(["resource", "artifact"], captured["services"])
+

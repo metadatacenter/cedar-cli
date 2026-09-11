@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import difflib
 import os
 import re
@@ -24,7 +25,7 @@ class DockerImages:
     def build_home():
         # Util.cedar_home is populated during CLI startup; fall back to the environment so this
         # module also works when used on its own.
-        home = Util.cedar_home or os.environ.get('CEDAR_HOME')
+        home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
         if not home:
             raise ValueError('CEDAR_HOME is not set')
         return os.path.join(home, 'cedar-docker-build')
@@ -38,6 +39,7 @@ class DockerImages:
                 text=True,
                 capture_output=True,
                 check=False,
+                env=invocation_environment(),
             )
         except (OSError, ValueError):
             return None
@@ -104,7 +106,7 @@ class DockerImages:
 
     @classmethod
     def image_prefix(cls, environment=None):
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         prefix = environment.get('CEDAR_IMAGE_PREFIX')
         if prefix is None:
             prefix = cls.default_image_prefix()
@@ -118,7 +120,7 @@ class DockerImages:
         namespace. Registry publication can put the bases in a private/internal repository without
         leaking that repository into Compose.
         """
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         prefix = environment.get('CEDAR_BASE_IMAGE_PREFIX')
         if prefix is None:
             prefix = cls.image_prefix(environment)
@@ -137,7 +139,7 @@ class DockerImages:
     @classmethod
     def manifest(cls, environment=None):
         """Image names and version, read from the shell manifest that stays the source of truth."""
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         with open(cls._manifest_path(), encoding='utf-8') as manifest:
             text = manifest.read()
         version = re.search(r'^export IMAGE_VERSION=(\S+)', text, re.M)
@@ -157,7 +159,7 @@ class DockerImages:
         Dockerfiles declare these as build arguments with no default, so a version missing here
         fails the build rather than being silently substituted.
         """
-        environment = os.environ if environment is None else environment
+        environment = invocation_environment() if environment is None else environment
         with open(cls._manifest_path(), encoding='utf-8') as manifest:
             text = manifest.read()
         found = re.findall(r'^export ([A-Z0-9_]+(?:_VERSION|_SHA256))=(\S+)', text, re.M)

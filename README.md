@@ -31,6 +31,14 @@ The main implementation areas are:
 
 - `cedar.py` registers the top-level command groups.
 - `org/metadatacenter/*.py` defines the Typer command surfaces.
+- `org/metadatacenter/release_support/` owns release planning, state, package comparison,
+  workspaces, version stamping, validation, Git integration, publication, preflight, and
+  presentation in separate modules. `release_train.py` registers commands and explicitly
+  re-exports the existing component API; components never import that command facade.
+- `org/metadatacenter/docker_support/` separates engine calls, deployment state, images,
+  setup, lifecycle, health checks, and status reporting. `train_support/` separates source
+  surveys, GitHub workflow access, preflight, dispatch, and reporting. The existing worker
+  classes delegate to these components with their original call signatures.
 - `org/metadatacenter/config/` and `org/metadatacenter/model/` describe repositories, images,
   targets, and plans.
 - `org/metadatacenter/planner/`, `org/metadatacenter/executor/`, and
@@ -39,8 +47,35 @@ The main implementation areas are:
   safeguards.
 - `tests/` exercises command paths without starting a real CEDAR deployment.
 - `cli.sh` is the shell wrapper the `cedarcli` alias sources, and the only one. It activates the
-  repository virtual environment, preserves the caller's working directory for `build this` and
-  `publish this`, and returns the Python process's exit status.
+  repository virtual environment in a subshell, preserves the caller's working directory for
+  `build this` and `publish this`, and returns the Python process's exit status without exiting
+  the caller's shell. Setup failures stop before Python runs; only successful commands may
+  consume a pending Git navigation record.
+
+Release `start`, `resume`, and `abandon` hold an exclusive process lock in the release state
+directory for the whole operation, including preflight and retries. A competing modifying command
+refuses immediately; `release status --watch` remains available. The OS releases ownership when
+the command exits, including after a crash. The persistent `release.lock` file must not be deleted
+while a release command is running.
+
+Estate-wide Git commands visit every selected repository and return a nonzero exit status if
+any repository fails. Their result records retain each repository's process exit code, including
+failures that produce no stderr. A failed status scan does not update `git next` navigation.
+
+Shared streamed subprocess execution lives in `util/ProcessRunner.py`: `run_process` takes
+literal arguments, and `run_shell` takes one explicit script. Both return output lines with a
+`returncode`. Worker script lists run in order and stop at the first failed script; shell state
+is local to each script. Output preserves indentation and replaces invalid UTF-8 bytes. An
+interrupted reader kills its owned process group, reaps the child, and closes the pipe.
+
+Each root CLI invocation binds an `InvocationContext` containing its environment, settings,
+repository/server catalogs, and task registries. Profile resolution updates that environment;
+subprocesses receive it explicitly. `create_app()` registers commands without host inspection,
+and importing `cedar` does not bootstrap a profile. `GlobalContext`, `Util.cedar_home`, and
+`CedarCliSettings` remain compatibility accessors rather than owners of mutable process state.
+Library callers can use `with use_context(InvocationContext(environment=...)):` or supply a
+context as the root application's `obj`. Calls made outside a bound context retain ambient
+library behavior. Change settings on `context.settings`, rather than assigning class attributes.
 
 ## Contributor Setup
 

@@ -14,6 +14,7 @@ from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.VersionReport import VersionReport
 from org.metadatacenter.model.VersionType import VersionType
 from org.metadatacenter.util.Const import Const
+from org.metadatacenter.util.GitSync import GitSync
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.Worker import Worker
@@ -26,33 +27,110 @@ class VersionWorker(Worker):
     def __init__(self):
         super().__init__()
 
-    def check_versions(self):
+    def check_versions(self, by_file: bool = False, strict: bool = False):
+        report = VersionReport()
+        for repo in GlobalContext.repos.get_list_all():
+            self.get_version_report(repo, report)
+
+        GitSync.clear_cache()
+        for entry in report.entries:
+            entry.sync = GitSync.state_for_dir(VersionWorker.entry_dir(entry))
+
+        report.summarize()
+
+        table = self.build_file_table(report) if by_file else self.build_repo_table(report)
+        table.caption = report.get_caption()
+        console.print(table)
+        for line in report.get_remedy_lines(strict=strict):
+            console.print(line)
+        Util.write_rich_cedar_file('last_version_check.rich.txt', table)
+        # An interactive run judges the estate, so a clone nobody pulled is not its verdict. A gate
+        # judges this workspace, where an unpulled clone means the answer was read from the wrong
+        # source, so --strict makes that fatal too.
+        if report.cnt_nok:
+            return 1
+        if strict and report.cnt_stale:
+            return 1
+        return 0
+
+    @staticmethod
+    def entry_dir(entry) -> str:
+        """The working directory an entry was read from, or an unresolvable path if there is none."""
+        if Util.cedar_home is None:
+            return ''
+        return os.path.join(Util.cedar_home, entry.dir_suffix.lstrip('/'))
+
+    @staticmethod
+    def build_file_table(report: VersionReport) -> Table:
         table = Table("Repo",
                       Column(header="Dir"),
                       Column(header="Type", justify="center"),
                       Column(header="File"),
                       Column(header="Version type"),
                       Column(header="Version value"),
+                      Column(header="Sync"),
                       Column(header="Status"))
-
-        report = VersionReport()
-        for repo in GlobalContext.repos.get_list_all():
-            self.get_version_report(repo, report)
-
-        report.summarize()
-
         last_repo_name = None
         for entry in report.entries:
             if last_repo_name != entry.repo.name:
                 table.add_section()
             table.add_row(entry.repo.name, entry.dir_suffix, str(entry.repo.repo_type), entry.file_name,
-                          str(entry.version_type), entry.version, entry.status)
+                          str(entry.version_type), entry.version, entry.sync.describe(), entry.status)
             last_repo_name = entry.repo.name
+        return table
 
-        table.caption = report.get_caption()
-        console.print(table)
-        Util.write_rich_cedar_file('last_version_check.rich.txt', table)
-        return 1 if report.cnt_nok else 0
+    @staticmethod
+    def build_repo_table(report: VersionReport) -> Table:
+        """
+        One row per repository, because a whole repository at one version is one finding.
+
+        The per-file view answers a different question, and `--by-file` asks it: which file inside a
+        repository disagrees with its siblings.
+        """
+        table = Table("Repo",
+                      Column(header="Type", justify="center"),
+                      Column(header="Files", justify="right"),
+                      Column(header="Version(s)"),
+                      Column(header="Sync"),
+                      Column(header="Status"))
+        disagreeing = set(report.repos_disagreeing_internally())
+        for name in VersionWorker.repo_names_in_order(report):
+            entries = [entry for entry in report.entries if entry.repo.name == name]
+            versions = []
+            for entry in entries:
+                if entry.version and entry.version not in versions:
+                    versions.append(entry.version)
+            table.add_row(name,
+                          str(entries[0].repo.repo_type),
+                          str(len(entries)),
+                          ", ".join(versions),
+                          entries[0].sync.describe(),
+                          VersionWorker.rollup_status(entries, name in disagreeing))
+        return table
+
+    @staticmethod
+    def repo_names_in_order(report: VersionReport):
+        names = []
+        for entry in report.entries:
+            if entry.repo.name not in names:
+                names.append(entry.repo.name)
+        return names
+
+    @staticmethod
+    def rollup_status(entries, disagrees_internally: bool) -> str:
+        """
+        The worst thing true of a repository, with one exception that outranks the rest.
+
+        Files inside one repository declaring different versions is a half-applied bump. No pull
+        fixes it and it is not ordinary drift, so it is reported as itself rather than folded into
+        whichever status a member file happened to get.
+        """
+        if disagrees_internally:
+            return "⚠️"
+        for status in ("❌", "⏳", "👍"):
+            if any(entry.status == status for entry in entries):
+                return status
+        return "✅"
 
     def get_version_report(self, repo, report: VersionReport):
         if repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:

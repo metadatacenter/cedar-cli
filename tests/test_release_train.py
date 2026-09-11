@@ -19,6 +19,7 @@ import typer
 from typer.testing import CliRunner
 
 from org.metadatacenter import release_train
+from org.metadatacenter.release_support import lifecycle, preflight, validation
 from org.metadatacenter.release_train import (
     DEV_CEE_NAME,
     PUBLIC_CEE_NAME,
@@ -1743,6 +1744,12 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
 
 
 class ReleaseBuildValidationTest(unittest.TestCase):
+    def setUp(self):
+        # These tests inject simulated Maven execution. A separate developer test
+        # run must not change their verdict through the host's process inventory.
+        self.enterContext(patch(
+            "org.metadatacenter.util.BuildSafety.embedded_mongo_processes", return_value=[]))
+
     def make_manifest(self, directory, include_frontend=False):
         attempt = Path(directory) / "attempt"
         variants = {}
@@ -1851,9 +1858,9 @@ class ReleaseBuildValidationTest(unittest.TestCase):
                 if item["id"] == "release:maven:parent"
             )
             with patch.object(
-                release_train, "require_no_embedded_mongo_processes") as before, \
+                validation, "require_no_embedded_mongo_processes") as before, \
                     patch.object(
-                        release_train, "wait_for_no_embedded_mongo_processes") as after:
+                        validation, "wait_for_no_embedded_mongo_processes") as after:
                 validator.run_task(manifest, task)
 
             before.assert_called_once_with("release Maven task release:maven:parent")
@@ -3249,7 +3256,7 @@ class ReleasePreflightTest(unittest.TestCase):
     """Every check answers a question that once cost a release its build phase."""
 
     def _preflight(self, *, environment=None, commands=None, http=None,
-                   manifest=None, root=None, accepted=None):
+                   manifest=None, root=None, accepted=None, accepted_main_only=None):
         values = dict(PREFLIGHT_ENVIRONMENT)
         if root is not None:
             values["CEDAR_HOME"] = str(root)
@@ -3262,6 +3269,7 @@ class ReleasePreflightTest(unittest.TestCase):
             http=http or FakeNexus(),
             environment=values,
             accepted_red_develop=accepted,
+            accepted_main_only=accepted_main_only,
             ci_sleeper=lambda _delay: None,
             ci_delays=(),
         )
@@ -3312,7 +3320,7 @@ class ReleasePreflightTest(unittest.TestCase):
         process = SimpleNamespace(
             describe=lambda: "PID 42 (/Users/test/.embedmongo/5.0/mongod; "
             "listening on 127.0.0.1:42317)")
-        with patch.object(release_train, "embedded_mongo_processes", return_value=[process]):
+        with patch.object(preflight, "embedded_mongo_processes", return_value=[process]):
             findings = self._preflight().check_embedded_test_processes()
 
         self.assertEqual(1, len(findings))
@@ -3991,6 +3999,46 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(names, set(called))
 
 
+class ReleaseMainOnlyFilesTest(unittest.TestCase):
+    """Work that exists only on main is not something a release may quietly replace."""
+
+    def _preflight_with_survey(self, replaced, *, accepted_main_only=None):
+        preflight = ReleasePreflightTest._preflight(
+            ReleasePreflightTest(), accepted_main_only=accepted_main_only)
+        with patch.object(release_train.ReleaseRemoteIntegrator, "survey", return_value=replaced):
+            return preflight.check_remote_survey()
+
+    def test_main_only_files_stop_the_release(self):
+        findings = self._preflight_with_survey(
+            {"cedar-template-editor": ["app/one.html", "app/two.js"]})
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal, "replacing main-only work must block the release")
+        self.assertIn("app/one.html", findings[0].message)
+        self.assertIn("--accept-main-only cedar-template-editor", findings[0].remedy)
+
+    def test_naming_the_repository_accepts_the_replacement(self):
+        findings = self._preflight_with_survey(
+            {"cedar-template-editor": ["app/one.html"]},
+            accepted_main_only={"cedar-template-editor"})
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal)
+        self.assertIn("explicit acceptance", findings[0].message)
+
+    def test_acceptance_is_per_repository(self):
+        findings = self._preflight_with_survey(
+            {"cedar-template-editor": ["app/one.html"], "cedar-workspace": ["app/two.js"]},
+            accepted_main_only={"cedar-template-editor"})
+
+        fatal = [finding for finding in findings if finding.fatal]
+        self.assertEqual(1, len(fatal))
+        self.assertIn("cedar-workspace", fatal[0].message)
+
+    def test_a_clean_survey_reports_nothing(self):
+        self.assertEqual([], self._preflight_with_survey({}))
+
+
 class ReleaseLicenseStampingTest(unittest.TestCase):
     """A release, rather than the turn of a year, is what keeps the copyright current."""
 
@@ -4237,7 +4285,7 @@ class TransientRetryTest(unittest.TestCase):
             return outcome
 
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "advance_active_release", advance):
+                patch.object(lifecycle, "advance_active_release", advance):
             manifest = release_train._drive_release(
                 self._state(directory), sleeper=slept.append)
 
@@ -4251,7 +4299,7 @@ class TransientRetryTest(unittest.TestCase):
             raise ReleaseError("integration commit changed the prepared tree")
 
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "advance_active_release", advance):
+                patch.object(lifecycle, "advance_active_release", advance):
             with self.assertRaisesRegex(ReleaseError, "changed the prepared tree"):
                 release_train._drive_release(
                     self._state(directory), sleeper=slept.append)
@@ -4265,7 +4313,7 @@ class TransientRetryTest(unittest.TestCase):
             raise RetryableReleaseError("connection reset")
 
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "advance_active_release", advance):
+                patch.object(lifecycle, "advance_active_release", advance):
             with self.assertRaises(RetryableReleaseError):
                 release_train._drive_release(
                     self._state(directory), sleeper=slept.append)
@@ -4343,8 +4391,8 @@ class ReleaseResumptionTest(unittest.TestCase):
 
         stages = tuple(stub(stage) for stage in release_train.RELEASE_STAGES)
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(release_train, "RELEASE_STAGES", stages), \
-                patch.object(release_train, "RELEASE_TERMINAL_PHASE", stages[-1].done_phase):
+                patch.object(lifecycle, "RELEASE_STAGES", stages), \
+                patch.object(lifecycle, "RELEASE_TERMINAL_PHASE", stages[-1].done_phase):
             manifest = advance_active_release(self._state(directory, phase))
         return ran, manifest
 

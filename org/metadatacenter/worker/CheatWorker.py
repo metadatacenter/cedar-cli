@@ -1,3 +1,5 @@
+import shlex
+import sys
 from rich.console import Console
 
 from org.metadatacenter.util.Util import Util
@@ -14,8 +16,8 @@ class CheatWorker(Worker):
     @staticmethod
     def cheat():
         path = Util.get_asset_file_path(['docs', 'cedar-cli.pdf'])
-        Worker.execute_generic_shell_commands([
-            'open ' + path
+        return Worker.execute_generic_shell_commands([
+            shlex.join(['open' if sys.platform == 'darwin' else 'xdg-open', path])
         ],
             title="Opening cheatsheet",
         )

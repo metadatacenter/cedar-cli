@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
 import re
 from pathlib import Path
@@ -6,6 +7,10 @@ from rich.console import Console
 
 from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.util.ArtifactServiceKey import CURRENT, manage_artifact_key
+from org.metadatacenter.util.ModeManager import ModeManager
+from org.metadatacenter.model.CedarMode import CedarMode
+from org.metadatacenter.model.CedarProfile import CedarProfile
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -21,8 +26,31 @@ class ProdWorker(Worker):
         super().__init__()
 
     @staticmethod
+    def provision_artifact_key():
+        if ModeManager.current() is not CedarMode.NATIVE or ModeManager.current_profile() is not CedarProfile.SERVER:
+            raise ProdError('Run this command on the production application host in native mode with the server profile. '
+                            'For development, use cedarcli env artifact-key init.')
+        path = ModeManager.cedar_home() / '.cedar' / 'secrets' / 'artifact-service.sh'
+        if not path.exists() and invocation_environment().get(CURRENT):
+            raise ProdError('An artifact service key is already supplied through the environment. '
+                            'Keep using that secret provider; no local key was generated.')
+        console.print(manage_artifact_key('init'), markup=False)
+        console.print(f'Private key file: {path} (owner read/write only).', markup=False)
+        console.print('On this application host, the native launcher loads this file automatically for artifact, '
+                      'resource, and worker. No copying or manual export is needed. '
+                      'Other services and frontends do not receive the key.')
+        console.print('No running process was changed. During a full stopped-stack deployment, start the upgraded '
+                      'microservices normally. For the first rolling deployment, restart the upgraded bridge, '
+                      'then resource and worker, then artifact last. Verify with cedarcli native status and your '
+                      'deployment acceptance checks.')
+        console.print('If those three services run on different hosts, stop here: this command provisions only this host. '
+                      'All backend hosts must receive the same secret through your deployment secret provider; '
+                      'do not generate an independent key on each host.')
+        return 0
+
+    @staticmethod
     def configure_frontends():
-        domain = os.environ.get(Const.CEDAR_HOST)
+        domain = invocation_environment().get(Const.CEDAR_HOST)
         if not domain:
             raise ProdError("CEDAR_HOST is not set. Load the production CEDAR profile first.")
         if not re.fullmatch(r"[A-Za-z0-9.-]+", domain):

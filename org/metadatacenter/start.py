@@ -31,21 +31,41 @@ app.add_typer(start_frontend.app, name="frontend")
 app.add_typer(start_microservice.app, name="microservice")
 
 
+def _start_infrastructure_once():
+    """Start the infrastructure the host is missing, and say so when it is missing none.
+
+    Starting infrastructure that already runs is not harmless. Keycloak refuses a bound 8080
+    and returns non-zero, which used to end `start all` before it reached the applications it
+    was asked for. An operator whose stack is up and who wants fresh binaries wants
+    `cedarcli native restart`; saying that here is cheaper than leaving them to read a
+    Quarkus port-binding error and guess.
+    """
+    gaps = NativeWorker.infrastructure_gaps()
+    if gaps == []:
+        console.print(
+            "Infrastructure is already listening on every managed port. Starting applications "
+            "only; `cedarcli native restart` redeploys them from current binaries.")
+        return
+    if gaps:
+        console.print(f"Starting infrastructure; {', '.join(gaps)} not listening.")
+    exit_on_failure(StartInfrastructureWorker.all())
+
+
 @app.command("all")
 def all_all():
-    exit_on_failure(StartInfrastructureWorker.all())
+    _start_infrastructure_once()
     exit_on_failure(NativeWorker.start())
 
 
 @app.command("backends")
 def backend_all():
-    exit_on_failure(StartInfrastructureWorker.all())
+    _start_infrastructure_once()
     exit_on_failure(StartMicroserviceWorker.all())
 
 
 @app.command("infra")
 def infra_all():
-    exit_on_failure(StartInfrastructureWorker.all())
+    _start_infrastructure_once()
 
 
 @app.command("microservices")

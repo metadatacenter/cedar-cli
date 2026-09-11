@@ -1,4 +1,6 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import os
+import re
 import shlex
 import sys
 from typing import Iterable
@@ -28,7 +30,7 @@ class NativeWorker(Worker):
 
     @staticmethod
     def controller_path() -> str:
-        cedar_home = Util.cedar_home or os.environ["CEDAR_HOME"]
+        cedar_home = Util.cedar_home or invocation_environment()["CEDAR_HOME"]
         return os.path.join(cedar_home, "cedar-development", "ops", "cedar-services.sh")
 
     @classmethod
@@ -41,6 +43,49 @@ class NativeWorker(Worker):
             [command], title=title or f"Native CEDAR: {action}",
             show_command=show_command, echo_streams=echo_streams,
             show_title=show_title)
+
+    @classmethod
+    def infrastructure_ports(cls) -> dict:
+        """The infrastructure the controller manages, read from the controller's own list.
+
+        Duplicating the names here would let the two drift, and the drift would show up as an
+        infrastructure service nobody notices is missing.
+        """
+        try:
+            text = open(cls.controller_path(), encoding="utf-8").read()
+        except OSError:
+            return {}
+        match = re.search(r"^INFRASTRUCTURE_PORTS=\((.*?)^\)", text, re.MULTILINE | re.DOTALL)
+        if not match:
+            return {}
+        ports = {}
+        for line in match.group(1).splitlines():
+            entry = line.strip().strip('"')
+            if not entry or entry.startswith("#"):
+                continue
+            name, _, port = entry.partition(" ")
+            if name and port:
+                ports[name] = port.strip()
+        return ports
+
+    @classmethod
+    def infrastructure_gaps(cls):
+        """Infrastructure ports with no listener, or None when the controller cannot say.
+
+        An empty list means every managed port is already served, which is the state in which
+        starting infrastructure again is not a no-op but a failure: Keycloak refuses a bound
+        8080 and takes the whole start with it.
+        """
+        expected = cls.infrastructure_ports()
+        if not expected:
+            return None
+        result = cls.execute(
+            "running-infra", title="Reading native infrastructure",
+            show_command=False, echo_streams=False, show_title=False)
+        if result.returncode:
+            return None
+        listening = {line.split(" (", 1)[0].strip() for line in result if line.strip()}
+        return [name for name in expected if name not in listening]
 
     @classmethod
     def start(cls, services: Iterable[str] = ()):
@@ -91,4 +136,4 @@ class NativeWorker(Worker):
         appender = "Dropwizard log" if dropwizard else "log"
         console.print(f"[yellow]Following native CEDAR {appender}: {service}[/yellow]")
         sys.stdout.flush()
-        os.execv(controller, arguments)
+        os.execve(controller, arguments, invocation_environment())

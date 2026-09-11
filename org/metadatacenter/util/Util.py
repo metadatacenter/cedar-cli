@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import invocation_environment
 import copy
 import os
 import re
@@ -16,6 +17,7 @@ from org.metadatacenter.model.PrePostType import PrePostType
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.util.Const import Const
+from org.metadatacenter.util.InvocationContext import ContextAttribute, current_context
 
 console = Console()
 
@@ -25,13 +27,7 @@ class Util(object):
     LAST_PLAN_JSON_FILE = 'last_plan_content.json'
     LAST_PLAN_SCRIPT_FILE = 'last_plan_content.sh'
 
-    cedar_home: str = None
-
-
-    def __new__(cls):
-        if not hasattr(cls, 'instance'):
-            cls.instance = super(Util, cls).__new__(cls)
-        return cls.instance
+    cedar_home = ContextAttribute('cedar_home')
 
 
     @staticmethod
@@ -85,13 +81,12 @@ class Util(object):
     @classmethod
 
     def check_cedar_home(cls):
-        if Const.CEDAR_HOME in os.environ:
-            cls.cedar_home = os.environ[Const.CEDAR_HOME]
+        if Const.CEDAR_HOME in invocation_environment():
+            return invocation_environment()[Const.CEDAR_HOME]
         else:
             inferred = Path(__file__).resolve().parents[4]
             if (inferred / 'cedar-development').is_dir():
-                cls.cedar_home = str(inferred)
-                os.environ[Const.CEDAR_HOME] = cls.cedar_home
+                current_context().environment[Const.CEDAR_HOME] = str(inferred)
             else:
                 err = 'CEDAR_HOME environment variable is not set and could not be inferred from the cedarcli installation'
                 console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))
@@ -221,7 +216,7 @@ class Util(object):
         if 'version' in task.parameters:
             return task.get_parameter('version')
         if task.task_type == TaskType.BUILD or task.task_type == TaskType.PUBLISH:
-            return os.environ[Const.CEDAR_VERSION]
+            return invocation_environment()[Const.CEDAR_VERSION]
         else:
             err = 'Build version not found for TaskType:' + str(task.task_type)
             console.print(Panel(err, title="[bold red]Error", subtitle="[bold red]cedarcli", style=Style(color="yellow")))

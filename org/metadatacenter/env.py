@@ -16,6 +16,22 @@ class EnvironmentSurface(str, Enum):
     DOCKER = "docker"
 
 
+class ArtifactKeyAction(str, Enum):
+    INIT = "init"
+    ROTATE = "rotate"
+    RETIRE = "retire"
+
+
+@app.command("artifact-key", help="Initialize, rotate, or retire artifact's private service credential")
+def artifact_key(action: ArtifactKeyAction):
+    from org.metadatacenter.util.ArtifactServiceKey import manage_artifact_key
+    try:
+        console.print(manage_artifact_key(action.value))
+    except (ModeError, OSError) as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
+
+
 def run(operation, *args):
     try:
         operation(*args)
