@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import re
 import os
 import unittest
@@ -26,7 +27,9 @@ class BuildPolicyTest(unittest.TestCase):
         return re.sub(r"\x1b\[[0-9;]*m", "", output)
 
     def setUp(self):
-        self.enterContext(use_context(InvocationContext(environment=os.environ)))
+        contexts = ExitStack()
+        self.addCleanup(contexts.close)
+        contexts.enter_context(use_context(InvocationContext(environment=os.environ)))
         GlobalContext.init_task_operators()
         self.runner = CliRunner()
 

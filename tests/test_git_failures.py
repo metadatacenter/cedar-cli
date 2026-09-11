@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import subprocess
 import tempfile
 import unittest
@@ -21,8 +22,10 @@ class GitFailureTest(unittest.TestCase):
         self.repos = [Repo(name, RepoType.MISC, []) for name in ('first', 'second')]
         for repo in self.repos:
             subprocess.run(['git', 'init', '-q', str(self.root / repo.name)], check=True)
-        self.enterContext(patch.object(Util, 'cedar_home', str(self.root)))
-        self.enterContext(patch.object(GlobalContext.repos, 'get_list_top', return_value=self.repos))
+        contexts = ExitStack()
+        self.addCleanup(contexts.close)
+        contexts.enter_context(patch.object(Util, 'cedar_home', str(self.root)))
+        contexts.enter_context(patch.object(GlobalContext.repos, 'get_list_top', return_value=self.repos))
 
     def test_failed_checkout_pull_and_fetch_propagate_to_cli(self):
         for args in (['checkout', 'missing-branch'], ['pull']):

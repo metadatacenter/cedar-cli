@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import base64
 import copy
 import hashlib
@@ -1747,7 +1748,9 @@ class ReleaseBuildValidationTest(unittest.TestCase):
     def setUp(self):
         # These tests inject simulated Maven execution. A separate developer test
         # run must not change their verdict through the host's process inventory.
-        self.enterContext(patch(
+        contexts = ExitStack()
+        self.addCleanup(contexts.close)
+        contexts.enter_context(patch(
             "org.metadatacenter.util.BuildSafety.embedded_mongo_processes", return_value=[]))
 
     def make_manifest(self, directory, include_frontend=False):
