@@ -23,6 +23,7 @@ from org.metadatacenter.util.BuildSafety import (
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.util.ProcessRunner import run_shell
+from org.metadatacenter.util.NodeBuildCheck import is_frontend_build, require_build_node
 
 console = Console()
 
@@ -51,6 +52,8 @@ class ShellTaskExecutor(TaskExecutor):
             style=Style(color="green"))
         if not dry_run:
             try:
+                if is_frontend_build(task):
+                    require_build_node(Path(cwd))
                 parameter = getattr(task, "get_parameter", lambda _name: None)
                 if parameter("isolated_frontend_build") is True:
                     with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions):
