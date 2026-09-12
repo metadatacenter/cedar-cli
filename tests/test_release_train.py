@@ -1051,6 +1051,11 @@ class ReleaseStateAndCliTest(unittest.TestCase):
             ])
             self.assertEqual(0, start.exit_code, start.output)
             self.assertIn("Phase:               accepted", start.output)
+            # An accepted release leaves develop advanced and the checkouts behind it, which is
+            # what the next train's preflight reads.
+            self.assertIn("cedarcli git pull", start.output)
+            self.assertIn("cedarcli check ci", start.output)
+            self.assertIn("cedarcli test e2e", start.output)
             status = self.runner.invoke(release_train.app, ["status"])
             self.assertEqual(0, status.exit_code, status.output)
             self.assertIn("Release 2.9.3 — COMPLETE", status.output)

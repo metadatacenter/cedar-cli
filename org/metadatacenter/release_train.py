@@ -358,6 +358,23 @@ def start(
         raise typer.Exit(1) from error
     console.print(f"Phase:               {active['phase']}")
     console.print(f"Internal state:      {path}")
+    _render_next_steps(active['phase'])
+
+
+def _render_next_steps(phase):
+    """What an accepted release leaves for the operator, said at the moment it becomes true.
+
+    A release advances develop in every repository it integrated and leaves the local checkouts
+    behind it, so the next train's preflight reads CI at heads nothing has tested and a smoke
+    record that no longer covers them. The runbook says this; saying it here means it is read.
+    """
+    if phase != "accepted":
+        return
+    console.print(
+        "Next:                every released repository advanced on develop, and the local "
+        "checkouts are behind it. Before the next train:")
+    for command in ("cedarcli git pull", "cedarcli check ci", "cedarcli test e2e"):
+        console.print(f"                       {command}", soft_wrap=True)
 
 
 @app.command("resume")
@@ -381,6 +398,7 @@ def resume(
     _render_plan(manifest)
     console.print(f"Phase:               {manifest['phase']}")
     console.print(f"Internal state:      {path}")
+    _render_next_steps(manifest['phase'])
 
 
 @app.command("abandon")
