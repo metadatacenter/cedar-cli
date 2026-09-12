@@ -1,8 +1,9 @@
 """CEDAR release validation."""
 from __future__ import annotations
-from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
+from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
+    executable_build_workspace,
     embedded_mongo_processes,
     require_no_embedded_mongo_processes,
     wait_for_no_embedded_mongo_processes,
@@ -11,8 +12,7 @@ from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_fa
 from pathlib import Path, PurePosixPath
 import copy
 import datetime as dt
-import os
-import subprocess
+from org.metadatacenter.util.ProcessRunner import run_process
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
 )
@@ -131,23 +131,13 @@ class ReleaseBuildValidator:
         log.parent.mkdir(parents=True, exist_ok=True)
         try:
             with log.open("w", encoding="utf-8") as output:
-                process = subprocess.Popen(
-                    command,
-                    cwd=str(cwd),
-                    env=process_environment(environment),
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    bufsize=1,
-                )
-                assert process.stdout is not None
-                with process.stdout:
-                    for line in process.stdout:
-                        output.write(line)
-                        output.flush()
-                        if verbose:
-                            print(line, end="", flush=True)
-                returncode = process.wait()
+                def report(line):
+                    output.write(line + "\n")
+                    output.flush()
+                    if verbose:
+                        print(line, flush=True)
+                result = run_process(command, cwd=str(cwd), env=environment, on_line=report)
+                returncode = result.returncode
         except OSError as error:
             raise ReleaseError(f"cannot run {command[0]}: {error}") from error
         if returncode:
@@ -187,29 +177,35 @@ class ReleaseBuildValidator:
                     f"release Maven task {task['id']}")
             except BuildSafetyError as error:
                 raise ReleaseError(str(error)) from error
-        command_failure = None
         try:
-            if self.executor is None:
-                self._stream_command(
-                    task["command"], Path(task["cwd"]), environment, log,
-                    verbose=self.verbose,
-                )
-            else:
-                log.parent.mkdir(parents=True, exist_ok=True)
-                output = self.executor(task, environment)
-                log.write_text(output or "", encoding="utf-8")
-        except ReleaseError as error:
-            command_failure = error
-        if guarded_maven:
-            try:
-                wait_for_no_embedded_mongo_processes(
-                    f"completion of release Maven task {task['id']}")
-            except BuildSafetyError as error:
+            with executable_build_workspace(
+                environment, java=task.get("kind") == "maven",
+            ) as (_, environment):
+                command_failure = None
+                try:
+                    if self.executor is None:
+                        self._stream_command(
+                            task["command"], Path(task["cwd"]), environment, log,
+                            verbose=self.verbose,
+                        )
+                    else:
+                        log.parent.mkdir(parents=True, exist_ok=True)
+                        output = self.executor(task, environment)
+                        log.write_text(output or "", encoding="utf-8")
+                except ReleaseError as error:
+                    command_failure = error
+                if guarded_maven:
+                    try:
+                        wait_for_no_embedded_mongo_processes(
+                            f"completion of release Maven task {task['id']}")
+                    except BuildSafetyError as error:
+                        if command_failure is not None:
+                            raise ReleaseError(f"{command_failure}\n{error}") from command_failure
+                        raise ReleaseError(str(error)) from error
                 if command_failure is not None:
-                    raise ReleaseError(f"{command_failure}\n{error}") from command_failure
-                raise ReleaseError(str(error)) from error
-        if command_failure is not None:
-            raise command_failure
+                    raise command_failure
+        except BuildSafetyError as error:
+            raise ReleaseError(str(error)) from error
         record = {
             **task,
             "startedAt": started,

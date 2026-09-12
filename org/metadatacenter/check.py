@@ -1,5 +1,6 @@
 import typer
 
+from org.metadatacenter.ci_env import check_ci_env
 from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
 from org.metadatacenter.worker.OpenApiWorker import OpenApiWorker
@@ -23,6 +24,15 @@ def versions(
                  "workspace rather than the estate.")):
     """Check version declarations across configured repositories."""
     exit_on_failure(version_worker.check_versions(by_file=by_file, strict=strict))
+
+
+@app.command("ci-env")
+def ci_env(
+        apply: bool = typer.Option(
+            False, "--apply",
+            help="Rewrite the copies that have drifted, for review and one commit per repository.")):
+    """Check that every Java repository's CI gives its tests the environment the code requires."""
+    exit_on_failure(check_ci_env(apply=apply))
 
 
 @app.command("repos")

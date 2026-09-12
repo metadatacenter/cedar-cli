@@ -210,6 +210,50 @@ class RunSmokeTest(unittest.TestCase):
             self.assertEqual([], runner.commands("npm"))
             self.assertFalse((home / "cedar-development" / "ops" / "e2e" / "reports").exists())
 
+    def test_a_warming_service_is_waited_out_rather_than_refused(self):
+        """terminology answers its probe only once it has loaded every ontology."""
+        warming = (
+            "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
+            "resource\t101\t9007\tup\thealthy\tcurrent\t0\n"
+            "terminology\t102\t9004\tup\tstarting\tcurrent\t0\n"
+        )
+        answers = [warming, warming, HEALTHY_TSV]
+
+        def status(_args, _kwargs):
+            return FakeResult(stdout=answers.pop(0) if len(answers) > 1 else answers[0])
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            runner.answers[0] = (runner.answers[0][0], status)
+            slept = []
+
+            code = run_smoke(home, runner=runner, clock=clock(),
+                             environment={"PATH": "/usr/bin"}, sleeper=slept.append)
+
+            self.assertEqual(0, code, "a stack that finished warming should run the tiers")
+            self.assertEqual(2, len(runner.commands("npm")))
+            self.assertTrue(slept, "the gate should have waited rather than refused at once")
+
+    def test_a_service_that_never_warms_still_refuses(self):
+        warming = (
+            "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
+            "terminology\t102\t9004\tup\tstarting\tcurrent\t0\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home, tsv=warming)
+            slept = []
+
+            code = run_smoke(home, runner=runner, clock=clock(),
+                             environment={"PATH": "/usr/bin"}, sleeper=slept.append)
+
+            self.assertEqual(1, code)
+            self.assertEqual([], runner.commands("npm"))
+            self.assertEqual(
+                smoke_gate.WARMUP_WAIT_SECONDS // smoke_gate.WARMUP_POLL_SECONDS, len(slept),
+                "the wait is bounded by its polls, so it ends without a wall clock")
+
     def test_a_failing_tier_still_lets_the_other_run_and_records_a_failed_run(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)

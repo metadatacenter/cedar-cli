@@ -10,6 +10,8 @@ from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
 from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories
+from org.metadatacenter.util.BuildSafety import BuildSafetyError
+from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
 
@@ -30,6 +32,11 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
     """Run a build while proving it did not add or alter tracked workspace changes."""
     if dry_run or dump_plan:
         return plan_executor.execute(plan, dry_run, dump_plan)
+    try:
+        require_plan_node(plan)
+    except BuildSafetyError as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(code=1) from error
     before = capture_estate_state(Path(Util.cedar_home))
     failure = None
     try:

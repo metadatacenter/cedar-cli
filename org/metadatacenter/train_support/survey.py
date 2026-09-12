@@ -10,6 +10,7 @@ from org.metadatacenter.github_ci import (
     run_url,
 )
 from org.metadatacenter.util.Util import Util
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 import json
 import os
@@ -102,6 +103,46 @@ def _source_alignment():
                 f'{repository} local develop is {local[:8]}, but GitHub develop is '
                 f'{remote_sha[:8]}')
     return findings
+
+
+def releasability_survey(source, max_workers=12):
+    """Which repositories have moved off the commits a train captured.
+
+    A release stamps a train's exact commits and refuses any repository whose develop has left
+    them, so a completed train stops being releasable the moment anything lands in one of the
+    forty-four. That refusal is otherwise met at `release plan`, after the train has already
+    been built and paid for. One ls-remote per repository answers it while the answer can still
+    change what an operator does next.
+
+    Returns the repositories that moved, those whose develop could not be read, and how many
+    the train captured.
+    """
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
+    if not cedar_home:
+        raise ValueError('CEDAR_HOME is not set')
+    recorded = source.get('repositories', {}) if isinstance(source, dict) else {}
+    if not recorded:
+        raise ValueError('this train recorded no source repositories')
+
+    def head(item):
+        repository, _revision = item
+        root = Path(cedar_home) / repository
+        tracked = (root / '.git').exists()
+        code, output, _detail = _git_component._git(
+            root if tracked else Path(cedar_home),
+            'ls-remote',
+            'origin' if tracked else f'https://github.com/metadatacenter/{repository}.git',
+            'refs/heads/develop',
+        )
+        if code != 0 or not output:
+            return repository, None
+        return repository, output.split()[0]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        results = list(pool.map(head, sorted(recorded.items())))
+    moved = [name for name, sha in results if sha is not None and sha != recorded[name]]
+    unreadable = [name for name, sha in results if sha is None]
+    return moved, unreadable, len(recorded)
 
 
 def source_ci_survey(source=None, reporter=None):

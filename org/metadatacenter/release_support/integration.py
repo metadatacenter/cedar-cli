@@ -89,7 +89,13 @@ class ReleaseRemoteIntegrator:
         if not cedar_home:
             raise ReleaseError("CEDAR_HOME is not set")
         findings: dict[str, list[str]] = {}
+        # Every repository is examined before the refusal, because the remedy depends on how many
+        # moved. One drifted repository can often be explained; eighteen means the train is spent
+        # and a new one has to be built, and reporting only the first hides that difference.
+        drifted: list[tuple[str, str]] = []
+        captured = 0
         for repository in _integration_repositories(manifest):
+            captured += 1
             source = manifest.get("sourceRepositories", {}).get(repository)
             if not source:
                 raise ReleaseError(f"{repository} has no recorded train source")
@@ -103,9 +109,8 @@ class ReleaseRemoteIntegrator:
             if develop is None or main is None:
                 raise ReleaseError(f"{repository} remote must contain main and develop")
             if develop != source:
-                raise ReleaseError(
-                    f"{repository} develop advanced beyond train source {source}"
-                )
+                drifted.append((repository, source))
+                continue
             self.git._run([
                 "git", "-C", str(root), "fetch", "--quiet", "--no-tags", remote,
                 "+refs/heads/main:refs/remotes/cedar-release/survey-main",
@@ -130,6 +135,17 @@ class ReleaseRemoteIntegrator:
             )
             if replaced:
                 findings[repository] = replaced
+        if len(drifted) == 1:
+            repository, source = drifted[0]
+            raise ReleaseError(
+                f"{repository} develop advanced beyond train source {source}"
+            )
+        if drifted:
+            raise ReleaseError(
+                f"{len(drifted)} of {captured} captured repositories advanced beyond their train "
+                f"source, so this train can no longer back a release: "
+                + ", ".join(repository for repository, _ in drifted)
+            )
         return findings
 
     def tasks(self, manifest: dict) -> list[dict]:

@@ -1,6 +1,7 @@
 from contextlib import ExitStack
 import re
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -226,9 +227,11 @@ class BuildPolicyTest(unittest.TestCase):
             command_list=["./mvnw clean install"],
         )
 
-        with patch("org.metadatacenter.taskexecutor.ShellTaskExecutor.Util.get_wd",
+        with tempfile.TemporaryDirectory() as home, \
+                use_context(InvocationContext(environment={**os.environ, 'CEDAR_HOME': home})), \
+                patch("org.metadatacenter.taskexecutor.ShellTaskExecutor.Util.get_wd",
                    return_value="/tmp"), \
-                patch.object(executor, "execute_shell_command", return_value=([], 0)), \
+                patch.object(executor, "execute_shell_command", return_value=([], 0)) as execute, \
                 patch(
                     "org.metadatacenter.taskexecutor.ShellTaskExecutor."
                     "require_no_embedded_mongo_processes") as before, \
@@ -239,6 +242,9 @@ class BuildPolicyTest(unittest.TestCase):
                 task, Mock(), dry_run=False)
 
         self.assertEqual(0, return_code)
+        child_env = execute.call_args.kwargs['environment']
+        self.assertIn(child_env['TMPDIR'], child_env['JAVA_TOOL_OPTIONS'])
+        self.assertFalse(Path(child_env['TMPDIR']).exists())
         before.assert_called_once_with(
             "test-bearing Maven task for cedar-example")
         after.assert_called_once_with(

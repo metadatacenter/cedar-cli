@@ -42,7 +42,8 @@ class BuildSafetyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             repo = self.repository(Path(directory))
             (repo / "source.txt").write_text("developer change\n", encoding="utf-8")
-            with patch(
+            with patch('org.metadatacenter.util.BuildSafety.invocation_environment',
+                       return_value={**os.environ, 'CEDAR_HOME': directory}), patch(
                 "org.metadatacenter.util.BuildSafety.frontend_runtime_collisions",
                 return_value=[(42, "ng serve")],
             ):

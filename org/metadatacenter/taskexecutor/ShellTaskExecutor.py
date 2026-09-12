@@ -1,4 +1,5 @@
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from rich.console import Console
@@ -11,6 +12,8 @@ from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
+    executable_build_workspace,
+    is_maven_command,
     is_test_bearing_maven_command,
     isolated_frontend_workspace,
     require_no_embedded_mongo_processes,
@@ -20,6 +23,7 @@ from org.metadatacenter.util.BuildSafety import (
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.util.ProcessRunner import run_shell
+from org.metadatacenter.util.NodeBuildCheck import is_frontend_build, require_build_node
 
 console = Console()
 
@@ -48,6 +52,8 @@ class ShellTaskExecutor(TaskExecutor):
             style=Style(color="green"))
         if not dry_run:
             try:
+                if is_frontend_build(task):
+                    require_build_node(Path(cwd))
                 parameter = getattr(task, "get_parameter", lambda _name: None)
                 if parameter("isolated_frontend_build") is True:
                     with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions):
@@ -63,6 +69,9 @@ class ShellTaskExecutor(TaskExecutor):
                         )
                 if parameter("in_place_frontend_build") is True:
                     require_no_frontend_runtime_collision(Path(cwd))
+                    with executable_build_workspace() as (_, environment):
+                        return self._execute_commands(
+                            task, repo, commands_to_execute, cwd, job_progress, environment)
                 return self._execute_commands(
                     task, repo, commands_to_execute, cwd, job_progress, None,
                 )
@@ -80,12 +89,15 @@ class ShellTaskExecutor(TaskExecutor):
             if guarded_maven:
                 require_no_embedded_mongo_processes(
                     f"test-bearing Maven task for {repo.name}")
-            stdout_parts, return_code = self.execute_shell_command(
-                task, repo, command, cwd, job_progress, environment=environment,
-            )
-            if guarded_maven:
-                wait_for_no_embedded_mongo_processes(
-                    f"completion of test-bearing Maven task for {repo.name}")
+            workspace = (executable_build_workspace(environment, java=True)
+                         if is_maven_command(command) else nullcontext((None, environment)))
+            with workspace as (_, child_environment):
+                stdout_parts, return_code = self.execute_shell_command(
+                    task, repo, command, cwd, job_progress, environment=child_environment,
+                )
+                if guarded_maven:
+                    wait_for_no_embedded_mongo_processes(
+                        f"completion of test-bearing Maven task for {repo.name}")
             if return_code != 0:
                 if first_failure == 0:
                     first_failure = return_code

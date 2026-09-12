@@ -2,6 +2,7 @@ import datetime as dt
 import io
 import json
 import os
+import datetime as _train_status_dt
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -322,6 +323,78 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotIn(f'Manifests: {BuildTrain.STATE_BASE_URL}/', result.output)
         self.assertIn('source state is recorded and publication is incomplete', result.output)
         self.assertIn('cedarcli publish train --resume', result.output)
+
+    @staticmethod
+    def _recorded_except_docker(path):
+        if path.startswith(('trains/', 'completed/', 'npm/')):
+            return {'version': '2.9.3-dev.20260824.1847'}
+        raise ValueError('build-train state does not exist')
+
+    @staticmethod
+    def _concluded(seconds_ago):
+        finished = _train_status_dt.datetime.now(_train_status_dt.timezone.utc) - \
+            _train_status_dt.timedelta(seconds=seconds_ago)
+        return {
+            'databaseId': 13, 'status': 'completed', 'conclusion': 'success',
+            'updatedAt': finished.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        }
+
+    @patch.object(BuildTrain, '_read')
+    def test_a_train_whose_record_is_still_in_flight_is_not_offered_for_resume(self, read):
+        read.side_effect = self._recorded_except_docker
+        with patch("org.metadatacenter.train_support.workflow._workflow_run",
+                   return_value=self._concluded(5)):
+            result = self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Decision: completing', result.output)
+        self.assertNotIn('resume this ID', result.output)
+        self.assertNotIn('cedarcli publish train --resume', result.output)
+
+    @patch.object(BuildTrain, '_read')
+    def test_a_train_stopped_long_ago_is_still_offered_for_resume(self, read):
+        read.side_effect = self._recorded_except_docker
+        with patch("org.metadatacenter.train_support.workflow._workflow_run",
+                   return_value=self._concluded(3600)):
+            result = self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn('Decision: completing', result.output)
+        self.assertIn('source state is recorded and publication is incomplete', result.output)
+
+    @staticmethod
+    def _complete_train(path):
+        return {'version': '2.9.3-dev.20260824.1847', 'repositories': {'repo-one': 'a' * 40}}
+
+    def _train_status_with_survey(self, survey_result):
+        with patch.object(BuildTrain, '_read', side_effect=self._complete_train), \
+                patch("org.metadatacenter.train_support.workflow._workflow_run",
+                      return_value={'databaseId': 13, 'status': 'completed',
+                                    'conclusion': 'success'}), \
+                patch("org.metadatacenter.train_support.survey.releasability_survey",
+                      return_value=survey_result):
+            return self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
+
+    def test_a_complete_train_reports_that_it_can_still_back_a_release(self):
+        result = self._train_status_with_survey(([], [], 44))
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Releasable: yes', result.output)
+        self.assertIn('all 44 captured heads are unchanged', result.output)
+
+    def test_a_complete_train_names_the_repositories_that_spent_it(self):
+        result = self._train_status_with_survey((['cedar-libraries', 'cedar-project'], [], 44))
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Releasable: no', result.output)
+        self.assertIn('2 of 44 captured repositories have advanced', result.output)
+        self.assertIn('cedar-libraries', result.output)
+        self.assertIn('cedar-project', result.output)
+        self.assertIn('needs a new train', result.output)
+
+    def test_a_train_whose_heads_cannot_be_read_is_not_called_releasable(self):
+        result = self._train_status_with_survey(([], ['cedar-user-server'], 44))
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Releasable: unproven', result.output)
+        self.assertIn('cedar-user-server', result.output)
 
     def test_local_publication_preflight_uses_maven_settings_without_exposing_password(self):
         with tempfile.TemporaryDirectory() as directory:

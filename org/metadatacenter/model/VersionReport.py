@@ -6,6 +6,13 @@ from org.metadatacenter.model.VersionReportEntry import VersionReportEntry
 from org.metadatacenter.model.VersionType import VersionType
 
 
+def describe_age(seconds: float) -> str:
+    """An age an operator reads at a glance rather than converting."""
+    if seconds >= 3600:
+        return f"{int(seconds / 3600)}h"
+    return f"{max(1, int(seconds / 60))}m"
+
+
 class VersionReport:
 
     def __init__(self) -> None:
@@ -87,11 +94,17 @@ class VersionReport:
             lines.append(
                 "These repositories declare more than one version among their own files, which is a "
                 "half-applied bump rather than a stale clone: " + ", ".join(partial_repos) + ".")
-        age = self.oldest_fetch_age_seconds()
-        if age is not None and self.cnt_stale == 0 and self.cnt_nok > 0:
+        stale = self.stale_fetch_repos()
+        if stale:
+            verdict = "This is fatal under --strict" if strict else "This does not fail the check"
+            worst = ", ".join(f"{name} {describe_age(age)}" for name, age in stale[:3])
+            more = f", and {len(stale) - 3} more" if len(stale) > 3 else ""
+            subject = ("1 repository was" if len(stale) == 1
+                       else f"{len(stale)} repositories were")
             lines.append(
-                f"Ahead/behind counts compare against the last fetch, up to {int(age / 3600)}h old here. "
-                f"Run `cedarcli git fetch` for a current comparison.")
+                f"{subject} last fetched over {describe_age(self.STALE_FETCH_SECONDS)} ago "
+                f"({worst}{more}), so their ahead/behind counts, and any target version computed "
+                f"from them, describe an older remote. Run `cedarcli git fetch` first. {verdict}.")
         return lines
 
     def repos_with(self, predicate) -> List[str]:
@@ -109,6 +122,23 @@ class VersionReport:
                 continue
             seen.setdefault(entry.repo.name, set()).add(entry.version)
         return [name for name, versions in seen.items() if len(versions) > 1]
+
+    # Session scale: long enough that ordinary work does not re-fetch constantly, short enough
+    # that no gate certifies this workspace against yesterday's view of the remotes. Repositories
+    # outside the release set are fetched rarely, so this names them rather than one oldest age.
+    STALE_FETCH_SECONDS = 3600
+
+    def stale_fetch_repos(self):
+        """Repositories whose fetch is too old for their ahead/behind counts to mean anything."""
+        oldest: Dict[str, float] = {}
+        for entry in self.entries:
+            age = entry.sync.fetch_age_seconds
+            if age is None or age < self.STALE_FETCH_SECONDS:
+                continue
+            name = entry.repo.name
+            if age > oldest.get(name, 0):
+                oldest[name] = age
+        return sorted(oldest.items(), key=lambda item: item[1], reverse=True)
 
     def oldest_fetch_age_seconds(self):
         ages = [entry.sync.fetch_age_seconds for entry in self.entries
