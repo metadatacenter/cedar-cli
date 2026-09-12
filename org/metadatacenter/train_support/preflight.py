@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+from org.metadatacenter import ci_env as _ci_env_component
 from org.metadatacenter.train_support import output as _output_component
 from org.metadatacenter.train_support import policy as _policy_component
 from org.metadatacenter.train_support import survey as _survey_component
@@ -313,9 +314,35 @@ def _preflight(selected, resume):
     settle(_smoke_gate_preflight, source)
     settle(_npm_configuration_preflight)
     settle(_publication_targets_preflight)
+    _ci_env_preflight()
     if findings:
         raise ValueError(_preflight_failure(findings))
     return summary, source
+
+
+def _ci_env_preflight():
+    """Report CI environment drift without refusing the train.
+
+    A copy missing an entry breaks only the repositories whose suites build that part of the
+    configuration, so drift is not evidence that this train would fail, and refusing on it would
+    have stopped legitimate trains. It is still worth saying here, because the next repository
+    whose suite asks goes red at a moment nobody chose, and the operator is already looking at
+    exactly this report.
+    """
+    try:
+        code, output = _ci_env_component.ci_env_report()
+    except ValueError as error:
+        _output_component.console.print(f'  [yellow]CI environment not checked: {error}[/yellow]')
+        return
+    if not code:
+        return
+    drifted = [line.split()[1].rstrip(':') for line in output.splitlines()
+               if line.strip().startswith('DRIFTED')]
+    detail = (f"{len(drifted)} repositories carry a stale copy of ci-env-block.yml: "
+              + ', '.join(drifted)) if drifted else 'ci-env-block.yml no longer matches the code'
+    _output_component.console.print(f'  [yellow]CI environment advisory: {detail}[/yellow]')
+    _output_component.console.print(
+        '  [yellow]  Repair with cedarcli check ci-env --apply, outside a train.[/yellow]')
 
 
 def _preflight_failure(findings):
