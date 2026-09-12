@@ -1,3 +1,5 @@
+import time
+
 import typer
 from rich.console import Console
 
@@ -49,6 +51,31 @@ def _start_infrastructure_once():
     if gaps:
         console.print(f"Starting infrastructure; {', '.join(gaps)} not listening.")
     exit_on_failure(StartInfrastructureWorker.all())
+    _await_infrastructure()
+
+
+def _await_infrastructure(timeout_seconds: int = 180, interval_seconds: int = 2):
+    """Return once every managed infrastructure port is served, or say which are not.
+
+    A microservice reaches Neo4j, Mongo and Keycloak while it boots, so returning from here
+    early is what produces the failure a readiness check on the applications can only report
+    afterwards. Waiting here prevents the cascade instead.
+
+    A controller that cannot say which ports are expected returns None, and there is nothing
+    to wait for in that case.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    gaps = NativeWorker.infrastructure_gaps()
+    while gaps:
+        if time.monotonic() >= deadline:
+            console.print(
+                f"[red]Infrastructure did not come up within {timeout_seconds}s: "
+                f"{', '.join(gaps)} still not listening.[/red]")
+            raise typer.Exit(code=1)
+        time.sleep(interval_seconds)
+        gaps = NativeWorker.infrastructure_gaps()
+    if gaps == []:
+        console.print("Infrastructure is listening on every managed port.")
 
 
 @app.command("all")

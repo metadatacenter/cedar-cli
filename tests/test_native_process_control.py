@@ -4,6 +4,8 @@ import unittest.mock
 from pathlib import Path
 from unittest.mock import patch
 
+import typer
+
 from typer.testing import CliRunner
 
 from org.metadatacenter import (native, start, start_frontend, start_microservice, stop,
@@ -78,6 +80,31 @@ class NativeProcessControlTest(unittest.TestCase):
 
         infrastructure.assert_called_once_with()
         applications.assert_called_once_with()
+
+    def test_start_waits_for_infrastructure_before_the_applications(self):
+        """A microservice reaches Neo4j, Mongo and Keycloak while it boots, so it must be there."""
+        order = []
+        gaps = [["Keycloak"], ["Keycloak"], []]
+        with patch.object(NativeWorker, "infrastructure_gaps",
+                          side_effect=[["Keycloak"]] + gaps), \
+                patch.object(StartInfrastructureWorker, "all",
+                             side_effect=lambda: order.append("infra")), \
+                patch.object(NativeWorker, "start", side_effect=lambda: order.append("applications")), \
+                patch("org.metadatacenter.start.time.sleep"):
+            start.all_all()
+
+        self.assertEqual(["infra", "applications"], order)
+
+    def test_start_stops_when_infrastructure_never_arrives(self):
+        with patch.object(NativeWorker, "infrastructure_gaps", return_value=["Keycloak"]), \
+                patch.object(StartInfrastructureWorker, "all"), \
+                patch.object(NativeWorker, "start") as applications, \
+                patch("org.metadatacenter.start.time.sleep"), \
+                patch("org.metadatacenter.start.time.monotonic", side_effect=[0, 1000, 2000]):
+            with self.assertRaises(typer.Exit):
+                start.all_all()
+
+        applications.assert_not_called()
 
     @patch.object(StopInfrastructureWorker, "all")
     @patch.object(NativeWorker, "stop")
@@ -367,8 +394,10 @@ class InfrastructureAlreadyRunningTest(unittest.TestCase):
         applications.assert_called_once_with()
 
     def test_start_all_starts_infrastructure_when_a_port_is_silent(self):
+        # The gap is what makes it start, and it closes once the port is served, which is what
+        # releases the wait before the applications go.
         with (
-            patch.object(NativeWorker, "infrastructure_gaps", return_value=["keycloak"]),
+            patch.object(NativeWorker, "infrastructure_gaps", side_effect=[["keycloak"], []]),
             patch.object(StartInfrastructureWorker, "all") as infrastructure,
             patch.object(NativeWorker, "start") as applications,
         ):
