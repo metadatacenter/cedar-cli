@@ -9,9 +9,24 @@ _cedarcli_run() {
   fi
   if (
     cd "$CEDAR_HOME/cedar-cli" || exit 1
-    source .venv/bin/activate || exit 1
+    # Checked before activating: activate is a plain shell script and still sources cleanly after
+    # the interpreter it was built against has been upgraded away, so sourcing first turns a
+    # recoverable environment into a silent exit.
     if [ ! -x .venv/bin/python3 ]; then
-      echo 'The cedar-cli virtual environment has no executable python3.' >&2
+      if [ -d .venv ]; then
+        echo "The Python in $CEDAR_HOME/cedar-cli/.venv is gone; an interpreter upgrade leaves" >&2
+        echo "its python3 link pointing at nothing. Rebuild the environment:" >&2
+      else
+        echo "There is no Python environment at $CEDAR_HOME/cedar-cli/.venv. Create it:" >&2
+      fi
+      echo "    cd $CEDAR_HOME/cedar-cli" >&2
+      echo "    rm -rf .venv && python3 -m venv .venv" >&2
+      echo "    .venv/bin/python3 -m pip install -r requirements.txt" >&2
+      exit 1
+    fi
+    if ! source .venv/bin/activate; then
+      echo "$CEDAR_HOME/cedar-cli/.venv/bin/activate could not be sourced; rebuild the" >&2
+      echo "environment with the three commands in the cedar-cli README." >&2
       exit 1
     fi
     if { [ "${1:-}" = build ] || [ "${1:-}" = publish ]; } && [ "${2:-}" = this ]; then

@@ -19,6 +19,7 @@ running the suite happens to offer outside a virtualenv.
 """
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -117,6 +118,29 @@ class CliWrapperTest(unittest.TestCase):
                     (home / 'cedar-cli/.venv/bin/python3').unlink()
                 self.assertNotEqual(0, self.run_wrapper(home, script, True))
                 self.assertFalse(marker.exists())
+
+    def test_a_broken_environment_says_how_to_rebuild_it(self):
+        """On a deployment host the refusal is the only thing the operator has to work from.
+
+        An interpreter upgrade leaves `activate` sourceable and its `python3` link dangling, so
+        the missing environment has to be reported with the commands that restore it rather than
+        as a bare statement of what is absent.
+        """
+        for failure in ('missing', 'interpreter'):
+            with tempfile.TemporaryDirectory() as directory:
+                home, script = self.make_fixture(directory, 0)
+                venv = home / 'cedar-cli' / '.venv'
+                if failure == 'missing':
+                    shutil.rmtree(venv)
+                else:
+                    (venv / 'bin' / 'python3').unlink()
+                result = subprocess.run(
+                    ['bash', str(script), 'status'], capture_output=True, text=True,
+                    env={**os.environ, 'CEDAR_HOME': str(home)})
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(str(venv), result.stderr)
+                self.assertIn('python3 -m venv .venv', result.stderr)
+                self.assertIn('requirements.txt', result.stderr)
 
     def test_navigation_handles_spaces(self):
         with tempfile.TemporaryDirectory(prefix='cedar space ') as directory:
