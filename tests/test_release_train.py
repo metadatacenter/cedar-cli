@@ -20,7 +20,7 @@ import typer
 from typer.testing import CliRunner
 
 from org.metadatacenter import release_train
-from org.metadatacenter.release_support import lifecycle, preflight, validation
+from org.metadatacenter.release_support import integration, lifecycle, preflight, validation
 from org.metadatacenter.release_support import publication
 from org.metadatacenter.release_support.publication import _extract_source_archive
 from org.metadatacenter.release_train import (
@@ -2585,6 +2585,29 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
             with self.assertRaises(ReleaseError) as raised:
                 integrator.survey(manifest)
             self.assertIn("develop advanced beyond train source", str(raised.exception))
+
+    def test_survey_names_every_repository_that_advanced_beyond_the_train_source(self):
+        """The remedy differs by count, so one drifted repository must not hide the rest."""
+        manifest = {
+            "sourceRepositories": {"repo-one": "a" * 40, "repo-two": "b" * 40},
+            "releaseRepositories": ["repo-one", "repo-two"],
+        }
+        integrator = ReleaseRemoteIntegrator(
+            ReleaseState(),
+            remote_resolver=lambda repository: f"https://example/{repository}.git",
+            environment={"CEDAR_HOME": "/nonexistent"},
+        )
+        moved = {"refs/heads/develop": "c" * 40, "refs/heads/main": "d" * 40}
+        with patch.object(integration, "_integration_repositories",
+                          return_value=manifest["releaseRepositories"]), \
+                patch.object(ReleaseRemoteIntegrator, "_remote_refs", return_value=moved):
+            with self.assertRaises(ReleaseError) as raised:
+                integrator.survey(manifest)
+        message = str(raised.exception)
+        self.assertIn("2 of 2 captured repositories advanced beyond their train source", message)
+        self.assertIn("repo-one", message)
+        self.assertIn("repo-two", message)
+        self.assertIn("can no longer back a release", message)
 
     def test_integration_leaves_the_release_workspace_on_the_main_commit(self):
         """Publication packs from the workspace's checked-out commit and refuses any other."""
