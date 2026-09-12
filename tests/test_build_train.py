@@ -2,6 +2,7 @@ import datetime as dt
 import io
 import json
 import os
+import datetime as _train_status_dt
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -322,6 +323,44 @@ class BuildTrainTest(unittest.TestCase):
         self.assertNotIn(f'Manifests: {BuildTrain.STATE_BASE_URL}/', result.output)
         self.assertIn('source state is recorded and publication is incomplete', result.output)
         self.assertIn('cedarcli publish train --resume', result.output)
+
+    @staticmethod
+    def _recorded_except_docker(path):
+        if path.startswith(('trains/', 'completed/', 'npm/')):
+            return {'version': '2.9.3-dev.20260824.1847'}
+        raise ValueError('build-train state does not exist')
+
+    @staticmethod
+    def _concluded(seconds_ago):
+        finished = _train_status_dt.datetime.now(_train_status_dt.timezone.utc) - \
+            _train_status_dt.timedelta(seconds=seconds_ago)
+        return {
+            'databaseId': 13, 'status': 'completed', 'conclusion': 'success',
+            'updatedAt': finished.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        }
+
+    @patch.object(BuildTrain, '_read')
+    def test_a_train_whose_record_is_still_in_flight_is_not_offered_for_resume(self, read):
+        read.side_effect = self._recorded_except_docker
+        with patch("org.metadatacenter.train_support.workflow._workflow_run",
+                   return_value=self._concluded(5)):
+            result = self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Decision: completing', result.output)
+        self.assertNotIn('resume this ID', result.output)
+        self.assertNotIn('cedarcli publish train --resume', result.output)
+
+    @patch.object(BuildTrain, '_read')
+    def test_a_train_stopped_long_ago_is_still_offered_for_resume(self, read):
+        read.side_effect = self._recorded_except_docker
+        with patch("org.metadatacenter.train_support.workflow._workflow_run",
+                   return_value=self._concluded(3600)):
+            result = self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn('Decision: completing', result.output)
+        self.assertIn('source state is recorded and publication is incomplete', result.output)
 
     def test_local_publication_preflight_uses_maven_settings_without_exposing_password(self):
         with tempfile.TemporaryDirectory() as directory:

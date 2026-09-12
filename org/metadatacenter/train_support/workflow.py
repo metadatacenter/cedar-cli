@@ -49,7 +49,7 @@ def _workflow_runs():
     command = [
         'gh', 'run', 'list', '--repo', _policy_component.REPOSITORY,
         '--workflow', _policy_component.WORKFLOW, '--limit', '100',
-        '--json', 'databaseId,status,conclusion,url,displayTitle,createdAt',
+        '--json', 'databaseId,status,conclusion,url,displayTitle,createdAt,updatedAt',
     ]
     try:
         result = subprocess.run(command, text=True, capture_output=True, check=False, env=invocation_environment())

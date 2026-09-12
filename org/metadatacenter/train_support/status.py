@@ -1,6 +1,7 @@
 """CEDAR train status."""
 from __future__ import annotations
 from org.metadatacenter.util.BuildTrain import BuildTrain
+import datetime as dt
 import re
 import time
 from org.metadatacenter.train_support import output as _output_component
@@ -103,6 +104,28 @@ def _render_stage_records(records):
             _output_component.console.print(f'    {error}', soft_wrap=True)
 
 
+# The workflow concludes success a few seconds before the Docker completion record appears on
+# the state branch. In that window neither "complete" nor "still running" holds, and without this
+# the fall-through recommends resuming a train that is merely finishing: advice that would spend
+# an immutable version. A bounded window keeps a train that genuinely stopped from hiding here.
+COMPLETION_RECORD_GRACE_SECONDS = 180
+
+
+def _finishing(workflow):
+    """Whether the workflow has just succeeded and its completion record may still be in flight."""
+    if not workflow or workflow.get('conclusion') != 'success':
+        return False
+    finished = workflow.get('updatedAt')
+    if not finished:
+        return False
+    try:
+        ended = dt.datetime.fromisoformat(str(finished).replace('Z', '+00:00'))
+    except ValueError:
+        return False
+    age = (dt.datetime.now(dt.timezone.utc) - ended).total_seconds()
+    return 0 <= age <= COMPLETION_RECORD_GRACE_SECONDS
+
+
 def _render_recovery(version, records, workflow):
     state = {label: value for label, _path, value, _error in records}
     active = workflow and workflow.get('status') in {'queued', 'in_progress', 'waiting', 'pending'}
@@ -112,6 +135,11 @@ def _render_recovery(version, records, workflow):
         return
     if active:
         _output_component.console.print('[yellow]Decision: still running; do not dispatch another train.[/yellow]')
+        return
+    if _finishing(workflow):
+        _output_component.console.print(
+            '[yellow]Decision: completing; the workflow succeeded and the completion record is '
+            'not written yet. Read this status again in a few seconds.[/yellow]')
         return
     if state.get('source') != 'recorded':
         _output_component.console.print('[yellow]Decision: no source state was recorded; use a new train ID.[/yellow]')
