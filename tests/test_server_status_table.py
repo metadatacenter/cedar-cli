@@ -128,3 +128,61 @@ class SourceCurrencyWarningTest(unittest.TestCase):
 
         self.assertEqual(["resource", "artifact"], captured["services"])
 
+
+class InfrastructureProbeBoundsTest(unittest.TestCase):
+    """A probe that never returns makes the table its own source of delay."""
+
+    class _Server:
+        def __init__(self, name, port, admin_port, tag, check_running):
+            self.name = name
+            self.port = port
+            self.admin_port = admin_port
+            self.tag = tag
+            self.check_running = check_running
+
+    def _servers(self, tag, check_running, count=3):
+        return [self._Server(f"server-{n}", 9000 + n, 9100 + n, tag, check_running)
+                for n in range(count)]
+
+    def test_a_health_check_probe_is_bounded(self):
+        from org.metadatacenter.model.CheckRunning import CheckRunning
+        servers = self._servers("infra", CheckRunning.HEALTH_CHECK, count=1)
+        status = {}
+        with patch.object(Util, "get_servers", return_value=servers), \
+                patch.object(ServerWorker, "is_port_open", return_value=True), \
+                patch("org.metadatacenter.worker.ServerWorker.requests.head") as head:
+            ServerWorker.check_status_of("infra", status)
+
+        self.assertEqual(ServerWorker.PROBE_TIMEOUT_SECONDS, head.call_args.kwargs.get("timeout"))
+        self.assertEqual(1, len(status))
+
+    def test_a_response_probe_is_bounded(self):
+        from org.metadatacenter.model.CheckRunning import CheckRunning
+        servers = self._servers("infra", CheckRunning.RESPONSE, count=1)
+        status = {}
+        with patch.object(Util, "get_servers", return_value=servers), \
+                patch.object(ServerWorker, "is_port_open", return_value=True), \
+                patch("org.metadatacenter.worker.ServerWorker.requests.head") as head:
+            ServerWorker.check_status_of("infra", status)
+
+        self.assertEqual(ServerWorker.PROBE_TIMEOUT_SECONDS, head.call_args.kwargs.get("timeout"))
+
+    def test_one_slow_server_does_not_hold_up_the_others(self):
+        """Serial probing costs their sum; the table is worth the slowest of them."""
+        from org.metadatacenter.model.CheckRunning import CheckRunning
+        import time
+        servers = self._servers("infra", CheckRunning.OPEN_PORT, count=3)
+        status = {}
+
+        def slow(host, port):
+            time.sleep(0.4)
+            return True
+
+        started = time.monotonic()
+        with patch.object(Util, "get_servers", return_value=servers), \
+                patch.object(ServerWorker, "is_port_open", side_effect=slow):
+            ServerWorker.check_status_of("infra", status)
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(3, len(status))
+        self.assertLess(elapsed, 1.0, "three 0.4s probes ran in sequence")

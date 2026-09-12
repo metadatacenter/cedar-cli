@@ -2,6 +2,7 @@ from org.metadatacenter.util.InvocationContext import invocation_environment
 import csv
 import os
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 
 import requests
@@ -264,11 +265,21 @@ class ServerWorker(Worker):
             f"run records heads these binaries do not carry"
         ]
 
+    # A probe answers or it does not, and the table is worth no wait beyond that. Without a bound,
+    # `requests` waits forever and a server that accepts a connection and then hangs stalls every
+    # row behind it; without the pool, the wait is the sum of the servers rather than the slowest.
+    PROBE_TIMEOUT_SECONDS = 5
+
     @staticmethod
     def check_status_of(tag: ServerTag, server_status_map: dict):
-        for server in Util.get_servers():
-            if server.tag == tag:
-                ServerWorker.check_status_of_server(server, server_status_map)
+        servers = [server for server in Util.get_servers() if server.tag == tag]
+        if not servers:
+            return
+        with ThreadPoolExecutor(max_workers=len(servers)) as pool:
+            for _ in pool.map(
+                    lambda server: ServerWorker.check_status_of_server(server, server_status_map),
+                    servers):
+                pass
 
     @staticmethod
     def check_status_of_server(server: Server, server_status_map: dict):
@@ -292,7 +303,7 @@ class ServerWorker(Worker):
         else:
             url = 'http://localhost:' + str(server.admin_port) + '/healthcheck'
             try:
-                response = requests.head(url)
+                response = requests.head(url, timeout=ServerWorker.PROBE_TIMEOUT_SECONDS)
                 server_status_report.set_status_code(response.status_code)
             except Exception as e:
                 server_status_report.add_exception(str(e))
@@ -308,7 +319,7 @@ class ServerWorker(Worker):
         else:
             url = 'http://localhost:' + str(server.port)
             try:
-                response = requests.head(url)
+                response = requests.head(url, timeout=ServerWorker.PROBE_TIMEOUT_SECONDS)
                 server_status_report.set_status_code(response.status_code)
             except Exception as e:
                 server_status_report.add_exception(str(e))
@@ -328,6 +339,7 @@ class ServerWorker(Worker):
     @staticmethod
     def is_port_open(host: str, port: int):
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            sock.settimeout(ServerWorker.PROBE_TIMEOUT_SECONDS)
             if sock.connect_ex((host, port)) == 0:
                 return True
             else:
