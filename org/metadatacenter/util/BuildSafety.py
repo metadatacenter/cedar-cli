@@ -27,17 +27,60 @@ class BuildSafetyError(RuntimeError):
     pass
 
 
+# A Unix domain socket path cannot exceed 103 characters. The embedded MariaDB a Java test starts
+# puts its socket straight in TMPDIR as `MariaDB4j.<port>.sock`, so a scratch directory nested too
+# deeply makes the database abort before it announces itself, and the test sees only the startup
+# timeout that follows. Every root is therefore measured before it is used.
+SOCKET_PATH_LIMIT = 103
+LONGEST_BUILD_SOCKET = len('/MariaDB4j.65535.sock') + 3
+SHORT_BUILD_ROOT = Path('/tmp/cedar-build')
+_SCRATCH_NESTING = len('/build-') + 8 + len('/tmp')
+
+
+def socket_safe_root_length():
+    """The longest root whose build scratch directory can still hold a build's Unix socket."""
+    return SOCKET_PATH_LIMIT - LONGEST_BUILD_SOCKET - _SCRATCH_NESTING
+
+
+def _socket_safe(root):
+    # The build resolves its workspace before handing the path to a child, and a symlinked root
+    # such as /tmp grows when it resolves, so measure the form the kernel will see.
+    return len(str(root.resolve())) <= socket_safe_root_length()
+
+
+def _preferred_roots(environment):
+    """Roots in preference order: beside the estate it builds, then beside the user who owns it."""
+    for base in (environment.get('CEDAR_HOME'), environment.get('HOME')):
+        if base:
+            yield Path(base) / '.cedar' / 'build-tmp'
+
+
+def build_temporary_root(environment):
+    """Choose a writable root whose scratch directory a build can open a Unix socket in."""
+    configured = environment.get('CEDAR_BUILD_TMPDIR')
+    if configured:
+        root = Path(configured)
+        if not root.is_absolute():
+            raise BuildSafetyError('CEDAR_BUILD_TMPDIR must be an absolute path')
+        if not _socket_safe(root):
+            raise BuildSafetyError(
+                f'CEDAR_BUILD_TMPDIR resolves to {len(str(root.resolve()))} characters, so a build '
+                'could not open a Unix socket in it. Use a path that resolves to at most '
+                f'{socket_safe_root_length()} characters.')
+        return root
+    if not environment.get('CEDAR_HOME'):
+        raise BuildSafetyError('CEDAR_HOME is required for build temporary storage')
+    # A release builds inside its own deep attempt workspace, which it exports as CEDAR_HOME. That
+    # path alone can outrun the socket limit, so fall back rather than fail a build for its depth.
+    return next((root for root in _preferred_roots(environment) if _socket_safe(root)),
+                SHORT_BUILD_ROOT)
+
+
 @contextlib.contextmanager
 def executable_build_workspace(environment=None, *, java=False):
     """Private, executable scratch space scoped to build children, never the host."""
     environment = dict(invocation_environment() if environment is None else environment)
-    configured = environment.get('CEDAR_BUILD_TMPDIR')
-    home = environment.get('CEDAR_HOME')
-    if not configured and not home:
-        raise BuildSafetyError('CEDAR_HOME is required for build temporary storage')
-    root = Path(configured) if configured else Path(home) / '.cedar' / 'build-tmp'
-    if not root.is_absolute():
-        raise BuildSafetyError('CEDAR_BUILD_TMPDIR must be an absolute path')
+    root = build_temporary_root(environment)
     try:
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         temporary = tempfile.TemporaryDirectory(prefix='build-', dir=root)
