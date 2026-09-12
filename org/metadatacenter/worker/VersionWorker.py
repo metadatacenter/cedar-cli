@@ -51,6 +51,10 @@ class VersionWorker(Worker):
             return 1
         if strict and report.cnt_stale:
             return 1
+        # A gate that reads ahead/behind from a stale fetch can call a behind checkout current,
+        # which is the one answer --strict exists to give correctly.
+        if strict and report.stale_fetch_repos():
+            return 1
         return 0
 
     @staticmethod

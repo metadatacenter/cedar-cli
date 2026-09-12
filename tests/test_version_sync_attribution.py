@@ -182,7 +182,32 @@ class RemedyLineTest(unittest.TestCase):
 
         self.assertTrue(any("cedarcli git fetch" in line for line in lines),
                         "an ahead/behind count is only as fresh as the last fetch, and should say so")
-        self.assertTrue(any("2h old" in line for line in lines))
+        self.assertTrue(any("some-repo 2h" in line for line in lines),
+                        "the repository whose fetch is old is the one to name")
+        self.assertTrue(any("does not fail the check" in line for line in lines))
+
+    def test_a_stale_fetch_is_fatal_under_strict(self):
+        """--strict answers whether this workspace holds what it should, which a stale fetch cannot."""
+        repo = Repo("some-repo", RepoType.MISC, [])
+        report = VersionReport()
+        report.add(repo, "/some-repo", "file", "test", TARGET,
+                   GitSyncState.tracking("develop", 0, 0, 7200.0))
+        report.summarize()
+
+        self.assertEqual([("some-repo", 7200.0)], report.stale_fetch_repos())
+        self.assertTrue(any("fatal under --strict" in line
+                            for line in report.get_remedy_lines(strict=True)))
+
+    def test_a_fresh_fetch_raises_nothing(self):
+        repo = Repo("some-repo", RepoType.MISC, [])
+        report = VersionReport()
+        report.add(repo, "/some-repo", "file", "test", TARGET,
+                   GitSyncState.tracking("develop", 0, 0, 60.0))
+        report.summarize()
+
+        self.assertEqual([], report.stale_fetch_repos())
+        self.assertFalse(any("cedarcli git fetch" in line
+                             for line in report.get_remedy_lines(strict=True)))
 
 
 if __name__ == "__main__":
