@@ -6,6 +6,7 @@ import re
 import time
 from org.metadatacenter.train_support import output as _output_component
 from org.metadatacenter.train_support import policy as _policy_component
+from org.metadatacenter.train_support import survey as _survey_component
 from org.metadatacenter.train_support import workflow as _workflow_component
 
 
@@ -110,6 +111,9 @@ def _render_stage_records(records):
 # an immutable version. A bounded window keeps a train that genuinely stopped from hiding here.
 COMPLETION_RECORD_GRACE_SECONDS = 180
 
+# A verdict an operator can read at a glance: the count is the decision, the names are a sample.
+RELEASABILITY_NAMES_SHOWN = 10
+
 
 def _finishing(workflow):
     """Whether the workflow has just succeeded and its completion record may still be in flight."""
@@ -132,20 +136,20 @@ def _render_recovery(version, records, workflow):
     if state.get('Docker') == 'recorded':
         _output_component.console.print('[green]Decision: complete; do not resume or abandon this train.[/green]')
         _output_component.console.print('Publication: Maven, npm, and all 31 Docker images are verified.')
-        return
+        return True
     if active:
         _output_component.console.print('[yellow]Decision: still running; do not dispatch another train.[/yellow]')
-        return
+        return False
     if _finishing(workflow):
         _output_component.console.print(
             '[yellow]Decision: completing; the workflow succeeded and the completion record is '
             'not written yet. Read this status again in a few seconds.[/yellow]')
-        return
+        return False
     if state.get('source') != 'recorded':
         _output_component.console.print('[yellow]Decision: no source state was recorded; use a new train ID.[/yellow]')
         _output_component.console.print('Publication: none can have started before source state is recorded.')
         _output_component.console.print('Recommended command: cedarcli publish train', soft_wrap=True)
-        return
+        return False
 
     verified = [
         label for label in ('Maven', 'npm model', 'npm CEE', 'npm frontends', 'Docker')
@@ -167,6 +171,36 @@ def _render_recovery(version, records, workflow):
     _output_component.console.print(
         'If the correction changes source or train configuration, commit it and start a new '
         'train instead.')
+    return False
+
+
+
+def _render_releasability(version):
+    """Whether a completed train can still back a release, asked while the answer can be acted on."""
+    try:
+        source = BuildTrain._read(f'trains/{version}.json')
+        moved, unreadable, captured = _survey_component.releasability_survey(source)
+    except ValueError as error:
+        _output_component.console.print(f'Releasable: not checked ({error})')
+        return
+    if moved:
+        _output_component.console.print(
+            f'[red]Releasable: no; {len(moved)} of {captured} captured repositories have '
+            f'advanced since this train was built.[/red]')
+        shown = moved[:RELEASABILITY_NAMES_SHOWN]
+        listed = ', '.join(shown)
+        if len(moved) > len(shown):
+            listed += f', and {len(moved) - len(shown)} more'
+        _output_component.console.print('  ' + listed, soft_wrap=True)
+        _output_component.console.print(
+            '  A release stamps this train\'s exact commits, so it needs a new train.')
+    elif unreadable:
+        _output_component.console.print(
+            f'[yellow]Releasable: unproven; {len(unreadable)} of {captured} repositories could '
+            f'not be read: ' + ', '.join(unreadable) + '[/yellow]')
+    else:
+        _output_component.console.print(
+            f'[green]Releasable: yes; all {captured} captured heads are unchanged.[/green]')
 
 
 def status(version=None, watch=False):
@@ -231,5 +265,6 @@ def status(version=None, watch=False):
         f'Manifest branch: {BuildTrain.STATE_BROWSE_URL}',
         soft_wrap=True,
     )
-    _render_recovery(selected, records, progress or workflow)
+    if _render_recovery(selected, records, progress or workflow):
+        _render_releasability(selected)
     return int(bool(progress and progress.get('conclusion') in _policy_component.FAILED_CONCLUSIONS))
