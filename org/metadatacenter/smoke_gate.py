@@ -31,6 +31,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
@@ -216,12 +217,47 @@ def _stamp(moment: dt.datetime) -> str:
     return moment.replace(microsecond=0).isoformat()
 
 
+# A service that is warming is on its way to healthy, not broken: terminology answers its health
+# probe only once it has loaded every ontology, which takes minutes, and the probe's own timeout is
+# seconds. Refusing the gate for it turns a wait into a failed command an operator reruns by hand.
+WARMING_HEALTH = ("starting",)
+WARMUP_WAIT_SECONDS = 300
+WARMUP_POLL_SECONDS = 15
+
+
+def only_warming(problems: list[str]) -> bool:
+    """Whether every finding is a service still coming up, rather than one that is wrong."""
+    suffixes = tuple(f" is {state}" for state in WARMING_HEALTH)
+    return bool(problems) and all(problem.endswith(suffixes) for problem in problems)
+
+
+def wait_out_warmup(home, problems, runner=subprocess.run, sleeper=time.sleep):
+    """Give a warming stack the time it needs, and return the findings that outlast it.
+
+    The bound is a number of polls rather than a wall clock, so the wait is exactly as long as
+    the polls it performs and a caller supplying its own sleeper controls the whole duration.
+    """
+    console.print(
+        f"Waiting up to {WARMUP_WAIT_SECONDS // 60} minutes for the stack to finish warming: "
+        + ", ".join(problems))
+    for _attempt in range(max(1, WARMUP_WAIT_SECONDS // WARMUP_POLL_SECONDS)):
+        sleeper(WARMUP_POLL_SECONDS)
+        problems = stack_findings(home, runner)
+        if not problems:
+            console.print("The stack is healthy; running the smoke tiers.")
+            return problems
+        if not only_warming(problems):
+            return problems
+    return problems
+
+
 def run_smoke(
     cedar_home=None,
     *,
     runner=subprocess.run,
     clock: Callable[[], dt.datetime] = _now,
     environment: Mapping[str, str] | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
     """Run both smoke tiers and record what they ran against. Zero only when both pass.
 
@@ -240,6 +276,8 @@ def run_smoke(
         return 1
 
     problems = stack_findings(home, runner)
+    if only_warming(problems):
+        problems = wait_out_warmup(home, problems, runner=runner, sleeper=sleeper)
     if problems:
         console.print("[red]The native stack cannot stand for its source:[/red]")
         for problem in problems:
