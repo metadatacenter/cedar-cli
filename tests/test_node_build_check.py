@@ -11,6 +11,7 @@ from org.metadatacenter import build
 from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.InvocationContext import InvocationContext, use_context
+from org.metadatacenter.release_support.toolchain import node_24_remediation
 from org.metadatacenter.util.NodeBuildCheck import require_build_node, require_plan_node
 
 
@@ -39,18 +40,39 @@ class NodeBuildCheckTest(unittest.TestCase):
             project, env = self.fixture(root, 'v24.19.0')
             require_build_node(project, env)
             (project / '.nvmrc').write_text('v22.22.3\n')
-            with self.assertRaisesRegex(BuildSafetyError, 'requires Node 22.22.3'):
+            with self.assertRaisesRegex(BuildSafetyError, 'pins Node 22.22.3'):
                 require_build_node(project, env)
             self.fixture(root, 'v22.22.3')
             require_build_node(project, env)
 
     def test_missing_node_and_invalid_pin_fail_clearly(self):
         with tempfile.TemporaryDirectory() as root:
-            with self.assertRaisesRegex(BuildSafetyError, 'not installed'):
+            with self.assertRaisesRegex(BuildSafetyError, 'has no node on it'):
                 require_build_node(root, {'PATH': root})
             (Path(root) / '.nvmrc').write_text('lts/*')
             with self.assertRaisesRegex(BuildSafetyError, 'exact Node version'):
                 require_build_node(root, {'PATH': root})
+
+    def test_the_refusal_carries_the_command_that_fixes_it(self):
+        # An operator reading this has to be able to act on it without knowing where the estate
+        # keeps its Node, so the refusal names this host's own way to reach that version.
+        with tempfile.TemporaryDirectory() as root:
+            project, env = self.fixture(root, 'v16.20.2')
+            with self.assertRaises(BuildSafetyError) as error:
+                require_build_node(project, env)
+            message = str(error.exception)
+            self.assertIn(node_24_remediation(), message)
+            self.assertIn('Nothing has been installed or compiled', message)
+
+    def test_a_pin_the_toolchain_does_not_set_gets_no_toolchain_advice(self):
+        with tempfile.TemporaryDirectory() as root:
+            project, env = self.fixture(root, 'v16.20.2')
+            (project / '.nvmrc').write_text('20.11.1\n')
+            with self.assertRaises(BuildSafetyError) as error:
+                require_build_node(project, env)
+            message = str(error.exception)
+            self.assertIn('20.11.1', message)
+            self.assertNotIn('node@24', message)
 
     def test_mixed_plan_fails_before_any_task_or_snapshot(self):
         frontend = SimpleNamespace(parameters={'isolated_frontend_build': True},
