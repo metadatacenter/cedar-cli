@@ -498,6 +498,7 @@ def prepare_active_release_versions(
 def accept_active_release(
     state: ReleaseState | None = None,
     acceptance: ReleaseAcceptance | None = None,
+    integrator: ReleaseRemoteIntegrator | None = None,
 ) -> dict:
     state = state or ReleaseState()
     manifest, _ = state.read_current_manifest()
@@ -515,9 +516,15 @@ def accept_active_release(
             "failure": str(error),
         })
         raise
+    # Only once the release is proven: the branches an earlier release left behind are
+    # superseded by this one, and sweeping them before the proof would destroy the refs a
+    # failed acceptance might still be read against.
+    retirement = (integrator or ReleaseRemoteIntegrator(state)).retire_superseded_release_branches(
+        manifest)
     completed_manifest, _ = state.update_current_manifest({
         "phase": "accepted",
         "acceptance": evidence,
+        "branchRetirement": retirement,
         "failure": None,
     })
     state.conclude()
@@ -650,7 +657,9 @@ RELEASE_STAGES = (
         "acceptance",
         frozenset({"artifacts-published", "acceptance-failed"}),
         "accepted",
-        lambda state, deps: accept_active_release(state, deps["acceptance"]),
+        lambda state, deps: accept_active_release(
+            state, deps["acceptance"], deps["remote_integrator"],
+        ),
     ),
 )
 

@@ -350,3 +350,61 @@ class ReleaseRemoteIntegrator:
             expected[record["postBranch"]["ref"]] = record["postBranch"]["commit"]
         if actual != expected:
             raise ReleaseError(f"remote refs changed after integration for {task['repository']}")
+
+    def retire_superseded_release_branches(self, manifest: dict) -> dict:
+        """Delete the release branches earlier releases left behind.
+
+        A release writes `release/pre-<version>` to every repository it touches and
+        `release/post-<next>` to the release repositories, and `check_target_version_unused`
+        refuses a version whose refs already exist. Nothing ever removed them, so they
+        accumulated a pair per release per repository — 2.9.5 through 2.9.14 were still
+        standing in every repository until they were swept by hand.
+
+        The current pair stays. It is the evidence for the release being accepted, and the
+        one a rollback would reach for; everything older is superseded by the tag that names
+        the same tree.
+
+        This is housekeeping rather than proof, and it runs after a release is already
+        accepted, so a remote that refuses a delete is recorded and returned rather than
+        raised. A branch nobody could remove is untidy; an accepted release reported as
+        failed because of one would be wrong.
+        """
+        keep = {
+            f"release/pre-{manifest['releaseVersion']}",
+            f"release/post-{manifest['nextDevelopmentVersion']}",
+        }
+        cedar_home = self.environment.get("CEDAR_HOME")
+        if not cedar_home:
+            raise ReleaseError("CEDAR_HOME is not set")
+        retired: list[dict] = []
+        failures: list[dict] = []
+        for repository in sorted(manifest.get("sourceRepositories", {})):
+            root = Path(cedar_home) / repository
+            if not root.is_dir():
+                continue
+            try:
+                remote = self.remote_resolver(repository)
+                listing = self.git._run([
+                    "git", "-C", str(root), "ls-remote", "--heads", remote,
+                    "refs/heads/release/*",
+                ])
+                present = sorted({
+                    line.split("\t", 1)[-1][len("refs/heads/"):]
+                    for line in listing.splitlines() if line.strip()
+                })
+                superseded = [branch for branch in present if branch not in keep]
+                if not superseded:
+                    continue
+                self.git._run([
+                    "git", "-C", str(root), "push", remote, "--delete", *superseded,
+                ])
+                retired.append({"repository": repository, "branches": superseded})
+            except ReleaseError as error:
+                failures.append({"repository": repository, "error": str(error)})
+        return {
+            "retiredAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "kept": sorted(keep),
+            "repositories": retired,
+            "branchCount": sum(len(record["branches"]) for record in retired),
+            "failures": failures,
+        }
