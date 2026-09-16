@@ -130,6 +130,18 @@ class ReposFactory:
 
         repos.add_repo(cee_component_demo_multi)
 
+        # CEDAR's design values — the font stack, the type scale, the brand palettes and the
+        # neutrals — as one Sass partial and the custom properties compiled from it. Registered
+        # ahead of every npm repository that follows, because a plan is walked in the order repos
+        # are added here and each consumer resolves this from Nexus when its own build starts: a
+        # frontend built before this one publishes reads the previous snapshot and renders the
+        # previous values. It publishes itself on its own cadence, like the TypeScript model
+        # library, so it is out of the release train and allowed a version of its own.
+        design_tokens = Repo("cedar-design-tokens", RepoType.TYPESCRIPT,
+                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
+                             is_frontend=True, allow_different_version=True, skip_from_release=True)
+        repos.add_repo(design_tokens)
+
         # CEE assembles and stages its own npm package, and the CLI drives that pipeline rather
         # than reassembling the build output itself. Angular's esbuild builder emits an ES module
         # graph under dist/cedar-embeddable-editor/browser/, which cannot be joined by

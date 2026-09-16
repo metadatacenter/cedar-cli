@@ -217,10 +217,12 @@ def _stamp(moment: dt.datetime) -> str:
     return moment.replace(microsecond=0).isoformat()
 
 
-# A service that is warming is on its way to healthy, not broken: terminology answers its health
-# probe only once it has loaded every ontology, which takes minutes, and the probe's own timeout is
-# seconds. Refusing the gate for it turns a wait into a failed command an operator reruns by hand.
-WARMING_HEALTH = ("starting",)
+# A service in one of these states is on its way to healthy rather than broken, and refusing the gate
+# for it turns a wait into a failed command an operator reruns by hand. A `starting` service has begun
+# listening and has not finished booting, which a frontend compiling its bundle takes minutes to do.
+# A `slow` one is serving and did not answer its health probe inside the bound, which a single slow
+# dependency produces and the next poll usually clears.
+WARMING_HEALTH = ("starting", "slow")
 WARMUP_WAIT_SECONDS = 300
 WARMUP_POLL_SECONDS = 15
 

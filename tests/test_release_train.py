@@ -2646,6 +2646,85 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
                 integrate_active_release(state, integrator)
 
 
+class ReleaseBranchRetirementTest(unittest.TestCase):
+    """A release sweeps the branches earlier releases left behind, and keeps its own.
+
+    Every release wrote `release/pre-<version>` to each repository and `release/post-<next>`
+    to the release repositories, and nothing removed either, so 2.9.5 through 2.9.14 were
+    still standing in all of them when the accumulation was noticed.
+    """
+
+    @staticmethod
+    def _branches(remote) -> set:
+        output = subprocess.run(
+            ["git", "--git-dir", str(remote), "for-each-ref", "--format=%(refname:short)",
+             "refs/heads/release/"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        return {line.strip() for line in output.splitlines() if line.strip()}
+
+    def _strand_older_releases(self, remotes):
+        """Leave the refs two earlier releases would have left in every repository."""
+        for remote in remotes.values():
+            head = subprocess.run(
+                ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/main"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            for stale in (
+                "release/pre-9.9.1", "release/post-9.9.2-SNAPSHOT",
+                "release/pre-9.9.2", "release/post-9.9.3-SNAPSHOT",
+            ):
+                subprocess.run([
+                    "git", "--git-dir", str(remote), "update-ref", f"refs/heads/{stale}", head,
+                ], check=True)
+
+    def test_accepting_a_release_retires_superseded_branches_and_keeps_its_own(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, remotes, _completed = (
+                ReleaseRemoteIntegrationTest().make_integrated_release(directory)
+            )
+            manifest, _ = state.read_current_manifest()
+            self._strand_older_releases(remotes)
+            keep = {
+                f"release/pre-{manifest['releaseVersion']}",
+                f"release/post-{manifest['nextDevelopmentVersion']}",
+            }
+            for remote in remotes.values():
+                self.assertTrue(keep & self._branches(remote), "the release wrote no branch to keep")
+
+            retirement = integrator.retire_superseded_release_branches(manifest)
+
+            self.assertEqual([], retirement["failures"])
+            self.assertEqual(sorted(keep), retirement["kept"])
+            self.assertEqual(4 * len(remotes), retirement["branchCount"])
+            for repository, remote in remotes.items():
+                surviving = self._branches(remote)
+                self.assertEqual(
+                    keep & surviving, surviving,
+                    f"{repository} kept a superseded release branch",
+                )
+
+    def test_a_remote_that_refuses_a_delete_is_reported_rather_than_raised(self):
+        """The release is already accepted by the time this runs, so it cannot fail it."""
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, remotes, _completed = (
+                ReleaseRemoteIntegrationTest().make_integrated_release(directory)
+            )
+            manifest, _ = state.read_current_manifest()
+            self._strand_older_releases(remotes)
+            refused = sorted(remotes)[0]
+            integrator.remote_resolver = (
+                lambda repository: "/nonexistent/remote.git"
+                if repository == refused else str(remotes[repository])
+            )
+
+            retirement = integrator.retire_superseded_release_branches(manifest)
+
+            self.assertEqual([refused], [item["repository"] for item in retirement["failures"]])
+            swept = {item["repository"] for item in retirement["repositories"]}
+            self.assertEqual(set(remotes) - {refused}, swept)
+
+
 class ReleaseNexusInventorySearchTest(unittest.TestCase):
     """Nexus indexes snapshots under a timestamped version, releases under the version."""
 

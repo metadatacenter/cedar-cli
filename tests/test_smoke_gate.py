@@ -211,7 +211,7 @@ class RunSmokeTest(unittest.TestCase):
             self.assertFalse((home / "cedar-development" / "ops" / "e2e" / "reports").exists())
 
     def test_a_warming_service_is_waited_out_rather_than_refused(self):
-        """terminology answers its probe only once it has loaded every ontology."""
+        """A frontend compiling its bundle takes minutes to leave `starting`."""
         warming = (
             "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
             "resource\t101\t9007\tup\thealthy\tcurrent\t0\n"
@@ -232,6 +232,35 @@ class RunSmokeTest(unittest.TestCase):
                              environment={"PATH": "/usr/bin"}, sleeper=slept.append)
 
             self.assertEqual(0, code, "a stack that finished warming should run the tiers")
+            self.assertEqual(2, len(runner.commands("npm")))
+            self.assertTrue(slept, "the gate should have waited rather than refused at once")
+
+    def test_a_slow_probe_is_waited_out_rather_than_refused(self):
+        """A server that is serving and did not answer in time is not a reason to refuse the gate.
+
+        One slow dependency inside a health report produces it, the next poll usually clears it, and
+        the run it would otherwise refuse is a run against a stack that was healthy all along.
+        """
+        slow = (
+            "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
+            "resource\t101\t9007\tup\thealthy\tcurrent\t0\n"
+            "terminology\t102\t9004\tup\tslow\tcurrent\t0\n"
+        )
+        answers = [slow, HEALTHY_TSV]
+
+        def status(_args, _kwargs):
+            return FakeResult(stdout=answers.pop(0) if len(answers) > 1 else answers[0])
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            runner.answers[0] = (runner.answers[0][0], status)
+            slept = []
+
+            code = run_smoke(home, runner=runner, clock=clock(),
+                             environment={"PATH": "/usr/bin"}, sleeper=slept.append)
+
+            self.assertEqual(0, code, "a probe that answered on the next poll should run the tiers")
             self.assertEqual(2, len(runner.commands("npm")))
             self.assertTrue(slept, "the gate should have waited rather than refused at once")
 

@@ -157,8 +157,8 @@ class ServerWorker(Worker):
     def style_health(value):
         styles = {
             "healthy": "green", "docker": "cyan", "starting": "yellow",
-            "UNHEALTHY": "bold red", "error": "bold red", "down": "red",
-            "unknown": "yellow",
+            "slow": "yellow", "UNHEALTHY": "bold red", "error": "bold red",
+            "down": "red", "unknown": "yellow",
         }
         return Text(value, style=styles.get(value, "yellow"))
 
