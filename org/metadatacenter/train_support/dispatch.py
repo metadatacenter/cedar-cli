@@ -45,6 +45,10 @@ def _dry_run(selected, resume, command):
         'committed, and pushed'
     )
     _output_component.console.print(
+        '  [green]OK[/green] every source is readable without credentials, as the runner '
+        'reads it'
+    )
+    _output_component.console.print(
         '  [green]OK[/green] read-only Nexus, Maven, npm, and Docker publication targets '
         '(credentials from environment or ~/.m2/settings.xml)'
     )

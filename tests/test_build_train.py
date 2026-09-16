@@ -185,6 +185,7 @@ class BuildTrainTest(unittest.TestCase):
             ),
             patch("org.metadatacenter.train_support.preflight._local_configuration_preflight") as local_config,
             patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight") as smoke_gate,
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight") as npm_config,
@@ -198,6 +199,7 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('prospective ID; not reserved', result.output)
         self.assertIn('44 repositories', result.output)
         self.assertIn('7 frontends', result.output)
+        self.assertIn('readable without credentials', result.output)
         self.assertIn('Would dispatch:', result.output)
         self.assertIn('No changes made.', result.output)
         self.assertEqual(3, run.call_count)
@@ -241,6 +243,7 @@ class BuildTrainTest(unittest.TestCase):
                               'cedar-embeddable-editor', 7, 3),
             ),
             patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight"),
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight") as smoke_gate,
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
@@ -802,6 +805,7 @@ class PreflightReportTest(unittest.TestCase):
             patch("org.metadatacenter.train_support.survey._open_work", return_value=[
                 'cedar-x has 1 uncommitted change(s), which the train cannot see']),
             patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight", side_effect=ValueError(
                 'train source CI is not settled: cedar-y: CI concluded failure')) as source_ci,
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
@@ -838,6 +842,7 @@ class PreflightReportTest(unittest.TestCase):
             patch("org.metadatacenter.train_support.survey._open_work", return_value=[]),
             patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[
                 'cedar-z local develop is 11111111, but GitHub develop is 22222222']),
+            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
@@ -1058,6 +1063,146 @@ class SmokeGatePreflightTest(unittest.TestCase):
 
         self.assertIn('cedar-a has no local develop branch', str(refused.exception))
         findings.assert_not_called()
+
+
+class AnonymousSourceReadabilityTest(unittest.TestCase):
+    """The runner reads every source without credentials, so the preflight must too."""
+
+    CONFIGURATION = {
+        'organization': 'metadatacenter',
+        'sourceBranch': 'develop',
+        'repositories': ['cedar-a', 'cedar-b'],
+    }
+
+    def _home(self, directory, configuration=None):
+        ops = Path(directory) / 'cedar-development' / 'ops'
+        ops.mkdir(parents=True)
+        (ops / 'build-train.json').write_text(
+            json.dumps(self.CONFIGURATION if configuration is None else configuration),
+            encoding='utf-8',
+        )
+        return directory
+
+    @staticmethod
+    def _result(returncode=0, stdout='c' * 40 + '\trefs/heads/develop\n'):
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr='')
+
+    def test_a_readable_source_settles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._home(directory)
+            with (
+                patch.object(Util, 'cedar_home', home),
+                patch('org.metadatacenter.train_support.preflight.subprocess.run',
+                      return_value=self._result()) as run,
+            ):
+                BuildTrainWorker._anonymous_source_readability_preflight()
+
+        self.assertEqual(2, run.call_count)
+        urls = {call.args[0][-2] for call in run.call_args_list}
+        self.assertEqual({
+            'https://github.com/metadatacenter/cedar-a.git',
+            'https://github.com/metadatacenter/cedar-b.git',
+        }, urls)
+
+    def test_the_probe_carries_none_of_the_operator_credentials(self):
+        invocation = {
+            'CEDAR_HOME': '/tmp/x', 'GH_TOKEN': 'secret', 'GITHUB_TOKEN': 'secret',
+            'GIT_ASKPASS': '/usr/bin/askpass', 'SSH_ASKPASS': '/usr/bin/askpass',
+            'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'credential.helper',
+            'GIT_CONFIG_VALUE_0': 'store', 'PATH': '/usr/bin',
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._home(directory)
+            with (
+                patch.object(Util, 'cedar_home', home),
+                patch('org.metadatacenter.train_support.preflight.invocation_environment',
+                      return_value=invocation),
+                patch('org.metadatacenter.train_support.preflight.subprocess.run',
+                      return_value=self._result()) as run,
+            ):
+                BuildTrainWorker._anonymous_source_readability_preflight()
+
+        environment = run.call_args_list[0].kwargs['env']
+        for name in (
+            'GH_TOKEN', 'GITHUB_TOKEN', 'GIT_ASKPASS', 'SSH_ASKPASS',
+            'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+        ):
+            self.assertNotIn(name, environment)
+        self.assertEqual('0', environment['GIT_TERMINAL_PROMPT'])
+        self.assertEqual(os.devnull, environment['GIT_CONFIG_GLOBAL'])
+        self.assertEqual(os.devnull, environment['GIT_CONFIG_SYSTEM'])
+        self.assertEqual('/usr/bin', environment['PATH'])
+        self.assertIn('credential.helper=', run.call_args_list[0].args[0])
+
+    def test_a_private_source_refuses_and_names_it(self):
+        def answer(command, **_kwargs):
+            if command[-2].endswith('cedar-b.git'):
+                return self._result(returncode=128, stdout='')
+            return self._result()
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._home(directory)
+            with (
+                patch.object(Util, 'cedar_home', home),
+                patch('org.metadatacenter.train_support.preflight.subprocess.run',
+                      side_effect=answer),
+            ):
+                with self.assertRaises(ValueError) as refused:
+                    BuildTrainWorker._anonymous_source_readability_preflight()
+
+        message = str(refused.exception)
+        self.assertIn('reads every source anonymously', message)
+        self.assertIn('cedar-b is not readable without credentials', message)
+        self.assertNotIn('cedar-a', message)
+
+    def test_a_source_without_the_branch_refuses(self):
+        def answer(command, **_kwargs):
+            if command[-2].endswith('cedar-a.git'):
+                return self._result(stdout='')
+            return self._result()
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._home(directory)
+            with (
+                patch.object(Util, 'cedar_home', home),
+                patch('org.metadatacenter.train_support.preflight.subprocess.run',
+                      side_effect=answer),
+            ):
+                with self.assertRaises(ValueError) as refused:
+                    BuildTrainWorker._anonymous_source_readability_preflight()
+
+        self.assertIn('cedar-a has no develop branch', str(refused.exception))
+
+    def test_every_unreadable_source_is_reported_together(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._home(directory)
+            with (
+                patch.object(Util, 'cedar_home', home),
+                patch('org.metadatacenter.train_support.preflight.subprocess.run',
+                      return_value=self._result(returncode=128, stdout='')),
+            ):
+                with self.assertRaises(ValueError) as refused:
+                    BuildTrainWorker._anonymous_source_readability_preflight()
+
+        message = str(refused.exception)
+        self.assertIn('cedar-a is not readable', message)
+        self.assertIn('cedar-b is not readable', message)
+
+    def test_a_resumed_train_asks_of_its_recorded_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = self._home(directory)
+            with (
+                patch.object(Util, 'cedar_home', home),
+                patch('org.metadatacenter.train_support.preflight.subprocess.run',
+                      return_value=self._result()) as run,
+            ):
+                BuildTrainWorker._anonymous_source_readability_preflight(
+                    {'version': 'x', 'repositories': {'cedar-z': 'z' * 40}})
+
+        self.assertEqual(1, run.call_count)
+        self.assertEqual(
+            'https://github.com/metadatacenter/cedar-z.git',
+            run.call_args_list[0].args[0][-2])
 
 
 class MainAheadSurveyTest(unittest.TestCase):

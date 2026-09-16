@@ -6,6 +6,7 @@ from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.NexusCredentials import environment_with_nexus_credentials
 from org.metadatacenter.util.Util import Util
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 import json
 import os
@@ -210,6 +211,87 @@ def _source_ci_preflight(source=None):
         raise ValueError('train source CI is not settled: ' + '; '.join(failures))
 
 
+def _credential_free_environment():
+    """A git environment holding none of the operator's credentials.
+
+        The workflow runner resolves each source anonymously, so a preflight that inherits the
+        operator's git configuration answers a different question than the one that matters. The
+        user and system files are replaced rather than ignored, because a credential helper
+        configured in either would otherwise supply a token the runner never has; the same helper
+        can also arrive through the environment's own config entries, and through an askpass
+        program, so those go too.
+        """
+    environment = dict(invocation_environment())
+    for name in list(environment):
+        if name.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')):
+            del environment[name]
+    for name in (
+        'GIT_CONFIG_COUNT', 'GIT_ASKPASS', 'SSH_ASKPASS',
+        'GH_TOKEN', 'GITHUB_TOKEN',
+    ):
+        environment.pop(name, None)
+    environment['GIT_TERMINAL_PROMPT'] = '0'
+    environment['GIT_CONFIG_GLOBAL'] = os.devnull
+    environment['GIT_CONFIG_SYSTEM'] = os.devnull
+    return environment
+
+
+def _anonymous_source_readability_preflight(source=None, max_workers=12):
+    """Require every train source to be readable the way the runner reads it.
+
+        The capture step resolves each source with an unauthenticated `git ls-remote`, so a private
+        repository, or one without the source branch, stops the workflow before it records any
+        state. Nothing is published when that happens, but the train ID is spent, and the recovery
+        is a fresh one.
+        """
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
+    if not cedar_home:
+        raise ValueError('CEDAR_HOME is not set')
+    ops = Path(cedar_home) / 'cedar-development' / 'ops'
+    try:
+        build = json.loads((ops / 'build-train.json').read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f'cannot read build-train configuration: {error}') from error
+    organization = build.get('organization')
+    branch = build.get('sourceBranch')
+    if not organization or not branch:
+        raise ValueError('build-train source must name an organization and a branch')
+    recorded = source.get('repositories') if isinstance(source, dict) else None
+    repositories = sorted(recorded) if recorded else build.get('repositories', [])
+    if not repositories:
+        raise ValueError('this train has no source repositories')
+
+    environment = _credential_free_environment()
+
+    def readable(repository):
+        url = f'https://github.com/{organization}/{repository}.git'
+        try:
+            result = subprocess.run(
+                ['git', '-c', 'credential.helper=',
+                 'ls-remote', url, f'refs/heads/{branch}'],
+                cwd=str(cedar_home),
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            return repository, f'cannot be resolved: {error}'
+        if result.returncode:
+            return repository, 'is not readable without credentials'
+        if not result.stdout.strip():
+            return repository, f'has no {branch} branch'
+        return repository, None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        results = list(pool.map(readable, repositories))
+    findings = [f'{repository} {detail}' for repository, detail in results if detail]
+    if findings:
+        raise ValueError(
+            'the train capture step reads every source anonymously, and '
+            + '; '.join(findings))
+
+
 def _local_configuration_preflight():
     cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
@@ -309,6 +391,7 @@ def _preflight(selected, resume):
     if settled and alignment:
         findings.append(
             'local source checkouts do not match GitHub develop: ' + '; '.join(alignment))
+    settle(_anonymous_source_readability_preflight, source)
     if github_ready:
         settle(_source_ci_preflight, source)
     settle(_smoke_gate_preflight, source)
