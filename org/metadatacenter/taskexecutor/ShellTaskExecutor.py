@@ -67,7 +67,7 @@ class ShellTaskExecutor(TaskExecutor):
                         # The reactor. Resolve this copy's CEDAR dependencies from the siblings
                         # already built in this walk, the way a Maven reactor resolves from ~/.m2,
                         # and turn npm ci into npm install because a rewritten manifest no longer
-                        # matches the lock. An empty store rewrites nothing and builds the pins.
+                        # matches the lock. Scheduled producers must succeed before resolution.
                         cedar_home = Util.cedar_home
                         resolved = reactor.resolve(isolated_cwd, cedar_home)
                         if resolved:
@@ -79,7 +79,7 @@ class ShellTaskExecutor(TaskExecutor):
                             job_progress, environment,
                         )
                         if code == 0:
-                            stored = reactor.publish(repo, isolated_cwd, cedar_home)
+                            stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)
                         return code
@@ -91,6 +91,9 @@ class ShellTaskExecutor(TaskExecutor):
                 return self._execute_commands(
                     task, repo, commands_to_execute, cwd, job_progress, None,
                 )
+            except reactor.ReactorError as error:
+                job_progress.print(f"Reactor failed: {error}", markup=False)
+                return 1
             except BuildSafetyError as error:
                 job_progress.print(f"Build safety check failed: {error}", markup=False)
                 return 1

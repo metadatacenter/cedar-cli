@@ -14,21 +14,27 @@ It cannot be the sibling's checkout. A published package is not its source tree:
 builds a `dist/` whose package.json is `package-dist.json`, the two Web Components stage under
 `dist-npm/`, and the design tokens publish their root. Each repository declares which it is.
 
-Nor can it be the sibling's build output, because a frontend builds in a copy that is thrown away.
-That is what `~/.m2` is for in Maven, and this keeps the same shape: after a repository builds, its
-published package is copied into a store beside the checkouts, and a consumer's dependency is
-rewritten to point there.
-
-A dependency the store has not seen is left alone. So an empty store builds exactly what the pins
-say, which is what every build did before this existed, and `build frontends` fills the store as it
-walks: the producers come first, so by the time a consumer builds, the siblings it needs are there.
+Each successful producer is packed without lifecycle scripts and stored as an immutable,
+content-addressed npm tarball. Consumers install the tarball, never a shared directory link.
+A build snapshots the available packages once and then uses its own producers' outputs;
+concurrent builds cannot change that selection. Producers scheduled in this build must
+succeed before their consumers may resolve them. Other dependencies retain their pins
+when no local artifact is available.
 """
 
 from __future__ import annotations
 
+import contextlib
+from contextvars import ContextVar
+import hashlib
 import json
-import shutil
+import os
+import re
+import tarfile
+import tempfile
 from pathlib import Path
+
+from org.metadatacenter.util.ProcessRunner import run_process
 
 # Beside the checkouts rather than inside one, because it belongs to no repository. The name is
 # hidden so it does not read as a sibling to anything that scans $CEDAR_HOME for repositories.
@@ -68,33 +74,120 @@ def install_commands(commands):
     return rewritten
 
 
-def publish(repo, build_root, cedar_home) -> str | None:
-    """Copy what this repository publishes into the store, for the consumers still to build.
+class ReactorError(RuntimeError):
+    """A reactor artifact could not be produced or safely consumed."""
 
-    Returns what it stored, for the build report, or None when this repository publishes nothing
-    a sibling consumes.
+
+_session = ContextVar("cedar_frontend_reactor", default=None)
+
+
+def _available(cedar_home):
+    refs = store_root(cedar_home) / "refs"
+    available = {}
+    try:
+        for ref in sorted(refs.glob("*.json")):
+            digest = json.loads(ref.read_text())["sha256"]
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError(f"invalid artifact digest in {ref}")
+            target = store_root(cedar_home) / "artifacts" / f"{digest}.tgz"
+            if not target.is_file():
+                raise ValueError(f"missing artifact {target}")
+            available[ref.stem] = target.resolve()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ReactorError(f"Cannot read reactor store: {error}") from error
+    return available
+
+
+@contextlib.contextmanager
+def session(cedar_home, producers=()):
+    """Freeze external selections and require this walk's producers to finish first."""
+    available = _available(cedar_home)
+    pending = set(producers)
+    for name in pending:
+        available.pop(name, None)
+    token = _session.set((Path(cedar_home).resolve(), available, pending))
+    try:
+        yield
+    finally:
+        _session.reset(token)
+
+
+def _state(cedar_home):
+    state = _session.get()
+    if state is not None and state[0] == Path(cedar_home).resolve():
+        return state[1], state[2]
+    return _available(cedar_home), set()
+
+
+def session_for_plan(cedar_home, plan):
+    """Only isolated frontend tasks participate; other plans never read the store."""
+    repos = []
+
+    def visit(task):
+        if getattr(task, "parameters", {}).get("isolated_frontend_build") is True:
+            repos.append(task.repo)
+        for child in task.tasks:
+            visit(child)
+
+    visit(plan)
+    if not repos:
+        return contextlib.nullcontext()
+    return session(cedar_home, {repo.name for repo in repos if repo.published_package_path})
+
+
+def publish(repo, build_root, cedar_home, environment=None) -> str | None:
+    """Pack verified output and atomically advertise its immutable artifact.
+
+    Declaring a package makes storage part of build success. Never accept absent output,
+    keep a partially written artifact, or report a failed store operation as success.
     """
     if not repo.published_package_path:
         return None
     source = (Path(build_root) / repo.published_package_path).resolve()
-    manifest = source / "package.json"
-    if not manifest.is_file():
-        return None
     try:
-        name = unscoped(json.loads(manifest.read_text(encoding="utf-8")).get("name") or "")
-    except (OSError, ValueError):
-        return None
-    if not name:
-        return None
-    destination = store_root(cedar_home) / name
-    try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists():
-            shutil.rmtree(destination)
-        shutil.copytree(source, destination, symlinks=True,
-                        ignore=lambda _d, names: {n for n in names if n == "node_modules"})
-    except OSError as error:
-        return f"{name} could not be stored: {error}"
+        package = json.loads((source / "package.json").read_text(encoding="utf-8"))
+        name = unscoped(package.get("name") or "")
+        if name != repo.name or not isinstance(package.get("version"), str) or not package["version"]:
+            raise ValueError(f"expected named, versioned package for {repo.name}")
+        store = store_root(cedar_home).resolve()
+        artifacts = store / "artifacts"
+        refs = store / "refs"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        refs.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="pack-", dir=store) as temporary:
+            scratch = Path(temporary)
+            result = run_process([
+                "npm", "pack", "--ignore-scripts", "--json",
+                "--pack-destination", str(scratch), "--cache", str(scratch / "cache"),
+            ], cwd=str(source), env=environment)
+            if result.returncode:
+                raise ValueError("npm pack failed: " + "\n".join(result))
+            tarballs = list(scratch.glob("*.tgz"))
+            if len(tarballs) != 1:
+                raise ValueError("npm pack did not produce exactly one tarball")
+            packed = tarballs[0]
+            with tarfile.open(packed, "r:gz") as archive:
+                metadata = json.load(archive.extractfile("package/package.json"))
+                if metadata.get("name") != package["name"] or metadata.get("version") != package["version"]:
+                    raise ValueError("packed package identity differs from build output")
+            digest = hashlib.sha256(packed.read_bytes()).hexdigest()
+            destination = artifacts / f"{digest}.tgz"
+            # An exclusive link makes a complete artifact visible in one operation. The
+            # same digest can be published concurrently without replacing either reader's file.
+            try:
+                os.link(packed, destination)
+            except FileExistsError:
+                if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                    raise ValueError(f"corrupt existing artifact {destination}")
+            ref = scratch / "reference.json"
+            ref.write_text(json.dumps({"sha256": digest}) + "\n")
+            os.replace(ref, refs / f"{name}.json")
+        state = _session.get()
+        if state is not None and state[0] == Path(cedar_home).resolve():
+            state[1][name] = destination
+            state[2].discard(name)
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, tarfile.TarError) as error:
+        raise ReactorError(f"Cannot store {repo.name}: {error}") from error
     return name
 
 
@@ -104,11 +197,8 @@ def resolve(build_root, cedar_home) -> list[str]:
     Every manifest in the copy is rewritten, because a repository can carry several: CEE has one
     under visual/, and each multi-repository has one per sub-project.
     """
-    store = store_root(cedar_home)
-    if not store.is_dir():
-        return []
-    available = {path.name: path for path in store.iterdir() if (path / "package.json").is_file()}
-    if not available:
+    available, pending = _state(cedar_home)
+    if not available and not pending:
         return []
     notes = []
     for manifest in sorted(Path(build_root).rglob("package.json")):
@@ -129,9 +219,13 @@ def resolve(build_root, cedar_home) -> list[str]:
                 name = key
                 if isinstance(requested, str) and requested.startswith("npm:"):
                     name = requested[len("npm:"):].rsplit("@", 1)[0]
-                target = available.get(unscoped(name))
                 # A repository never resolves itself from the store.
-                if target is None or unscoped(name) == unscoped(package.get("name") or ""):
+                if unscoped(name) == unscoped(package.get("name") or ""):
+                    continue
+                if unscoped(name) in pending:
+                    raise ReactorError(f"{manifest}: producer {unscoped(name)} has not succeeded in this build")
+                target = available.get(unscoped(name))
+                if target is None:
                     continue
                 declared[key] = f"file:{target}"
                 rewritten = True

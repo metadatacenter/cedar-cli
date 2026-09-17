@@ -1,11 +1,18 @@
+import contextlib
 import json
+import shutil
+import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from org.metadatacenter import reactor
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoType import RepoType
+from org.metadatacenter.util.ProcessRunner import CommandOutput
 
 
 class InstallCommandsTest(unittest.TestCase):
@@ -31,6 +38,7 @@ class InstallCommandsTest(unittest.TestCase):
         self.assertEqual(["npm run ci"], reactor.install_commands(["npm run ci"]))
 
 
+@unittest.skipUnless(shutil.which("npm"), "requires npm")
 class PublishTest(unittest.TestCase):
 
     def setUp(self):
@@ -49,34 +57,139 @@ class PublishTest(unittest.TestCase):
     def _repo(self, path="dist-npm/cedar-embeddable-designer"):
         return Repo("cedar-embeddable-designer", RepoType.ANGULAR, [], published_package_path=path)
 
-    def test_the_published_package_is_stored_under_its_unscoped_name(self):
-        self._staged()
-
+    def test_storing_again_keeps_old_artifact_and_advances_reference(self):
+        staged = self._staged()
         self.assertEqual("cedar-embeddable-designer",
                          reactor.publish(self._repo(), self.build, self.home))
-
-        stored = self.home / reactor.STORE / "cedar-embeddable-designer"
-        self.assertEqual("// bundle", (stored / "cedar-embeddable-designer.js").read_text())
-
-    def test_storing_again_replaces_what_was_there(self):
-        self._staged()
+        old = reactor._available(self.home)[self._repo().name]
+        (staged / "cedar-embeddable-designer.js").write_text("// rebuilt")
         reactor.publish(self._repo(), self.build, self.home)
-        (self.build / "dist-npm" / "cedar-embeddable-designer" / "stale.js").unlink(missing_ok=True)
-        (self.build / "dist-npm" / "cedar-embeddable-designer"
-         / "cedar-embeddable-designer.js").write_text("// rebuilt")
-
-        reactor.publish(self._repo(), self.build, self.home)
-
-        stored = self.home / reactor.STORE / "cedar-embeddable-designer"
-        self.assertEqual("// rebuilt", (stored / "cedar-embeddable-designer.js").read_text())
+        new = reactor._available(self.home)[self._repo().name]
+        self.assertNotEqual(old, new)
+        with tarfile.open(old) as archive:
+            self.assertEqual(b"// bundle", archive.extractfile("package/cedar-embeddable-designer.js").read())
+        with tarfile.open(new) as archive:
+            self.assertEqual(b"// rebuilt", archive.extractfile("package/cedar-embeddable-designer.js").read())
 
     def test_a_repository_that_publishes_nothing_stores_nothing(self):
         self.assertIsNone(reactor.publish(self._repo(path=None), self.build, self.home))
         self.assertFalse((self.home / reactor.STORE).exists())
 
-    def test_a_declared_path_with_no_manifest_stores_nothing(self):
-        """A build that did not stage its package leaves the store as it was."""
-        self.assertIsNone(reactor.publish(self._repo(), self.build, self.home))
+    def test_declared_package_requires_valid_output(self):
+        staged = self.build / self._repo().published_package_path
+        for contents in (None, "bad json", "[]", '{}', '{"name":"wrong","version":"1.0.0"}'):
+            with self.subTest(contents=contents):
+                if contents is not None:
+                    (staged / "package.json").write_text(contents)
+                with self.assertRaises(reactor.ReactorError):
+                    reactor.publish(self._repo(), self.build, self.home)
+
+    def test_failed_pack_and_failed_reference_write_are_errors(self):
+        self._staged()
+        reactor.publish(self._repo(), self.build, self.home)
+        previous = reactor._available(self.home)
+        with patch.object(reactor, "run_process", return_value=CommandOutput(["pack failed"], 1)):
+            with self.assertRaisesRegex(reactor.ReactorError, "pack failed"):
+                reactor.publish(self._repo(), self.build, self.home)
+        for operation in ("link", "replace"):
+            with self.subTest(operation=operation), patch.object(reactor.os, operation, side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(reactor.ReactorError, "disk full"):
+                    reactor.publish(self._repo(), self.build, self.home)
+        self.assertEqual(previous, reactor._available(self.home))
+
+    def test_tarball_install_never_runs_prepare_or_follows_future_publications(self):
+        staged = self._staged()
+        manifest = staged / "package.json"
+        package = json.loads(manifest.read_text())
+        package.update({"main": "cedar-embeddable-designer.js", "files": ["cedar-embeddable-designer.js"],
+                        "scripts": {"prepare": "node -e \"process.exit(71)\""}})
+        manifest.write_text(json.dumps(package))
+        (staged / "cedar-embeddable-designer.js").write_text('module.exports = "first";')
+        (staged / "unpublished.txt").write_text("not in the npm package")
+        reactor.publish(self._repo(), self.build, self.home)
+        consumer = self.home / "consumer"
+        consumer.mkdir()
+        consumer_manifest = consumer / "package.json"
+        def reset_consumer():
+            consumer_manifest.write_text(json.dumps({"name": "consumer", "version": "1.0.0", "dependencies": {
+                "cedar-embeddable-designer": "npm:@org.metadatacenter/cedar-embeddable-designer@0.1.0"}}))
+        reset_consumer()
+        with reactor.session(self.home):
+            reactor.resolve(consumer, self.home)
+            selected = consumer_manifest.read_text()
+            # Nested session represents another invocation, publishing before the first
+            # consumer even installs. Both installation and later resolution must stay pinned.
+            with reactor.session(self.home):
+                (staged / "cedar-embeddable-designer.js").write_text('module.exports = "second";')
+                reactor.publish(self._repo(), self.build, self.home)
+            reset_consumer()
+            reactor.resolve(consumer, self.home)
+            self.assertEqual(selected, consumer_manifest.read_text())
+            result = subprocess.run(["npm", "install", "--offline", "--no-audit", "--no-fund",
+                                     "--cache", str(self.home / "cache")], cwd=consumer,
+                                    capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            installed = consumer / "node_modules/cedar-embeddable-designer"
+            self.assertFalse(installed.is_symlink())
+            self.assertFalse((installed / "unpublished.txt").exists())
+            result = subprocess.check_output(["node", "-p", "require('cedar-embeddable-designer')"],
+                                             cwd=consumer, text=True)
+            self.assertEqual("first", result.strip())
+        reset_consumer()
+        reactor.resolve(consumer, self.home)
+        self.assertNotEqual(selected, consumer_manifest.read_text())
+
+    def test_pending_or_failed_producer_cannot_fall_back_to_old_package(self):
+        self._staged()
+        reactor.publish(self._repo(), self.build, self.home)
+        consumer = self.home / "consumer"
+        consumer.mkdir()
+        (consumer / "package.json").write_text(json.dumps({"dependencies": {
+            "cedar-embeddable-designer": "0.1.0"}}))
+        with reactor.session(self.home, [self._repo().name]):
+            with patch.object(reactor, "run_process", return_value=CommandOutput(["pack failed"], 1)):
+                with self.assertRaises(reactor.ReactorError):
+                    reactor.publish(self._repo(), self.build, self.home)
+            with self.assertRaisesRegex(reactor.ReactorError, "has not succeeded"):
+                reactor.resolve(consumer, self.home)
+            reactor.publish(self._repo(), self.build, self.home)
+            self.assertEqual(1, len(reactor.resolve(consumer, self.home)))
+
+
+class PlanSessionTest(unittest.TestCase):
+    def test_only_scheduled_isolated_producers_must_be_built(self):
+        producer = Repo("cedar-producer", RepoType.TYPESCRIPT, [], published_package_path="dist")
+        server = Repo("cedar-server", RepoType.ANGULAR_JS, [], published_package_path="dist")
+        plan = SimpleNamespace(tasks=[
+            SimpleNamespace(repo=producer, tasks=[], parameters={"isolated_frontend_build": True}),
+            SimpleNamespace(repo=server, tasks=[], parameters={"in_place_frontend_build": True}),
+        ])
+        with tempfile.TemporaryDirectory() as home:
+            with reactor.session_for_plan(home, plan):
+                self.assertEqual({"cedar-producer"}, reactor._state(home)[1])
+            self.assertIsNone(reactor._session.get())
+
+    def test_other_plans_do_not_read_the_reactor_store(self):
+        plan = SimpleNamespace(tasks=[SimpleNamespace(tasks=[], parameters={"in_place_frontend_build": True})])
+        with patch.object(reactor, "_available", side_effect=AssertionError("must not read store")):
+            with reactor.session_for_plan("/unused", plan):
+                self.assertIsNone(reactor._session.get())
+
+
+class ExecutorFailureTest(unittest.TestCase):
+    def test_publication_failure_makes_shell_task_fail(self):
+        from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
+        task = SimpleNamespace(node_id=1, repo=SimpleNamespace(name="cedar-example", repo_type="TYPESCRIPT"),
+                               command_list=["npm run build"], parameters={"isolated_frontend_build": True},
+                               get_parameter=lambda key: key == "isolated_frontend_build")
+        executor = ShellTaskExecutor()
+        module = "org.metadatacenter.taskexecutor.ShellTaskExecutor"
+        with patch(module + ".require_build_node"), patch(module + ".Util.get_wd", return_value="/tmp"), \
+             patch(module + ".isolated_frontend_workspace", return_value=contextlib.nullcontext((Path('/tmp'), {}, []))), \
+             patch.object(reactor, "resolve", return_value=[]), \
+             patch.object(reactor, "publish", side_effect=reactor.ReactorError("disk full")), \
+             patch.object(executor, "_execute_commands", return_value=0):
+            self.assertEqual(1, executor.execute_shell_command_list(task, Mock(), False))
 
 
 class ResolveTest(unittest.TestCase):
@@ -90,9 +203,13 @@ class ResolveTest(unittest.TestCase):
 
     def _store(self, *names):
         for name in names:
-            stored = self.home / reactor.STORE / name
-            stored.mkdir(parents=True)
-            (stored / "package.json").write_text(json.dumps({"name": name, "version": "0.1.0"}))
+            import hashlib
+            digest = hashlib.sha256(name.encode()).hexdigest()
+            stored = self.home / reactor.STORE
+            (stored / "artifacts").mkdir(parents=True, exist_ok=True)
+            (stored / "refs").mkdir(exist_ok=True)
+            (stored / "artifacts" / f"{digest}.tgz").write_bytes(b"fixture")
+            (stored / "refs" / f"{name}.json").write_text(json.dumps({"sha256": digest}))
 
     def _manifest(self, payload, *parts):
         path = self.build.joinpath(*parts) if parts else self.build / "package.json"
@@ -118,7 +235,7 @@ class ResolveTest(unittest.TestCase):
         written = json.loads(manifest.read_text())["devDependencies"][
             "@org.metadatacenter/cedar-design-tokens"]
         self.assertTrue(written.startswith("file:"), written)
-        self.assertTrue(written.endswith("cedar-design-tokens"), written)
+        self.assertTrue(written.endswith(".tgz"), written)
         self.assertEqual(1, len(notes))
 
     def test_the_alias_form_is_matched_by_the_package_it_reaches(self):
