@@ -48,6 +48,69 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-cadsr-tools", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
         repos.add_repo(Repo("cedar-model-library-roundtrip", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
 
+        # The frontends are registered in dependency order, because a plan is walked in the
+        # order repos are added here. Every consumer resolves its CEDAR packages from Nexus when
+        # its own build starts, so a consumer registered before the package it consumes reads the
+        # previous snapshot: it builds, and it builds against what it replaced. The producers
+        # therefore come first, and `tests/test_frontend_registration_order.py` holds that.
+
+        # CEDAR's design values — the font stack, the type scale, the brand palettes and the
+        # neutrals — as one Sass partial and the custom properties compiled from it. Nothing in
+        # the estate consumes anything it consumes, so it comes first. It publishes itself on its
+        # own cadence, like the TypeScript model library, so it is out of the release train and
+        # allowed a version of its own.
+        design_tokens = Repo("cedar-design-tokens", RepoType.TYPESCRIPT,
+                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
+                             is_frontend=True, allow_different_version=True, skip_from_release=True)
+        repos.add_repo(design_tokens)
+
+        model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT,
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 allow_different_version=True, skip_from_release=True)
+        repos.add_repo(model_typescript_library)
+
+        # CEE assembles and stages its own npm package, and the CLI drives that pipeline rather
+        # than reassembling the build output itself. Angular's esbuild builder emits an ES module
+        # graph under dist/cedar-embeddable-editor/browser/, which cannot be joined by
+        # concatenation the way the old webpack chunks could; visual/resolve-build-output.mjs is
+        # the single place that knows what the builder emitted and how to turn it into one script.
+        embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR,
+                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
+                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
+                                 allow_different_version=True, skip_from_release=True,
+                                 build_command_list=[
+                                     'npm ci',
+                                     'npm --prefix visual ci',
+                                     'npm run build:production',
+                                     'npm --prefix visual run bundle',
+                                     'npm run package:npm:prebuilt',
+                                 ])
+        repos.add_repo(embeddable_editor)
+
+        # The two Web Components the split Designer host serves beside CEE. Both publish a
+        # single-file custom-element bundle to the scoped Nexus registry on their own cadence, like
+        # the TypeScript model library, so both are allowed a version of their own and stay out of
+        # the release train. Registered after design-tokens and the model library, which they
+        # consume, and each publishes the package staged under dist-npm/ rather than its checkout
+        # root, which is why the publish command names that directory.
+        term_picker = Repo("cedar-embeddable-term-picker", RepoType.ANGULAR,
+                           [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
+                           is_frontend=True, allow_different_version=True, skip_from_release=True,
+                           build_command_list=['npm ci', 'npm run dist'],
+                           publish_command_list=[
+                               'npm publish ./dist-npm/cedar-embeddable-term-picker --tag=dev'])
+        repos.add_repo(term_picker)
+
+        embeddable_designer = Repo("cedar-embeddable-designer", RepoType.ANGULAR,
+                                   [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
+                                   is_frontend=True, allow_different_version=True,
+                                   skip_from_release=True,
+                                   build_command_list=['npm ci', 'npm run dist'],
+                                   publish_command_list=[
+                                       'npm publish ./dist-npm/cedar-embeddable-designer --tag=dev'])
+        repos.add_repo(embeddable_designer)
+
         repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, [V.PACKAGE_OWN], is_frontend=True))
 
         # The split frontends use the ordinary platform release and Nexus publication path. Their
@@ -130,68 +193,9 @@ class ReposFactory:
 
         repos.add_repo(cee_component_demo_multi)
 
-        # CEDAR's design values — the font stack, the type scale, the brand palettes and the
-        # neutrals — as one Sass partial and the custom properties compiled from it. Registered
-        # ahead of every npm repository that follows, because a plan is walked in the order repos
-        # are added here and each consumer resolves this from Nexus when its own build starts: a
-        # frontend built before this one publishes reads the previous snapshot and renders the
-        # previous values. It publishes itself on its own cadence, like the TypeScript model
-        # library, so it is out of the release train and allowed a version of its own.
-        design_tokens = Repo("cedar-design-tokens", RepoType.TYPESCRIPT,
-                             [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
-                             is_frontend=True, allow_different_version=True, skip_from_release=True)
-        repos.add_repo(design_tokens)
-
-        # CEE assembles and stages its own npm package, and the CLI drives that pipeline rather
-        # than reassembling the build output itself. Angular's esbuild builder emits an ES module
-        # graph under dist/cedar-embeddable-editor/browser/, which cannot be joined by
-        # concatenation the way the old webpack chunks could; visual/resolve-build-output.mjs is
-        # the single place that knows what the builder emitted and how to turn it into one script.
-        embeddable_editor = Repo("cedar-embeddable-editor", RepoType.ANGULAR,
-                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
-                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                                 allow_different_version=True, skip_from_release=True,
-                                 build_command_list=[
-                                     'npm ci',
-                                     'npm --prefix visual ci',
-                                     'npm run build:production',
-                                     'npm --prefix visual run bundle',
-                                     'npm run package:npm:prebuilt',
-                                 ])
-        repos.add_repo(embeddable_editor)
-
         content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(content_distribution)
-
-        model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT,
-                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
-                                  V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                                 allow_different_version=True, skip_from_release=True)
-        repos.add_repo(model_typescript_library)
-
-        # The two Web Components the split Designer host serves beside CEE. Both publish a
-        # single-file custom-element bundle to the scoped Nexus registry on their own cadence, like
-        # the TypeScript model library, so both are allowed a version of their own and stay out of
-        # the release train. Registered after design-tokens and the model library, which they
-        # consume, and each publishes the package staged under dist-npm/ rather than its checkout
-        # root, which is why the publish command names that directory.
-        term_picker = Repo("cedar-embeddable-term-picker", RepoType.ANGULAR,
-                           [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
-                           is_frontend=True, allow_different_version=True, skip_from_release=True,
-                           build_command_list=['npm ci', 'npm run dist'],
-                           publish_command_list=[
-                               'npm publish ./dist-npm/cedar-embeddable-term-picker --tag=dev'])
-        repos.add_repo(term_picker)
-
-        embeddable_designer = Repo("cedar-embeddable-designer", RepoType.ANGULAR,
-                                   [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
-                                   is_frontend=True, allow_different_version=True,
-                                   skip_from_release=True,
-                                   build_command_list=['npm ci', 'npm run dist'],
-                                   publish_command_list=[
-                                       'npm publish ./dist-npm/cedar-embeddable-designer --tag=dev'])
-        repos.add_repo(embeddable_designer)
 
         model_typescript_library_demo = Repo("cedar-model-typescript-library-demo", RepoType.TYPESCRIPT,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN,
