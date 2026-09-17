@@ -212,7 +212,8 @@ class ServerWorker(Worker):
             if service in EDITOR_FRONTENDS:
                 warnings.append(
                     f"{service} serves an Embeddable Editor other than the one its lock names; run "
-                    f"(cd $CEDAR_HOME/{EDITOR_FRONTENDS[service]} && npm ci && npx gulp copy:cee)")
+                    f"(cd $CEDAR_HOME/{EDITOR_FRONTENDS[service]} && npm ci && "
+                    f"{'npm run copy:cee' if service == 'ui-workspace' else 'npx gulp copy:cee'})")
         if unmanaged:
             warnings.append(f"unmanaged CEDAR processes: {', '.join(unmanaged)}; restart adopts them")
         if foreign:

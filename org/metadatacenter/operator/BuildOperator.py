@@ -42,11 +42,15 @@ class BuildOperator(Operator):
             elif repo.repo_type == RepoType.ANGULAR:
                 if build_frontends:
                     shell_wrapper = PlanTask("Build angular project", TaskType.SHELL_WRAPPER, repo)
-                    if repo.build_command_list:
+                    if task.get_parameter("server_frontend_payload") is True and repo.server_build_command_list:
+                        build_task = BuildShellTaskFactory.repo_server_build_commands(repo)
+                        build_task.parameters["in_place_frontend_build"] = True
+                    elif repo.build_command_list:
                         build_task = BuildShellTaskFactory.repo_build_commands(repo)
                     else:
                         build_task = BuildShellTaskFactory.npm_ci_legacy_ng_build(repo)
-                    build_task.parameters["isolated_frontend_build"] = True
+                    if not build_task.parameters.get("in_place_frontend_build"):
+                        build_task.parameters["isolated_frontend_build"] = True
                     shell_wrapper.add_task_as_task(build_task)
                 else:
                     shell_wrapper = PlanTask("Build angular project - skipped because of CEDAR_DEV_BUILD_FRONTENDS", TaskType.SHELL_WRAPPER,

@@ -121,9 +121,9 @@ class ReposFactory:
         # The split frontends use the ordinary platform release and Nexus publication path. Their
         # native static-payload build remains explicit because nginx serves these repositories
         # directly rather than through the legacy Template Editor tree.
-        repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],
+        repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR, [V.PACKAGE_OWN],
                             is_frontend=True,
-                            build_command_list=['npm ci'],
+                            build_command_list=['npm ci', 'npm run build'],
                             server_build_command_list=[
                                 'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace']))
         repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],

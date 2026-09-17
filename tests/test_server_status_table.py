@@ -59,7 +59,7 @@ class ServerStatusTableTest(unittest.TestCase):
         self.assertIn(
             "ui-main serves an Embeddable Editor other than the one its lock names; run "
             "(cd $CEDAR_HOME/cedar-template-editor && npm ci && npx gulp copy:cee)", rendered)
-        self.assertIn("(cd $CEDAR_HOME/cedar-workspace && npm ci && npx gulp copy:cee)", rendered)
+        self.assertIn("(cd $CEDAR_HOME/cedar-workspace && npm ci && npm run copy:cee)", rendered)
         self.assertNotIn("ui-main, ui-workspace; restart", rendered)
         self.assertNotIn("ui-designer serves", rendered)
 
