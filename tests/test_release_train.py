@@ -3277,6 +3277,8 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             )
             tarball, evidence = publisher._pack_npm(task)
             package = publisher._npm_tarball_package("packed frontend", tarball.read_bytes())
+            self.assertEqual(release_train._file_sha256(tarball), evidence["tarballSha256"])
+            release_train._verify_integrity("packed frontend", tarball.read_bytes(), evidence["integrity"])
             self.assertEqual("cedar-frontend", evidence["name"])
             self.assertEqual(commit, package["gitHead"])
             self.assertEqual("2.9.3", package["version"])

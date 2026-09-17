@@ -10,9 +10,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from org.metadatacenter import reactor
+from org.metadatacenter.npm_package import NpmPackageError
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoType import RepoType
-from org.metadatacenter.util.ProcessRunner import CommandOutput
 
 
 class InstallCommandsTest(unittest.TestCase):
@@ -88,7 +88,7 @@ class PublishTest(unittest.TestCase):
         self._staged()
         reactor.publish(self._repo(), self.build, self.home)
         previous = reactor._available(self.home)
-        with patch.object(reactor, "run_process", return_value=CommandOutput(["pack failed"], 1)):
+        with patch.object(reactor, "pack_and_inspect", side_effect=NpmPackageError("pack failed")):
             with self.assertRaisesRegex(reactor.ReactorError, "pack failed"):
                 reactor.publish(self._repo(), self.build, self.home)
         for operation in ("link", "replace"):
@@ -147,7 +147,7 @@ class PublishTest(unittest.TestCase):
         (consumer / "package.json").write_text(json.dumps({"dependencies": {
             "cedar-embeddable-designer": "0.1.0"}}))
         with reactor.session(self.home, [self._repo().name]):
-            with patch.object(reactor, "run_process", return_value=CommandOutput(["pack failed"], 1)):
+            with patch.object(reactor, "pack_and_inspect", side_effect=NpmPackageError("pack failed")):
                 with self.assertRaises(reactor.ReactorError):
                     reactor.publish(self._repo(), self.build, self.home)
             with self.assertRaisesRegex(reactor.ReactorError, "has not succeeded"):

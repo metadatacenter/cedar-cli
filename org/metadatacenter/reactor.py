@@ -30,11 +30,10 @@ import hashlib
 import json
 import os
 import re
-import tarfile
 import tempfile
 from pathlib import Path
 
-from org.metadatacenter.util.ProcessRunner import run_process
+from org.metadatacenter.npm_package import NpmPackageError, pack_and_inspect
 
 # Beside the checkouts rather than inside one, because it belongs to no repository. The name is
 # hidden so it does not read as a sibling to anything that scans $CEDAR_HOME for repositories.
@@ -156,21 +155,9 @@ def publish(repo, build_root, cedar_home, environment=None) -> str | None:
         refs.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="pack-", dir=store) as temporary:
             scratch = Path(temporary)
-            result = run_process([
-                "npm", "pack", "--ignore-scripts", "--json",
-                "--pack-destination", str(scratch), "--cache", str(scratch / "cache"),
-            ], cwd=str(source), env=environment)
-            if result.returncode:
-                raise ValueError("npm pack failed: " + "\n".join(result))
-            tarballs = list(scratch.glob("*.tgz"))
-            if len(tarballs) != 1:
-                raise ValueError("npm pack did not produce exactly one tarball")
-            packed = tarballs[0]
-            with tarfile.open(packed, "r:gz") as archive:
-                metadata = json.load(archive.extractfile("package/package.json"))
-                if metadata.get("name") != package["name"] or metadata.get("version") != package["version"]:
-                    raise ValueError("packed package identity differs from build output")
-            digest = hashlib.sha256(packed.read_bytes()).hexdigest()
+            packed, inspection = pack_and_inspect(
+                source, scratch, environment=environment, cache=scratch / "cache")
+            digest = inspection.sha256
             destination = artifacts / f"{digest}.tgz"
             # An exclusive link makes a complete artifact visible in one operation. The
             # same digest can be published concurrently without replacing either reader's file.
@@ -186,7 +173,7 @@ def publish(repo, build_root, cedar_home, environment=None) -> str | None:
         if state is not None and state[0] == Path(cedar_home).resolve():
             state[1][name] = destination
             state[2].discard(name)
-    except (OSError, ValueError, TypeError, AttributeError, KeyError, tarfile.TarError) as error:
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, NpmPackageError) as error:
         raise ReactorError(f"Cannot store {repo.name}: {error}") from error
     return name
 
