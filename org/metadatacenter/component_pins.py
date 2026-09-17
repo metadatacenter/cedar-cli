@@ -82,10 +82,19 @@ class ComponentPlan:
     head: str
     target: str
     consumers: tuple[ConsumerPlan, ...]
+    published_by: str | None = None
 
     @property
     def publishes(self) -> bool:
-        """Whether develop holds a commit the published version does not name."""
+        """Whether this command would publish, which a component it does not own never does.
+
+        The TypeScript model library's development snapshots are published by the build train,
+        which also advances CEE's pin. Nothing advanced the other consumers, so the library is
+        declared here to be followed rather than published: its target is the version the
+        reference consumer already carries, and no version is stamped.
+        """
+        if self.published_by:
+            return False
         return self.published != self.target
 
     @property
@@ -138,7 +147,9 @@ def declared(cedar_home, only=None):
     for item in items:
         if not isinstance(item, dict):
             raise ComponentPinError(f"{CONFIG} has a component that is not an object")
-        for field in ("id", "repository", "publishedName", "stagedPackage", "distCommand"):
+        required = ("id", "repository", "publishedName")
+        required += ("reference",) if item.get("publishedBy") else ("stagedPackage", "distCommand")
+        for field in required:
             if not item.get(field):
                 raise ComponentPinError(f"{CONFIG} component {item.get('id')!r} has no {field}")
         if only and item["id"] != only:
@@ -158,21 +169,25 @@ def plan(cedar_home, only=None):
         directory = Path(cedar_home) / item["repository"]
         published = _manifest_version(directory / item.get("sourceManifest", "package.json"))
         head = _head(directory)
-        target = next_version(published, head, today)
+        published_by = item.get("publishedBy")
+        target = (_reference_version(cedar_home, item) if published_by
+                  else next_version(published, head, today))
         consumers = tuple(
             _consumer_plan(cedar_home, consumer, item["publishedName"], target)
             for consumer in item.get("consumers", [])
         )
+
         plans.append(ComponentPlan(
             identifier=item["id"],
             repository=item["repository"],
             package=item["publishedName"],
-            staged=item["stagedPackage"],
-            dist=tuple(item["distCommand"]),
+            staged=item.get("stagedPackage", ""),
+            dist=tuple(item.get("distCommand", ())),
             published=published,
             head=head,
             target=target,
             consumers=consumers,
+            published_by=published_by,
         ))
     return plans
 
@@ -189,6 +204,28 @@ def next_version(published: str, head: str, today: str) -> str:
     if published.endswith(f".{head}"):
         return published
     return f"{match.group('base')}-dev.{today}.{head}"
+
+
+def _reference_version(cedar_home, item):
+    """The version a followed component's reference consumer already carries.
+
+    A followed component's own manifest is not the answer. The model library's package.json
+    names the commit of its last stamp, which is not always the newest snapshot the train
+    published, so the consumer the train keeps current is the reliable witness.
+    """
+    reference = item["reference"]
+    for field in ("repository", "dependency"):
+        if not reference.get(field):
+            raise ComponentPinError(f"{item['id']}'s reference has no {field}")
+    manifest = (Path(cedar_home) / reference["repository"]
+                / reference.get("manifest", "package.json"))
+    version = _version_of(_dependency_value(manifest, reference["dependency"]),
+                          item["publishedName"])
+    if not version:
+        raise ComponentPinError(
+            f"{reference['repository']} does not declare {reference['dependency']}, "
+            f"so {item['id']} has no version to follow")
+    return version
 
 
 def _consumer_plan(cedar_home, consumer, package, target):
@@ -384,11 +421,14 @@ def _report(plans, apply):
         Column(header="To"),
     )
     for item in plans:
+        surface = (f"published by the {item.published_by}" if item.published_by
+                   else f"published package ({item.head})")
         table.add_row(
             item.repository,
-            f"published package ({item.head})",
+            surface,
             item.published,
-            item.target if item.publishes else "[green]current[/green]",
+            "[dim]not published here[/dim]" if item.published_by
+            else (item.target if item.publishes else "[green]current[/green]"),
         )
         for consumer in item.consumers:
             table.add_row(

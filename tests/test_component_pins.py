@@ -244,3 +244,97 @@ class PublishTargetTest(unittest.TestCase):
     def test_a_root_published_component_is_published_in_place(self):
         for declared in (".", "", "./", " . "):
             self.assertEqual(".", component_pins._publish_target(declared))
+
+
+FOLLOWED = {
+    "components": [
+        {
+            "id": "model",
+            "repository": "cedar-model-typescript-library",
+            "publishedName": "@org.metadatacenter/cedar-model-typescript-library",
+            "sourceManifest": "package.json",
+            "publishedBy": "build train",
+            "reference": {
+                "repository": "cedar-embeddable-editor",
+                "manifest": "package.json",
+                "dependency": "cedar-model-typescript-library",
+            },
+            "consumers": [{
+                "repository": "cedar-embeddable-designer",
+                "dependency": "cedar-model-typescript-library",
+                "manifest": "package.json",
+                "lock": "package-lock.json",
+            }],
+        }
+    ]
+}
+
+
+class FollowedComponentTest(unittest.TestCase):
+    """A component something else publishes: the train owns the model library's snapshots."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        config = self.root / "cedar-development" / "ops"
+        config.mkdir(parents=True)
+        (config / "frontend-train.json").write_text(json.dumps(FOLLOWED))
+        WorkspaceTest._repo(self, "cedar-model-typescript-library", {
+            "name": "cedar-model-typescript-library", "version": "1.0.13-dev.20260915.5cbf9da"})
+        WorkspaceTest._repo(self, "cedar-embeddable-editor", {
+            "name": "cedar-embeddable-editor",
+            "dependencies": {"cedar-model-typescript-library":
+                             "npm:@org.metadatacenter/cedar-model-typescript-library@1.0.13-dev.20260915.757d636"}})
+        WorkspaceTest._repo(self, "cedar-embeddable-designer", {
+            "name": "cedar-embeddable-designer",
+            "dependencies": {"cedar-model-typescript-library":
+                             "npm:@org.metadatacenter/cedar-model-typescript-library@1.0.12-dev.20260915.076d468"}})
+
+    def test_the_target_is_the_version_the_reference_consumer_carries(self):
+        """Not the library's own manifest, which names its last stamp rather than the newest
+        snapshot the train published."""
+        item = plan(str(self.root))[0]
+
+        self.assertEqual("1.0.13-dev.20260915.757d636", item.target)
+        self.assertEqual("1.0.13-dev.20260915.5cbf9da", item.published)
+
+    def test_it_never_publishes_however_far_its_own_manifest_has_drifted(self):
+        item = plan(str(self.root))[0]
+
+        self.assertFalse(item.publishes)
+        self.assertEqual("build train", item.published_by)
+        self.assertTrue(item.moves)
+
+    def test_applying_repoints_the_consumer_and_runs_no_build_or_publish(self):
+        commands = []
+        plans = plan(str(self.root))
+
+        with patch.object(component_pins, "console"):
+            _apply(str(self.root), plans, run=lambda d, c: commands.append((d.name, c)))
+
+        self.assertEqual([("cedar-embeddable-designer", ["npm", "install"])], commands)
+        self.assertEqual(
+            "npm:@org.metadatacenter/cedar-model-typescript-library@1.0.13-dev.20260915.757d636",
+            json.loads((self.root / "cedar-embeddable-designer" / "package.json").read_text())
+            ["dependencies"]["cedar-model-typescript-library"])
+
+    def test_a_followed_component_needs_a_reference_rather_than_a_package_to_build(self):
+        config = self.root / "cedar-development" / "ops" / "frontend-train.json"
+        payload = json.loads(config.read_text())
+        del payload["components"][0]["reference"]
+        config.write_text(json.dumps(payload))
+
+        with self.assertRaises(ComponentPinError) as refused:
+            declared(str(self.root))
+
+        self.assertIn("reference", str(refused.exception))
+
+    def test_a_reference_that_does_not_declare_the_dependency_is_refused(self):
+        editor = self.root / "cedar-embeddable-editor" / "package.json"
+        editor.write_text(json.dumps({"name": "cedar-embeddable-editor", "dependencies": {}}))
+
+        with self.assertRaises(ComponentPinError) as refused:
+            plan(str(self.root))
+
+        self.assertIn("no version to follow", str(refused.exception))
