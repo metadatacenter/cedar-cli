@@ -96,3 +96,18 @@ def ci(
             help="List every repository, not only those whose CI is not green.")):
     """Check GitHub CI at the exact develop commit of every repository a train would capture."""
     exit_on_failure(BuildTrainWorker.report_source_ci(show_all=show_all))
+
+
+@app.command("design-tokens")
+def design_tokens(
+        repo: list[str] = typer.Option(None, "--repo", help="Frontend repository; repeat to select several."),
+        strict: bool = typer.Option(False, "--strict", help="Fail on new color/typography drift or missing baselines."),
+        json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable adoption report."),
+        show_all: bool = typer.Option(False, "--all", help="Include existing findings."),
+        init_baseline: bool = typer.Option(False, "--init-baseline", help="Create reviewed debt baselines once; never overwrite."),
+        prune_baseline: bool = typer.Option(False, "--prune-baseline", help="Remove resolved debt without increasing allowances.")):
+    """Report shared-style adoption, new drift and token dependency pins across frontends."""
+    from org.metadatacenter.design_tokens import check_design_tokens
+    exit_on_failure(check_design_tokens(
+        repos=repo, strict=strict, json_output=json_output, show_all=show_all,
+        init_baseline=init_baseline, prune_baseline=prune_baseline))

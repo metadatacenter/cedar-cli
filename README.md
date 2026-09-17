@@ -132,3 +132,13 @@ and `restart microservices` or `restart frontends` for a group. `restart fronten
 selects Workspace and Designer. `restart all` restarts all managed applications and leaves
 infrastructure running; bare `restart` retains that behavior. The old flat syntax, such as
 `restart repo ui-openview`, remains supported. Hybrid mode permits only frontend targets.
+
+### Design-token adoption
+
+`cedarcli check design-tokens` reports shared-style debt and token dependency pins
+across the embeddable editor, designer and term picker. Use `--strict` to fail
+on new color/typography findings, `--json` for automation, `--repo <name>` to select
+a frontend, and `--prune-baseline` after fixing existing findings. Spacing and
+geometry remain advisory. The implementation and CI contract live in
+`cedar-design-tokens/tools/check_adoption.py`; that repository's README explains
+exceptions, scope and rollout.
