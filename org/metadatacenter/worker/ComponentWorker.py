@@ -43,8 +43,36 @@ STAGED_MANIFEST = Path("app/components/manifest.json")
 SOURCE_GLOBS = ("app/**/*.mjs", "app/**/*.js", "app/**/*.html", "src/**/*.ts", "src/**/*.html")
 EXCLUDED_PARTS = ("node_modules", "dist", "components")
 
+# What clears a failure, for a gate that has room for one line rather than a table.
+COMPONENT_REMEDY = ("publish the component's current source, advance the host's pin onto that snapshot, "
+                    "and stage the locked package")
+
+
+class ComponentGateError(Exception):
+    """The comparison could not be made at all, rather than made and failed."""
+
 
 class ComponentWorker:
+
+    @staticmethod
+    def findings(root=None):
+        """Every comparison for every browser application, reported to nobody.
+
+        The release and train gates call this rather than the command: a preflight needs the
+        verdicts and prints its own report, and a table written to a console it does not own
+        would arrive in the middle of somebody else's.
+        """
+        workspace = root or Util.cedar_home
+        if not isinstance(workspace, (str, Path)) or not str(workspace).strip():
+            raise ComponentGateError("CEDAR_HOME does not name a workspace to compare")
+        components = ComponentWorker._component_index(workspace)
+        if not components:
+            raise ComponentGateError(
+                "no component packages were found in the workspace; check CEDAR_HOME")
+        findings = []
+        for name, directory in sorted(components.items()):
+            findings.extend(ComponentWorker._evaluate_host(name, directory, components))
+        return findings
 
     @staticmethod
     def check_components(strict=False, show_all=False):
@@ -52,17 +80,19 @@ class ComponentWorker:
 
         Exits non-zero when a host serves bytes that are not the package it locks, creates an
         element no locked bundle defines, or pins a build the component's history cannot account
-        for. Under --strict a host merely sitting behind a published component fails too, which is
-        the gate a release or a server payload wants.
-        """
-        components = ComponentWorker._component_index()
-        if not components:
-            console.print("[red]No component packages were found in the workspace.[/red]")
-            return 1
+        for. These are what the release and train preflights gate on, because a clean install
+        cannot repair any of them.
 
-        findings = []
-        for name, directory in sorted(components.items()):
-            findings.extend(ComponentWorker._evaluate_host(name, directory, components))
+        Under --strict a host merely sitting behind a published component fails too. That is the
+        question a server payload asks, since it serves whatever the lock resolves; a release does
+        not ask it, because a host sits on the last published component for as long as it takes to
+        publish the next one.
+        """
+        try:
+            findings = ComponentWorker.findings()
+        except ComponentGateError as error:
+            console.print(f"[red]{str(error).capitalize()}.[/red]")
+            return 1
 
         if not findings:
             console.print("No browser application pins a component in this workspace.")
@@ -79,14 +109,14 @@ class ComponentWorker:
     # Reading the workspace
 
     @staticmethod
-    def _component_index():
+    def _component_index(root=None):
         """Every repository in the workspace that publishes an npm package, by package name.
 
         Read from the checkouts rather than from the repository registry, because a component is a
         component as soon as a sibling installs it, and the estate has published two that the
         registry does not yet name.
         """
-        root = Path(Util.cedar_home)
+        root = Path(root or Util.cedar_home)
         index = {}
         for manifest in sorted(root.glob("*/package.json")):
             directory = manifest.parent

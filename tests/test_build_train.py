@@ -188,6 +188,7 @@ class BuildTrainTest(unittest.TestCase):
             patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight") as smoke_gate,
+            patch("org.metadatacenter.train_support.preflight._component_preflight") as components,
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight") as npm_config,
             patch("org.metadatacenter.train_support.preflight._publication_targets_preflight") as targets,
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
@@ -246,6 +247,7 @@ class BuildTrainTest(unittest.TestCase):
             patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight"),
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight") as smoke_gate,
+            patch("org.metadatacenter.train_support.preflight._component_preflight"),
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
             patch("org.metadatacenter.train_support.preflight._publication_targets_preflight"),
             patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run',
@@ -809,6 +811,7 @@ class PreflightReportTest(unittest.TestCase):
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight", side_effect=ValueError(
                 'train source CI is not settled: cedar-y: CI concluded failure')) as source_ci,
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
+            patch("org.metadatacenter.train_support.preflight._component_preflight"),
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight") as npm_config,
             patch("org.metadatacenter.train_support.preflight._publication_targets_preflight") as targets,
         ):
@@ -845,6 +848,7 @@ class PreflightReportTest(unittest.TestCase):
             patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
             patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
             patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
+            patch("org.metadatacenter.train_support.preflight._component_preflight"),
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
             patch("org.metadatacenter.train_support.preflight._publication_targets_preflight"),
         ):

@@ -17,8 +17,19 @@ from org.metadatacenter.util.ComponentFreshness import (
     referenced_elements,
     release_tag,
 )
+from org.metadatacenter.util.ComponentFreshness import ComponentFinding
 from org.metadatacenter.util.Util import Util
-from org.metadatacenter.worker.ComponentWorker import ComponentWorker
+from org.metadatacenter.release_support import preflight as release_preflight_module
+from org.metadatacenter.release_support.preflight import ReleasePreflight
+from org.metadatacenter.train_support import preflight as train_preflight
+from org.metadatacenter.worker.ComponentWorker import (
+    COMPONENT_REMEDY, ComponentGateError, ComponentWorker,
+)
+
+
+def _release_preflight(environment):
+    """A preflight carrying only what check_components reads."""
+    return ReleasePreflight({}, environment=environment)
 
 
 class DependencyPinsTest(unittest.TestCase):
@@ -233,3 +244,74 @@ class ComponentWorkerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComponentGateTest(unittest.TestCase):
+    """The release and train preflights, against the verdicts the check produces."""
+
+    FAILURE = ComponentFinding(
+        "cedar-template-designer", "cedar-embeddable-field-designer",
+        Surface.ELEMENT, ComponentState.UNDEFINED,
+        "no locked component bundle defines this element")
+    INFORMATIONAL = ComponentFinding(
+        "cedar-embeddable-editor", "cedar-design-tokens",
+        Surface.PIN, ComponentState.BEHIND,
+        "0.1.0-dev.20260915.4e0a0032 predates 5 commits on develop")
+
+    def test_the_release_gate_is_part_of_the_complete_gate_and_of_every_build_stage(self):
+        from org.metadatacenter.release_support.preflight import ReleasePreflight
+        self.assertIn("check_components", ReleasePreflight.CHECKS)
+        source = Path(release_preflight_module.__file__).read_text()
+        # The stages that build frontends are the ones where the question still applies.
+        self.assertIn('"check_develop_is_green", "check_smoke_gate", "check_components",', source)
+
+    def test_the_release_gate_refuses_a_failure_and_ignores_what_is_only_behind(self):
+        preflight = _release_preflight({"CEDAR_HOME": "/workspace"})
+        with patch.object(ComponentWorker, "findings",
+                          return_value=[self.FAILURE, self.INFORMATIONAL]):
+            findings = preflight.check_components()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+        self.assertIn("cedar-embeddable-field-designer", findings[0].message)
+        self.assertEqual(COMPONENT_REMEDY, findings[0].remedy)
+
+    def test_the_release_gate_asks_about_the_workspace_it_is_judging(self):
+        preflight = _release_preflight({"CEDAR_HOME": "/workspace"})
+        with patch.object(ComponentWorker, "findings", return_value=[]) as findings:
+            self.assertEqual([], preflight.check_components())
+
+        findings.assert_called_once_with("/workspace")
+
+    def test_the_release_gate_reports_a_comparison_it_could_not_make(self):
+        preflight = _release_preflight({"CEDAR_HOME": "/workspace"})
+        with patch.object(ComponentWorker, "findings",
+                          side_effect=ComponentGateError("CEDAR_HOME does not name a workspace")):
+            findings = preflight.check_components()
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(findings[0].fatal)
+
+    def test_the_train_gate_refuses_a_failure_and_ignores_what_is_only_behind(self):
+        with patch.object(ComponentWorker, "findings",
+                          return_value=[self.FAILURE, self.INFORMATIONAL]):
+            with self.assertRaises(ValueError) as refused:
+                train_preflight._component_preflight()
+
+        message = str(refused.exception)
+        self.assertIn("cedar-embeddable-field-designer", message)
+        self.assertNotIn("cedar-design-tokens", message)
+        self.assertIn(COMPONENT_REMEDY, message)
+
+    def test_the_train_gate_passes_when_nothing_failed(self):
+        with patch.object(ComponentWorker, "findings", return_value=[self.INFORMATIONAL]):
+            self.assertIsNone(train_preflight._component_preflight())
+
+    def test_the_train_gate_is_asked_on_every_dispatch(self):
+        source = Path(train_preflight.__file__).read_text()
+        self.assertIn("settle(_component_preflight)", source)
+
+    def test_an_unresolvable_workspace_is_a_gate_error_rather_than_a_crash(self):
+        with patch.object(Util, "cedar_home", None):
+            with self.assertRaises(ComponentGateError):
+                ComponentWorker.findings()

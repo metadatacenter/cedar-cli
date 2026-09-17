@@ -41,7 +41,8 @@ def components(
         strict: bool = typer.Option(
             False, "--strict",
             help="Also fail when a host sits behind a published component or serves a local "
-                 "build. For a gate, which judges what a server payload would serve."),
+                 "build. For a server payload, which serves whatever the lock resolves; the "
+                 "release and train preflights ask this check without it."),
         show_all: bool = typer.Option(
             False, "--all",
             help="List every comparison, not only those with findings.")):

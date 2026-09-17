@@ -2,6 +2,9 @@
 from __future__ import annotations
 from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
 from org.metadatacenter import smoke_gate
+from org.metadatacenter.worker.ComponentWorker import (
+    COMPONENT_REMEDY, ComponentGateError, ComponentWorker,
+)
 from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.NexusCredentials import environment_with_nexus_credentials
@@ -344,6 +347,29 @@ def _smoke_gate_preflight(source=None):
             'no passing whole-stack smoke run covers this source: ' + '; '.join(findings))
 
 
+def _component_preflight():
+    """Require every browser application to serve the components it pins.
+
+    A train captures source, and the frontends among that source reach each other as published
+    npm packages. A host whose pin predates the component commit it depends on builds and tests
+    green, and fails at the moment a person opens the surface that needs the missing piece, so
+    the train would carry a browser application that cannot work.
+
+    Asked at the check's own severity. Sitting behind a published component is true of the estate
+    for most of a cycle and is not refused here; bytes that are not the locked package, an element
+    no locked bundle defines, and a pin develop cannot account for are.
+    """
+    try:
+        findings = ComponentWorker.findings()
+    except ComponentGateError as error:
+        raise ValueError(f'components cannot be compared: {error}') from error
+    failures = [f'{finding.host} {finding.surface.value} {finding.component}: {finding.detail}'
+                for finding in findings if finding.is_failure]
+    if failures:
+        raise ValueError('browser applications do not serve the components they pin: '
+                         + '; '.join(failures) + f'; {COMPONENT_REMEDY}')
+
+
 def _preflight(selected, resume):
     source_path = f'trains/{selected}.json'
     try:
@@ -395,6 +421,7 @@ def _preflight(selected, resume):
     if github_ready:
         settle(_source_ci_preflight, source)
     settle(_smoke_gate_preflight, source)
+    settle(_component_preflight)
     settle(_npm_configuration_preflight)
     settle(_publication_targets_preflight)
     _ci_env_preflight()
