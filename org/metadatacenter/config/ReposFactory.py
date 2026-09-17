@@ -61,13 +61,15 @@ class ReposFactory:
         # allowed a version of its own.
         design_tokens = Repo("cedar-design-tokens", RepoType.TYPESCRIPT,
                              [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
-                             is_frontend=True, allow_different_version=True, skip_from_release=True)
+                             is_frontend=True, allow_different_version=True, skip_from_release=True,
+                             published_package_path=".")
         repos.add_repo(design_tokens)
 
         model_typescript_library = Repo("cedar-model-typescript-library", RepoType.TYPESCRIPT,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
-                                 allow_different_version=True, skip_from_release=True)
+                                 allow_different_version=True, skip_from_release=True,
+                                 published_package_path="dist")
         repos.add_repo(model_typescript_library)
 
         # CEE assembles and stages its own npm package, and the CLI drives that pipeline rather
@@ -79,6 +81,7 @@ class ReposFactory:
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN,
                                   V.DIST_NPM_PACKAGE_OWN, V.DIST_NPM_PACKAGE_LOCK_OWN, V.DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True,
                                  allow_different_version=True, skip_from_release=True,
+                                 published_package_path="dist-npm/cedar-embeddable-editor",
                                  build_command_list=[
                                      'npm ci',
                                      'npm --prefix visual ci',
@@ -97,6 +100,7 @@ class ReposFactory:
         term_picker = Repo("cedar-embeddable-term-picker", RepoType.ANGULAR,
                            [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
                            is_frontend=True, allow_different_version=True, skip_from_release=True,
+                           published_package_path="dist-npm/cedar-embeddable-term-picker",
                            build_command_list=['npm ci', 'npm run dist'],
                            publish_command_list=[
                                'npm publish ./dist-npm/cedar-embeddable-term-picker --tag=dev'])
@@ -106,6 +110,7 @@ class ReposFactory:
                                    [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
                                    is_frontend=True, allow_different_version=True,
                                    skip_from_release=True,
+                                   published_package_path="dist-npm/cedar-embeddable-designer",
                                    build_command_list=['npm ci', 'npm run dist'],
                                    publish_command_list=[
                                        'npm publish ./dist-npm/cedar-embeddable-designer --tag=dev'])

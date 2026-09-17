@@ -12,7 +12,7 @@ class Repo:
                  is_frontend=False,
                  allow_different_version=False, skip_from_release=False,
                  build_command_list: List[str] = None, server_build_command_list: List[str] = None,
-                 publish_command_list: List[str] = None):
+                 publish_command_list: List[str] = None, published_package_path: str = None):
         self.name = name
         self.repo_type = repo_type
         self.version_list = version_list
@@ -37,6 +37,12 @@ class Repo:
         # Shell commands that publish this repo. A repo with an explicit publication pipeline uses
         # this instead of the generic commands implied by its repository type.
         self.publish_command_list = publish_command_list
+        # Where this repo's published package sits after its build, relative to the checkout. The
+        # published shape is not the checkout: the model library builds a dist/ whose package.json
+        # is package-dist.json, the Web Components stage under dist-npm/, and the design tokens
+        # publish their root. A reactor build copies this into its store so consumers resolve the
+        # sibling that was just built rather than the last snapshot Nexus served.
+        self.published_package_path = published_package_path
 
     def __eq__(self, obj):
         return isinstance(obj, Repo) and obj.get_fqn() == self.get_fqn()
