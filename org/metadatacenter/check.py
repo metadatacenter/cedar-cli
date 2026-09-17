@@ -3,6 +3,7 @@ import typer
 from org.metadatacenter.ci_env import check_ci_env
 from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
+from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.OpenApiWorker import OpenApiWorker
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.SnapshotWorker import DEFAULT_NEXUS, SnapshotWorker
@@ -33,6 +34,19 @@ def ci_env(
             help="Rewrite the copies that have drifted, for review and one commit per repository.")):
     """Check that every Java repository's CI gives its tests the environment the code requires."""
     exit_on_failure(check_ci_env(apply=apply))
+
+
+@app.command("components")
+def components(
+        strict: bool = typer.Option(
+            False, "--strict",
+            help="Also fail when a host sits behind a published component or serves a local "
+                 "build. For a gate, which judges what a server payload would serve."),
+        show_all: bool = typer.Option(
+            False, "--all",
+            help="List every comparison, not only those with findings.")):
+    """Check that every browser application serves the component sources beside it."""
+    exit_on_failure(ComponentWorker.check_components(strict=strict, show_all=show_all))
 
 
 @app.command("repos")
