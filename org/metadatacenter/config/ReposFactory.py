@@ -170,6 +170,29 @@ class ReposFactory:
                                  allow_different_version=True, skip_from_release=True)
         repos.add_repo(model_typescript_library)
 
+        # The two Web Components the split Designer host serves beside CEE. Both publish a
+        # single-file custom-element bundle to the scoped Nexus registry on their own cadence, like
+        # the TypeScript model library, so both are allowed a version of their own and stay out of
+        # the release train. Registered after design-tokens and the model library, which they
+        # consume, and each publishes the package staged under dist-npm/ rather than its checkout
+        # root, which is why the publish command names that directory.
+        term_picker = Repo("cedar-embeddable-term-picker", RepoType.ANGULAR,
+                           [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
+                           is_frontend=True, allow_different_version=True, skip_from_release=True,
+                           build_command_list=['npm ci', 'npm run dist'],
+                           publish_command_list=[
+                               'npm publish ./dist-npm/cedar-embeddable-term-picker --tag=dev'])
+        repos.add_repo(term_picker)
+
+        embeddable_designer = Repo("cedar-embeddable-designer", RepoType.ANGULAR,
+                                   [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN],
+                                   is_frontend=True, allow_different_version=True,
+                                   skip_from_release=True,
+                                   build_command_list=['npm ci', 'npm run dist'],
+                                   publish_command_list=[
+                                       'npm publish ./dist-npm/cedar-embeddable-designer --tag=dev'])
+        repos.add_repo(embeddable_designer)
+
         model_typescript_library_demo = Repo("cedar-model-typescript-library-demo", RepoType.TYPESCRIPT,
                                  [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN,
                                   V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)

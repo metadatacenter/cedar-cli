@@ -1,9 +1,11 @@
 import typer
 
+from org.metadatacenter.component_pins import advance_component_pins
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.PublishPlanner import PublishPlanner
+from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
 from org.metadatacenter.worker.LockBaselineWorker import LockBaselineWorker
@@ -132,6 +134,23 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     plan = Plan("Publish frontends")
     PublishPlanner.frontends(plan)
     plan_executor.execute(plan, dry_run, dump_plan)
+
+
+@app.command("components")
+def components(
+        apply: bool = typer.Option(
+            False, "--apply",
+            help="Publish and repoint. Without it the plan is reported and nothing is written, "
+                 "because an npm version once taken cannot be republished."),
+        component: str = typer.Option(
+            None, "--component",
+            help="Act on one declared component by id rather than all of them.")):
+    """Publish each declared component's current source and advance the pins that follow it.
+
+    A build cannot do this: `npm ci` reproduces the lock, so advancing a pin is a source change
+    across several repositories. Nothing is committed; the diffs are left for review.
+    """
+    exit_on_failure(advance_component_pins(apply=apply, only=component))
 
 
 @app.command("all")
