@@ -111,3 +111,11 @@ def design_tokens(
     exit_on_failure(check_design_tokens(
         repos=repo, strict=strict, json_output=json_output, show_all=show_all,
         init_baseline=init_baseline, prune_baseline=prune_baseline))
+
+
+@app.command("artifact-versioning")
+def artifact_versioning(
+        apply: bool = typer.Option(False, "--apply", help="Repair unambiguous graph latest flags and enqueue reindexing.")):
+    """Audit artifact history links, ordering, draft uniqueness and latest flags in the selected stack."""
+    from org.metadatacenter.version_lifecycle import check_versioning
+    exit_on_failure(check_versioning(apply=apply))
