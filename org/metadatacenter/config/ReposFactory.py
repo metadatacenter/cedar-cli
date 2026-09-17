@@ -4,6 +4,7 @@ from org.metadatacenter.model.RepoRelationType import RepoRelationType
 from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.Repos import Repos
 from org.metadatacenter.model.VersionType import VersionType as V
+from org.metadatacenter.taskfactory.PublishShellTaskFactory import NPM_PUBLISH
 
 
 class ReposFactory:
@@ -124,6 +125,7 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-workspace", RepoType.ANGULAR, [V.PACKAGE_OWN],
                             is_frontend=True,
                             build_command_list=['npm ci', 'npm run build'],
+                            publish_command_list=[NPM_PUBLISH],
                             server_build_command_list=[
                                 'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" workspace']))
         repos.add_repo(Repo("cedar-template-designer", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],

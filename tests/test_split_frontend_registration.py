@@ -6,7 +6,11 @@ from org.metadatacenter.config.ServersFactory import ServersFactory
 from org.metadatacenter.model.ServerTag import ServerTag
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.RepoType import RepoType
+from org.metadatacenter.model.PlanTask import PlanTask
+from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.operator.BuildOperator import BuildOperator
+from org.metadatacenter.operator.PublishOperator import PublishOperator
+from org.metadatacenter.taskfactory.PublishShellTaskFactory import NPM_PUBLISH
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.worker.StartFrontendWorker import StartFrontendWorker
@@ -27,7 +31,8 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
             self.assertEqual(['npm ci', 'npm run build'] if name == 'cedar-workspace' else ['npm ci'], repo.build_command_list)
             self.assertEqual(1, len(repo.server_build_command_list))
             self.assertIn('build-native-split-frontend.sh', repo.server_build_command_list[0])
-            self.assertIsNone(repo.publish_command_list)
+            self.assertEqual([NPM_PUBLISH] if name == 'cedar-workspace' else None,
+                             repo.publish_command_list)
             self.assertIn(repo, repos.get_release_all())
             self.assertIn(repo, repos.get_frontends())
 
@@ -73,6 +78,29 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
             else:
                 self.assertEqual(["npm ci", "npm run build"], build.command_list)
                 self.assertTrue(build.parameters["isolated_frontend_build"])
+
+    @patch.object(GlobalContext, "repos", new_callable=ReposFactory.build_repos)
+    def test_angular_publication_builds_staged_output_before_explicit_publish(self, repos):
+        for name, expected in (
+            ("cedar-workspace", ['npm ci', 'npm run build', NPM_PUBLISH]),
+            ("cedar-embeddable-term-picker", ['npm ci', 'npm run dist',
+                'npm publish ./dist-npm/cedar-embeddable-term-picker --tag=dev']),
+        ):
+            with self.subTest(repository=name):
+                task = PlanTask("Publish", TaskType.PUBLISH, repos.map[name])
+                PublishOperator.expand(task)
+                commands = [command for wrapper in task.tasks for child in wrapper.tasks
+                            for command in child.command_list]
+                self.assertEqual(expected, commands)
+
+    @patch.object(GlobalContext, "repos", new_callable=ReposFactory.build_repos)
+    def test_angular_source_without_explicit_publication_stays_build_only(self, repos):
+        repo = repos.map["cedar-content-distribution"]
+        task = PlanTask("Publish", TaskType.PUBLISH, repo)
+        PublishOperator.expand(task)
+        commands = [command for wrapper in task.tasks for child in wrapper.tasks
+                    for command in child.command_list]
+        self.assertEqual(['npm ci --legacy-peer-deps', 'ng build --configuration=production'], commands)
 
     def test_split_processes_are_non_essential_previews(self):
         servers = ServersFactory.build_servers()
