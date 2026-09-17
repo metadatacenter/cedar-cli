@@ -232,3 +232,15 @@ class WorkspaceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PublishTargetTest(unittest.TestCase):
+    """A component whose package is its checkout root, such as the design tokens."""
+
+    def test_a_staged_subdirectory_is_published_from_there(self):
+        self.assertEqual("./dist-npm/cedar-embeddable-designer",
+                         component_pins._publish_target("dist-npm/cedar-embeddable-designer"))
+
+    def test_a_root_published_component_is_published_in_place(self):
+        for declared in (".", "", "./", " . "):
+            self.assertEqual(".", component_pins._publish_target(declared))

@@ -278,7 +278,7 @@ def _apply(cedar_home, plans, run=None):
             _stamp(directory / "package.json", item.target)
             _stamp_lock(directory / "package-lock.json", item.target)
             run(directory, list(item.dist))
-            run(directory, ["npm", "publish", f"./{item.staged}", "--tag=dev"])
+            run(directory, ["npm", "publish", _publish_target(item.staged), "--tag=dev"])
         for consumer in item.consumers:
             if not consumer.moves:
                 continue
@@ -312,6 +312,15 @@ def _require_clean(cedar_home, plans):
         raise ComponentPinError(
             "these repositories hold uncommitted tracked changes, and this command writes to "
             "them: " + ", ".join(dirty))
+
+
+def _publish_target(staged):
+    """The directory npm publishes, for a component that stages one and for one that does not.
+
+    A component whose published package is its checkout root, such as the design tokens, declares
+    "." and is published in place.
+    """
+    return "." if staged.strip(" /") in ("", ".") else f"./{staged}"
 
 
 def _stamp(path, version):
