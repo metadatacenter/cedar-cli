@@ -21,7 +21,7 @@ from org.metadatacenter.util.Util import Util
 EDGES = {
     "cedar-design-tokens": (
         "cedar-embeddable-editor", "cedar-embeddable-term-picker", "cedar-embeddable-designer",
-        "cedar-workspace",
+        "cedar-workspace", "cedar-monitoring", "cedar-openview",
     ),
     "cedar-model-typescript-library": (
         "cedar-embeddable-editor", "cedar-embeddable-designer",
