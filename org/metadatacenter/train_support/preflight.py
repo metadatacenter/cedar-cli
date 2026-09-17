@@ -388,9 +388,19 @@ def _preflight(selected, resume):
     elif source_exists:
         raise ValueError(f'train {selected} already exists; use --resume {selected}')
 
-    # Every stage runs even after one has refused, so the operator reads one report rather
-    # than fixing a finding, rerunning, and meeting the next. The checks that need the GitHub
-    # CLI are skipped once it has failed, because each would only repeat that failure.
+    # The checks run in two phases, by what they cost to answer. The local phase reads this
+    # workspace and settles in about a second. The remote phase asks GitHub once per source
+    # repository, then probes Nexus, npm and the Docker registry, and takes a minute and a
+    # half.
+    #
+    # Within a phase every stage runs even after one has refused, so the operator still reads
+    # one report and fixes a whole phase rather than one finding at a time. The remote phase
+    # does not run at all once the local one has refused: a train the workspace already
+    # disqualifies cannot dispatch whatever GitHub would answer, so the minute and a half buys
+    # nothing but a longer wait for a verdict that is already decided.
+    #
+    # The checks that need the GitHub CLI are skipped once it has failed, because each would
+    # only repeat that failure.
     findings = []
 
     def settle(check, *arguments):
@@ -400,29 +410,39 @@ def _preflight(selected, resume):
             findings.append(str(error))
             return None, False
 
-    summary, _ = settle(_configuration_summary)
+    summary, configured = settle(_configuration_summary)
+    if not configured:
+        # Every later check reads the configuration this one could not, so each would report
+        # the same failure in different words.
+        raise ValueError(_preflight_failure(findings, remote_checked=False))
+
     if not resume:
         settle(_local_configuration_preflight)
+    open_work, settled = settle(_survey_component._open_work)
+    if settled and open_work:
+        findings.append(
+            'source repositories hold work the train cannot see: ' + '; '.join(open_work))
+    settle(_component_preflight)
+    settle(_npm_configuration_preflight)
+    if findings:
+        raise ValueError(_preflight_failure(findings, remote_checked=False))
+
     _, github_ready = settle(_github_preflight)
     if github_ready:
         active, settled = settle(_workflow_component._active_workflow_runs)
         if settled and active:
             findings.append(
                 'another build train is queued or running: ' + '; '.join(active))
-    open_work, settled = settle(_survey_component._open_work)
-    if settled and open_work:
-        findings.append(
-            'source repositories hold work the train cannot see: ' + '; '.join(open_work))
     alignment, settled = settle(_survey_component._source_alignment)
     if settled and alignment:
         findings.append(
             'local source checkouts do not match GitHub develop: ' + '; '.join(alignment))
+    # After the alignment check, which is what makes the local heads the source to judge a
+    # smoke run against.
+    settle(_smoke_gate_preflight, source)
     settle(_anonymous_source_readability_preflight, source)
     if github_ready:
         settle(_source_ci_preflight, source)
-    settle(_smoke_gate_preflight, source)
-    settle(_component_preflight)
-    settle(_npm_configuration_preflight)
     settle(_publication_targets_preflight)
     _ci_env_preflight()
     if findings:
@@ -455,12 +475,26 @@ def _ci_env_preflight():
         '  [yellow]  Repair with cedarcli check ci-env --apply, outside a train.[/yellow]')
 
 
-def _preflight_failure(findings):
-    if len(findings) == 1:
-        return findings[0]
-    lines = []
-    for finding in findings:
-        first, *rest = finding.splitlines() or ['']
-        lines.append(f'- {first}')
-        lines.extend(f'  {line}' for line in rest)
-    return f'{len(findings)} preflight findings:\n' + '\n'.join(lines)
+REMOTE_PHASE_SKIPPED = (
+    'GitHub, the smoke record and the publication targets were not asked, because this train '
+    'is already refused here. Repair the above and rehearse again.')
+
+
+def _preflight_failure(findings, remote_checked=True):
+    """Render the findings, saying so when the remote phase never ran.
+
+    An operator reading a short report needs to know whether it is the whole story. Without
+    that line a local refusal looks like the complete list, and the remote findings arrive as a
+    surprise on the next rehearsal.
+    """
+    body = findings[0] if len(findings) == 1 else None
+    if body is None:
+        lines = []
+        for finding in findings:
+            first, *rest = finding.splitlines() or ['']
+            lines.append(f'- {first}')
+            lines.extend(f'  {line}' for line in rest)
+        body = f'{len(findings)} preflight findings:\n' + '\n'.join(lines)
+    if remote_checked:
+        return body
+    return f'{body}\n{REMOTE_PHASE_SKIPPED}'

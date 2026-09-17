@@ -65,8 +65,16 @@ def _open_work():
     return findings
 
 
-def _source_alignment():
-    """Require every local source checkout to describe the remote train source exactly."""
+def _source_alignment(max_workers=12):
+    """Require every local source checkout to describe the remote train source exactly.
+
+    One `ls-remote` per repository answers this, and forty-odd of them in series is the
+    largest part of what a rehearsal costs. They are independent network round trips, so they
+    run together, the way `releasability_survey` and the anonymous readability check already
+    ask their own questions. The findings are ordered by repository rather than by whichever
+    round trip returned first, because a report that reorders itself between runs is hard to
+    compare against the last one.
+    """
     cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
         raise ValueError('CEDAR_HOME is not set')
@@ -76,33 +84,41 @@ def _source_alignment():
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f'cannot read build-train configuration: {error}') from error
 
-    findings = []
-    for repository in build.get('repositories', []):
+    def aligned(repository):
+        """Every finding this one repository has, in the order the checks ask."""
+        found = []
         root = Path(cedar_home) / repository
         if not (root / '.git').exists():
-            continue
+            return found
         code, branch, _ = _git_component._git(root, 'rev-parse', '--abbrev-ref', 'HEAD')
         if code != 0:
-            continue
+            return found
         if branch != 'develop':
-            findings.append(f'{repository} is on {branch}, not develop')
+            found.append(f'{repository} is on {branch}, not develop')
         code, local, _ = _git_component._git(root, 'rev-parse', 'refs/heads/develop')
         if code != 0:
-            findings.append(f'{repository} has no local develop branch')
-            continue
+            found.append(f'{repository} has no local develop branch')
+            return found
         code, remote, detail = _git_component._git(
             root, 'ls-remote', '--heads', 'origin', 'refs/heads/develop')
         if code != 0 or not remote:
-            findings.append(
+            found.append(
                 f'{repository} cannot read origin/develop'
                 + (f': {detail.splitlines()[-1]}' if detail else ''))
-            continue
+            return found
         remote_sha = remote.split()[0]
         if local != remote_sha:
-            findings.append(
+            found.append(
                 f'{repository} local develop is {local[:8]}, but GitHub develop is '
                 f'{remote_sha[:8]}')
-    return findings
+        return found
+
+    repositories = build.get('repositories', [])
+    if not repositories:
+        return []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        per_repository = list(pool.map(aligned, repositories))
+    return [finding for found in per_repository for finding in found]
 
 
 def releasability_survey(source, max_workers=12):

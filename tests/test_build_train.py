@@ -793,7 +793,7 @@ class PreflightReportTest(unittest.TestCase):
         self.assertEqual(1, outcome.exit_code, outcome.output)
         self.assertIn('no dispatched build train was found', outcome.output)
 
-    def test_preflight_reports_every_finding_together(self):
+    def test_the_local_phase_reports_every_finding_and_asks_nothing_remote(self):
         with (
             patch.object(BuildTrain, '_read', side_effect=ValueError(
                 'build-train state does not exist')),
@@ -802,15 +802,14 @@ class PreflightReportTest(unittest.TestCase):
             patch("org.metadatacenter.train_support.preflight._local_configuration_preflight", side_effect=ValueError(
                 'local train configuration preflight failed:\n'
                 '2 npm lock baselines fail review:\n  first lock\n  second lock')),
-            patch("org.metadatacenter.train_support.preflight._github_preflight"),
-            patch("org.metadatacenter.train_support.workflow._active_workflow_runs", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._github_preflight") as github,
+            patch("org.metadatacenter.train_support.workflow._active_workflow_runs") as active,
             patch("org.metadatacenter.train_support.survey._open_work", return_value=[
                 'cedar-x has 1 uncommitted change(s), which the train cannot see']),
-            patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
-            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
-            patch("org.metadatacenter.train_support.preflight._source_ci_preflight", side_effect=ValueError(
-                'train source CI is not settled: cedar-y: CI concluded failure')) as source_ci,
-            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
+            patch("org.metadatacenter.train_support.survey._source_alignment") as alignment,
+            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight") as readable,
+            patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
+            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight") as smoke,
             patch("org.metadatacenter.train_support.preflight._component_preflight"),
             patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight") as npm_config,
             patch("org.metadatacenter.train_support.preflight._publication_targets_preflight") as targets,
@@ -819,15 +818,66 @@ class PreflightReportTest(unittest.TestCase):
                 BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None)
 
         message = str(refused.exception)
-        self.assertIn('3 preflight findings', message)
+        self.assertIn('2 preflight findings', message)
         self.assertIn('- local train configuration preflight failed', message)
         self.assertIn('  first lock', message)
         self.assertIn('  second lock', message)
         self.assertIn('- source repositories hold work the train cannot see: cedar-x', message)
-        self.assertIn('- train source CI is not settled: cedar-y', message)
-        source_ci.assert_called_once_with(None)
+        self.assertIn('were not asked', message)
         npm_config.assert_called_once_with()
+        for remote in (github, active, alignment, readable, source_ci, smoke, targets):
+            remote.assert_not_called()
+
+    def test_the_remote_phase_reports_every_finding_together(self):
+        with (
+            patch.object(BuildTrain, '_read', side_effect=ValueError(
+                'build-train state does not exist')),
+            patch("org.metadatacenter.train_support.preflight._configuration_summary",
+                         return_value=(43, 'model', 'cee', 7, 3)),
+            patch("org.metadatacenter.train_support.preflight._local_configuration_preflight"),
+            patch("org.metadatacenter.train_support.preflight._github_preflight"),
+            patch("org.metadatacenter.train_support.workflow._active_workflow_runs", return_value=[]),
+            patch("org.metadatacenter.train_support.survey._open_work", return_value=[]),
+            patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[
+                'cedar-z local develop is 11111111, but GitHub develop is 22222222']),
+            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight"),
+            patch("org.metadatacenter.train_support.preflight._source_ci_preflight", side_effect=ValueError(
+                'train source CI is not settled: cedar-y: CI concluded failure')) as source_ci,
+            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight"),
+            patch("org.metadatacenter.train_support.preflight._component_preflight"),
+            patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
+            patch("org.metadatacenter.train_support.preflight._publication_targets_preflight") as targets,
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None)
+
+        message = str(refused.exception)
+        self.assertIn('2 preflight findings', message)
+        self.assertIn('- local source checkouts do not match GitHub develop: cedar-z', message)
+        self.assertIn('- train source CI is not settled: cedar-y', message)
+        self.assertNotIn('were not asked', message)
+        source_ci.assert_called_once_with(None)
         targets.assert_called_once_with()
+
+    def test_an_unreadable_configuration_stops_before_every_other_check(self):
+        with (
+            patch.object(BuildTrain, '_read', side_effect=ValueError(
+                'build-train state does not exist')),
+            patch("org.metadatacenter.train_support.preflight._configuration_summary",
+                         side_effect=ValueError('cannot read build-train configuration: no such file')),
+            patch("org.metadatacenter.train_support.preflight._local_configuration_preflight") as local_config,
+            patch("org.metadatacenter.train_support.survey._open_work") as open_work,
+            patch("org.metadatacenter.train_support.preflight._component_preflight") as components,
+            patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight") as npm_config,
+            patch("org.metadatacenter.train_support.preflight._github_preflight") as github,
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None)
+
+        message = str(refused.exception)
+        self.assertIn('cannot read build-train configuration', message)
+        for later in (local_config, open_work, components, npm_config, github):
+            later.assert_not_called()
 
     def test_a_single_finding_is_reported_as_itself(self):
         self.assertEqual('only one', BuildTrainWorker._preflight_failure(['only one']))
