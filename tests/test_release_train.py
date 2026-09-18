@@ -711,7 +711,6 @@ class ReleasePlannerTest(unittest.TestCase):
                 "cedar-component-demo": "c" * 40,
                 "cedar-workspace": "d" * 40,
                 "cedar-template-designer": "e" * 40,
-                "cedar-model-typescript-library-demo": "f" * 40,
             },
         }
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
@@ -966,7 +965,6 @@ class ReleasePlannerTest(unittest.TestCase):
             "cedar-template-designer": "3" * 40,
             "cedar-embeddable-editor": "4" * 40,
             "cedar-model-typescript-library": "5" * 40,
-            "cedar-model-typescript-library-demo": "6" * 40,
         }}
         release, maven = ReleasePlanner._release_repositories({
             "repositories": list(source["repositories"]),
@@ -976,7 +974,6 @@ class ReleasePlannerTest(unittest.TestCase):
             "cedar-parent",
             "cedar-workspace",
             "cedar-template-designer",
-            "cedar-model-typescript-library-demo",
         ], release)
         self.assertEqual(["cedar-parent"], maven)
 
@@ -1491,7 +1488,6 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
         repositories = (
             "cedar-workspace",
             "cedar-template-designer",
-            "cedar-model-typescript-library-demo",
         )
         for repository in repositories:
             with self.subTest(repository=repository), tempfile.TemporaryDirectory() as directory:
@@ -1929,7 +1925,6 @@ class ReleaseBuildValidationTest(unittest.TestCase):
         self.assertEqual([], install_options["openview"])
         self.assertEqual([], install_options["workspace"])
         self.assertEqual([], install_options["template-designer"])
-        self.assertEqual([], install_options["model-typescript-library-demo"])
         self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
         self.assertEqual([], install_options["content"])
         self.assertEqual([], install_options["cee-demo-angular"])
@@ -3388,14 +3383,14 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 "packed frontend", tarball.read_bytes(), evidence["runtimeFiles"],
             )
 
-    def test_npm_pack_includes_the_demo_build_proven_by_release_validation(self):
+    def test_npm_pack_includes_a_generated_build_proven_by_release_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
-            root = workspace / "cedar-model-typescript-library-demo"
+            root = workspace / "cedar-generated-npm-surface"
             root.mkdir(parents=True)
             (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
             (root / "package.json").write_text(json.dumps({
-                "name": "cedar-model-typescript-library-demo",
+                "name": "cedar-generated-npm-surface",
                 "version": "2.9.10",
                 "main": "dist/index.js",
                 "files": ["dist"],
@@ -3409,7 +3404,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             log = Path(directory) / "build.log"
             log.write_text("build passed\n", encoding="utf-8")
             build_record = {
-                "id": "release:npm:model-typescript-library-demo:build",
+                "id": "release:npm:generated-npm-surface:build",
                 "buildOutput": str(root / "dist"),
                 "outputFiles": release_train._directory_file_hashes(root / "dist"),
                 "log": str(log),
@@ -3421,9 +3416,9 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 }},
             }, None))
             task = {
-                "id": "npm:release:model-typescript-library-demo",
+                "id": "npm:release:generated-npm-surface",
                 "kind": "npm-release",
-                "repository": "cedar-model-typescript-library-demo",
+                "repository": "cedar-generated-npm-surface",
                 "directory": ".",
                 "version": "2.9.10",
                 "registry": "https://nexus.example/repository/npm/",
@@ -3442,7 +3437,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 evidence["runtimeFiles"]["dist/index.js"],
             )
             publisher._verify_npm_tarball_files(
-                "packed demo", tarball.read_bytes(), evidence["runtimeFiles"],
+                "packed surface", tarball.read_bytes(), evidence["runtimeFiles"],
             )
 
 

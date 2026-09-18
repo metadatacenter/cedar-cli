@@ -204,11 +204,6 @@ class ReposFactory:
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(content_distribution)
 
-        model_typescript_library_demo = Repo("cedar-model-typescript-library-demo", RepoType.TYPESCRIPT,
-                                 [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN,
-                                  V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
-        repos.add_repo(model_typescript_library_demo)
-
         repos.add_repo(Repo("cedar-model-typescript-library-python", RepoType.PYTHON, []))
 
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, []))
