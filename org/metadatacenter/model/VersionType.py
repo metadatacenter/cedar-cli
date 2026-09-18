@@ -13,5 +13,6 @@ class VersionType:
     DIST_NPM_PACKAGE_OWN = "dist-npm/package-own"
     DIST_NPM_PACKAGE_LOCK_OWN = "dist-npm/package-lock-own"
     DIST_NPM_PACKAGE_LOCK_PACKAGES_OWN = "dist-npm/package-lock-packages-own"
+    MISSING = 'missing-checkout'
     EMPTY = 'expected-empty'
     UNKNOWN = 'unknown'
