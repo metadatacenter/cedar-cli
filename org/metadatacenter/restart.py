@@ -1,4 +1,5 @@
 """Native application restart targets, with the original flat syntax retained."""
+import os
 from typing import List
 
 import typer
@@ -43,8 +44,18 @@ def _restart(services):
 
 
 @app.callback()
-def restart_default(ctx: typer.Context):
+def restart_default(
+    ctx: typer.Context,
+    refresh_dependencies: bool = typer.Option(
+        False, "--refresh-dependencies",
+        help="Install a frontend's dependencies when its lockfile has moved past them, "
+             "rather than refusing the restart"),
+):
     """Restart applications; infrastructure is left running. No target means all applications."""
+    # Recorded on the worker, which every controller call beneath this one reads, so it
+    # reaches the restart's own start of each application.
+    if refresh_dependencies:
+        NativeWorker.refresh_stale_dependencies = True
     if ctx.invoked_subcommand is None:
         _restart(())
 

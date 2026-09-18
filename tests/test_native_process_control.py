@@ -416,3 +416,61 @@ class InfrastructureAlreadyRunningTest(unittest.TestCase):
 
         infrastructure.assert_called_once_with()
 
+
+
+class RefreshStaleDependenciesTest(unittest.TestCase):
+    """The start that meets a moved lockfile can install past it when asked to.
+
+    The condition is exact and its repair is the same command every time, so refusing seven
+    starts for seven identical reasons after a release — which rewrites every frontend lockfile
+    at once — leaves the operator running that command seven times. It stays opt-in because
+    `npm ci` reinstalls from scratch, and a start is not where somebody expects to wait.
+    """
+
+    def setUp(self):
+        NativeWorker.refresh_stale_dependencies = False
+        self.addCleanup(setattr, NativeWorker, "refresh_stale_dependencies", False)
+        self.runner = CliRunner()
+
+    def _command(self, invoke):
+        with patch.object(NativeWorker, "controller_path", return_value="/controller.sh"), \
+             patch("org.metadatacenter.worker.Worker.Worker.execute_generic_shell_commands",
+                   return_value=subprocess.CompletedProcess([], 0)) as execute, \
+             patch.object(ModeManager, "require_surface", return_value=CedarMode.NATIVE):
+            invoke()
+        return execute.call_args[0][0][0]
+
+    def test_the_controller_is_not_asked_to_install_by_default(self):
+        command = self._command(lambda: NativeWorker.start(("ui-content",)))
+
+        self.assertNotIn("CEDAR_REFRESH_STALE_DEPENDENCIES", command)
+
+    def test_the_worker_flag_reaches_the_controller(self):
+        NativeWorker.refresh_stale_dependencies = True
+
+        command = self._command(lambda: NativeWorker.start(("ui-content",)))
+
+        self.assertTrue(command.startswith("CEDAR_REFRESH_STALE_DEPENDENCIES=1 "), command)
+
+    def test_the_decision_travels_in_the_script_rather_than_the_environment(self):
+        """A subprocess inherits the invocation's resolved profile, not os.environ.
+
+        That snapshot is taken before any command runs, so a callback setting os.environ would
+        never reach the controller. The prefix is in the script text for that reason.
+        """
+        command = self._command(
+            lambda: NativeWorker.restart(("ui-content",), refresh_dependencies=True))
+
+        self.assertIn("CEDAR_REFRESH_STALE_DEPENDENCIES=1", command)
+
+    def test_the_start_option_sets_the_worker_flag(self):
+        with patch.object(ModeManager, "require_surface", return_value=CedarMode.NATIVE), \
+             patch.object(StartFrontendWorker, "all",
+                          return_value=subprocess.CompletedProcess([], 0)):
+            result = self.runner.invoke(start.app, ["--refresh-dependencies", "frontends"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertTrue(NativeWorker.refresh_stale_dependencies)
+
+    def test_the_controller_offers_the_option_in_its_refusal(self):
+        self.assertIn("--refresh-dependencies", NATIVE_CONTROLLER.read_text(encoding="utf-8"))

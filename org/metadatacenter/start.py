@@ -1,3 +1,4 @@
+import os
 import time
 
 import typer
@@ -17,7 +18,19 @@ console = Console()
 
 
 @app.callback()
-def require_allowed_native_start(ctx: typer.Context):
+def require_allowed_native_start(
+    ctx: typer.Context,
+    refresh_dependencies: bool = typer.Option(
+        False, "--refresh-dependencies",
+        help="Install a frontend's dependencies when its lockfile has moved past them, "
+             "rather than refusing the start"),
+):
+    # Recorded on the worker rather than in the environment: a subprocess inherits the
+    # invocation's resolved profile, a snapshot taken before any command runs, so os.environ
+    # set here would never reach the controller. A release rewrites all seven frontend
+    # lockfiles at once, which is the case this exists for.
+    if refresh_dependencies:
+        NativeWorker.refresh_stale_dependencies = True
     try:
         mode = ModeManager.require_surface("native")
         if mode is CedarMode.HYBRID and ctx.invoked_subcommand not in ("frontends", "frontend"):
