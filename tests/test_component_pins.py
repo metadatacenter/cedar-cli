@@ -210,6 +210,25 @@ class WorkspaceTest(unittest.TestCase):
             json.loads((self.host / "package.json").read_text())
             ["dependencies"]["cedar-embeddable-designer"])
 
+    def test_nested_consumer_installs_beside_its_manifest(self):
+        nested = self.host / 'frontend-src'
+        nested.mkdir()
+        (self.host / 'package.json').rename(nested / 'package.json')
+        subprocess.run(['git', '-C', str(self.host), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.host), 'commit', '-qm', 'Nest frontend'], check=True)
+        config_path = self.root / 'cedar-development/ops/frontend-train.json'
+        config = json.loads(config_path.read_text())
+        consumer = config['components'][0]['consumers'][0]
+        consumer['manifest'] = 'frontend-src/package.json'
+        consumer['lock'] = 'frontend-src/package-lock.json'
+        config_path.write_text(json.dumps(config))
+        commands = []
+        with patch.object(component_pins, 'console'):
+            _apply(str(self.root), plan(str(self.root)), run=lambda d, c: commands.append((d, c)))
+        self.assertIn((nested, ['npm', 'install']), commands)
+        self.assertNotIn((self.host, ['npm', 'install']), commands)
+        self.assertIn((self.host, ['npm', 'run', 'prepare:components']), commands)
+
     def test_a_repository_with_uncommitted_tracked_changes_is_refused(self):
         """The diffs this leaves must be its own, so a review sees nothing else."""
         (self.host / "package.json").write_text(json.dumps({"name": "edited"}))

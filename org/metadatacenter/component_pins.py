@@ -323,7 +323,7 @@ def _apply(cedar_home, plans, run=None):
             consumer_directory = Path(cedar_home) / consumer.repository
             _repoint(consumer_directory / consumer.manifest, consumer.dependency,
                      item.package, item.target)
-            run(consumer_directory, ["npm", "install"])
+            run((consumer_directory / consumer.manifest).parent, ["npm", "install"])
             if consumer.restage:
                 run(consumer_directory, list(consumer.restage))
     console.print("\nNothing is committed. Review each repository's diff, then commit and push it.")
