@@ -403,10 +403,19 @@ class ReleasePreflight:
                 "git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"])
             if dirty:
                 count = len(dirty.splitlines())
+                # Naming the cost of the obvious remedy. A release stamps the exact commits
+                # its train captured, so committing here spends the train and the release
+                # needs a new one, built and smoke-gated from scratch. Stashing does not.
+                # The operator is choosing between those two at the moment they read this.
+                captured = repository in (self.manifest.get("sourceRepositories") or {})
+                remedy = (f"stash them in {root}; committing spends train "
+                          f"{self.manifest.get('train', 'this train')}, which captured "
+                          f"{repository}, and the release then needs a new one"
+                          ) if captured else f"commit or stash them in {root}"
                 findings.append(PreflightFinding(
                     "working-tree", "fail",
                     f"{repository} has {count} uncommitted change(s)",
-                    f"commit or stash them in {root}",
+                    remedy,
                 ))
             code, ahead, _ = self._capture(
                 ["git", "-C", str(root), "rev-list", "--count", "@{upstream}..HEAD"])

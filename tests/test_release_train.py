@@ -44,6 +44,12 @@ from org.metadatacenter.release_train import (
     ReleaseWorkspacePreparer,
     advance_active_release,
     compare_cee_packages,
+    _reason,
+    cee_consumer_findings,
+    packaging_findings,
+    readiness_findings,
+    required_artifact_findings,
+    version_findings,
     create_active_release_refs,
     integrate_active_release,
     publish_active_release,
@@ -5142,3 +5148,101 @@ class DockerDefaultStampingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseReadinessTest(unittest.TestCase):
+    """Preconditions answerable before a train exists, which is when repairing them is cheap."""
+
+    def _workspace(self, directory):
+        root = Path(directory)
+        ops = root / "cedar-development" / "ops"
+        ops.mkdir(parents=True)
+        return root, ops
+
+    def _write(self, ops, frontend=None, build=None):
+        (ops / "frontend-train.json").write_text(json.dumps(frontend or {}), encoding="utf-8")
+        (ops / "build-train.json").write_text(json.dumps(build or {}), encoding="utf-8")
+
+    def test_a_cee_consumer_manifest_absent_from_the_checkout_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, ops = self._workspace(directory)
+            (root / "cedar-workspace" / ".git").mkdir(parents=True)
+            self._write(ops, frontend={"frontends": [{
+                "repository": "cedar-workspace",
+                "ceeConsumer": {"manifest": "package.json", "lock": "package-lock.json"},
+            }]})
+            frontend = json.loads((ops / "frontend-train.json").read_text())
+
+            findings = cee_consumer_findings(root, frontend)
+
+            self.assertTrue(any("package.json, which is not in the checkout" in f
+                                for f in findings), findings)
+
+    def test_a_duplicated_cee_consumer_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, ops = self._workspace(directory)
+            entry = {"repository": "cedar-component-demo", "manifest": "a/package.json",
+                     "lock": "a/package-lock.json"}
+            self._write(ops, frontend={"additionalCeeConsumers": [entry, dict(entry)]})
+            frontend = json.loads((ops / "frontend-train.json").read_text())
+
+            findings = cee_consumer_findings(root, frontend)
+
+            self.assertTrue(any("declared as a CEE consumer twice" in f for f in findings), findings)
+
+    def test_a_required_artifact_no_module_builds_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, ops = self._workspace(directory)
+            (root / "cedar-parent").mkdir()
+            (root / "cedar-parent" / "pom.xml").write_text(
+                "<project><modules><module>cedar-core-library</module></modules></project>",
+                encoding="utf-8")
+            build = {"requiredArtifacts": ["cedar-core-library", "cedar-invented-library"]}
+
+            findings = required_artifact_findings(root, build)
+
+            self.assertEqual(
+                ["cedar-invented-library is required but no module in the workspace builds it"],
+                findings)
+
+    def test_the_next_version_must_follow_the_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, _ = self._workspace(directory)
+            self.assertTrue(any("does not follow the release" in f
+                                for f in version_findings("2.9.17", "2.9.16-SNAPSHOT", root)))
+            self.assertEqual([], version_findings("2.9.17", "2.9.18-SNAPSHOT", root))
+
+    def test_a_workspace_on_another_version_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, _ = self._workspace(directory)
+            (root / "cedar-parent").mkdir()
+            (root / "cedar-parent" / "pom.xml").write_text(
+                "<project><version>2.9.18-SNAPSHOT</version></project>", encoding="utf-8")
+
+            findings = version_findings("2.9.17", "2.9.18-SNAPSHOT", root)
+
+            self.assertTrue(any("releases 2.9.18 rather than 2.9.17" in f for f in findings),
+                            findings)
+
+
+class PackagingPreflightTest(unittest.TestCase):
+    """Whether a published surface can be packed the way the publisher packs it."""
+
+    def test_a_pack_that_fails_reports_the_thrown_message_not_the_stack_frame(self):
+        class Result:
+            returncode = 1
+            stdout = ("> app@1 prepack\n"
+                      "file:///tmp/throwaway/scripts/stage.mjs:20\n"
+                      "Error: Missing cedar-embeddable-designer bundle. Run npm ci\n")
+            stderr = ""
+
+        self.assertEqual(
+            "Error: Missing cedar-embeddable-designer bundle. Run npm ci",
+            _reason(Result()))
+
+    def test_a_surface_that_is_not_checked_out_is_skipped_rather_than_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            findings = packaging_findings(
+                directory, surfaces=[{"id": "absent", "repository": "nowhere", "directory": "."}])
+
+            self.assertEqual([], findings)
