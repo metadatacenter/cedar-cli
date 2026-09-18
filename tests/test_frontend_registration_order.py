@@ -22,6 +22,7 @@ EDGES = {
     "cedar-design-tokens": (
         "cedar-embeddable-editor", "cedar-embeddable-term-picker", "cedar-embeddable-designer",
         "cedar-workspace", "cedar-monitoring", "cedar-openview",
+        "cedar-bridging", "cedar-template-designer",
     ),
     "cedar-model-typescript-library": (
         "cedar-embeddable-editor", "cedar-embeddable-designer",
