@@ -1,10 +1,17 @@
 #!/bin/bash
 # Keep setup local to the invocation; sourcing this file must never exit the caller.
 _cedarcli_run() {
-  local cedar_cli_cwd="$PWD" cedar_cli_rc next_git_path
+  local cedar_cli_cwd="$PWD" cedar_cli_rc next_git_path cedar_home_inferred
   local NEXT_GIT_FILE=$HOME/.cedar/next_git_repo
   if [ -z "${CEDAR_HOME:-}" ]; then
-    echo 'CEDAR_HOME must name the CEDAR installation directory.' >&2
+    echo 'CEDAR_HOME must name the CEDAR installation directory; cedarcli reads nothing else' >&2
+    echo 'to find the estate, and resolves the mode and profile itself once it has this.' >&2
+    # This script lives at $CEDAR_HOME/cedar-cli/cli.sh, so its own location names the answer.
+    cedar_home_inferred=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)
+    if [ -n "$cedar_home_inferred" ]; then
+      echo 'This copy is installed under one, so export that:' >&2
+      echo "    export CEDAR_HOME=$cedar_home_inferred" >&2
+    fi
     return 1
   fi
   if (

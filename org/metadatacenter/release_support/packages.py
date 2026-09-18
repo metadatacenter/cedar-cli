@@ -16,6 +16,7 @@ from org.metadatacenter.release_support.hashes import (
     _sha256,
 )
 from org.metadatacenter.release_support.policy import (
+    CEE_BUNDLE_PAIRS,
     DEV_CEE_NAME,
     DEV_MODEL_SPEC_RE,
     LOAD_TRACE_RE,
@@ -122,11 +123,22 @@ def _normalize_package_metadata(
     return result
 
 
+def _bundle_pairs(files: dict[str, bytes]) -> list[tuple[str, str]]:
+    """The bundle/manifest pairs this package carries, the first one always."""
+    required, *optional = CEE_BUNDLE_PAIRS
+    return [required] + [
+        pair for pair in optional if pair[0] in files or pair[1] in files
+    ]
+
+
 def _verify_bundle(identity: str, files: dict[str, bytes]) -> None:
-    manifest = _read_package_json(identity, files, "bundle-manifest.json")
-    bundle = files["cedar-embeddable-editor.js"]
-    if manifest.get("bytes") != len(bundle) or manifest.get("sha256") != _sha256(bundle):
-        raise ReleaseError(f"{identity} JavaScript does not match bundle-manifest.json")
+    for bundle_name, manifest_name in _bundle_pairs(files):
+        if bundle_name not in files:
+            raise ReleaseError(f"{identity} has {manifest_name} without {bundle_name}")
+        manifest = _read_package_json(identity, files, manifest_name)
+        bundle = files[bundle_name]
+        if manifest.get("bytes") != len(bundle) or manifest.get("sha256") != _sha256(bundle):
+            raise ReleaseError(f"{identity} JavaScript does not match {manifest_name}")
 
 
 def _tree_digest(files: dict[str, bytes]) -> str:
@@ -271,6 +283,7 @@ def _canonicalize_minified_renames(
     dev_bundle: bytes,
     public_identity: str,
     public_bundle: bytes,
+    bundle_name: str = "cedar-embeddable-editor.js",
 ) -> tuple[bytes, int]:
     """Spell the development bundle with the public bundle's minified names, or refuse.
 
@@ -288,7 +301,8 @@ def _canonicalize_minified_renames(
     gate before they meet here, which is the defence that remains.
     """
     refusal = ReleaseError(
-        "CEE promotion changes executable JavaScript outside declared release provenance"
+        f"CEE promotion changes executable JavaScript in {bundle_name} outside declared "
+        "release provenance"
     )
     dev_parts = MINIFIED_TOKEN_SPLIT.split(dev_bundle)
     public_parts = MINIFIED_TOKEN_SPLIT.split(public_bundle)
@@ -366,9 +380,10 @@ def compare_cee_packages(
         if normalized_dev[name] != normalized_public[name]
     ]
     if changed:
-        allowed = {
-            "CHANGELOG.md", "bundle-manifest.json", "cedar-embeddable-editor.js",
-        }
+        pairs = _bundle_pairs(normalized_dev)
+        allowed = {"CHANGELOG.md"}
+        for bundle_name, manifest_name in pairs:
+            allowed.update({bundle_name, manifest_name})
         unexpected = sorted(set(changed) - allowed)
         if unexpected:
             raise ReleaseError(
@@ -376,13 +391,18 @@ def compare_cee_packages(
                 + ", ".join(unexpected)
             )
         changed_set = set(changed)
-        bundle_changed = "cedar-embeddable-editor.js" in changed_set
-        manifest_changed = "bundle-manifest.json" in changed_set
-        if bundle_changed != manifest_changed:
-            raise ReleaseError(
-                "CEE promotion changes an incomplete bundle-provenance pair: "
-                + ", ".join(changed)
-            )
+        # A bundle and its manifest move together, because the manifest records the bytes. One
+        # without the other means the manifest no longer describes what it names.
+        for bundle_name, manifest_name in pairs:
+            if (bundle_name in changed_set) != (manifest_name in changed_set):
+                raise ReleaseError(
+                    "CEE promotion changes an incomplete bundle-provenance pair: "
+                    + ", ".join(changed)
+                )
+        changed_pairs = [
+            pair for pair in pairs if pair[0] in changed_set
+        ]
+        bundle_changed = bool(changed_pairs)
 
         public_model_version = None
         if "CHANGELOG.md" in changed_set:
@@ -405,24 +425,28 @@ def compare_cee_packages(
 
         if bundle_changed:
             assert public_model_version is not None
-            dev_bundle, public_bundle = _normalize_bundle_provenance(
-                dev_identity,
-                dev_files["cedar-embeddable-editor.js"],
-                dev_version,
-                public_identity,
-                public_files["cedar-embeddable-editor.js"],
-                public_version,
-                public_model_version,
-                development_allow_scripts,
-            )
-            if dev_bundle != public_bundle:
-                dev_bundle, minified_renames = _canonicalize_minified_renames(
-                    dev_identity, dev_bundle, public_identity, public_bundle,
+            # Each bundle carries the same provenance strings, so each is proved the same way.
+            for bundle_name, manifest_name in changed_pairs:
+                dev_bundle, public_bundle = _normalize_bundle_provenance(
+                    dev_identity,
+                    dev_files[bundle_name],
+                    dev_version,
+                    public_identity,
+                    public_files[bundle_name],
+                    public_version,
+                    public_model_version,
+                    development_allow_scripts,
                 )
-            normalized_dev["cedar-embeddable-editor.js"] = dev_bundle
-            normalized_public["cedar-embeddable-editor.js"] = public_bundle
-            normalized_dev["bundle-manifest.json"] = _normalized_bundle_manifest(dev_bundle)
-            normalized_public["bundle-manifest.json"] = _normalized_bundle_manifest(public_bundle)
+                if dev_bundle != public_bundle:
+                    dev_bundle, renames = _canonicalize_minified_renames(
+                        dev_identity, dev_bundle, public_identity, public_bundle,
+                        bundle_name,
+                    )
+                    minified_renames += renames
+                normalized_dev[bundle_name] = dev_bundle
+                normalized_public[bundle_name] = public_bundle
+                normalized_dev[manifest_name] = _normalized_bundle_manifest(dev_bundle)
+                normalized_public[manifest_name] = _normalized_bundle_manifest(public_bundle)
         changed = [
             name for name in sorted(normalized_dev)
             if normalized_dev[name] != normalized_public[name]
@@ -433,6 +457,19 @@ def compare_cee_packages(
             + ", ".join(changed)
         )
     digest = _tree_digest(normalized_dev)
+    pairs = _bundle_pairs(normalized_dev)
+    bundle_changes = []
+    for bundle_name, manifest_name in pairs:
+        bundle_changes.extend([
+            f"{bundle_name}:CEE version",
+            f"{bundle_name}:model package identity",
+            f"{bundle_name}:load trace",
+            f"{manifest_name}:derived bundle bytes and sha256",
+        ])
+        if development_allow_scripts:
+            bundle_changes.append(f"{bundle_name}:embedded allowScripts install policy")
+        if minified_renames:
+            bundle_changes.append(f"{bundle_name}:minified identifier names")
     return {
         "algorithm": "sha256",
         "normalizedPayloadSha256": digest,
@@ -440,6 +477,16 @@ def compare_cee_packages(
         "bundleSha256": _sha256(dev_files["cedar-embeddable-editor.js"]),
         "publicBundleSha256": _sha256(public_files["cedar-embeddable-editor.js"]),
         "normalizedBundleSha256": _sha256(normalized_dev["cedar-embeddable-editor.js"]),
+        # Every bundle the package ships, so the evidence names what was proved rather than
+        # leaving a second one to be assumed from the first.
+        "provenBundles": {
+            bundle_name: {
+                "bundleSha256": _sha256(dev_files[bundle_name]),
+                "publicBundleSha256": _sha256(public_files[bundle_name]),
+                "normalizedBundleSha256": _sha256(normalized_dev[bundle_name]),
+            }
+            for bundle_name, _ in pairs
+        },
         "minifiedIdentifierRenames": minified_renames,
         "allowedMetadataChanges": [
             "package.json:name",
@@ -449,16 +496,7 @@ def compare_cee_packages(
             "package-lock.json:version",
             "package-lock.json:packages['']:name",
             "package-lock.json:packages['']:version",
-            "cedar-embeddable-editor.js:CEE version",
-            "cedar-embeddable-editor.js:model package identity",
-            "cedar-embeddable-editor.js:load trace",
-            "bundle-manifest.json:derived bundle bytes and sha256",
+        ] + bundle_changes + [
             f"CHANGELOG.md:{public_version} release entry",
-        ] + (
-            ["cedar-embeddable-editor.js:embedded allowScripts install policy"]
-            if development_allow_scripts else []
-        ) + (
-            ["cedar-embeddable-editor.js:minified identifier names"]
-            if minified_renames else []
-        ),
+        ],
     }

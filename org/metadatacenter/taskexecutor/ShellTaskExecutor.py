@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.progress import Progress
 from rich.style import Style
 
+from org.metadatacenter import reactor
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
@@ -63,10 +64,25 @@ class ShellTaskExecutor(TaskExecutor):
                                 f"Active frontend runtime(s) {processes} detected; "
                                 "the build is isolated from their checkout and Angular cache."
                             )
-                        return self._execute_commands(
+                        # The reactor. Resolve this copy's CEDAR dependencies from the siblings
+                        # already built in this walk, the way a Maven reactor resolves from ~/.m2,
+                        # and turn npm ci into npm install because a rewritten manifest no longer
+                        # matches the lock. Scheduled producers must succeed before resolution.
+                        cedar_home = Util.cedar_home
+                        resolved = reactor.resolve(isolated_cwd, cedar_home)
+                        if resolved:
+                            job_progress.print(
+                                "Reactor: " + ", ".join(resolved), markup=False)
+                            commands_to_execute = reactor.install_commands(commands_to_execute)
+                        code = self._execute_commands(
                             task, repo, commands_to_execute, str(isolated_cwd),
                             job_progress, environment,
                         )
+                        if code == 0:
+                            stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
+                            if stored:
+                                job_progress.print(f"Reactor: stored {stored}", markup=False)
+                        return code
                 if parameter("in_place_frontend_build") is True:
                     require_no_frontend_runtime_collision(Path(cwd))
                     with executable_build_workspace() as (_, environment):
@@ -75,6 +91,9 @@ class ShellTaskExecutor(TaskExecutor):
                 return self._execute_commands(
                     task, repo, commands_to_execute, cwd, job_progress, None,
                 )
+            except reactor.ReactorError as error:
+                job_progress.print(f"Reactor failed: {error}", markup=False)
+                return 1
             except BuildSafetyError as error:
                 job_progress.print(f"Build safety check failed: {error}", markup=False)
                 return 1

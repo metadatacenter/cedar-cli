@@ -105,6 +105,7 @@ from org.metadatacenter.release_support.output import (
 )
 
 from org.metadatacenter.release_support.packages import (
+    _bundle_pairs,
     _canonicalize_minified_renames,
     _normalize_bundle_provenance,
     _normalize_package_metadata,

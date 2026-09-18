@@ -48,6 +48,7 @@ from org.metadatacenter.train_support.policy import (
 )
 
 from org.metadatacenter.train_support.preflight import (
+    _anonymous_source_readability_preflight,
     _configuration_summary,
     _github_preflight,
     _local_configuration_preflight,
@@ -244,6 +245,10 @@ class BuildTrainWorker:
     @staticmethod
     def _smoke_gate_preflight(source=None):
         return _preflight_component._smoke_gate_preflight(source)
+
+    @staticmethod
+    def _anonymous_source_readability_preflight(source=None):
+        return _preflight_component._anonymous_source_readability_preflight(source)
 
     @staticmethod
     def _preflight(selected, resume):

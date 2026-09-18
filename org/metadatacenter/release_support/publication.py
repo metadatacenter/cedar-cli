@@ -6,7 +6,6 @@ from pathlib import Path, PurePosixPath
 import base64
 import datetime as dt
 import gzip
-import hashlib
 import io
 import json
 import posixpath
@@ -16,6 +15,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+from org.metadatacenter.npm_package import NpmPackageError, inspect_tarball, pack_and_inspect
 from org.metadatacenter.release_support.distribution import (
     ReleaseDistributionMaterializer,
 )
@@ -557,22 +557,9 @@ class ReleaseArtifactPublisher:
     @staticmethod
     def _npm_tarball_package(identity: str, content: bytes) -> dict:
         try:
-            with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
-                members = [
-                    member for member in archive.getmembers()
-                    if PurePosixPath(member.name) == PurePosixPath("package/package.json")
-                ]
-                if len(members) != 1 or not members[0].isfile():
-                    raise ReleaseError(f"{identity} has no unique package/package.json")
-                stream = archive.extractfile(members[0])
-                if stream is None:
-                    raise ReleaseError(f"{identity} package.json is unreadable")
-                package = json.load(stream)
-        except (tarfile.TarError, json.JSONDecodeError) as error:
-            raise ReleaseError(f"{identity} is not a readable npm tarball") from error
-        if not isinstance(package, dict):
-            raise ReleaseError(f"{identity} package.json is not an object")
-        return package
+            return inspect_tarball(content, identity).package
+        except NpmPackageError as error:
+            raise ReleaseError(str(error)) from error
 
     def _verify_npm_package(self, task: dict, evidence: dict, *, wait: bool) -> dict:
         attempts = 12 if wait else 1
@@ -695,28 +682,9 @@ class ReleaseArtifactPublisher:
         except OSError as error:
             raise ReleaseError(f"cannot stamp npm provenance in {package_path}: {error}") from error
         try:
-            pack = subprocess.run([
-                "npm", "pack", str(package_root), "--pack-destination", str(stage),
-                "--ignore-scripts", "--json",
-            ], check=False, text=True, capture_output=True, env=npm_environment)
-        except OSError as error:
-            raise ReleaseError(f"cannot run npm pack for {task['id']}: {error}") from error
-        if pack.returncode:
-            detail = (pack.stderr or pack.stdout).strip()
-            if pack.returncode < 0 and not detail:
-                detail = "the process produced no diagnostic output of its own"
-            raise ReleaseError(
-                f"npm pack {describe_subprocess_failure(pack.returncode)} "
-                f"for {task['id']}: {detail}"
-            )
-        try:
-            packed = json.loads(pack.stdout)
-            filename = packed[0]["filename"]
-            if not isinstance(filename, str) or PurePosixPath(filename).name != filename:
-                raise ReleaseError(f"npm pack returned an unsafe filename for {task['id']}")
-            tarball_path = stage / filename
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as error:
-            raise ReleaseError(f"npm pack returned invalid evidence for {task['id']}") from error
+            tarball_path, _ = pack_and_inspect(package_root, stage, environment=npm_environment)
+        except NpmPackageError as error:
+            raise ReleaseError(f"cannot pack {task['id']}: {error}") from error
         runtime_files = self._include_runtime_assets(
             tarball_path, package_root, task.get("packedRuntimeDirectories", []),
         )
@@ -726,13 +694,13 @@ class ReleaseArtifactPublisher:
                 f"packed {task['id']}", tarball_path.read_bytes(), generated_files,
             )
         try:
-            content = tarball_path.read_bytes()
-        except OSError as error:
+            inspection = inspect_tarball(tarball_path.read_bytes(), task["id"])
+        except (OSError, NpmPackageError) as error:
             raise ReleaseError(f"cannot read npm tarball for {task['id']}: {error}") from error
         return tarball_path, {
             "name": package["name"],
-            "integrity": "sha512-" + base64.b64encode(hashlib.sha512(content).digest()).decode(),
-            "tarballSha256": _sha256(content),
+            "integrity": inspection.integrity,
+            "tarballSha256": inspection.sha256,
             "packedTarball": str(tarball_path),
             "runtimeFiles": runtime_files,
         }

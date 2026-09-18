@@ -35,12 +35,18 @@ class DesignTokensRegistrationTest(unittest.TestCase):
         so one built before this package publishes reads the previous snapshot and
         renders the previous values. A plan is walked in registration order, which
         makes that order load-bearing rather than tidy.
+
+        The consumers named here are the repositories whose manifests declare the
+        tokens. `tests/test_frontend_registration_order.py` asserts the whole
+        frontend order and checks the edge list against those manifests, which is
+        what this rule was missing when it named repositories that do not consume
+        the tokens at all.
         """
         names = [repo.name for repo in ReposFactory.build_repos().get_frontends()]
         tokens = names.index("cedar-design-tokens")
 
-        for consumer in ("cedar-embeddable-editor", "cedar-content-distribution",
-                         "cedar-model-typescript-library"):
+        for consumer in ("cedar-embeddable-editor", "cedar-embeddable-term-picker",
+                         "cedar-embeddable-designer", "cedar-workspace"):
             self.assertLess(tokens, names.index(consumer),
                             f"cedar-design-tokens must be registered before {consumer}")
 

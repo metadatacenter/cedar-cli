@@ -66,6 +66,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Packaging tests execute real npm commands. Runner-image npm versions differ
+      # in whether pack --ignore-scripts suppresses prepare; use the estate toolchain.
+      - name: Set up Node 24.19.0
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+
+      - name: Report Node and npm versions
+        run: |
+          node --version
+          npm --version
+
       # Ubuntu 22.04 deployment hosts use Python 3.10; keep that baseline covered.
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -80,9 +92,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
-      # Tests mock subprocess/filesystem calls, source the native controller in its inspection-only
-      # library mode, or inspect a harmless sleeper process. Nothing starts a service or reaches
-      # the network.
+      # Tests also pack and install local npm fixtures offline. Nothing starts a CEDAR
+      # service or publishes a package. Native-controller checks use inspection-only mode.
       - name: Run tests
         working-directory: cedar-cli
         env:

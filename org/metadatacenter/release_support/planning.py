@@ -256,8 +256,17 @@ class ReleasePlanner:
                     raise ReleaseError(
                         f"CEE consumer {consumer.get('repository')} has invalid {field} path"
                     )
-        if len(consumers) != 7:
-            raise ReleaseError(f"expected 7 CEE consumers, found {len(consumers)}")
+        # The configuration and the npm plan have already been required to cover each other
+        # exactly, in both directions, so a count is not what makes this list right. Seven was a
+        # tripwire against the configuration quietly losing a consumer, and it went stale the
+        # moment an eighth was declared: the Designer, which had been a consumer of the editor
+        # all along and was missing from the inventory rather than from the estate. What the
+        # tripwire was defending against is an empty or repeated inventory, so it says that.
+        if not consumers:
+            raise ReleaseError("the frontend configuration declares no CEE consumers")
+        declared = [(consumer["repository"], consumer["manifest"]) for consumer in consumers]
+        if len(set(declared)) != len(declared):
+            raise ReleaseError("a CEE consumer manifest is declared more than once")
         return consumers
 
     @staticmethod

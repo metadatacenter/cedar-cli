@@ -1,6 +1,9 @@
 """CEDAR release preflight."""
 from __future__ import annotations
 from org.metadatacenter import smoke_gate
+from org.metadatacenter.worker.ComponentWorker import (
+    COMPONENT_REMEDY, ComponentGateError, ComponentWorker,
+)
 from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
     GithubCIProbeError,
@@ -165,6 +168,7 @@ class ReleasePreflight:
         "check_target_artifacts_unused",
         "check_develop_is_green",
         "check_smoke_gate",
+        "check_components",
         "check_source_contract",
         "check_generated_version_files",
         "check_license_files",
@@ -247,7 +251,7 @@ class ReleasePreflight:
                 "check_nexus_authorization", "check_npm_authorization",
                 "check_push_permission", "check_target_version_unused",
                 "check_target_artifacts_unused", "check_source_contract",
-                "check_develop_is_green", "check_smoke_gate",
+                "check_develop_is_green", "check_smoke_gate", "check_components",
                 "check_generated_version_files", "check_license_files",
                 "check_remote_survey",
             ])
@@ -809,6 +813,32 @@ class ReleasePreflight:
         return [
             PreflightFinding("smoke", "fail", message, smoke_gate.REMEDY)
             for message in smoke_gate.findings_for(self.environment.get("CEDAR_HOME"), expected)
+        ]
+
+    def check_components(self) -> list[PreflightFinding]:
+        """Refuse to release a browser application that does not serve the components it pins.
+
+        Gated at the check's own severity rather than under --strict. A host sits on the last
+        published component for as long as it takes to publish the next one, so refusing on that
+        would refuse nearly every release, and a gate that always refuses earns an override flag
+        within a week. What is refused here is the condition a clean install cannot repair: bytes
+        that are not the locked package, an element no locked bundle defines, or a pin the
+        component's history cannot account for.
+
+        A release builds frontends in an isolated workspace from the lock, so a bundle staged
+        locally over a locked one never reaches it and is not asked about.
+        """
+        try:
+            findings = ComponentWorker.findings(self.environment.get("CEDAR_HOME"))
+        except ComponentGateError as error:
+            return [PreflightFinding("components", "fail", str(error), COMPONENT_REMEDY)]
+        return [
+            PreflightFinding(
+                "components", "fail",
+                f"{finding.host} {finding.surface.value} {finding.component}: {finding.detail}",
+                COMPONENT_REMEDY,
+            )
+            for finding in findings if finding.is_failure
         ]
 
     def check_source_contract(self) -> list[PreflightFinding]:

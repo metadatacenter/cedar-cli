@@ -4,7 +4,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from org.metadatacenter import maven
+from org.metadatacenter import maven, reactor
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
@@ -40,7 +40,8 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
     before = capture_estate_state(Path(Util.cedar_home))
     failure = None
     try:
-        plan_executor.execute(plan, dry_run, dump_plan)
+        with reactor.session_for_plan(Util.cedar_home, plan):
+            plan_executor.execute(plan, dry_run, dump_plan)
     except BaseException as error:
         failure = error
     after = capture_estate_state(Path(Util.cedar_home))

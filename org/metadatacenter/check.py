@@ -3,6 +3,7 @@ import typer
 from org.metadatacenter.ci_env import check_ci_env
 from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.worker.BuildTrainWorker import BuildTrainWorker
+from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.OpenApiWorker import OpenApiWorker
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.SnapshotWorker import DEFAULT_NEXUS, SnapshotWorker
@@ -33,6 +34,20 @@ def ci_env(
             help="Rewrite the copies that have drifted, for review and one commit per repository.")):
     """Check that every Java repository's CI gives its tests the environment the code requires."""
     exit_on_failure(check_ci_env(apply=apply))
+
+
+@app.command("components")
+def components(
+        strict: bool = typer.Option(
+            False, "--strict",
+            help="Also fail when a host sits behind a published component or serves a local "
+                 "build. For a server payload, which serves whatever the lock resolves; the "
+                 "release and train preflights ask this check without it."),
+        show_all: bool = typer.Option(
+            False, "--all",
+            help="List every comparison, not only those with findings.")):
+    """Check that every browser application serves the component sources beside it."""
+    exit_on_failure(ComponentWorker.check_components(strict=strict, show_all=show_all))
 
 
 @app.command("repos")
@@ -81,3 +96,26 @@ def ci(
             help="List every repository, not only those whose CI is not green.")):
     """Check GitHub CI at the exact develop commit of every repository a train would capture."""
     exit_on_failure(BuildTrainWorker.report_source_ci(show_all=show_all))
+
+
+@app.command("design-tokens")
+def design_tokens(
+        repo: list[str] = typer.Option(None, "--repo", help="Frontend repository; repeat to select several."),
+        strict: bool = typer.Option(False, "--strict", help="Fail on new color/typography drift or missing baselines."),
+        json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable adoption report."),
+        show_all: bool = typer.Option(False, "--all", help="Include existing findings."),
+        init_baseline: bool = typer.Option(False, "--init-baseline", help="Create reviewed debt baselines once; never overwrite."),
+        prune_baseline: bool = typer.Option(False, "--prune-baseline", help="Remove resolved debt without increasing allowances.")):
+    """Report shared-style adoption, new drift and token dependency pins across frontends."""
+    from org.metadatacenter.design_tokens import check_design_tokens
+    exit_on_failure(check_design_tokens(
+        repos=repo, strict=strict, json_output=json_output, show_all=show_all,
+        init_baseline=init_baseline, prune_baseline=prune_baseline))
+
+
+@app.command("artifact-versioning")
+def artifact_versioning(
+        apply: bool = typer.Option(False, "--apply", help="Repair unambiguous graph latest flags and enqueue reindexing.")):
+    """Audit artifact history links, ordering, draft uniqueness and latest flags in the selected stack."""
+    from org.metadatacenter.version_lifecycle import check_versioning
+    exit_on_failure(check_versioning(apply=apply))

@@ -47,6 +47,17 @@ REQUIRED_CEE_FILES = {
 }
 
 
+# A CEE package ships one browser bundle per font strategy, each with a manifest recording the
+# bytes and digest it was built from. The host-fonts bundle arrived in 2.0.16, carrying no
+# embedded text-font data for a host that provides its own, so a package cut before it has only
+# the first pair. The first is required; a later one is proved exactly like it when the package
+# has it, and a manifest without its bundle is a broken package rather than an older one.
+CEE_BUNDLE_PAIRS = (
+    ("cedar-embeddable-editor.js", "bundle-manifest.json"),
+    ("cedar-embeddable-editor.host-fonts.js", "bundle-manifest.host-fonts.json"),
+)
+
+
 INDEPENDENT_RELEASE_REPOSITORIES = {
     "cedar-embeddable-editor",
     "cedar-model-typescript-library",

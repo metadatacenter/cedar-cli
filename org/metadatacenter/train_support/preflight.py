@@ -2,10 +2,14 @@
 from __future__ import annotations
 from org.metadatacenter.util.InvocationContext import invocation_environment, process_environment
 from org.metadatacenter import smoke_gate
+from org.metadatacenter.worker.ComponentWorker import (
+    COMPONENT_REMEDY, ComponentGateError, ComponentWorker,
+)
 from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.NexusCredentials import environment_with_nexus_credentials
 from org.metadatacenter.util.Util import Util
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 import json
 import os
@@ -210,6 +214,87 @@ def _source_ci_preflight(source=None):
         raise ValueError('train source CI is not settled: ' + '; '.join(failures))
 
 
+def _credential_free_environment():
+    """A git environment holding none of the operator's credentials.
+
+        The workflow runner resolves each source anonymously, so a preflight that inherits the
+        operator's git configuration answers a different question than the one that matters. The
+        user and system files are replaced rather than ignored, because a credential helper
+        configured in either would otherwise supply a token the runner never has; the same helper
+        can also arrive through the environment's own config entries, and through an askpass
+        program, so those go too.
+        """
+    environment = dict(invocation_environment())
+    for name in list(environment):
+        if name.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')):
+            del environment[name]
+    for name in (
+        'GIT_CONFIG_COUNT', 'GIT_ASKPASS', 'SSH_ASKPASS',
+        'GH_TOKEN', 'GITHUB_TOKEN',
+    ):
+        environment.pop(name, None)
+    environment['GIT_TERMINAL_PROMPT'] = '0'
+    environment['GIT_CONFIG_GLOBAL'] = os.devnull
+    environment['GIT_CONFIG_SYSTEM'] = os.devnull
+    return environment
+
+
+def _anonymous_source_readability_preflight(source=None, max_workers=12):
+    """Require every train source to be readable the way the runner reads it.
+
+        The capture step resolves each source with an unauthenticated `git ls-remote`, so a private
+        repository, or one without the source branch, stops the workflow before it records any
+        state. Nothing is published when that happens, but the train ID is spent, and the recovery
+        is a fresh one.
+        """
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
+    if not cedar_home:
+        raise ValueError('CEDAR_HOME is not set')
+    ops = Path(cedar_home) / 'cedar-development' / 'ops'
+    try:
+        build = json.loads((ops / 'build-train.json').read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f'cannot read build-train configuration: {error}') from error
+    organization = build.get('organization')
+    branch = build.get('sourceBranch')
+    if not organization or not branch:
+        raise ValueError('build-train source must name an organization and a branch')
+    recorded = source.get('repositories') if isinstance(source, dict) else None
+    repositories = sorted(recorded) if recorded else build.get('repositories', [])
+    if not repositories:
+        raise ValueError('this train has no source repositories')
+
+    environment = _credential_free_environment()
+
+    def readable(repository):
+        url = f'https://github.com/{organization}/{repository}.git'
+        try:
+            result = subprocess.run(
+                ['git', '-c', 'credential.helper=',
+                 'ls-remote', url, f'refs/heads/{branch}'],
+                cwd=str(cedar_home),
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            return repository, f'cannot be resolved: {error}'
+        if result.returncode:
+            return repository, 'is not readable without credentials'
+        if not result.stdout.strip():
+            return repository, f'has no {branch} branch'
+        return repository, None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        results = list(pool.map(readable, repositories))
+    findings = [f'{repository} {detail}' for repository, detail in results if detail]
+    if findings:
+        raise ValueError(
+            'the train capture step reads every source anonymously, and '
+            + '; '.join(findings))
+
+
 def _local_configuration_preflight():
     cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not cedar_home:
@@ -262,6 +347,29 @@ def _smoke_gate_preflight(source=None):
             'no passing whole-stack smoke run covers this source: ' + '; '.join(findings))
 
 
+def _component_preflight():
+    """Require every browser application to serve the components it pins.
+
+    A train captures source, and the frontends among that source reach each other as published
+    npm packages. A host whose pin predates the component commit it depends on builds and tests
+    green, and fails at the moment a person opens the surface that needs the missing piece, so
+    the train would carry a browser application that cannot work.
+
+    Asked at the check's own severity. Sitting behind a published component is true of the estate
+    for most of a cycle and is not refused here; bytes that are not the locked package, an element
+    no locked bundle defines, and a pin develop cannot account for are.
+    """
+    try:
+        findings = ComponentWorker.findings()
+    except ComponentGateError as error:
+        raise ValueError(f'components cannot be compared: {error}') from error
+    failures = [f'{finding.host} {finding.surface.value} {finding.component}: {finding.detail}'
+                for finding in findings if finding.is_failure]
+    if failures:
+        raise ValueError('browser applications do not serve the components they pin: '
+                         + '; '.join(failures) + f'; {COMPONENT_REMEDY}')
+
+
 def _preflight(selected, resume):
     source_path = f'trains/{selected}.json'
     try:
@@ -280,9 +388,19 @@ def _preflight(selected, resume):
     elif source_exists:
         raise ValueError(f'train {selected} already exists; use --resume {selected}')
 
-    # Every stage runs even after one has refused, so the operator reads one report rather
-    # than fixing a finding, rerunning, and meeting the next. The checks that need the GitHub
-    # CLI are skipped once it has failed, because each would only repeat that failure.
+    # The checks run in two phases, by what they cost to answer. The local phase reads this
+    # workspace and settles in about a second. The remote phase asks GitHub once per source
+    # repository, then probes Nexus, npm and the Docker registry, and takes a minute and a
+    # half.
+    #
+    # Within a phase every stage runs even after one has refused, so the operator still reads
+    # one report and fixes a whole phase rather than one finding at a time. The remote phase
+    # does not run at all once the local one has refused: a train the workspace already
+    # disqualifies cannot dispatch whatever GitHub would answer, so the minute and a half buys
+    # nothing but a longer wait for a verdict that is already decided.
+    #
+    # The checks that need the GitHub CLI are skipped once it has failed, because each would
+    # only repeat that failure.
     findings = []
 
     def settle(check, *arguments):
@@ -292,27 +410,39 @@ def _preflight(selected, resume):
             findings.append(str(error))
             return None, False
 
-    summary, _ = settle(_configuration_summary)
+    summary, configured = settle(_configuration_summary)
+    if not configured:
+        # Every later check reads the configuration this one could not, so each would report
+        # the same failure in different words.
+        raise ValueError(_preflight_failure(findings, remote_checked=False))
+
     if not resume:
         settle(_local_configuration_preflight)
+    open_work, settled = settle(_survey_component._open_work)
+    if settled and open_work:
+        findings.append(
+            'source repositories hold work the train cannot see: ' + '; '.join(open_work))
+    settle(_component_preflight)
+    settle(_npm_configuration_preflight)
+    if findings:
+        raise ValueError(_preflight_failure(findings, remote_checked=False))
+
     _, github_ready = settle(_github_preflight)
     if github_ready:
         active, settled = settle(_workflow_component._active_workflow_runs)
         if settled and active:
             findings.append(
                 'another build train is queued or running: ' + '; '.join(active))
-    open_work, settled = settle(_survey_component._open_work)
-    if settled and open_work:
-        findings.append(
-            'source repositories hold work the train cannot see: ' + '; '.join(open_work))
     alignment, settled = settle(_survey_component._source_alignment)
     if settled and alignment:
         findings.append(
             'local source checkouts do not match GitHub develop: ' + '; '.join(alignment))
+    # After the alignment check, which is what makes the local heads the source to judge a
+    # smoke run against.
+    settle(_smoke_gate_preflight, source)
+    settle(_anonymous_source_readability_preflight, source)
     if github_ready:
         settle(_source_ci_preflight, source)
-    settle(_smoke_gate_preflight, source)
-    settle(_npm_configuration_preflight)
     settle(_publication_targets_preflight)
     _ci_env_preflight()
     if findings:
@@ -345,12 +475,26 @@ def _ci_env_preflight():
         '  [yellow]  Repair with cedarcli check ci-env --apply, outside a train.[/yellow]')
 
 
-def _preflight_failure(findings):
-    if len(findings) == 1:
-        return findings[0]
-    lines = []
-    for finding in findings:
-        first, *rest = finding.splitlines() or ['']
-        lines.append(f'- {first}')
-        lines.extend(f'  {line}' for line in rest)
-    return f'{len(findings)} preflight findings:\n' + '\n'.join(lines)
+REMOTE_PHASE_SKIPPED = (
+    'GitHub, the smoke record and the publication targets were not asked, because this train '
+    'is already refused here. Repair the above and rehearse again.')
+
+
+def _preflight_failure(findings, remote_checked=True):
+    """Render the findings, saying so when the remote phase never ran.
+
+    An operator reading a short report needs to know whether it is the whole story. Without
+    that line a local refusal looks like the complete list, and the remote findings arrive as a
+    surprise on the next rehearsal.
+    """
+    body = findings[0] if len(findings) == 1 else None
+    if body is None:
+        lines = []
+        for finding in findings:
+            first, *rest = finding.splitlines() or ['']
+            lines.append(f'- {first}')
+            lines.extend(f'  {line}' for line in rest)
+        body = f'{len(findings)} preflight findings:\n' + '\n'.join(lines)
+    if remote_checked:
+        return body
+    return f'{body}\n{REMOTE_PHASE_SKIPPED}'
