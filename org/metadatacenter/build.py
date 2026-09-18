@@ -195,6 +195,19 @@ def split_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     execute_build(plan, dry_run, dump_plan)
 
 
+@app.command("server-frontends")
+def server_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
+                     dump_plan: bool = typer.Option(False, help="Dump plan"),
+                     server_payload: bool = typer.Option(
+                         False, "--server-payload",
+                         help="Generate environment-configured static payloads for native nginx")):
+    """Build every frontend a native host serves from its own checkout, monolith included."""
+    GlobalContext.mark_global_task_type(TaskType.BUILD)
+    plan = Plan("Build server frontends")
+    BuildPlanner.server_frontends(plan, server_payload=server_payload)
+    execute_build(plan, dry_run, dump_plan)
+
+
 @app.command("all")
 def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
               dump_plan: bool = typer.Option(False, help="Dump plan"),

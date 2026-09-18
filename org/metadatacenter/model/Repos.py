@@ -93,6 +93,16 @@ class Repos:
     def get_split_frontends(self) -> [Repo]:
         return [self.map[name] for name in ("cedar-workspace", "cedar-template-designer")]
 
+    def get_server_frontends(self) -> [Repo]:
+        """Every frontend whose served tree a native host generates from its own checkout.
+
+        The monolith belongs with the two split applications here. It was left out while its build
+        was the one step of a deploy nobody had wrapped, which is also why it is the only served
+        payload without a build-info identity.
+        """
+        return [self.map[name] for name in
+                ("cedar-template-editor", "cedar-workspace", "cedar-template-designer")]
+
     def get_release_all(self) -> [Repo]:
         repos = []
         repos = repos + Util.get_flat_repo_list_pre_post(self.get_parent())

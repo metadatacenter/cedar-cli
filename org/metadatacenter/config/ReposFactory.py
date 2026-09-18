@@ -117,7 +117,16 @@ class ReposFactory:
                                        'npm publish ./dist-npm/cedar-embeddable-designer --tag=dev'])
         repos.add_repo(embeddable_designer)
 
-        repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, [V.PACKAGE_OWN], is_frontend=True))
+        # The monolith's served tree is generated in place like the split applications', so it is
+        # registered the same way. Without a server build command the ANGULAR_JS branch falls back
+        # to a bare `npm ci` in an isolated checkout, which installs dependencies for a tree nginx
+        # does not serve -- leaving the real build, and the version.js touch it needs, to be typed
+        # by hand on every deploy.
+        repos.add_repo(Repo("cedar-template-editor", RepoType.ANGULAR_JS, [V.PACKAGE_OWN],
+                            is_frontend=True,
+                            build_command_list=['npm ci'],
+                            server_build_command_list=[
+                                'bash "$CEDAR_HOME/cedar-development/ops/build-native-split-frontend.sh" editor']))
 
         # The split frontends use the ordinary platform release and Nexus publication path. Their
         # native static-payload build remains explicit because nginx serves these repositories
