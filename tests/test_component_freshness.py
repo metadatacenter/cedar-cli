@@ -222,6 +222,82 @@ class ComponentWorkerTest(unittest.TestCase):
         behind = [f for f in findings if f.surface == Surface.PIN and f.state == ComponentState.BEHIND]
         self.assertEqual(["Add embeddable field designer"], list(behind[0].unseen))
 
+    def _train_configuration(self, configuration):
+        ops = self.root / "cedar-development" / "ops"
+        ops.mkdir(parents=True, exist_ok=True)
+        (ops / "frontend-train.json").write_text(json.dumps(configuration), encoding="utf-8")
+
+    def test_a_host_pinning_a_component_no_inventory_names_is_a_failure(self):
+        """Publishing advances the pins an inventory names, so an omitted host rots in silence.
+
+        It never reports behind either, because the component it pins does move on without it.
+        """
+        self._repo("cedar-model-typescript-library",
+                   {"name": "@org.metadatacenter/cedar-model-typescript-library",
+                    "version": "1.0.13-dev.20260915.7576363"})
+        self._repo("cedar-model-typescript-library-demo", {
+            "name": "cedar-model-typescript-library-demo",
+            "dependencies": {"cedar-model-typescript-library": "1.0.2"},
+        })
+        self._train_configuration({
+            "components": [{
+                "id": "model",
+                "repository": "cedar-model-typescript-library",
+                "publishedName": "@org.metadatacenter/cedar-model-typescript-library",
+                "consumers": [],
+            }],
+        })
+
+        with patch.object(Util, "cedar_home", str(self.root)):
+            findings = ComponentWorker.findings()
+
+        undeclared = [f for f in findings if f.state == ComponentState.UNDECLARED]
+        self.assertEqual(
+            [("cedar-model-typescript-library-demo", "cedar-model-typescript-library")],
+            [(f.host, f.component) for f in undeclared])
+        self.assertTrue(undeclared[0].is_failure)
+
+    def test_a_declared_consumer_and_the_reference_host_are_not_undeclared(self):
+        self._repo("cedar-model-typescript-library",
+                   {"name": "@org.metadatacenter/cedar-model-typescript-library",
+                    "version": "1.0.13-dev.20260915.7576363"})
+        self._repo("cedar-model-typescript-library-demo", {
+            "name": "cedar-model-typescript-library-demo",
+            "dependencies": {"cedar-model-typescript-library": "1.0.2"},
+        })
+        self._repo("cedar-embeddable-editor", {
+            "name": "cedar-embeddable-editor",
+            "dependencies": {"cedar-model-typescript-library": "1.0.12"},
+        })
+        self._train_configuration({
+            "components": [{
+                "id": "model",
+                "repository": "cedar-model-typescript-library",
+                "publishedName": "@org.metadatacenter/cedar-model-typescript-library",
+                "reference": {"repository": "cedar-embeddable-editor"},
+                "consumers": [{"repository": "cedar-model-typescript-library-demo"}],
+            }],
+        })
+
+        with patch.object(Util, "cedar_home", str(self.root)):
+            findings = ComponentWorker.findings()
+
+        self.assertEqual([], [f for f in findings if f.state == ComponentState.UNDECLARED])
+
+    def test_an_unreadable_inventory_reports_nothing_rather_than_everything(self):
+        self._repo("cedar-model-typescript-library",
+                   {"name": "@org.metadatacenter/cedar-model-typescript-library",
+                    "version": "1.0.13-dev.20260915.7576363"})
+        self._repo("cedar-model-typescript-library-demo", {
+            "name": "cedar-model-typescript-library-demo",
+            "dependencies": {"cedar-model-typescript-library": "1.0.2"},
+        })
+
+        with patch.object(Util, "cedar_home", str(self.root)):
+            findings = ComponentWorker.findings()
+
+        self.assertEqual([], [f for f in findings if f.state == ComponentState.UNDECLARED])
+
     def test_a_component_is_not_asked_about_the_elements_it_defines_itself(self):
         self._repo("cedar-embeddable-designer",
                    {"name": "cedar-embeddable-designer", "version": "0.1.0-dev.20260916.aaaaaaa"},

@@ -73,11 +73,22 @@ class ComponentState(Enum):
     OVERRIDDEN = "overridden"
     MISMATCHED = "mismatched"
     UNDEFINED = "undefined"
+    UNDECLARED = "undeclared"
 
 
 # What runs is not what the pin says, or is not there at all. Each of these is a defect in the
 # workspace as it stands rather than a stage of ordinary work.
-ALWAYS_FAIL = (ComponentState.MISMATCHED, ComponentState.UNDEFINED, ComponentState.DIVERGED)
+#
+# An undeclared consumer belongs here rather than with the states below it, because it is not a
+# stage of anything: publishing the component advances the pins its inventory names, so a host
+# that pins it without being named is never advanced and never reported behind either. It reads
+# as a coherent estate until somebody opens the surface that has rotted.
+ALWAYS_FAIL = (
+    ComponentState.MISMATCHED,
+    ComponentState.UNDEFINED,
+    ComponentState.DIVERGED,
+    ComponentState.UNDECLARED,
+)
 
 # True of an estate mid-cycle. A host sits on the last published component for as long as it takes
 # to publish the next one, and a local override is how a component is tried out before it is

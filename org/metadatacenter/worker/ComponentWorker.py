@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Column, Table
 
 from org.metadatacenter.util.ComponentFreshness import (
+    ComponentFinding,
     ComponentState,
     Surface,
     dependency_pins,
@@ -32,7 +33,14 @@ STATE_ICON = {
     ComponentState.OVERRIDDEN: "[yellow]overridden[/yellow]",
     ComponentState.MISMATCHED: "[red]mismatched[/red]",
     ComponentState.UNDEFINED: "[red]undefined[/red]",
+    ComponentState.UNDECLARED: "[red]undeclared[/red]",
 }
+
+# Where the component inventories live: the lists that say which pins a publication advances.
+TRAIN_CONFIGURATION = Path("cedar-development") / "ops" / "frontend-train.json"
+
+UNDECLARED_REMEDY = ("declare the host as a consumer of the component in "
+                     "cedar-development/ops/frontend-train.json")
 
 # Where a host keeps the bundles it serves and the record of what it staged.
 STAGED_MANIFEST = Path("app/components/manifest.json")
@@ -72,6 +80,72 @@ class ComponentWorker:
         findings = []
         for name, directory in sorted(components.items()):
             findings.extend(ComponentWorker._evaluate_host(name, directory, components))
+        findings.extend(ComponentWorker._undeclared_consumers(workspace, components))
+        return findings
+
+    @staticmethod
+    def _declared_consumers(workspace):
+        """Which repositories each component's inventory says a publication advances.
+
+        Returns None when the configuration cannot be read, because a comparison against a list
+        that is not there would report every consumer as undeclared.
+        """
+        configuration = ComponentWorker._read_json(Path(workspace) / TRAIN_CONFIGURATION)
+        if not isinstance(configuration, dict):
+            return None
+        declared = {}
+        for component in configuration.get("components", []):
+            if not isinstance(component, dict):
+                continue
+            name = unscoped(component.get("publishedName") or "")
+            if not name:
+                continue
+            repositories = declared.setdefault(name, set())
+            for consumer in component.get("consumers", []) or []:
+                if isinstance(consumer, dict) and consumer.get("repository"):
+                    repositories.add(consumer["repository"])
+            # The reference host pins the component to say which build the component is at, so it
+            # is a consumer the inventory already accounts for by another name.
+            reference = component.get("reference")
+            if isinstance(reference, dict) and reference.get("repository"):
+                repositories.add(reference["repository"])
+        editor = configuration.get("cee")
+        if isinstance(editor, dict) and editor.get("publishedName"):
+            repositories = declared.setdefault(unscoped(editor["publishedName"]), set())
+            for frontend in configuration.get("frontends", []) or []:
+                if isinstance(frontend, dict) and frontend.get("ceeConsumer") \
+                        and frontend.get("repository"):
+                    repositories.add(frontend["repository"])
+            for consumer in configuration.get("additionalCeeConsumers", []) or []:
+                if isinstance(consumer, dict) and consumer.get("repository"):
+                    repositories.add(consumer["repository"])
+        return declared
+
+    @staticmethod
+    def _undeclared_consumers(workspace, components):
+        """Every repository that pins a component without appearing in its inventory."""
+        declared = ComponentWorker._declared_consumers(workspace)
+        if declared is None:
+            return []
+        findings = []
+        for host, directory in sorted(components.items()):
+            package = ComponentWorker._read_json(directory / "package.json")
+            if not isinstance(package, dict):
+                continue
+            for pinned in sorted(dependency_pins(package)):
+                component = unscoped(pinned)
+                if component == host or component not in declared:
+                    continue
+                if directory.name in declared[component]:
+                    continue
+                findings.append(ComponentFinding(
+                    host=directory.name,
+                    component=component,
+                    surface=Surface.PIN,
+                    state=ComponentState.UNDECLARED,
+                    detail=(f"pins {component} but no inventory names it, so publishing "
+                            f"{component} will never advance it"),
+                ))
         return findings
 
     @staticmethod
