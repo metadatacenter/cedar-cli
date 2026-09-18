@@ -152,8 +152,10 @@ class ReleaseWorkspacePreparer:
 
     def prepare(self, manifest: dict, attempt: Path) -> dict:
         consumers = manifest.get("cee", {}).get("consumers", [])
-        if not isinstance(consumers, list) or len(consumers) != 7:
-            raise ReleaseError("release manifest does not contain all seven CEE consumers")
+        # Planning settles which consumers there are, against both the captured configuration
+        # and the npm plan, so this asks only that the manifest carries them.
+        if not isinstance(consumers, list) or not consumers:
+            raise ReleaseError("release manifest contains no CEE consumers")
         repositories = manifest.get("sourceRepositories", {})
         if not isinstance(repositories, dict):
             raise ReleaseError("release manifest has no source repository inventory")

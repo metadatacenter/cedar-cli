@@ -68,6 +68,8 @@ def package_tarball(
     development,
     bundle=b"tested CEE bundle",
     changelog=b"Changes\n",
+    host_fonts_bundle=None,
+    host_fonts_manifest=None,
 ):
     package = {
         "name": name,
@@ -99,6 +101,14 @@ def package_tarball(
         "CHANGELOG.md": changelog,
         "license.txt": b"BSD\n",
     }
+    if host_fonts_bundle is not None:
+        files["cedar-embeddable-editor.host-fonts.js"] = host_fonts_bundle
+    if host_fonts_bundle is not None or host_fonts_manifest is not None:
+        described = host_fonts_manifest if host_fonts_manifest is not None else host_fonts_bundle
+        files["bundle-manifest.host-fonts.json"] = (json.dumps({
+            "bytes": len(described),
+            "sha256": hashlib.sha256(described).hexdigest(),
+        }, indent=2) + "\n").encode()
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz") as archive:
         for path, content in files.items():
@@ -318,6 +328,88 @@ class CeePromotionTest(unittest.TestCase):
             changelog=PUBLIC_CHANGELOG,
         )
         return dev, public
+
+    def _host_font_pair(self, dev_host_bundle, public_host_bundle):
+        """A dev and a public package that each ship a second, host-fonts bundle."""
+        dev_model = (
+            "npm:@org.metadatacenter/cedar-model-typescript-library@"
+            "1.0.5-dev.20260827.2030.g9261381c1fb4"
+        )
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            bundle=provenance_bundle(DEV_VERSION, dev_model, "2026-08-27 12:23 10212094"),
+            changelog=PUBLIC_CHANGELOG,
+            host_fonts_bundle=dev_host_bundle,
+        )
+        public = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09"),
+            changelog=PUBLIC_CHANGELOG,
+            host_fonts_bundle=public_host_bundle,
+        )
+        return dev, public
+
+    def test_a_second_host_fonts_bundle_is_proved_like_the_first(self):
+        dev, public = self._host_font_pair(
+            provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+                suffix="host-fonts",
+            ),
+            provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09",
+                suffix="host-fonts",
+            ),
+        )
+
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+        self.assertIn("cedar-embeddable-editor.host-fonts.js", proof["provenBundles"])
+        self.assertIn("cedar-embeddable-editor.js", proof["provenBundles"])
+        self.assertIn(
+            "cedar-embeddable-editor.host-fonts.js:CEE version",
+            proof["allowedMetadataChanges"],
+        )
+        self.assertNotEqual(
+            proof["provenBundles"]["cedar-embeddable-editor.host-fonts.js"]["bundleSha256"],
+            proof["provenBundles"]["cedar-embeddable-editor.js"]["bundleSha256"],
+        )
+
+    def test_changed_javascript_in_the_host_fonts_bundle_is_not_a_promotion(self):
+        dev, public = self._host_font_pair(
+            provenance_bundle(
+                DEV_VERSION,
+                "npm:@org.metadatacenter/cedar-model-typescript-library@"
+                "1.0.5-dev.20260827.2030.g9261381c1fb4",
+                "2026-08-27 12:23 10212094",
+                suffix="host-fonts",
+            ),
+            provenance_bundle(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09",
+                suffix="host-fonts-and-one-more-statement",
+            ),
+        )
+
+        with self.assertRaises(ReleaseError) as refused:
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+        self.assertIn("host-fonts", str(refused.exception))
+
+    def test_a_host_fonts_manifest_without_its_bundle_is_refused(self):
+        dev = package_tarball(
+            DEV_CEE_NAME, DEV_VERSION, development=True,
+            host_fonts_manifest=b"a bundle that is not in the package",
+        )
+        public = package_tarball(PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False)
+
+        with self.assertRaises(ReleaseError) as refused:
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+        self.assertIn(
+            "bundle-manifest.host-fonts.json without cedar-embeddable-editor.host-fonts.js",
+            str(refused.exception),
+        )
 
     def test_consistently_renamed_minified_identifiers_are_a_promotion(self):
         dev, public = self._renamed_pair(
