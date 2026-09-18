@@ -1,3 +1,5 @@
+from enum import Enum
+
 import typer
 from rich.console import Console
 
@@ -35,11 +37,22 @@ def status():
     exit_on_failure(NativeWorker.status())
 
 
+class HealthGroup(str, Enum):
+    ALL = "all"
+    MICROSERVICES = "microservices"
+    FRONTENDS = "frontends"
+
+
 @app.command("health")
-def health():
-    """Exit successfully only when every managed native application is healthy."""
+def health(
+        group: HealthGroup = typer.Option(
+            HealthGroup.ALL, "--group",
+            help="Which managed applications must be healthy. A host that serves its frontends as "
+                 "static trees from nginx runs none of the ui-* processes, so `all` cannot pass "
+                 "there; gate on `microservices` instead.")):
+    """Exit successfully only when every application in the selected group is healthy."""
     _require_native_backend("health")
-    result = NativeWorker.health()
+    result = NativeWorker.health(group.value)
     if result.returncode:
         raise typer.Exit(result.returncode)
 

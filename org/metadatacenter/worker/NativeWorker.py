@@ -124,8 +124,33 @@ class NativeWorker(Worker):
         return result
 
     @classmethod
-    def health(cls):
-        return cls.execute("health", title="Checking native CEDAR health")
+    def health_group(cls, group: str = None):
+        """The services a health gate should judge, for a host that does not run all of them.
+
+        The controller's health action selects every managed application when given no names, which
+        makes the check unusable as a gate on a host that deliberately runs a subset: a staging or
+        production application host serves the frontends as static trees from nginx and runs none of
+        the seven `ui-*` dev servers, so an all-or-nothing health probe reports failure however
+        healthy the backend is. Naming the group turns the answer back into a question about what
+        this host actually runs.
+
+        Infrastructure is not a group here because the controller's health action does not cover it;
+        it judges the 22 managed applications only.
+        """
+        if group in (None, "all"):
+            return ()
+        if group == "microservices":
+            return cls.MICROSERVICES
+        if group == "frontends":
+            return cls.FRONTENDS
+        raise ValueError(f"Unknown service group: {group}")
+
+    @classmethod
+    def health(cls, group: str = None):
+        services = cls.health_group(group)
+        scope = group or "all"
+        return cls.execute("health", services=services,
+                           title=f"Checking native CEDAR health ({scope})")
 
     @classmethod
     def watch(cls):
