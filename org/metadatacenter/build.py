@@ -42,6 +42,7 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
     try:
         with reactor.session_for_plan(Util.cedar_home, plan):
             plan_executor.execute(plan, dry_run, dump_plan)
+            selection = reactor.runtime_selection(Util.cedar_home)
     except BaseException as error:
         failure = error
     after = capture_estate_state(Path(Util.cedar_home))
@@ -56,6 +57,7 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
         raise SystemExit(1) from failure
     if failure is not None:
         raise failure
+    return selection
 
 
 @app.command("this")
@@ -140,7 +142,10 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
     BuildPlanner.frontends(plan)
-    execute_build(plan, dry_run, dump_plan)
+    selection = execute_build(plan, dry_run, dump_plan)
+    if not dry_run and not dump_plan:
+        reactor.activate_runtime(Util.cedar_home, selection)
+        console.print("Local frontend starts will use this reactor build's component artifacts.")
 
 
 @app.command("split-frontends")

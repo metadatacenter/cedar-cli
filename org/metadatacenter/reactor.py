@@ -118,6 +118,29 @@ def _state(cedar_home):
     return _available(cedar_home), set()
 
 
+def runtime_selection(cedar_home):
+    """Snapshot this build's exact packages, never another concurrent build's refs."""
+    available, pending = _state(cedar_home)
+    if pending:
+        raise ReactorError("Cannot activate an unfinished reactor build")
+    return {name: path.stem for name, path in available.items()}
+
+
+def activate_runtime(cedar_home, selection):
+    """Record a successful full build for subsequent local frontend starts."""
+    root = store_root(cedar_home)
+    root.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='runtime-', suffix='.json', dir=root)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'packages': selection}, stream, sort_keys=True)
+            stream.write('\n')
+        os.replace(temporary, root / 'runtime.json')
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def session_for_plan(cedar_home, plan):
     """Only isolated frontend tasks participate; other plans never read the store."""
     repos = []
