@@ -28,7 +28,23 @@ def configure_java_tests(tests: bool):
     GlobalContext.mark_skip_tests(not tests)
 
 
-def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
+def frontend_input_roots(plan):
+    """Frontend inputs and their build tooling; unrelated backend work is independent."""
+    home = Path(Util.cedar_home)
+    roots = {home / 'cedar-cli', home / 'cedar-development'}
+    def visit(task):
+        repo = getattr(task, 'repo', None)
+        if repo is not None:
+            while getattr(repo, 'parent_repo', None) is not None:
+                repo = repo.parent_repo
+            roots.add(home / repo.name)
+        for child in task.tasks:
+            visit(child)
+    visit(plan)
+    return roots
+
+
+def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
     """Run a build while proving it did not add or alter tracked workspace changes."""
     if dry_run or dump_plan:
         return plan_executor.execute(plan, dry_run, dump_plan)
@@ -37,6 +53,7 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
     except BuildSafetyError as error:
         console.print(str(error), markup=False)
         raise typer.Exit(code=1) from error
+    input_roots = frontend_input_roots(plan) if frontend_only else None
     before = capture_estate_state(Path(Util.cedar_home))
     failure = None
     try:
@@ -47,6 +64,8 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
         failure = error
     after = capture_estate_state(Path(Util.cedar_home))
     changed = changed_repositories(before, after)
+    if input_roots is not None:
+        changed = [path for path in changed if path in input_roots]
     if changed:
         names = ", ".join(path.name for path in changed)
         console.print(Panel(
@@ -142,7 +161,7 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
     BuildPlanner.frontends(plan)
-    selection = execute_build(plan, dry_run, dump_plan)
+    selection = execute_build(plan, dry_run, dump_plan, frontend_only=True)
     if not dry_run and not dump_plan:
         reactor.activate_runtime(Util.cedar_home, selection)
         console.print("Local frontend starts will use this reactor build's component artifacts.")
