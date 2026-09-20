@@ -261,6 +261,30 @@ def tracked_state(root: Path) -> bytes:
     return status + b"\0" + diff
 
 
+def tracked_path_state(root: Path, paths: tuple[str, ...]) -> bytes:
+    """Fingerprint selected tracked inputs, including commits and local edits."""
+    import hashlib
+    index = subprocess.run(
+        ['git', '-C', str(root), 'ls-files', '--stage', '-z', '--', *paths],
+        check=True, capture_output=True, env=invocation_environment(),
+    ).stdout
+    digest = hashlib.sha256(index)
+    for entry in index.split(b'\0'):
+        if not entry:
+            continue
+        name = entry.split(b'\t', 1)[1].decode()
+        path = root / name
+        digest.update(name.encode() + b'\0')
+        if path.is_symlink():
+            digest.update(os.readlink(path).encode())
+        elif path.exists():
+            digest.update(path.read_bytes())
+        else:
+            digest.update(b'<deleted>')
+        digest.update(b'\0')
+    return digest.digest()
+
+
 def repository_root(path: Path) -> Path | None:
     result = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "--show-toplevel"],

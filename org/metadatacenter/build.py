@@ -9,7 +9,7 @@ from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
-from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories
+from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories, tracked_path_state
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
@@ -44,6 +44,21 @@ def frontend_input_roots(plan):
     return roots
 
 
+# Profiles and frontend configuration live in this mixed-purpose repository.
+# Backend audits, repairs and documentation are not frontend build inputs.
+FRONTEND_DEVELOPMENT_INPUTS = (
+    'bin', 'ops/frontend-train.json', 'ops/cedar-services.sh',
+)
+
+
+def capture_build_state(home: Path, frontend_only: bool):
+    state = capture_estate_state(home)
+    development = (home / 'cedar-development').resolve()
+    if frontend_only and development in state:
+        state[development] = tracked_path_state(development, FRONTEND_DEVELOPMENT_INPUTS)
+    return state
+
+
 def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
     """Run a build while proving it did not add or alter tracked workspace changes."""
     if dry_run or dump_plan:
@@ -54,7 +69,7 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
         console.print(str(error), markup=False)
         raise typer.Exit(code=1) from error
     input_roots = frontend_input_roots(plan) if frontend_only else None
-    before = capture_estate_state(Path(Util.cedar_home))
+    before = capture_build_state(Path(Util.cedar_home), frontend_only)
     failure = None
     try:
         with reactor.session_for_plan(Util.cedar_home, plan):
@@ -62,14 +77,14 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
             selection = reactor.runtime_selection(Util.cedar_home)
     except BaseException as error:
         failure = error
-    after = capture_estate_state(Path(Util.cedar_home))
+    after = capture_build_state(Path(Util.cedar_home), frontend_only)
     changed = changed_repositories(before, after)
     if input_roots is not None:
         changed = [path for path in changed if path in input_roots]
     if changed:
         names = ", ".join(path.name for path in changed)
         console.print(Panel(
-            "The build changed tracked state relative to its starting snapshot: " + names,
+            "Tracked build inputs changed during the build (by this build or concurrent work): " + names,
             title="Build workspace invariant failed",
             style="red",
         ))

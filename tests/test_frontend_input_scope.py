@@ -29,3 +29,36 @@ class FrontendInputScopeTest(unittest.TestCase):
                         build.execute_build(plan, False, False, frontend_only=True)
                 else:
                     self.assertEqual(build.execute_build(plan, False, False, frontend_only=True), {})
+
+
+class DevelopmentInputScopeTest(unittest.TestCase):
+    def test_backend_edits_and_commits_do_not_invalidate_frontend_inputs(self):
+        import tempfile
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            repo = home / 'cedar-development'
+            (repo / 'ops').mkdir(parents=True)
+            (repo / 'bin').mkdir()
+            profile = repo / 'bin' / 'profile.sh'
+            profile.write_text('profile')
+            audit = repo / 'ops' / 'audit.py'
+            audit.write_text('audit')
+            def git(*args):
+                subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+            git('init')
+            git('config', 'user.email', 'test@example.org')
+            git('config', 'user.name', 'Test')
+            git('add', '.')
+            git('commit', '-m', 'Initial')
+            baseline = build.capture_build_state(home, True)
+            audit.write_text('changed audit')
+            self.assertEqual(baseline, build.capture_build_state(home, True))
+            git('add', '.')
+            git('commit', '-m', 'Backend work')
+            self.assertEqual(baseline, build.capture_build_state(home, True))
+            profile.write_text('changed profile')
+            self.assertNotEqual(baseline, build.capture_build_state(home, True))
+            git('add', '.')
+            git('commit', '-m', 'Profile work')
+            self.assertNotEqual(baseline, build.capture_build_state(home, True))
