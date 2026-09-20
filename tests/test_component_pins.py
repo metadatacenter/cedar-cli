@@ -198,6 +198,7 @@ class WorkspaceTest(unittest.TestCase):
 
         target = plans[0].target
         self.assertEqual([
+            ("cedar-embeddable-designer", ["npm", "ci"]),
             ("cedar-embeddable-designer", ["npm", "run", "dist"]),
             ("cedar-embeddable-designer",
              ["npm", "publish", "./dist-npm/cedar-embeddable-designer", "--tag=dev"]),
@@ -209,6 +210,31 @@ class WorkspaceTest(unittest.TestCase):
             f"npm:@org.metadatacenter/cedar-embeddable-designer@{target}",
             json.loads((self.host / "package.json").read_text())
             ["dependencies"]["cedar-embeddable-designer"])
+
+    def test_pin_updates_preserve_an_active_development_reactor(self):
+        (self.root / '.reactor').mkdir()
+        (self.root / '.reactor/runtime.json').write_text('{"packages": {}}')
+        commands = []
+        with patch.object(component_pins, 'console'), patch.object(
+            component_pins, 'invocation_environment', return_value={'CEDAR_PROFILE': 'develop'}
+        ):
+            _apply(str(self.root), plan(str(self.root)), run=lambda d, c: commands.append((d, c)))
+        self.assertIn((self.host, ['npm', 'install', '--package-lock-only', '--ignore-scripts']), commands)
+        self.assertNotIn((self.host, ['npm', 'install']), commands)
+        self.assertNotIn((self.host, ['npm', 'run', 'prepare:components']), commands)
+        self.assertLess(commands.index((self.component, ['npm', 'ci'])),
+                        commands.index((self.component, ['npm', 'run', 'dist'])))
+
+    def test_server_publication_does_not_use_a_development_reactor_marker(self):
+        (self.root / '.reactor').mkdir()
+        (self.root / '.reactor/runtime.json').write_text('{"packages": {}}')
+        commands = []
+        with patch.object(component_pins, 'console'), patch.object(
+            component_pins, 'invocation_environment', return_value={'CEDAR_PROFILE': 'server'}
+        ):
+            _apply(str(self.root), plan(str(self.root)), run=lambda d, c: commands.append((d, c)))
+        self.assertIn((self.host, ['npm', 'install']), commands)
+        self.assertIn((self.host, ['npm', 'run', 'prepare:components']), commands)
 
     def test_nested_consumer_installs_beside_its_manifest(self):
         nested = self.host / 'frontend-src'
