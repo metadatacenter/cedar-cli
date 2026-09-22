@@ -85,6 +85,7 @@ class EvidenceTest(unittest.TestCase):
         with reactor.session(self.home):
             inputs = reactor.prepare_checks(repo, self.repo, self.home, environment, ['npm run test:ci'])
         self.assertEqual(2, len(inputs))
+        self.assertFalse(Path(environment['CEF_BUNDLE']).is_relative_to(self.repo))
         self.assertEqual(b'cedar-embeddable-editor', Path(environment['CEF_BUNDLE']).read_bytes())
         self.assertEqual(b'cedar-embeddable-term-picker', Path(environment['PICKER_BUNDLE']).read_bytes())
         with reactor.session(self.home, ['cedar-embeddable-editor']):

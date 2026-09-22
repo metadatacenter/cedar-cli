@@ -262,7 +262,9 @@ def prepare_checks(repo, build_root, cedar_home, environment, commands):
         artifact = available[name]
         if hashlib.sha256(artifact.read_bytes()).hexdigest() != artifact.stem:
             raise ReactorError(f'Corrupt integration artifact: {artifact}')
-        target = Path(build_root) / '.reactor-checks' / (name + '.js')
+        # Keep test bundles outside the source tree: Tailwind scans local JavaScript
+        # and would otherwise compile sibling-only classes into the designer.
+        target = Path(build_root).parent / '.reactor-checks' / (name + '.js')
         target.parent.mkdir(exist_ok=True)
         with tarfile.open(artifact) as archive:
             bundle = archive.extractfile('package/' + name + '.js')
