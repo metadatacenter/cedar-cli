@@ -474,6 +474,41 @@ class CeePromotionTest(unittest.TestCase):
         proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
         self.assertEqual(2, proof["minifiedIdentifierRenames"])
 
+    def test_train_design_token_pin_normalizes_only_declared_build_metadata(self):
+        token_spec = 'npm:@org.metadatacenter/cedar-design-tokens@0.1.0-dev.20260922.g123456789abc.t0153'
+        def package(development, token, extra='', section='devDependencies'):
+            return package_tarball(
+                DEV_CEE_NAME if development else PUBLIC_CEE_NAME,
+                DEV_VERSION if development else PUBLIC_VERSION,
+                development=development,
+                bundle=provenance_bundle(
+                    DEV_VERSION if development else PUBLIC_VERSION,
+                    'npm:@org.metadatacenter/cedar-model-typescript-library@1.0.5-dev.20260827.2030.g9261381c1fb4'
+                    if development else '1.0.4',
+                    '2026-08-27 12:23 10212094' if development else '2026-08-27 15:09',
+                    suffix=',' + section + ':{"@org.metadatacenter/cedar-design-tokens":"' + token + '"}' + extra,
+                ), changelog=PUBLIC_CHANGELOG,
+            )
+        dev = package(True, token_spec)
+        public = package(False, '0.1.0-dev.20260921.3ae5f78b')
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION,
+                                     development_design_tokens_spec=token_spec)
+        self.assertIn('cedar-embeddable-editor.js:embedded design-token development pin',
+                      proof['allowedMetadataChanges'])
+        for broken, expected in (
+            (package(False, 'latest'), 'exactly one'),
+            (package(False, '0.1.0', section='dependencies'), 'exactly one'),
+            (package(False, '0.1.0', extra='changed-code'), 'outside declared release provenance'),
+            (package(False, '0.1.0', extra=',devDependencies:{"@org.metadatacenter/cedar-design-tokens":"0.1.0"}'), 'exactly one'),
+        ):
+            with self.subTest(expected=expected, broken=broken[:20]):
+                with self.assertRaisesRegex(ReleaseError, expected):
+                    compare_cee_packages(dev, DEV_VERSION, broken, PUBLIC_VERSION,
+                                         development_design_tokens_spec=token_spec)
+        with self.assertRaisesRegex(ReleaseError, 'disagrees with the train plan'):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION,
+                                 development_design_tokens_spec='0.1.0')
+
     def test_captured_allow_scripts_policy_is_normalized_out_of_bundle(self):
         allow_scripts = {
             "@parcel/watcher@2.6.0": True,

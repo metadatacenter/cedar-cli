@@ -436,12 +436,21 @@ class ReleasePlanner:
         _verify_integrity(
             f"{PUBLIC_CEE_NAME}@{cee_version}", public_tarball, public_integrity
         )
+        token_components = [component for component in npm_plan.get('components', [])
+                            if component['name'] == '@org.metadatacenter/cedar-design-tokens'
+                            and any(consumer['repository'] == 'cedar-embeddable-editor'
+                                    for consumer in component['consumers'])]
+        if len(token_components) > 1:
+            raise ReleaseError('Train repeats the CEE design-token component')
+        token_spec = (f"npm:{token_components[0]['name']}@{token_components[0]['version']}"
+                      if token_components else None)
         proof = compare_cee_packages(
             dev_tarball,
             dev_version,
             public_tarball,
             cee_version,
             development_allow_scripts=development_allow_scripts,
+            development_design_tokens_spec=token_spec,
         )
 
         # Carry the train's shared-component graph through release preparation too.

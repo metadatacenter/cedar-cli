@@ -210,11 +210,35 @@ def _normalize_bundle_provenance(
     public_version: str,
     public_model_version: str,
     development_allow_scripts: dict[str, bool] | None = None,
+    development_design_tokens_spec: str | None = None,
 ) -> tuple[bytes, bytes]:
     """Normalize provenance and captured build-only install policy, never executable code."""
 
     normalized_dev = dev_bundle
     normalized_public = public_bundle
+    if development_design_tokens_spec is not None:
+        # The root build manifest is embedded in CEE. Normalize only this one
+        # build-time pin, inside devDependencies; compiled styles still compare.
+        pin = rb'(?:npm:@org\.metadatacenter/cedar-design-tokens@)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?'
+        if not re.fullmatch(pin, development_design_tokens_spec.encode()):
+            raise ReleaseError('Train design-token dependency is not an exact package pin')
+        field = rb'("@org\.metadatacenter/cedar-design-tokens":"' + pin + rb'")'
+        pattern = re.compile(rb'(?:devDependencies|"devDependencies"):\{[^{}]*?' + field)
+        for identity, bundle, expected in (
+            (dev_identity, normalized_dev, development_design_tokens_spec),
+            (public_identity, normalized_public, None),
+        ):
+            value = _one_match(identity, 'embedded design-token development pin', pattern, bundle)
+            if expected is not None and value != (
+                b'"@org.metadatacenter/cedar-design-tokens":"' + expected.encode() + b'"'
+            ):
+                raise ReleaseError('CEE design-token pin disagrees with the train plan')
+            normalized = _replace_once(identity, 'embedded design-token development pin', bundle,
+                                       value, b'"@org.metadatacenter/cedar-design-tokens":"<design-token-pin>"')
+            if expected is not None:
+                normalized_dev = normalized
+            else:
+                normalized_public = normalized
     if development_allow_scripts:
         if not all(
             isinstance(package, str) and package and allowed is True
@@ -344,6 +368,7 @@ def compare_cee_packages(
     public_version: str,
     *,
     development_allow_scripts: dict[str, bool] | None = None,
+    development_design_tokens_spec: str | None = None,
 ) -> dict:
     """Prove that a public CEE package is a metadata-only promotion of a train package."""
 
@@ -436,6 +461,7 @@ def compare_cee_packages(
                     public_version,
                     public_model_version,
                     development_allow_scripts,
+                    development_design_tokens_spec,
                 )
                 if dev_bundle != public_bundle:
                     dev_bundle, renames = _canonicalize_minified_renames(
@@ -468,6 +494,8 @@ def compare_cee_packages(
         ])
         if development_allow_scripts:
             bundle_changes.append(f"{bundle_name}:embedded allowScripts install policy")
+        if development_design_tokens_spec is not None:
+            bundle_changes.append(f"{bundle_name}:embedded design-token development pin")
         if minified_renames:
             bundle_changes.append(f"{bundle_name}:minified identifier names")
     return {
