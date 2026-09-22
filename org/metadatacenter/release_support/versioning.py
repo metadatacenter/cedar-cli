@@ -319,7 +319,7 @@ class ReleaseVersionPreparer:
             self._ensure_clone(repository, revision, release_workspace / repository)
 
         cee_allowed_by_repo: dict[str, set[str]] = {}
-        for consumer in manifest["cee"]["consumers"]:
+        for consumer in [*manifest["cee"]["consumers"], *manifest.get('componentWiring', [])]:
             cee_allowed_by_repo.setdefault(consumer["repository"], set()).update({
                 consumer["manifest"], consumer["lock"],
             })
@@ -330,7 +330,7 @@ class ReleaseVersionPreparer:
                 destination = next_workspace / repository / relative
                 expected = next(
                     record[f"{kind}Sha256"]
-                    for record in frontend["consumers"]
+                    for record in [*frontend["consumers"], *frontend.get('components', [])]
                     if record["repository"] == repository
                     for kind in ("manifest", "lock")
                     if record[kind] == relative

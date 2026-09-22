@@ -444,6 +444,26 @@ class ReleasePlanner:
             development_allow_scripts=development_allow_scripts,
         )
 
+        # Carry the train's shared-component graph through release preparation too.
+        # Otherwise replacing CEE alone silently restores old tokens/CED/CETP locks.
+        component_wiring = []
+        consumer_repositories = {consumer['repository'] for consumer in consumers} | set(release_repositories)
+        for component in npm_plan.get('components', []):
+            if source.get('repositories', {}).get(component['repository']) != component['revision']:
+                raise ReleaseError('Shared component revision disagrees with train source')
+            recorded = next((package for package in npm_completion.get('packages', [])
+                             if package.get('name') == component['name']
+                             and package.get('version') == component['version']), None)
+            if not recorded or recorded.get('revision') != component['revision']:
+                raise ReleaseError(f"Train has no verified component {component['name']}")
+            payload = self.http.read(recorded['tarball'])
+            _verify_integrity(component['name'], payload, recorded['integrity'])
+            if _sha256(payload) != recorded['tarballSha256']:
+                raise ReleaseError('Train component tarball hash mismatch')
+            for consumer in component['consumers']:
+                if consumer['repository'] in consumer_repositories:
+                    component_wiring.append({**consumer, 'package': recorded})
+
         return {
             "schemaVersion": 1,
             "releaseVersion": release_version,
@@ -472,6 +492,7 @@ class ReleasePlanner:
             "mavenPhases": maven_phases,
             "publicationPlan": publication_plan,
             "dockerFrontendDefaults": docker_frontend_defaults,
+            "componentWiring": component_wiring,
             "cee": {
                 "development": {
                     "name": DEV_CEE_NAME,

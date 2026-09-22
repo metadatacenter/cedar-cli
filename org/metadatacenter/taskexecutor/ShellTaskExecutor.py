@@ -7,7 +7,7 @@ from rich.panel import Panel
 from rich.progress import Progress
 from rich.style import Style
 
-from org.metadatacenter import reactor
+from org.metadatacenter import reactor, reactor_evidence
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
@@ -57,6 +57,7 @@ class ShellTaskExecutor(TaskExecutor):
                     require_build_node(Path(cwd))
                 parameter = getattr(task, "get_parameter", lambda _name: None)
                 if parameter("isolated_frontend_build") is True:
+                    identity = reactor_evidence.begin(cwd)
                     with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions):
                         if collisions:
                             processes = ", ".join(f"PID {pid}" for pid, _ in collisions)
@@ -74,11 +75,14 @@ class ShellTaskExecutor(TaskExecutor):
                             job_progress.print(
                                 "Reactor: " + ", ".join(resolved), markup=False)
                             commands_to_execute = reactor.install_commands(commands_to_execute)
+                        checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
+                                                        environment, commands_to_execute)
                         code = self._execute_commands(
                             task, repo, commands_to_execute, str(isolated_cwd),
                             job_progress, environment,
                         )
                         if code == 0:
+                            reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
                             stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)

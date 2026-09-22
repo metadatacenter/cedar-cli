@@ -1266,6 +1266,41 @@ class ReleaseStateAndCliTest(unittest.TestCase):
 
 
 class ReleaseWorkspaceTest(unittest.TestCase):
+    def test_shared_components_follow_train_even_when_checkout_pins_are_older(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cedar_home, manifest = self.make_workspace(directory)
+            component = {'name': '@org.metadatacenter/tokens', 'version': '0.1.0-dev.train',
+                         'tarball': 'https://registry.example/tokens.tgz', 'integrity': 'sha512-tokens'}
+            consumer = {'repository': 'frontend-main', 'manifest': 'package.json',
+                        'lock': 'package-lock.json', 'dependency': '@org.metadatacenter/tokens',
+                        'package': component}
+            manifest['componentWiring'] = [consumer]
+            normal_runner = self._successful_runner(manifest['cee']['consumers'])
+            def runner(args, **kwargs):
+                if args[0] != 'npm':
+                    return normal_runner(args, **kwargs)
+                self.assertIn('--package-lock-only', args)
+                self.assertIn('--ignore-scripts', args)
+                root = Path(kwargs['cwd'])
+                package = json.loads((root / 'package.json').read_text())
+                lock = json.loads((root / 'package-lock.json').read_text())
+                dependency = consumer['dependency']
+                spec = f"npm:{component['name']}@{component['version']}"
+                package['devDependencies'] = {dependency: spec}
+                lock['packages']['']['devDependencies'] = {dependency: spec}
+                lock['packages']['node_modules/' + dependency] = {
+                    'version': component['version'], 'resolved': component['tarball'],
+                    'integrity': component['integrity']}
+                (root / 'package.json').write_text(json.dumps(package))
+                (root / 'package-lock.json').write_text(json.dumps(lock))
+                return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+            state = ReleaseState(root=Path(directory) / 'state')
+            preparer = ReleaseWorkspacePreparer(state, command_runner=runner,
+                                               environment={'CEDAR_HOME': str(cedar_home)})
+            result = preparer.prepare(manifest, Path(directory) / 'attempt')
+            self.assertEqual(component, result['components'][0]['package'])
+            self.assertNotIn('devDependencies', json.loads((cedar_home / 'frontend-main/package.json').read_text()))
+
     REPOSITORY_CONSUMERS = {
         "frontend-main": [("main", "package.json", "package-lock.json")],
         "frontend-workspace": [("workspace", "package.json", "package-lock.json")],

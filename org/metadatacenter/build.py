@@ -1,10 +1,13 @@
 from pathlib import Path
+import json
+import subprocess
+import sys
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from org.metadatacenter import maven, reactor
+from org.metadatacenter import maven, reactor, reactor_evidence
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
@@ -14,6 +17,8 @@ from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.NativeWorker import NativeWorker
+from org.metadatacenter.smoke_gate import run_smoke
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(maven.app, name="maven", help="Maven cache operations...")
@@ -47,7 +52,7 @@ def frontend_input_roots(plan):
 # Profiles and frontend configuration live in this mixed-purpose repository.
 # Backend audits, repairs and documentation are not frontend build inputs.
 FRONTEND_DEVELOPMENT_INPUTS = (
-    'bin', 'ops/frontend-train.json', 'ops/cedar-services.sh',
+    'bin', 'ops/frontend-train.json', 'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
 )
 
 
@@ -72,9 +77,12 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
     before = capture_build_state(Path(Util.cedar_home), frontend_only)
     failure = None
     try:
-        with reactor.session_for_plan(Util.cedar_home, plan):
+        with reactor_evidence.session(plan), reactor.session_for_plan(Util.cedar_home, plan):
             plan_executor.execute(plan, dry_run, dump_plan)
             selection = reactor.runtime_selection(Util.cedar_home)
+            if frontend_only:
+                selection = reactor_evidence.Selection(
+                    selection, reactor_evidence.finish(Util.cedar_home, selection))
     except BaseException as error:
         failure = error
     after = capture_build_state(Path(Util.cedar_home), frontend_only)
@@ -179,7 +187,24 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     selection = execute_build(plan, dry_run, dump_plan, frontend_only=True)
     if not dry_run and not dump_plan:
         reactor.activate_runtime(Util.cedar_home, selection)
-        console.print("Local frontend starts will use this reactor build's component artifacts.")
+        console.print(f"Reactor build evidence: {reactor.store_root(Util.cedar_home) / 'builds' / (selection.evidence + '.json')}")
+        console.print("Restarting local frontends with this reactor's exact component selection.")
+        result = NativeWorker.restart(NativeWorker.FRONTENDS)
+        if result.returncode:
+            raise typer.Exit(result.returncode)
+        home = Path(Util.cedar_home)
+        record = json.loads((home / '.reactor/builds' / (selection.evidence + '.json')).read_text())
+        config = json.loads((home / 'cedar-development/ops/frontend-train.json').read_text())
+        applications = {frontend['repository'] for frontend in config['frontends']}
+        for repository in record['repositories']:
+            if Path(repository).parts[0] not in applications:
+                continue  # Component and demo checkouts are not application runtimes.
+            subprocess.run([sys.executable, str(home / 'cedar-development/ops/frontend_reactor_runtime.py'),
+                            'verify', str(home), str(home / repository)], check=True)
+        code = run_smoke()
+        if code:
+            raise typer.Exit(code)
+        console.print("Frontend reactor completed: build, local deployment and whole-stack smoke passed.")
 
 
 @app.command("split-frontends")
