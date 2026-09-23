@@ -52,7 +52,8 @@ def frontend_input_roots(plan):
 # Profiles and frontend configuration live in this mixed-purpose repository.
 # Backend audits, repairs and documentation are not frontend build inputs.
 FRONTEND_DEVELOPMENT_INPUTS = (
-    'bin', 'ops/frontend-train.json', 'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
+    'bin', 'ops/frontend-train.json', 'ops/frontend_inventory.py',
+    'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
 )
 
 

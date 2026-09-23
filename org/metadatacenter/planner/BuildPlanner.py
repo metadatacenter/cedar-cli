@@ -51,22 +51,13 @@ class BuildPlanner(Planner):
             parameters={"force_frontend_build": True},
         )
         # Full reactor completion includes the owning packages' verification gates.
-        checks = {
-            'cedar-design-tokens': ['npm ci', 'npm test'],
-            'cedar-model-typescript-library': [
-                'npm ci', 'npm run lint', 'npm run typecheck', 'npm run test:coverage',
-                'npm run parity:yaml', 'npm run parity:json', 'npm run test:package'],
-            'cedar-embeddable-editor': [
-                'npm ci', 'npm --prefix harness ci', 'npm --prefix visual ci', 'npm run test:ci'],
-            'cedar-embeddable-designer': [
-                'npm ci', 'npm --prefix browser ci', 'npm run test:ci', 'npm run test:visual'],
-            'cedar-embeddable-term-picker': [
-                'npm ci', 'npm --prefix browser ci', 'npm run test:ci', 'npm run test:visual'],
-        }
+        from org.metadatacenter.frontend_inventory import reactor_checks
+        checks = reactor_checks()
         def verify(task):
             if getattr(task, 'parameters', {}).get('isolated_frontend_build'):
-                if task.repo.name in checks:
-                    task.command_list = checks[task.repo.name]
+                if task.repo.name not in checks:
+                    raise ValueError(f"Frontend {task.repo.name} has no verification inventory entry")
+                task.command_list = checks[task.repo.name]
             for child in task.tasks:
                 verify(child)
         verify(plan)

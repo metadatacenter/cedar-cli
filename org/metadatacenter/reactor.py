@@ -255,8 +255,9 @@ def prepare_checks(repo, build_root, cedar_home, environment, commands):
         return []
     available, pending = _state(cedar_home)
     inputs = []
-    for variable, name in [('CEF_BUNDLE', 'cedar-embeddable-editor'),
-                           ('PICKER_BUNDLE', 'cedar-embeddable-term-picker')]:
+    from org.metadatacenter.frontend_inventory import integration_inputs
+    for item in integration_inputs(repo.name):
+        variable, name = item['variable'], item['repository']
         if name in pending or name not in available:
             raise ReactorError(f'Designer integration checks require a completed {name} build')
         artifact = available[name]
