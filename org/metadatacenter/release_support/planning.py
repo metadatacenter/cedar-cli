@@ -442,8 +442,7 @@ class ReleasePlanner:
                                     for consumer in component['consumers'])]
         if len(token_components) > 1:
             raise ReleaseError('Train repeats the CEE design-token component')
-        token_spec = (f"npm:{token_components[0]['name']}@{token_components[0]['version']}"
-                      if token_components else None)
+        token_spec = token_components[0]['version'] if token_components else None
         proof = compare_cee_packages(
             dev_tarball,
             dev_version,

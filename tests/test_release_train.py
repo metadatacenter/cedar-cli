@@ -495,6 +495,9 @@ class CeePromotionTest(unittest.TestCase):
                                      development_design_tokens_spec=token_spec)
         self.assertIn('cedar-embeddable-editor.js:embedded design-token development pin',
                       proof['allowedMetadataChanges'])
+        plain_spec = token_spec.rsplit('@', 1)[1]
+        compare_cee_packages(package(True, plain_spec), DEV_VERSION, public, PUBLIC_VERSION,
+                             development_design_tokens_spec=plain_spec)
         for broken, expected in (
             (package(False, 'latest'), 'exactly one'),
             (package(False, '0.1.0', section='dependencies'), 'exactly one'),
@@ -1320,7 +1323,8 @@ class ReleaseWorkspaceTest(unittest.TestCase):
                 package = json.loads((root / 'package.json').read_text())
                 lock = json.loads((root / 'package-lock.json').read_text())
                 dependency = consumer['dependency']
-                spec = f"npm:{component['name']}@{component['version']}"
+                spec = component['version']
+                self.assertIn(f"{dependency}@{spec}", args)
                 package['devDependencies'] = {dependency: spec}
                 lock['packages']['']['devDependencies'] = {dependency: spec}
                 lock['packages']['node_modules/' + dependency] = {

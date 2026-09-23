@@ -202,7 +202,8 @@ class ReleaseWorkspacePreparer:
         for consumer in manifest.get('componentWiring', []):
             package = consumer['package']
             manifest_path, lock_path = self._consumer_paths(workspace, consumer)
-            spec = f"npm:{package['name']}@{package['version']}"
+            spec = (package['version'] if consumer['dependency'] == package['name']
+                    else f"npm:{package['name']}@{package['version']}")
             command = ['npm', 'install', '--package-lock-only', '--ignore-scripts',
                        '--save-exact', f"{consumer['dependency']}@{spec}"]
             if consumer.get('legacyPeerDeps'):
