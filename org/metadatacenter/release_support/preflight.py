@@ -275,7 +275,7 @@ class ReleasePreflight:
             ])
         elif stage == "artifacts":
             checks.extend(["check_nexus_authorization", "check_npm_authorization"])
-        elif stage == "acceptance":
+        elif stage in {"development", "acceptance"}:
             checks.append("check_nexus_authorization")
         findings = []
         for name in checks:
@@ -861,7 +861,7 @@ class ReleasePreflight:
         required: dict[str, set[str]] = {}
         for phase in self.manifest.get("mavenPhases", []):
             required.setdefault(phase.get("repository"), set()).add("mvnw")
-        for surface in FRONTEND_BUILD_SURFACES:
+        for surface in self.manifest.get("frontendSurfaces", FRONTEND_BUILD_SURFACES):
             repository = surface["repository"]
             if repository not in self.repositories:
                 continue
@@ -897,7 +897,7 @@ class ReleasePreflight:
                     "source", "fail",
                     f"train source {repository} is missing required release input {relative}",
                 ))
-        for surface in FRONTEND_BUILD_SURFACES:
+        for surface in self.manifest.get("frontendSurfaces", FRONTEND_BUILD_SURFACES):
             repository = surface["repository"]
             if repository not in self.repositories:
                 continue

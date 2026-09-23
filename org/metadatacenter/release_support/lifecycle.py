@@ -505,7 +505,9 @@ def accept_active_release(
     if manifest.get("phase") == "accepted":
         state.conclude()
         return manifest
-    if manifest.get("phase") not in {"artifacts-published", "acceptance-failed"}:
+    if manifest.get("developmentVerificationPolicy") and not manifest.get("developmentVerification", {}).get("completedAt"):
+        raise ReleaseError("next-development verification must complete before acceptance")
+    if manifest.get("phase") not in {"artifacts-published", "development-verified", "acceptance-failed"}:
         raise ReleaseError(f"cannot accept a release that is {manifest.get('phase')}")
     acceptance = acceptance or ReleaseAcceptance(state)
     try:
@@ -664,6 +666,18 @@ RELEASE_STAGES = (
 )
 
 
+def release_stages(manifest):
+    if not manifest.get('developmentVerificationPolicy'):
+        return RELEASE_STAGES
+    from org.metadatacenter.release_support.development import verify_active_development
+    development = ReleaseStage('development', frozenset({
+        'artifacts-published', 'verifying-development', 'development-verification-failed'}),
+        'development-verified', lambda state, deps: verify_active_development(state, deps.get('development_verifier')))
+    acceptance = dataclasses.replace(RELEASE_STAGES[-1],
+        entry_phases=frozenset({'development-verified', 'acceptance-failed'}))
+    return (*RELEASE_STAGES[:-1], development, acceptance)
+
+
 RELEASE_TERMINAL_PHASE = RELEASE_STAGES[-1].done_phase
 
 
@@ -676,7 +690,7 @@ def _next_release_stage(manifest: dict) -> str | None:
         return None
     if phase in REWIND_TO_FRONTENDS:
         return RELEASE_STAGES[0].name
-    for stage in RELEASE_STAGES:
+    for stage in release_stages(manifest):
         if phase in stage.entry_phases:
             return stage.name
     raise ReleaseError(f"a release in {phase} has no stage that can continue it")
@@ -686,7 +700,7 @@ def _release_stage_has_finished(manifest: dict, name: str) -> bool:
     next_name = _next_release_stage(manifest)
     if next_name is None:
         return True
-    order = [stage.name for stage in RELEASE_STAGES]
+    order = [stage.name for stage in release_stages(manifest)]
     return order.index(name) < order.index(next_name)
 
 
@@ -699,6 +713,7 @@ def advance_active_release(
     remote_integrator: ReleaseRemoteIntegrator | None = None,
     artifact_publisher: ReleaseArtifactPublisher | None = None,
     acceptance: ReleaseAcceptance | None = None,
+    development_verifier=None,
 ) -> dict:
     """Run the release from the first stage that can still take its recorded phase."""
     state = state or ReleaseState()
@@ -710,6 +725,7 @@ def advance_active_release(
         "remote_integrator": remote_integrator,
         "artifact_publisher": artifact_publisher,
         "acceptance": acceptance,
+        "development_verifier": development_verifier,
     }
     manifest, _ = state.read_current_manifest()
     if manifest.get("phase") in REWIND_TO_FRONTENDS:
@@ -724,13 +740,14 @@ def advance_active_release(
         # process interruption between those two durable writes is repaired by resume.
         state.conclude()
         return manifest
+    stages = release_stages(manifest)
     start = next(
-        (index for index, stage in enumerate(RELEASE_STAGES) if phase in stage.entry_phases),
+        (index for index, stage in enumerate(stages) if phase in stage.entry_phases),
         None,
     )
     if start is None:
         raise ReleaseError(f"a release in {phase} has no stage that can continue it")
-    for stage in RELEASE_STAGES[start:]:
+    for stage in stages[start:]:
         console.print(f"Release phase: {stage.name}", markup=False)
         manifest = stage(state, dependencies)
     return manifest

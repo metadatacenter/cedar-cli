@@ -58,6 +58,8 @@ from org.metadatacenter.release_support.acceptance import (
     _publication_evidence_by_plan,
 )
 
+from org.metadatacenter.release_support.development import DevelopmentVerifier, verify_active_development
+
 from org.metadatacenter.release_support.distribution import (
     ReleaseDistributionMaterializer,
 )
@@ -81,6 +83,7 @@ from org.metadatacenter.release_support.integration import (
 from org.metadatacenter.release_support.lifecycle import (
     RELEASE_FINAL_PHASES,
     RELEASE_STAGES,
+    release_stages,
     RELEASE_TERMINAL_PHASE,
     REWIND_TO_FRONTENDS,
     ReleaseStage,

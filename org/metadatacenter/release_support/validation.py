@@ -84,7 +84,7 @@ class ReleaseBuildValidator:
                     "command": command,
                     "tests": variant == "release",
                 })
-            for surface in FRONTEND_BUILD_SURFACES:
+            for surface in manifest.get("frontendSurfaces", FRONTEND_BUILD_SURFACES):
                 root = workspace / surface["repository"] / surface["directory"]
                 if not root.is_dir():
                     if surface["repository"] not in manifest["releaseRepositories"]:

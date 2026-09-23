@@ -2001,6 +2001,16 @@ class ReleaseBuildValidationTest(unittest.TestCase):
                     self.assertEqual("test:ember" if demo == "ember" else "test",
                                      group[2]["command"][-1])
 
+    def test_resume_uses_the_recorded_frontend_recipe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory, include_frontend=True)
+            manifest['frontendSurfaces'] = [dict(id='recorded', repository='cedar-template-editor',
+                directory='.', install=[], build=[], verify=[['npm','run','recorded-check']])]
+            tasks = ReleaseBuildValidator(ReleaseState(root=Path(directory) / 'state')).tasks(manifest)
+            checks = [task for task in tasks if task['kind']=='frontend-verification']
+            self.assertEqual(2, len(checks))
+            self.assertTrue(all(task['command']==['npm','run','recorded-check'] for task in checks))
+
     def test_angular_builds_do_not_forward_options_past_chained_package_scripts(self):
         angular_surfaces = {"openview", "bridging", "monitoring", "cee-demo-angular"}
         commands = {

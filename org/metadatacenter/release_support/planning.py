@@ -18,6 +18,7 @@ from org.metadatacenter.release_support.packages import (
 )
 from org.metadatacenter.release_support.policy import (
     DEV_CEE_NAME,
+    FRONTEND_BUILD_SURFACES,
     GIT_SHA_RE,
     INDEPENDENT_RELEASE_REPOSITORIES,
     MAVEN_RELEASE_REPOSITORY,
@@ -474,6 +475,11 @@ class ReleasePlanner:
 
         return {
             "schemaVersion": 1,
+            "developmentVerificationPolicy": 1,
+            "frontendSurfaces": copy.deepcopy([
+                row for row in frontend_config.get('surfaces', FRONTEND_BUILD_SURFACES)
+                if row.get('release', True)
+            ]),
             "releaseVersion": release_version,
             "nextDevelopmentVersion": next_version,
             "train": train,

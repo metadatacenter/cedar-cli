@@ -12,6 +12,7 @@ from org.metadatacenter.release_support.errors import (
 )
 from org.metadatacenter.release_support.lifecycle import (
     RELEASE_STAGES,
+    release_stages,
     RELEASE_TERMINAL_PHASE,
     _next_release_stage,
     _release_stage_has_finished,
@@ -66,6 +67,7 @@ def _release_progress(manifest: dict) -> list[dict]:
         "snapshots": completed_snapshots,
         "remotes": len(manifest.get("remoteIntegration", {}).get("completedTasks", {})),
         "artifacts": completed_release,
+        "development": int(bool(manifest.get("developmentVerification", {}).get("completedAt"))),
         "acceptance": int(manifest.get("phase") == RELEASE_TERMINAL_PHASE),
     }
     release_repositories = list(manifest.get("releaseRepositories", []))
@@ -83,6 +85,7 @@ def _release_progress(manifest: dict) -> list[dict]:
         "snapshots": len(manifest.get("mavenPhases", [])) + 1,
         "remotes": len(release_ref_repositories),
         "artifacts": 2 + len(plan.get("npm", {}).get("surfaces", [])),
+        "development": 1,
         "acceptance": 1,
     }
     if manifest.get("frontendPreparation"):
@@ -98,7 +101,7 @@ def _release_progress(manifest: dict) -> list[dict]:
         publication.get("inProgressTask") if isinstance(publication, dict) else None
     )
     rows = []
-    for stage in RELEASE_STAGES:
+    for stage in release_stages(manifest):
         if _release_stage_has_finished(manifest, stage.name):
             phase_state = "complete"
         elif stage.name == next_stage:
