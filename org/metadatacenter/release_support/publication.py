@@ -22,6 +22,7 @@ from org.metadatacenter.release_support.distribution import (
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
     RetryableReleaseError,
+    NexusRetryableError,
 )
 from org.metadatacenter.release_support.hashes import (
     _file_sha256,
@@ -332,9 +333,11 @@ class ReleaseArtifactPublisher:
                         f"Nexus returned HTTP {response.status} for {destination}"
                     )
         except urllib.error.HTTPError as error:
-            raise ReleaseError(f"cannot publish {destination}: HTTP {error.code}") from error
+            if error.code in {502, 503, 504}:
+                raise NexusRetryableError(f"Nexus PUT {destination}: HTTP {error.code}", operation='upload') from error
+            raise ReleaseError(f"Nexus PUT {destination}: HTTP {error.code}; publication stopped") from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise RetryableReleaseError(f"cannot publish {destination}: {error}") from error
+            raise NexusRetryableError(f"Nexus PUT {destination}: {error}", operation='upload') from error
 
     def _publish_maven_release(self, task: dict) -> dict:
         local_repository = Path(task["localRepository"])

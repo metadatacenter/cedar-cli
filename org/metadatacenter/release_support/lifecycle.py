@@ -14,6 +14,7 @@ from org.metadatacenter.release_support.distribution import (
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
     RetryableReleaseError,
+    NexusRetryableError,
 )
 from org.metadatacenter.release_support.integration import (
     ReleaseRemoteIntegrator,
@@ -778,6 +779,7 @@ def _drive_release(
     artifact_publisher = ReleaseArtifactPublisher(state, verbose=verbose)
     acceptance = ReleaseAcceptance(
         state, remote_integrator=remote_integrator, publisher=artifact_publisher)
+    nexus_failures = 0
     for attempt in range(1, TRANSIENT_RETRY_ATTEMPTS + 1):
         if attempt > 1:
             state.update_current_manifest({"retry": None, "failure": None})
@@ -793,6 +795,14 @@ def _drive_release(
                 acceptance=acceptance,
             )
         except RetryableReleaseError as error:
+            if isinstance(error, NexusRetryableError):
+                nexus_failures += 1
+                if nexus_failures >= 3:
+                    detail = (f"Nexus circuit open after {nexus_failures} transient failures: {error}. "
+                        "Health/read success does not prove upload recovery. State is retained; "
+                        "use release resume after Nexus recovers.")
+                    state.update_current_manifest({"retry": None, "failure": detail})
+                    raise ReleaseError(detail) from error
             if attempt == TRANSIENT_RETRY_ATTEMPTS:
                 raise
             delay = TRANSIENT_RETRY_BACKOFF_SECONDS[

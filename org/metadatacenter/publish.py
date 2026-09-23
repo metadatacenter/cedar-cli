@@ -37,6 +37,26 @@ def train(
     raise typer.Exit(code=BuildTrainWorker.dispatch(resume=resume, dry_run=dry_run, **intent))
 
 
+@app.command("probe")
+def probe(
+        upload: bool = typer.Option(False, "--upload", help="Also write, read and delete a 64 KiB probe in the dedicated cedar-cli-probes raw repository."),
+):
+    """Check publication endpoints; writes require the explicit --upload option."""
+    from org.metadatacenter.train_support.preflight import _publication_targets_preflight
+    from org.metadatacenter.nexus_probe import upload_probe
+    try:
+        _publication_targets_preflight()
+        if upload:
+            result = upload_probe()
+            typer.echo(f"Nexus upload/read/delete passed for {result['bytes']} bytes. "
+                       "This does not prove large artifact uploads or future availability.")
+        else:
+            typer.echo("Read-only publication checks passed; upload availability remains unproven.")
+    except (ValueError, OSError) as error:
+        typer.echo(str(error))
+        raise typer.Exit(1) from error
+
+
 @app.command("train-status")
 def train_status(
         version: str = typer.Argument(

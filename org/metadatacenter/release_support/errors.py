@@ -15,3 +15,10 @@ class RetryableReleaseError(ReleaseError):
     failures. A changed tree, authentication failure, registry byte mismatch, protected-ref
     refusal, or Nexus HTTP 500 is never retryable.
     """
+
+
+class NexusRetryableError(RetryableReleaseError):
+    """A Nexus operation failed transiently; repeated failures have a smaller retry budget."""
+    def __init__(self, message, *, operation='request'):
+        super().__init__(message)
+        self.operation = operation

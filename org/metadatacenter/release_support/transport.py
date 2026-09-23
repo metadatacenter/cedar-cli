@@ -10,6 +10,7 @@ import urllib.request
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
     RetryableReleaseError,
+    NexusRetryableError,
 )
 from org.metadatacenter.release_support.policy import (
     NEXUS_REPOSITORY_PROBE,
@@ -30,6 +31,10 @@ def _command_failure_is_retryable(command: list[str], detail: str) -> bool:
         return False
     tool = Path(command[0]).name
     text = detail.lower()
+    if 'nexus.bmir.stanford.edu' in text and re.search(
+        r'(?:http|status code:?)[^0-9]*(?:429|500)\b|\be(?:429|500)\b', text
+    ):
+        return False
     if any(token in text for token in RETRYABLE_TRANSPORT_TEXT):
         return tool in {"git", "mvn", "mvnw", "npm"} or tool.endswith("mvnw")
     if re.search(r"(?:http|status code:?)[^0-9]*(502|503|504)\b", text):
@@ -45,6 +50,8 @@ def _raise_command_failure(command: list[str], message: str, detail: str = "") -
         if _command_failure_is_retryable(command, detail)
         else ReleaseError
     )
+    if exception is RetryableReleaseError and 'nexus.bmir.stanford.edu' in detail.lower():
+        exception = NexusRetryableError
     suffix = f": {detail}" if detail else ""
     raise exception(f"{message}{suffix}")
 
@@ -84,7 +91,8 @@ class HttpClient:
                 return None
             raise ReleaseError(f"cannot read {url}: HTTP {error.code}") from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise RetryableReleaseError(f"cannot read {url}: {error}") from error
+            exception = NexusRetryableError if url.startswith('https://nexus.bmir.stanford.edu/') else RetryableReleaseError
+            raise exception(f"cannot read {url}: {error}") from error
 
     def read_json(self, url: str, *, missing_ok: bool = False) -> tuple[dict, bytes] | None:
         content = self.read(url, missing_ok=missing_ok)
@@ -127,7 +135,7 @@ class NexusCircuitBreaker:
         try:
             self.http.read(url)
         except RetryableReleaseError as error:
-            raise RetryableReleaseError(
+            raise NexusRetryableError(
                 f"Nexus circuit breaker could not reach {label} before {purpose}: {error}"
             ) from error
         except ReleaseError as error:

@@ -67,6 +67,7 @@ from org.metadatacenter.release_support.distribution import (
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
     RetryableReleaseError,
+    NexusRetryableError,
 )
 
 from org.metadatacenter.release_support.hashes import (
