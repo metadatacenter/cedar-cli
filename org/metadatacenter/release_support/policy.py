@@ -426,9 +426,10 @@ NEXUS_WRITABLE_ENDPOINT = f"{NEXUS_HOST}/service/rest/v1/status/writable"
 
 # The status endpoints answer from the web tier and stay green while every repository
 # behind them fails, so the check that decides whether a release can publish reads
-# something a release actually reads.
+# something a release actually reads. Use retained release metadata: snapshot
+# cleanup can legitimately remove all parent snapshot metadata without an outage.
 NEXUS_REPOSITORY_PROBE = (
-    f"{NEXUS_HOST}/repository/snapshots/org/metadatacenter/cedar-parent/maven-metadata.xml"
+    f"{NEXUS_HOST}/repository/releases/org/metadatacenter/cedar-parent/maven-metadata.xml"
 )
 
 

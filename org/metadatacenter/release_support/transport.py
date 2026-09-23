@@ -149,6 +149,8 @@ class NexusCircuitBreaker:
         except RetryableReleaseError:
             raise
         except ReleaseError as error:
+            if not re.search(r'HTTP 500\b', str(error)):
+                raise
             raise ReleaseError(
                 f"{error}. Nexus status is writable but repository content is unavailable; "
                 "this is consistent with the daily request budget being exhausted. Refusing "

@@ -3566,6 +3566,13 @@ class NexusCircuitBreakerTest(unittest.TestCase):
             release_train.NexusCircuitBreaker(
                 OfflineNexus(), PREFLIGHT_ENVIRONMENT).require("snapshot publication")
 
+    def test_missing_probe_is_not_reported_as_quota_exhaustion(self):
+        http = FakeNexus(failing={release_train.NEXUS_REPOSITORY_PROBE}, status=404)
+        with self.assertRaises(ReleaseError) as raised:
+            release_train.NexusCircuitBreaker(http, PREFLIGHT_ENVIRONMENT).require('publication')
+        self.assertIn('HTTP 404', str(raised.exception))
+        self.assertNotIn('daily request budget', str(raised.exception))
+
 
 class FakeCompletedProcess:
     def __init__(self, returncode=0, stdout="", stderr=""):
@@ -3819,6 +3826,14 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertTrue(findings[0].fatal)
         self.assertIn("cannot serve a repository read", findings[0].message)
+
+    def test_missing_repository_probe_is_not_a_quota_diagnosis(self):
+        findings = self._preflight(http=FakeNexus(
+            failing={release_train.NEXUS_REPOSITORY_PROBE}, status=404,
+        )).check_nexus_authorization()
+        self.assertEqual(1, len(findings))
+        self.assertIn('HTTP 404', findings[0].message)
+        self.assertNotIn('daily request budget', findings[0].message)
 
     def test_status_endpoints_alone_no_longer_decide_the_check(self):
         """They stayed green through a total outage, so they cannot be the whole answer."""

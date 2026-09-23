@@ -473,7 +473,7 @@ class ReleasePreflight:
         # A registry over its request budget serves its status endpoints and fails every
         # repository path, which reads as an outage until someone finds the usage page. It
         # is the one failure that gets worse the harder a release tries, so it is named.
-        if repository is not None and writable is None:
+        if repository == 'HTTP 500' and writable is None:
             return [PreflightFinding(
                 "nexus", "fail",
                 f"Nexus serves its status endpoints but not its repositories ({repository}), "
