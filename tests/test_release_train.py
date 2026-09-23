@@ -1976,6 +1976,31 @@ class ReleaseBuildValidationTest(unittest.TestCase):
                 "nextDevelopment:npm:template-editor:install", {task["id"] for task in tasks},
             )
 
+    def test_prepared_demo_checks_precede_build_and_maven_in_both_variants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory)
+            manifest["releaseRepositories"].append("cedar-component-demo")
+            for variant in manifest["versionPreparation"].values():
+                for surface in release_train.FRONTEND_BUILD_SURFACES:
+                    if surface["repository"] != "cedar-component-demo":
+                        continue
+                    root = Path(variant["workspace"]) / surface["repository"] / surface["directory"]
+                    root.mkdir(parents=True)
+                    (root / "package.json").write_text("{}")
+                    (root / "package-lock.json").write_text("{}")
+            tasks = ReleaseBuildValidator(ReleaseState(root=Path(directory) / "state")).tasks(manifest)
+            for variant in ("release", "nextDevelopment"):
+                selected = [task for task in tasks if task["variant"] == variant]
+                self.assertEqual("maven", selected[-1]["kind"])
+                for demo in ("angular", "ember", "react"):
+                    group = [task for task in selected if f":cee-demo-{demo}:" in task["id"]]
+                    self.assertEqual(["npm-install", "frontend-verification",
+                                      "frontend-verification", "frontend-build"],
+                                     [task["kind"] for task in group])
+                    self.assertTrue(group[2]["tests"])
+                    self.assertEqual("test:ember" if demo == "ember" else "test",
+                                     group[2]["command"][-1])
+
     def test_angular_builds_do_not_forward_options_past_chained_package_scripts(self):
         angular_surfaces = {"openview", "bridging", "monitoring", "cee-demo-angular"}
         commands = {

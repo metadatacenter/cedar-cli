@@ -226,13 +226,16 @@ FRONTEND_BUILD_SURFACES = [
      "install": [], "build": []},
     {"id": "cee-demo-angular", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-angular-src", "install": [],
+     "verify": [["npm", "run", "lint"], ["npm", "run", "test"]],
      "build": ["npm", "run", "build"],
      "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src/browser"},
     {"id": "cee-demo-ember", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-ember-src", "install": [],
+     "verify": [["npm", "run", "lint"], ["npm", "run", "test:ember"]],
      "build": ["npm", "run", "build"]},
     {"id": "cee-demo-react", "repository": "cedar-component-demo",
      "directory": "cedar-cee-demo-react", "install": [],
+     "verify": [["npm", "run", "lint"], ["npm", "run", "test"]],
      "build": ["npm", "run", "build"]},
 ]
 

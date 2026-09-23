@@ -104,6 +104,16 @@ class ReleaseBuildValidator:
                     "command": install,
                     "tests": False,
                 })
+                for index, command in enumerate(surface.get("verify", [])):
+                    tasks.append({
+                        "id": self._task_id(variant, "npm", surface["id"], f"verify-{index}"),
+                        "variant": variant,
+                        "kind": "frontend-verification",
+                        "repository": surface["repository"],
+                        "cwd": str(root),
+                        "command": command,
+                        "tests": True,
+                    })
                 if surface["build"]:
                     build_task = {
                         "id": self._task_id(variant, "npm", surface["id"], "build"),
@@ -119,6 +129,9 @@ class ReleaseBuildValidator:
                             workspace / surface["repository"] / surface["buildOutput"]
                         )
                     tasks.append(build_task)
+        # Catch prepared consumer failures before paying for the Java build. Preserve
+        # install/check/build order within each frontend and Maven dependency order.
+        tasks.sort(key=lambda task: (task["variant"] != "release", task["kind"] == "maven"))
         identifiers = [task["id"] for task in tasks]
         if len(identifiers) != len(set(identifiers)):
             raise ReleaseError("release build plan contains duplicate task identifiers")
