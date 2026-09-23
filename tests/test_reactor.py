@@ -15,6 +15,17 @@ from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoType import RepoType
 
 
+class VerificationEnvironmentTest(unittest.TestCase):
+    def test_model_reads_its_vendored_corpus_even_on_a_server(self):
+        environment = {"CEDAR_HOME": "/srv/cedar", "CEDAR_PROFILE": "server"}
+        repo = SimpleNamespace(name="cedar-model-typescript-library")
+        result = reactor.prepare_checks(repo, Path("/tmp/isolated/model"),
+                                        "/srv/cedar", environment, ["npm run test:coverage"])
+        self.assertEqual([], result)
+        self.assertEqual("/tmp/isolated/model", environment["CEDAR_HOME"])
+        self.assertEqual("server", environment["CEDAR_PROFILE"])
+
+
 class InstallCommandsTest(unittest.TestCase):
     """npm ci refuses a manifest that disagrees with the lock, which a rewrite always does."""
 

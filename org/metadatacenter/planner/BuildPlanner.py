@@ -43,13 +43,15 @@ class BuildPlanner(Planner):
         )
 
     @staticmethod
-    def frontends(plan: Plan):
+    def frontends(plan: Plan, *, verification: bool = True):
         plan.add_task(
             "Build frontends",
             TaskType.BUILD,
             GlobalContext.repos.get_frontends(),
             parameters={"force_frontend_build": True},
         )
+        if not verification:
+            return
         # Full reactor completion includes the owning packages' verification gates.
         from org.metadatacenter.frontend_inventory import reactor_checks
         checks = reactor_checks()

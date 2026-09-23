@@ -85,6 +85,25 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertTrue(all(command.endswith("-DskipTests")
                             for command in maven_commands))
 
+    @patch.object(build.plan_executor, "execute")
+    def test_all_skip_tests_keeps_builds_but_omits_frontend_verification(self, execute):
+        for skipped in (False, True):
+            args = ["all", "--dry-run"] + (["--skip-tests"] if skipped else [])
+            result = self.runner.invoke(build.app, args)
+            self.assertEqual(0, result.exit_code, result.output)
+            commands = self.commands(execute.call_args.args[0])
+            self.assertIn("npm run build", commands)
+            self.assertIn("npm ci", commands)
+            self.assertEqual(not skipped, "npm run test:coverage" in commands)
+            self.assertEqual(not skipped, "npm run parity:yaml" in commands)
+            maven = [c for c in commands if c.startswith("./mvnw clean install")]
+            self.assertTrue(maven)
+            self.assertTrue(all(("-DskipTests" in c) == skipped for c in maven))
+        # A previous compile-only command must not weaken the full reactor contract.
+        result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("npm run test:coverage", self.commands(execute.call_args.args[0]))
+
     def test_test_option_is_only_on_commands_that_can_reach_java(self):
         for command in (
                 "this", "parent", "libraries", "project", "clients", "java", "all"):

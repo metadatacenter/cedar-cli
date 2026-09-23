@@ -238,7 +238,7 @@ def server_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
 def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
               dump_plan: bool = typer.Option(False, help="Dump plan"),
               tests: bool = typer.Option(
-                  True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+                  True, "--tests/--skip-tests", help="Run Java and frontend verification suites. Default: run.")):
     configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
@@ -246,5 +246,5 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.libraries(plan)
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
-    BuildPlanner.frontends(plan)
+    BuildPlanner.frontends(plan, verification=tests)
     execute_build(plan, dry_run, dump_plan)
