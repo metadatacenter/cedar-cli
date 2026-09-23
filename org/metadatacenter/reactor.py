@@ -31,6 +31,7 @@ import json
 import os
 import re
 import tempfile
+import tarfile
 from pathlib import Path
 
 from org.metadatacenter.npm_package import NpmPackageError, pack_and_inspect
@@ -116,6 +117,32 @@ def _state(cedar_home):
     if state is not None and state[0] == Path(cedar_home).resolve():
         return state[1], state[2]
     return _available(cedar_home), set()
+
+
+def runtime_selection(cedar_home):
+    """Snapshot this build's exact packages, never another concurrent build's refs."""
+    available, pending = _state(cedar_home)
+    if pending:
+        raise ReactorError("Cannot activate an unfinished reactor build")
+    return {name: path.stem for name, path in available.items()}
+
+
+def activate_runtime(cedar_home, selection):
+    """Record a successful full build for subsequent local frontend starts."""
+    root = store_root(cedar_home)
+    root.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='runtime-', suffix='.json', dir=root)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            value = {'packages': selection}
+            if getattr(selection, 'evidence', None):
+                value['build'] = selection.evidence
+            json.dump(value, stream, sort_keys=True)
+            stream.write('\n')
+        os.replace(temporary, root / 'runtime.json')
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def session_for_plan(cedar_home, plan):
@@ -220,3 +247,31 @@ def resolve(build_root, cedar_home) -> list[str]:
         if rewritten:
             manifest.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
     return notes
+
+
+def prepare_checks(repo, build_root, cedar_home, environment, commands):
+    """Give designer integration tests this run's real siblings, not optional old bundles."""
+    if repo.name != 'cedar-embeddable-designer' or 'npm run test:ci' not in commands:
+        return []
+    available, pending = _state(cedar_home)
+    inputs = []
+    for variable, name in [('CEF_BUNDLE', 'cedar-embeddable-editor'),
+                           ('PICKER_BUNDLE', 'cedar-embeddable-term-picker')]:
+        if name in pending or name not in available:
+            raise ReactorError(f'Designer integration checks require a completed {name} build')
+        artifact = available[name]
+        if hashlib.sha256(artifact.read_bytes()).hexdigest() != artifact.stem:
+            raise ReactorError(f'Corrupt integration artifact: {artifact}')
+        # Keep test bundles outside the source tree: Tailwind scans local JavaScript
+        # and would otherwise compile sibling-only classes into the designer.
+        target = Path(build_root).parent / '.reactor-checks' / (name + '.js')
+        target.parent.mkdir(exist_ok=True)
+        with tarfile.open(artifact) as archive:
+            bundle = archive.extractfile('package/' + name + '.js')
+            if bundle is None:
+                raise ReactorError(f'Missing integration bundle in {artifact}')
+            target.write_bytes(bundle.read())
+        environment[variable] = str(target)
+        inputs.append({'variable': variable, 'package': name, 'sha256': artifact.stem,
+                       'bundleSha256': hashlib.sha256(target.read_bytes()).hexdigest()})
+    return inputs

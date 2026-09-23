@@ -14,6 +14,7 @@ from org.metadatacenter.util.GlobalContext import GlobalContext, UTF_8
 from org.metadatacenter.util.RepoResultTriple import RepoResultTriple
 from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -183,6 +184,42 @@ class GitWorker(Worker):
         return self.execute_shell_on_all_repos_with_table(
             status_line="Cloning",
             command_list=["git clone " + ReposFactory.git_base + "{0}"],
+            cwd_is_home=True,
+        )
+
+    def clone_missing(self):
+        """Clone the configured repositories this workspace does not have, and put them on main.
+
+        A release that registers a new repository leaves it absent on every host until someone
+        clones it by hand. `git pull` cannot surface that as anything but a per-repo error row, and
+        the version check has no version to read, so this is the command that closes the gap.
+
+        Top-level repositories only: a sub-repository lives inside its parent's checkout, so a
+        missing one means the parent is missing or damaged, which cloning a sibling cannot fix.
+
+        The checkout is deliberate rather than assumed. Deployment hosts build from `main` and the
+        release tags live there, but upstream default branches are not uniformly `main`, so clone
+        leaves a repository on whatever HEAD it points at. Move to `main` when the remote has one and
+        say so plainly when it does not, rather than failing a clone that succeeded.
+        """
+        missing = [repo for repo in GlobalContext.repos.get_list_top()
+                   if not RepoWorker.get_repo_dir_status(repo)]
+        if not missing:
+            console.print("All configured repositories are present; nothing to clone.")
+            return ResultTable(["Repo", "Output", "Error"], False)
+        console.print(f"{len(missing)} configured repositories missing: "
+                      + ", ".join(repo.name for repo in missing))
+        return self.execute_shell_on_all_repos_with_table(
+            status_line="Cloning",
+            repo_list=missing,
+            command_list=[
+                "git clone " + ReposFactory.git_base + "{0}",
+                'if git -C {0} rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then'
+                '  git -C {0} checkout main;'
+                'else'
+                '  echo "no origin/main; left on $(git -C {0} rev-parse --abbrev-ref HEAD)";'
+                'fi',
+            ],
             cwd_is_home=True,
         )
 

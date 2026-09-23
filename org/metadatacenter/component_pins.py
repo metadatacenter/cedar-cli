@@ -306,6 +306,12 @@ def _apply(cedar_home, plans, run=None):
     """
     run = run or _run
     _require_clean(cedar_home, plans)
+    # A pin update is not a deployment. npm install (including lifecycle scripts)
+    # and explicit restaging can overwrite a running reactor with older registry pins.
+    preserve_runtime = (
+        invocation_environment().get("CEDAR_PROFILE") != "server"
+        and (Path(cedar_home) / ".reactor/runtime.json").is_file()
+    )
     for item in plans:
         if not item.moves:
             continue
@@ -314,6 +320,9 @@ def _apply(cedar_home, plans, run=None):
             console.print(f"[bold]{item.repository}[/bold] → {item.target}")
             _stamp(directory / "package.json", item.target)
             _stamp_lock(directory / "package-lock.json", item.target)
+            # Consumer pins may have moved without replacing local reactor installs.
+            # Publish against the declared locks, never whatever node_modules contains.
+            run(directory, ["npm", "ci"])
             run(directory, list(item.dist))
             run(directory, ["npm", "publish", _publish_target(item.staged), "--tag=dev"])
         for consumer in item.consumers:
@@ -323,9 +332,14 @@ def _apply(cedar_home, plans, run=None):
             consumer_directory = Path(cedar_home) / consumer.repository
             _repoint(consumer_directory / consumer.manifest, consumer.dependency,
                      item.package, item.target)
-            run(consumer_directory, ["npm", "install"])
-            if consumer.restage:
+            install = ["npm", "install"]
+            if preserve_runtime:
+                install.extend(["--package-lock-only", "--ignore-scripts"])
+            run((consumer_directory / consumer.manifest).parent, install)
+            if consumer.restage and not preserve_runtime:
                 run(consumer_directory, list(consumer.restage))
+    if preserve_runtime:
+        console.print("Active development reactor preserved; pins updated without replacing installed or served bundles.")
     console.print("\nNothing is committed. Review each repository's diff, then commit and push it.")
 
 

@@ -436,13 +436,41 @@ class ReleasePlanner:
         _verify_integrity(
             f"{PUBLIC_CEE_NAME}@{cee_version}", public_tarball, public_integrity
         )
+        token_components = [component for component in npm_plan.get('components', [])
+                            if component['name'] == '@org.metadatacenter/cedar-design-tokens'
+                            and any(consumer['repository'] == 'cedar-embeddable-editor'
+                                    for consumer in component['consumers'])]
+        if len(token_components) > 1:
+            raise ReleaseError('Train repeats the CEE design-token component')
+        token_spec = token_components[0]['version'] if token_components else None
         proof = compare_cee_packages(
             dev_tarball,
             dev_version,
             public_tarball,
             cee_version,
             development_allow_scripts=development_allow_scripts,
+            development_design_tokens_spec=token_spec,
         )
+
+        # Carry the train's shared-component graph through release preparation too.
+        # Otherwise replacing CEE alone silently restores old tokens/CED/CETP locks.
+        component_wiring = []
+        consumer_repositories = {consumer['repository'] for consumer in consumers} | set(release_repositories)
+        for component in npm_plan.get('components', []):
+            if source.get('repositories', {}).get(component['repository']) != component['revision']:
+                raise ReleaseError('Shared component revision disagrees with train source')
+            recorded = next((package for package in npm_completion.get('packages', [])
+                             if package.get('name') == component['name']
+                             and package.get('version') == component['version']), None)
+            if not recorded or recorded.get('revision') != component['revision']:
+                raise ReleaseError(f"Train has no verified component {component['name']}")
+            payload = self.http.read(recorded['tarball'])
+            _verify_integrity(component['name'], payload, recorded['integrity'])
+            if _sha256(payload) != recorded['tarballSha256']:
+                raise ReleaseError('Train component tarball hash mismatch')
+            for consumer in component['consumers']:
+                if consumer['repository'] in consumer_repositories:
+                    component_wiring.append({**consumer, 'package': recorded})
 
         return {
             "schemaVersion": 1,
@@ -472,6 +500,7 @@ class ReleasePlanner:
             "mavenPhases": maven_phases,
             "publicationPlan": publication_plan,
             "dockerFrontendDefaults": docker_frontend_defaults,
+            "componentWiring": component_wiring,
             "cee": {
                 "development": {
                     "name": DEV_CEE_NAME,

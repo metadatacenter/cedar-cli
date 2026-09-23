@@ -44,6 +44,7 @@ from org.metadatacenter.npm_policy import (
 from org.metadatacenter import smoke_gate
 from org.metadatacenter.util.NexusCredentials import CredentialError, environment_with_nexus_credentials
 from org.metadatacenter.util.BuildTrain import BuildTrain
+from org.metadatacenter.util.Util import Util
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
     embedded_mongo_processes,
@@ -121,6 +122,20 @@ from org.metadatacenter.release_support.packages import (
     compare_cee_packages,
 )
 
+from org.metadatacenter.release_support.readiness import (
+    _configuration,
+    cee_consumer_findings,
+    readiness_findings,
+    required_artifact_findings,
+    surface_findings,
+    version_findings,
+)
+from org.metadatacenter.release_support.packaging import (
+    _archive,
+    _reason,
+    packaging_findings,
+    packaging_preflight,
+)
 from org.metadatacenter.release_support.planning import (
     ReleasePlanner,
 )
@@ -298,6 +313,46 @@ def _release_resume_gate_or_exit(manifest: dict) -> None:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
     _render_preflight_findings(findings)
+
+
+@app.command("readiness")
+def readiness(
+    release_version: str = typer.Option(
+        None, "--version", help="Intended CEDAR release version, to check the arithmetic"),
+    next_version: str = typer.Option(
+        None, "--next-version", help="Intended next SNAPSHOT version"),
+    skip_packaging: bool = typer.Option(
+        False, "--skip-packaging",
+        help="Omit the per-surface npm pack, which is the slowest check"),
+):
+    """Settle every release precondition a train has no bearing on, before building one.
+
+    `plan` needs a completed train, so the checks it makes that only read the workspace are
+    unreachable until one exists — and repairing what they find spends that train, because a
+    release stamps the exact commits its train captured. This asks them first.
+    """
+    _activate_toolchain()
+    cedar_home = Util.cedar_home or invocation_environment().get("CEDAR_HOME")
+    if not cedar_home:
+        console.print("[red]CEDAR_HOME is not set[/red]")
+        raise typer.Exit(1)
+    try:
+        findings = readiness_findings(
+            cedar_home, release_version, next_version, packaging=not skip_packaging)
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    if not findings:
+        console.print("[green]Release readiness: every workspace precondition settled[/green]")
+        console.print("A train built from this source can back a release.")
+        return
+    console.print(f"[red]{len(findings)} precondition(s) would refuse a release:[/red]")
+    for finding in findings:
+        console.print(f"  - {finding}", markup=False)
+    console.print(
+        "Repair these before building the train, rather than after: a train is spent by the "
+        "commit that fixes them.")
+    raise typer.Exit(1)
 
 
 @app.command("plan")

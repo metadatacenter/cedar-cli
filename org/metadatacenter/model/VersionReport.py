@@ -77,6 +77,17 @@ class VersionReport:
         already succeeded.
         """
         lines = []
+        # Named first because it is the only finding here that no amount of pulling or rebuilding
+        # fixes, and because it is what a release that registers a new repository produces on every
+        # host at once.
+        missing_repos = self.repos_with(lambda entry: entry.version_type == VersionType.MISSING)
+        if missing_repos:
+            lines.append(
+                f"{len(missing_repos)} configured repositories are not present in this workspace: "
+                + ", ".join(missing_repos) + ". A release that registers a new repository leaves it "
+                "absent until it is cloned; `cedarcli git pull` reports that only as a per-repo error "
+                "row. Run `cedarcli git clone-missing` (or clone by hand and `git checkout main`, "
+                "minding that the upstream default branch is not always `main`). This is fatal.")
         stale_repos = self.repos_with(lambda entry: entry.cnt_stale > 0)
         if stale_repos:
             verdict = "This is fatal under --strict" if strict else "This does not fail the check"
@@ -84,7 +95,8 @@ class VersionReport:
                 f"{len(stale_repos)} repositories are behind their remote, which accounts for "
                 f"{self.cnt_stale} of the versions above. The release published these; this workspace "
                 f"has not pulled them. Run `cedarcli git pull`. {verdict}.")
-        divergent_repos = self.repos_with(lambda entry: entry.cnt_nok > 0)
+        divergent_repos = self.repos_with(
+            lambda entry: entry.cnt_nok > 0 and entry.version_type != VersionType.MISSING)
         if divergent_repos:
             lines.append(
                 f"{len(divergent_repos)} repositories differ from the target while current with their "

@@ -39,7 +39,7 @@ class BuildOperator(Operator):
                 shell_wrapper = PlanTask("Build java project", TaskType.SHELL_WRAPPER, repo)
                 shell_wrapper.add_task_as_task(java_build(repo))
                 task.add_task_as_task(shell_wrapper)
-            elif repo.repo_type == RepoType.ANGULAR:
+            elif repo.repo_type in (RepoType.ANGULAR, RepoType.REACT, RepoType.EMBER):
                 if build_frontends:
                     shell_wrapper = PlanTask("Build angular project", TaskType.SHELL_WRAPPER, repo)
                     if task.get_parameter("server_frontend_payload") is True and repo.server_build_command_list:
@@ -47,6 +47,9 @@ class BuildOperator(Operator):
                         build_task.parameters["in_place_frontend_build"] = True
                     elif repo.build_command_list:
                         build_task = BuildShellTaskFactory.repo_build_commands(repo)
+                    elif repo.repo_type in (RepoType.REACT, RepoType.EMBER):
+                        build_task = PlanTask('Build frontend demo', TaskType.SHELL, repo)
+                        build_task.command_list = ['npm ci', 'npm run build']
                     else:
                         build_task = BuildShellTaskFactory.npm_ci_legacy_ng_build(repo)
                     if not build_task.parameters.get("in_place_frontend_build"):

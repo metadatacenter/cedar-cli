@@ -293,3 +293,23 @@ class ResolveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class RuntimeSelectionTest(unittest.TestCase):
+    def test_only_a_finished_selection_can_be_activated(self):
+        with tempfile.TemporaryDirectory() as home:
+            with reactor.session(home, ['cedar-embeddable-editor']):
+                with self.assertRaises(reactor.ReactorError):
+                    reactor.runtime_selection(home)
+            selection = {'cedar-embeddable-editor': 'a' * 64}
+            reactor.activate_runtime(home, selection)
+            self.assertEqual({'packages': selection}, json.loads((Path(home) / '.reactor/runtime.json').read_text()))
+
+    def test_selection_stays_frozen_when_another_build_updates_refs(self):
+        with tempfile.TemporaryDirectory() as home:
+            with reactor.session(home):
+                root = Path(home) / '.reactor'
+                (root / 'refs').mkdir(parents=True)
+                (root / 'artifacts').mkdir()
+                (root / 'artifacts' / ('a' * 64 + '.tgz')).write_bytes(b'another build')
+                (root / 'refs/cedar-embeddable-editor.json').write_text(json.dumps({'sha256': 'a' * 64}))
+                self.assertEqual({}, reactor.runtime_selection(home))

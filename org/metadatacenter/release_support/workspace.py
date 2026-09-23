@@ -161,7 +161,9 @@ class ReleaseWorkspacePreparer:
             raise ReleaseError("release manifest has no source repository inventory")
         workspace = attempt / "workspace"
         required_repositories = sorted(
-            {consumer["repository"] for consumer in consumers} | {"cedar-development"}
+            {consumer["repository"] for consumer in consumers}
+            | {consumer['repository'] for consumer in manifest.get('componentWiring', [])}
+            | {"cedar-development"}
         )
         for repository in required_repositories:
             revision = repositories.get(repository)
@@ -196,6 +198,31 @@ class ReleaseWorkspacePreparer:
             environment=command_environment,
             stream=True,
         )
+        component_evidence = []
+        for consumer in manifest.get('componentWiring', []):
+            package = consumer['package']
+            manifest_path, lock_path = self._consumer_paths(workspace, consumer)
+            spec = (package['version'] if consumer['dependency'] == package['name']
+                    else f"npm:{package['name']}@{package['version']}")
+            command = ['npm', 'install', '--package-lock-only', '--ignore-scripts',
+                       '--save-exact', f"{consumer['dependency']}@{spec}"]
+            if consumer.get('legacyPeerDeps'):
+                command.append('--legacy-peer-deps')
+            self._run(command, cwd=manifest_path.parent, environment=command_environment)
+            declared = json.loads(manifest_path.read_bytes())
+            lock = json.loads(lock_path.read_bytes())
+            dependency = consumer['dependency']
+            sections = ('dependencies', 'devDependencies', 'optionalDependencies')
+            if not any(declared.get(section, {}).get(dependency) == spec
+                       and lock.get('packages', {}).get('', {}).get(section, {}).get(dependency) == spec
+                       for section in sections):
+                raise ReleaseError(f'{manifest_path} does not pin the train component')
+            installed = lock.get('packages', {}).get('node_modules/' + dependency, {})
+            if any(installed.get(key) != package.get(expected) for key, expected in
+                   [('version', 'version'), ('resolved', 'tarball'), ('integrity', 'integrity')]):
+                raise ReleaseError(f'{lock_path} does not install the verified train component')
+            component_evidence.append({**consumer, 'manifestSha256': _file_sha256(manifest_path),
+                                       'lockSha256': _file_sha256(lock_path)})
         preparation_log = attempt / "preparation-logs" / "cee-propagation.log"
         preparation_log.parent.mkdir(parents=True, exist_ok=True)
         preparation_log.write_text(
@@ -204,7 +231,12 @@ class ReleaseWorkspacePreparer:
         )
 
         verified = []
+        for record in component_evidence:
+            manifest_path, lock_path = self._consumer_paths(workspace, record)
+            record.update(manifestSha256=_file_sha256(manifest_path), lockSha256=_file_sha256(lock_path))
         allowed_by_repo: dict[str, set[str]] = {}
+        for consumer in manifest.get('componentWiring', []):
+            allowed_by_repo.setdefault(consumer['repository'], set()).update({consumer['manifest'], consumer['lock']})
         for consumer in consumers:
             record = self._verify_consumer(workspace, consumer, public_cee)
             record["before"] = before[(consumer["repository"], consumer["manifest"])]
@@ -245,4 +277,5 @@ class ReleaseWorkspacePreparer:
                 for repository in required_repositories
             },
             "consumers": verified,
+            "components": component_evidence,
         }

@@ -46,7 +46,8 @@ class DesignTokensRegistrationTest(unittest.TestCase):
         tokens = names.index("cedar-design-tokens")
 
         for consumer in ("cedar-embeddable-editor", "cedar-embeddable-term-picker",
-                         "cedar-embeddable-designer", "cedar-workspace"):
+                         "cedar-embeddable-designer", "cedar-workspace", "cedar-openview",
+                         "cedar-monitoring", "cedar-bridging", "cedar-template-designer"):
             self.assertLess(tokens, names.index(consumer),
                             f"cedar-design-tokens must be registered before {consumer}")
 

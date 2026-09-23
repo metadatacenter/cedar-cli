@@ -45,6 +45,12 @@ def checkout(branch: str):
     exit_on_failure(git_worker.checkout(branch))
 
 
+@app.command("clone-missing")
+def clone_missing():
+    """Clone configured repositories that are absent from this workspace, then check out main."""
+    exit_on_failure(git_worker.clone_missing())
+
+
 @app.command("next")
 def git_next():
     exit_on_failure(git_worker.next())

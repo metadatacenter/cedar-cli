@@ -119,3 +119,10 @@ def artifact_versioning(
     """Audit artifact history links, ordering, draft uniqueness and latest flags in the selected stack."""
     from org.metadatacenter.version_lifecycle import check_versioning
     exit_on_failure(check_versioning(apply=apply))
+
+
+@app.command("stores")
+def stores():
+    """Check that each artifact collection carries the unique @id index the code relies on."""
+    from org.metadatacenter.worker.StoreWorker import StoreWorker
+    exit_on_failure(StoreWorker.check_stores())

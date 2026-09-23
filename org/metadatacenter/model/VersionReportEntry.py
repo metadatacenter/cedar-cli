@@ -22,6 +22,14 @@ class VersionReportEntry:
         self.cnt_stale = 0
 
     def compute_status(self, reference_version):
+        # A repository that is not on disk has no version to compare, and reporting it as "unknown"
+        # would file it beside a type this tool cannot read. It is a missing checkout: a failure with
+        # one remedy, and the reason a newly registered repository must be cloned before a build.
+        if self.version_type == VersionType.MISSING:
+            self.cnt_nok = 1
+            self.status = "🚫"
+            return
+
         if self.version_type == VersionType.EMPTY:
             self.cnt_ok = 1
             self.status = "✅"

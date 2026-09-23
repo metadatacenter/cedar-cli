@@ -235,8 +235,8 @@ class ComponentWorkerTest(unittest.TestCase):
         self._repo("cedar-model-typescript-library",
                    {"name": "@org.metadatacenter/cedar-model-typescript-library",
                     "version": "1.0.13-dev.20260915.7576363"})
-        self._repo("cedar-model-typescript-library-demo", {
-            "name": "cedar-model-typescript-library-demo",
+        self._repo("cedar-embeddable-designer", {
+            "name": "cedar-embeddable-designer",
             "dependencies": {"cedar-model-typescript-library": "1.0.2"},
         })
         self._train_configuration({
@@ -253,7 +253,7 @@ class ComponentWorkerTest(unittest.TestCase):
 
         undeclared = [f for f in findings if f.state == ComponentState.UNDECLARED]
         self.assertEqual(
-            [("cedar-model-typescript-library-demo", "cedar-model-typescript-library")],
+            [("cedar-embeddable-designer", "cedar-model-typescript-library")],
             [(f.host, f.component) for f in undeclared])
         self.assertTrue(undeclared[0].is_failure)
 
@@ -261,8 +261,8 @@ class ComponentWorkerTest(unittest.TestCase):
         self._repo("cedar-model-typescript-library",
                    {"name": "@org.metadatacenter/cedar-model-typescript-library",
                     "version": "1.0.13-dev.20260915.7576363"})
-        self._repo("cedar-model-typescript-library-demo", {
-            "name": "cedar-model-typescript-library-demo",
+        self._repo("cedar-embeddable-designer", {
+            "name": "cedar-embeddable-designer",
             "dependencies": {"cedar-model-typescript-library": "1.0.2"},
         })
         self._repo("cedar-embeddable-editor", {
@@ -275,7 +275,7 @@ class ComponentWorkerTest(unittest.TestCase):
                 "repository": "cedar-model-typescript-library",
                 "publishedName": "@org.metadatacenter/cedar-model-typescript-library",
                 "reference": {"repository": "cedar-embeddable-editor"},
-                "consumers": [{"repository": "cedar-model-typescript-library-demo"}],
+                "consumers": [{"repository": "cedar-embeddable-designer"}],
             }],
         })
 
@@ -288,8 +288,8 @@ class ComponentWorkerTest(unittest.TestCase):
         self._repo("cedar-model-typescript-library",
                    {"name": "@org.metadatacenter/cedar-model-typescript-library",
                     "version": "1.0.13-dev.20260915.7576363"})
-        self._repo("cedar-model-typescript-library-demo", {
-            "name": "cedar-model-typescript-library-demo",
+        self._repo("cedar-embeddable-designer", {
+            "name": "cedar-embeddable-designer",
             "dependencies": {"cedar-model-typescript-library": "1.0.2"},
         })
 

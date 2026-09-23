@@ -28,6 +28,11 @@ class NativeWorker(Worker):
         "ui-monitoring", "ui-bridging",
     )
 
+    # Set once by the command an operator invoked, and read by every controller call beneath it,
+    # so `--refresh-dependencies` reaches a restart's own start of each application without being
+    # threaded through every target in between.
+    refresh_stale_dependencies = False
+
     @staticmethod
     def controller_path() -> str:
         cedar_home = Util.cedar_home or invocation_environment()["CEDAR_HOME"]
@@ -36,9 +41,14 @@ class NativeWorker(Worker):
     @classmethod
     def execute(cls, action: str, services: Iterable[str] = (), title: str = None,
                 show_command: bool = True, echo_streams: bool = True,
-                show_title: bool = True):
+                show_title: bool = True, refresh_dependencies: bool = False):
         arguments = [cls.controller_path(), action, *services]
         command = " ".join(shlex.quote(argument) for argument in arguments)
+        if refresh_dependencies or cls.refresh_stale_dependencies:
+            # Carried in the script text rather than the environment. A subprocess inherits the
+            # invocation's resolved profile, which is a snapshot taken before any command runs,
+            # so setting os.environ in a callback would never reach the controller.
+            command = f"CEDAR_REFRESH_STALE_DEPENDENCIES=1 {command}"
         return Worker.execute_generic_shell_commands(
             [command], title=title or f"Native CEDAR: {action}",
             show_command=show_command, echo_streams=echo_streams,
@@ -88,16 +98,18 @@ class NativeWorker(Worker):
         return [name for name in expected if name not in listening]
 
     @classmethod
-    def start(cls, services: Iterable[str] = ()):
-        return cls.execute("start", services, "Starting native CEDAR services")
+    def start(cls, services: Iterable[str] = (), refresh_dependencies: bool = False):
+        return cls.execute("start", services, "Starting native CEDAR services",
+                           refresh_dependencies=refresh_dependencies)
 
     @classmethod
     def stop(cls, services: Iterable[str] = ()):
         return cls.execute("stop", services, "Stopping native CEDAR services")
 
     @classmethod
-    def restart(cls, services: Iterable[str] = ()):
-        return cls.execute("restart", services, "Restarting native CEDAR services")
+    def restart(cls, services: Iterable[str] = (), refresh_dependencies: bool = False):
+        return cls.execute("restart", services, "Restarting native CEDAR services",
+                           refresh_dependencies=refresh_dependencies)
 
     @classmethod
     def status(cls):
@@ -112,8 +124,33 @@ class NativeWorker(Worker):
         return result
 
     @classmethod
-    def health(cls):
-        return cls.execute("health", title="Checking native CEDAR health")
+    def health_group(cls, group: str = None):
+        """The services a health gate should judge, for a host that does not run all of them.
+
+        The controller's health action selects every managed application when given no names, which
+        makes the check unusable as a gate on a host that deliberately runs a subset: a staging or
+        production application host serves the frontends as static trees from nginx and runs none of
+        the seven `ui-*` dev servers, so an all-or-nothing health probe reports failure however
+        healthy the backend is. Naming the group turns the answer back into a question about what
+        this host actually runs.
+
+        Infrastructure is not a group here because the controller's health action does not cover it;
+        it judges the 22 managed applications only.
+        """
+        if group in (None, "all"):
+            return ()
+        if group == "microservices":
+            return cls.MICROSERVICES
+        if group == "frontends":
+            return cls.FRONTENDS
+        raise ValueError(f"Unknown service group: {group}")
+
+    @classmethod
+    def health(cls, group: str = None):
+        services = cls.health_group(group)
+        scope = group or "all"
+        return cls.execute("health", services=services,
+                           title=f"Checking native CEDAR health ({scope})")
 
     @classmethod
     def watch(cls):

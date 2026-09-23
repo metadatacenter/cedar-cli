@@ -71,7 +71,6 @@ NPM_VERSION_SURFACES = {
     "cedar-template-editor": ["."],
     "cedar-workspace": ["."],
     "cedar-template-designer": ["."],
-    "cedar-model-typescript-library-demo": ["."],
     "cedar-openview": ["cedar-openview-src", "cedar-openview-dist"],
     "cedar-content-distribution": ["."],
     "cedar-monitoring": ["cedar-monitoring-src", "cedar-monitoring-dist"],
@@ -214,10 +213,6 @@ FRONTEND_BUILD_SURFACES = [
      "install": [], "build": []},
     {"id": "template-designer", "repository": "cedar-template-designer", "directory": ".",
      "install": [], "build": []},
-    {"id": "model-typescript-library-demo",
-     "repository": "cedar-model-typescript-library-demo", "directory": ".",
-     "install": [], "build": ["npm", "run", "build"],
-     "buildOutput": "dist"},
     {"id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-src",
      "install": [], "build": ["npm", "run", "build"],
      "buildOutput": "cedar-openview-src/dist/cedar-openview"},
@@ -252,9 +247,6 @@ NPM_RELEASE_SURFACES = [
     {"id": "template-editor", "repository": "cedar-template-editor", "directory": "."},
     {"id": "workspace", "repository": "cedar-workspace", "directory": "."},
     {"id": "template-designer", "repository": "cedar-template-designer", "directory": "."},
-    {"id": "model-typescript-library-demo",
-     "repository": "cedar-model-typescript-library-demo", "directory": ".",
-     "generatedBuildOutput": "dist"},
     {
         "id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-dist",
         "buildOutput": "cedar-openview-src/dist/cedar-openview",
@@ -434,9 +426,10 @@ NEXUS_WRITABLE_ENDPOINT = f"{NEXUS_HOST}/service/rest/v1/status/writable"
 
 # The status endpoints answer from the web tier and stay green while every repository
 # behind them fails, so the check that decides whether a release can publish reads
-# something a release actually reads.
+# something a release actually reads. Use retained release metadata: snapshot
+# cleanup can legitimately remove all parent snapshot metadata without an outage.
 NEXUS_REPOSITORY_PROBE = (
-    f"{NEXUS_HOST}/repository/snapshots/org/metadatacenter/cedar-parent/maven-metadata.xml"
+    f"{NEXUS_HOST}/repository/releases/org/metadatacenter/cedar-parent/maven-metadata.xml"
 )
 
 

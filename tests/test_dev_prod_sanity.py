@@ -63,52 +63,102 @@ class ProdSanityTest(unittest.TestCase):
         self.runner = CliRunner()
 
     @staticmethod
-    def create_frontend_indexes(cedar_home):
-        for repo, dist in (
-                ("cedar-openview", "cedar-openview-dist"),
-                ("cedar-bridging", "cedar-bridging-dist"),
-                ("cedar-monitoring", "cedar-monitoring-dist")):
-            path = Path(cedar_home, repo, dist, "index.html")
-            path.parent.mkdir(parents=True)
-            path.write_text(
-                '<script>window.cedarDomain = "metadatacenter.org";</script> '
-                'https://content.metadatacenter.org/example'
+    def create_frontend_payloads(cedar_home, bundle_names=None):
+        """Fixtures shaped like what the Angular build actually emits.
+
+        The predecessor of these tests wrote an index.html carrying `window.cedarDomain`, a shape
+        the estate stopped producing in 2.9.8. The tests passed while the command could only raise
+        in the field, so the fixture must be the built bundle: a content-hashed main-*.js with the
+        configuration compiled into it, beside an index.html that references it and carries no
+        configuration of its own.
+        """
+        names = bundle_names or {}
+        for repo in ("cedar-openview", "cedar-bridging", "cedar-monitoring"):
+            dist = Path(cedar_home, repo, f"{repo}-dist")
+            dist.mkdir(parents=True)
+            for bundle in names.get(repo, ["main-A3S6MZD7.js"]):
+                Path(dist, bundle).write_text(
+                    'const e={production:!0,cedarDomain:"metadatacenter.org"};'
+                )
+            Path(dist, "index.html").write_text(
+                '<script src="main-A3S6MZD7.js" type="module"></script>'
             )
 
-    def test_configure_frontends_updates_all_entry_points(self):
+    def test_configure_frontends_rewrites_the_compiled_domain_in_every_payload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            self.create_frontend_indexes(temp_dir)
+            self.create_frontend_payloads(temp_dir)
             with patch.object(Util, "cedar_home", temp_dir), \
-                    patch.dict(os.environ, {"CEDAR_HOST": "example.org"}):
+                    patch.dict(os.environ, {"CEDAR_HOST": "staging.example.org"}):
                 self.assertEqual(0, ProdWorker.configure_frontends())
-                index_files = ProdWorker.frontend_index_files()
+                payload_files = ProdWorker.frontend_payload_files()
 
-            for _, path in index_files:
+            self.assertEqual(3, len(payload_files))
+            for _, path in payload_files:
                 content = path.read_text()
-                self.assertIn('window.cedarDomain = "example.org"', content)
-                self.assertIn('content.example.org/', content)
+                self.assertIn('cedarDomain:"staging.example.org"', content)
+                self.assertNotIn('cedarDomain:"metadatacenter.org"', content)
 
-    def test_configure_frontends_refuses_an_unrecognized_entry_point(self):
+    def test_configure_frontends_leaves_no_temporary_files_behind(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            self.create_frontend_indexes(temp_dir)
-            broken = Path(temp_dir, "cedar-monitoring", "cedar-monitoring-dist", "index.html")
-            broken.write_text("no domain declaration")
+            self.create_frontend_payloads(temp_dir)
+            with patch.object(Util, "cedar_home", temp_dir), \
+                    patch.dict(os.environ, {"CEDAR_HOST": "staging.example.org"}):
+                ProdWorker.configure_frontends()
+
+            leftovers = list(Path(temp_dir).rglob(".*.cedarcli.tmp"))
+            self.assertEqual([], leftovers)
+
+    def test_configure_frontends_refuses_a_bundle_without_a_compiled_domain(self):
+        """The guard the hand `sed` could not have: a bundle that matches nothing must fail loudly."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.create_frontend_payloads(temp_dir)
+            broken = Path(temp_dir, "cedar-monitoring", "cedar-monitoring-dist", "main-A3S6MZD7.js")
+            broken.write_text("const e={production:!0};")
             original_openview = Path(
-                temp_dir, "cedar-openview", "cedar-openview-dist", "index.html").read_text()
+                temp_dir, "cedar-openview", "cedar-openview-dist", "main-A3S6MZD7.js").read_text()
 
             with patch.object(Util, "cedar_home", temp_dir), \
-                    patch.dict(os.environ, {"CEDAR_HOST": "example.org"}):
-                with self.assertRaisesRegex(ProdError, "Cannot find window.cedarDomain"):
+                    patch.dict(os.environ, {"CEDAR_HOST": "staging.example.org"}):
+                with self.assertRaisesRegex(ProdError, "Cannot find a compiled cedarDomain"):
                     ProdWorker.configure_frontends()
 
             self.assertEqual(original_openview, Path(
-                temp_dir, "cedar-openview", "cedar-openview-dist", "index.html").read_text())
+                temp_dir, "cedar-openview", "cedar-openview-dist", "main-A3S6MZD7.js").read_text())
+
+    def test_configure_frontends_refuses_an_unbuilt_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.create_frontend_payloads(temp_dir)
+            Path(temp_dir, "cedar-bridging", "cedar-bridging-dist", "main-A3S6MZD7.js").unlink()
+
+            with patch.object(Util, "cedar_home", temp_dir), \
+                    patch.dict(os.environ, {"CEDAR_HOST": "staging.example.org"}):
+                with self.assertRaisesRegex(ProdError, "no built bundle"):
+                    ProdWorker.configure_frontends()
+
+    def test_configure_frontends_refuses_an_ambiguous_dist(self):
+        """Two bundles means picking one is a guess about which tree nginx serves."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.create_frontend_payloads(
+                temp_dir, {"cedar-monitoring": ["main-A3S6MZD7.js", "main-EMS6U332.js"]})
+
+            with patch.object(Util, "cedar_home", temp_dir), \
+                    patch.dict(os.environ, {"CEDAR_HOST": "staging.example.org"}):
+                with self.assertRaisesRegex(ProdError, "holds several bundles"):
+                    ProdWorker.configure_frontends()
+
+    def test_configure_frontends_requires_a_host(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.create_frontend_payloads(temp_dir)
+            with patch.object(Util, "cedar_home", temp_dir), \
+                    patch.dict(os.environ, {"CEDAR_HOST": ""}):
+                with self.assertRaisesRegex(ProdError, "CEDAR_HOST is not set"):
+                    ProdWorker.configure_frontends()
 
     @patch("org.metadatacenter.worker.ProdWorker.Worker.execute_generic_shell_commands")
-    def test_reset_frontends_uses_repository_relative_git_restore(self, execute):
+    def test_reset_frontends_restores_the_bundle_by_repository_relative_path(self, execute):
         execute.return_value = SimpleNamespace(returncode=0)
         with tempfile.TemporaryDirectory() as temp_dir:
-            self.create_frontend_indexes(temp_dir)
+            self.create_frontend_payloads(temp_dir)
             with patch.object(Util, "cedar_home", temp_dir):
                 self.assertEqual(0, ProdWorker.reset_frontends())
 
@@ -116,6 +166,7 @@ class ProdSanityTest(unittest.TestCase):
         for call in execute.call_args_list:
             command = call.args[0][0]
             self.assertTrue(command.startswith("git restore --source=HEAD -- "))
+            self.assertIn("main-A3S6MZD7.js", command)
             self.assertNotIn(temp_dir, command)
 
     @patch("org.metadatacenter.prod.ProdWorker.configure_frontends", return_value=8)

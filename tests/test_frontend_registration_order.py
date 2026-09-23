@@ -20,12 +20,13 @@ from org.metadatacenter.util.Util import Util
 # What consumes what, as the manifests declare it. Producer -> the repositories that consume it.
 EDGES = {
     "cedar-design-tokens": (
+        "cedar-template-editor",
         "cedar-embeddable-editor", "cedar-embeddable-term-picker", "cedar-embeddable-designer",
         "cedar-workspace", "cedar-monitoring", "cedar-openview",
+        "cedar-bridging", "cedar-template-designer",
     ),
     "cedar-model-typescript-library": (
         "cedar-embeddable-editor", "cedar-embeddable-designer",
-        "cedar-model-typescript-library-demo",
     ),
     "cedar-embeddable-editor": (
         "cedar-template-editor", "cedar-workspace", "cedar-template-designer",

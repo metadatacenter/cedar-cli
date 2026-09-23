@@ -1,19 +1,24 @@
 from pathlib import Path
+import json
+import subprocess
+import sys
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from org.metadatacenter import maven, reactor
+from org.metadatacenter import maven, reactor, reactor_evidence
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
-from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories
+from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories, tracked_path_state
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.NativeWorker import NativeWorker
+from org.metadatacenter.smoke_gate import run_smoke
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(maven.app, name="maven", help="Maven cache operations...")
@@ -28,7 +33,38 @@ def configure_java_tests(tests: bool):
     GlobalContext.mark_skip_tests(not tests)
 
 
-def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
+def frontend_input_roots(plan):
+    """Frontend inputs and their build tooling; unrelated backend work is independent."""
+    home = Path(Util.cedar_home)
+    roots = {home / 'cedar-cli', home / 'cedar-development'}
+    def visit(task):
+        repo = getattr(task, 'repo', None)
+        if repo is not None:
+            while getattr(repo, 'parent_repo', None) is not None:
+                repo = repo.parent_repo
+            roots.add(home / repo.name)
+        for child in task.tasks:
+            visit(child)
+    visit(plan)
+    return roots
+
+
+# Profiles and frontend configuration live in this mixed-purpose repository.
+# Backend audits, repairs and documentation are not frontend build inputs.
+FRONTEND_DEVELOPMENT_INPUTS = (
+    'bin', 'ops/frontend-train.json', 'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
+)
+
+
+def capture_build_state(home: Path, frontend_only: bool):
+    state = capture_estate_state(home)
+    development = (home / 'cedar-development').resolve()
+    if frontend_only and development in state:
+        state[development] = tracked_path_state(development, FRONTEND_DEVELOPMENT_INPUTS)
+    return state
+
+
+def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
     """Run a build while proving it did not add or alter tracked workspace changes."""
     if dry_run or dump_plan:
         return plan_executor.execute(plan, dry_run, dump_plan)
@@ -37,25 +73,33 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool):
     except BuildSafetyError as error:
         console.print(str(error), markup=False)
         raise typer.Exit(code=1) from error
-    before = capture_estate_state(Path(Util.cedar_home))
+    input_roots = frontend_input_roots(plan) if frontend_only else None
+    before = capture_build_state(Path(Util.cedar_home), frontend_only)
     failure = None
     try:
-        with reactor.session_for_plan(Util.cedar_home, plan):
+        with reactor_evidence.session(plan), reactor.session_for_plan(Util.cedar_home, plan):
             plan_executor.execute(plan, dry_run, dump_plan)
+            selection = reactor.runtime_selection(Util.cedar_home)
+            if frontend_only:
+                selection = reactor_evidence.Selection(
+                    selection, reactor_evidence.finish(Util.cedar_home, selection))
     except BaseException as error:
         failure = error
-    after = capture_estate_state(Path(Util.cedar_home))
+    after = capture_build_state(Path(Util.cedar_home), frontend_only)
     changed = changed_repositories(before, after)
+    if input_roots is not None:
+        changed = [path for path in changed if path in input_roots]
     if changed:
         names = ", ".join(path.name for path in changed)
         console.print(Panel(
-            "The build changed tracked state relative to its starting snapshot: " + names,
+            "Tracked build inputs changed during the build (by this build or concurrent work): " + names,
             title="Build workspace invariant failed",
             style="red",
         ))
         raise SystemExit(1) from failure
     if failure is not None:
         raise failure
+    return selection
 
 
 @app.command("this")
@@ -140,7 +184,27 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
     BuildPlanner.frontends(plan)
-    execute_build(plan, dry_run, dump_plan)
+    selection = execute_build(plan, dry_run, dump_plan, frontend_only=True)
+    if not dry_run and not dump_plan:
+        reactor.activate_runtime(Util.cedar_home, selection)
+        console.print(f"Reactor build evidence: {reactor.store_root(Util.cedar_home) / 'builds' / (selection.evidence + '.json')}")
+        console.print("Restarting local frontends with this reactor's exact component selection.")
+        result = NativeWorker.restart(NativeWorker.FRONTENDS)
+        if result.returncode:
+            raise typer.Exit(result.returncode)
+        home = Path(Util.cedar_home)
+        record = json.loads((home / '.reactor/builds' / (selection.evidence + '.json')).read_text())
+        config = json.loads((home / 'cedar-development/ops/frontend-train.json').read_text())
+        applications = {frontend['repository'] for frontend in config['frontends']}
+        for repository in record['repositories']:
+            if Path(repository).parts[0] not in applications:
+                continue  # Component and demo checkouts are not application runtimes.
+            subprocess.run([sys.executable, str(home / 'cedar-development/ops/frontend_reactor_runtime.py'),
+                            'verify', str(home), str(home / repository)], check=True)
+        code = run_smoke()
+        if code:
+            raise typer.Exit(code)
+        console.print("Frontend reactor completed: build, local deployment and whole-stack smoke passed.")
 
 
 @app.command("split-frontends")
@@ -153,6 +217,19 @@ def split_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build split frontends")
     BuildPlanner.split_frontends(plan, server_payload=server_payload)
+    execute_build(plan, dry_run, dump_plan)
+
+
+@app.command("server-frontends")
+def server_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
+                     dump_plan: bool = typer.Option(False, help="Dump plan"),
+                     server_payload: bool = typer.Option(
+                         False, "--server-payload",
+                         help="Generate environment-configured static payloads for native nginx")):
+    """Build every frontend a native host serves from its own checkout, monolith included."""
+    GlobalContext.mark_global_task_type(TaskType.BUILD)
+    plan = Plan("Build server frontends")
+    BuildPlanner.server_frontends(plan, server_payload=server_payload)
     execute_build(plan, dry_run, dump_plan)
 
 

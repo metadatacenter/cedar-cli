@@ -122,7 +122,14 @@ def check_versioning(apply=False):
                      'RETURN projections, count(CASE WHEN coalesce(d.parked,false)=false THEN d END), '
                      'count(CASE WHEN d.parked=true THEN d END)')['results'][0]['data'][0]['row']
         remaining = [f for f in findings if not (apply and f['issue'] == 'incorrect-latest-flags')]
-        print(json.dumps({'artifacts': len(rows), 'pendingProjections': queues[0],
+        # Report what was audited alongside the verdict. `artifacts` is the whole sample, and it
+        # covers schema artifacts only -- no instances -- so a small number with no findings is a
+        # narrow check passing, not a broad one. Read as a clean bill of health on a graph holding
+        # far more than this, it would be the most expensive kind of wrong answer: the reassuring
+        # one. An operator cannot tell the two apart unless the scope is stated.
+        print(json.dumps({'scope': {'resourceTypes': list(SCHEMA_TYPES), 'auditedArtifacts': len(rows),
+                                    'covers': 'schema artifacts only; metadata instances are not audited'},
+                          'artifacts': len(rows), 'pendingProjections': queues[0],
                           'pendingDeletions': queues[1], 'parkedDeletions': queues[2], 'repaired': len(repair_ids) if apply else 0,
                           'findings': remaining}, indent=2))
         return 1 if remaining or any(queues) else 0

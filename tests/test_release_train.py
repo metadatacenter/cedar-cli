@@ -44,6 +44,12 @@ from org.metadatacenter.release_train import (
     ReleaseWorkspacePreparer,
     advance_active_release,
     compare_cee_packages,
+    _reason,
+    cee_consumer_findings,
+    packaging_findings,
+    readiness_findings,
+    required_artifact_findings,
+    version_findings,
     create_active_release_refs,
     integrate_active_release,
     publish_active_release,
@@ -468,6 +474,44 @@ class CeePromotionTest(unittest.TestCase):
         proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
         self.assertEqual(2, proof["minifiedIdentifierRenames"])
 
+    def test_train_design_token_pin_normalizes_only_declared_build_metadata(self):
+        token_spec = 'npm:@org.metadatacenter/cedar-design-tokens@0.1.0-dev.20260922.g123456789abc.t0153'
+        def package(development, token, extra='', section='devDependencies'):
+            return package_tarball(
+                DEV_CEE_NAME if development else PUBLIC_CEE_NAME,
+                DEV_VERSION if development else PUBLIC_VERSION,
+                development=development,
+                bundle=provenance_bundle(
+                    DEV_VERSION if development else PUBLIC_VERSION,
+                    'npm:@org.metadatacenter/cedar-model-typescript-library@1.0.5-dev.20260827.2030.g9261381c1fb4'
+                    if development else '1.0.4',
+                    '2026-08-27 12:23 10212094' if development else '2026-08-27 15:09',
+                    suffix=',' + section + ':{"@org.metadatacenter/cedar-design-tokens":"' + token + '"}' + extra,
+                ), changelog=PUBLIC_CHANGELOG,
+            )
+        dev = package(True, token_spec)
+        public = package(False, '0.1.0-dev.20260921.3ae5f78b')
+        proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION,
+                                     development_design_tokens_spec=token_spec)
+        self.assertIn('cedar-embeddable-editor.js:embedded design-token development pin',
+                      proof['allowedMetadataChanges'])
+        plain_spec = token_spec.rsplit('@', 1)[1]
+        compare_cee_packages(package(True, plain_spec), DEV_VERSION, public, PUBLIC_VERSION,
+                             development_design_tokens_spec=plain_spec)
+        for broken, expected in (
+            (package(False, 'latest'), 'exactly one'),
+            (package(False, '0.1.0', section='dependencies'), 'exactly one'),
+            (package(False, '0.1.0', extra='changed-code'), 'outside declared release provenance'),
+            (package(False, '0.1.0', extra=',devDependencies:{"@org.metadatacenter/cedar-design-tokens":"0.1.0"}'), 'exactly one'),
+        ):
+            with self.subTest(expected=expected, broken=broken[:20]):
+                with self.assertRaisesRegex(ReleaseError, expected):
+                    compare_cee_packages(dev, DEV_VERSION, broken, PUBLIC_VERSION,
+                                         development_design_tokens_spec=token_spec)
+        with self.assertRaisesRegex(ReleaseError, 'disagrees with the train plan'):
+            compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION,
+                                 development_design_tokens_spec='0.1.0')
+
     def test_captured_allow_scripts_policy_is_normalized_out_of_bundle(self):
         allow_scripts = {
             "@parcel/watcher@2.6.0": True,
@@ -705,7 +749,6 @@ class ReleasePlannerTest(unittest.TestCase):
                 "cedar-component-demo": "c" * 40,
                 "cedar-workspace": "d" * 40,
                 "cedar-template-designer": "e" * 40,
-                "cedar-model-typescript-library-demo": "f" * 40,
             },
         }
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
@@ -960,7 +1003,6 @@ class ReleasePlannerTest(unittest.TestCase):
             "cedar-template-designer": "3" * 40,
             "cedar-embeddable-editor": "4" * 40,
             "cedar-model-typescript-library": "5" * 40,
-            "cedar-model-typescript-library-demo": "6" * 40,
         }}
         release, maven = ReleasePlanner._release_repositories({
             "repositories": list(source["repositories"]),
@@ -970,7 +1012,6 @@ class ReleasePlannerTest(unittest.TestCase):
             "cedar-parent",
             "cedar-workspace",
             "cedar-template-designer",
-            "cedar-model-typescript-library-demo",
         ], release)
         self.assertEqual(["cedar-parent"], maven)
 
@@ -1263,6 +1304,42 @@ class ReleaseStateAndCliTest(unittest.TestCase):
 
 
 class ReleaseWorkspaceTest(unittest.TestCase):
+    def test_shared_components_follow_train_even_when_checkout_pins_are_older(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cedar_home, manifest = self.make_workspace(directory)
+            component = {'name': '@org.metadatacenter/tokens', 'version': '0.1.0-dev.train',
+                         'tarball': 'https://registry.example/tokens.tgz', 'integrity': 'sha512-tokens'}
+            consumer = {'repository': 'frontend-main', 'manifest': 'package.json',
+                        'lock': 'package-lock.json', 'dependency': '@org.metadatacenter/tokens',
+                        'package': component}
+            manifest['componentWiring'] = [consumer]
+            normal_runner = self._successful_runner(manifest['cee']['consumers'])
+            def runner(args, **kwargs):
+                if args[0] != 'npm':
+                    return normal_runner(args, **kwargs)
+                self.assertIn('--package-lock-only', args)
+                self.assertIn('--ignore-scripts', args)
+                root = Path(kwargs['cwd'])
+                package = json.loads((root / 'package.json').read_text())
+                lock = json.loads((root / 'package-lock.json').read_text())
+                dependency = consumer['dependency']
+                spec = component['version']
+                self.assertIn(f"{dependency}@{spec}", args)
+                package['devDependencies'] = {dependency: spec}
+                lock['packages']['']['devDependencies'] = {dependency: spec}
+                lock['packages']['node_modules/' + dependency] = {
+                    'version': component['version'], 'resolved': component['tarball'],
+                    'integrity': component['integrity']}
+                (root / 'package.json').write_text(json.dumps(package))
+                (root / 'package-lock.json').write_text(json.dumps(lock))
+                return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+            state = ReleaseState(root=Path(directory) / 'state')
+            preparer = ReleaseWorkspacePreparer(state, command_runner=runner,
+                                               environment={'CEDAR_HOME': str(cedar_home)})
+            result = preparer.prepare(manifest, Path(directory) / 'attempt')
+            self.assertEqual(component, result['components'][0]['package'])
+            self.assertNotIn('devDependencies', json.loads((cedar_home / 'frontend-main/package.json').read_text()))
+
     REPOSITORY_CONSUMERS = {
         "frontend-main": [("main", "package.json", "package-lock.json")],
         "frontend-workspace": [("workspace", "package.json", "package-lock.json")],
@@ -1485,7 +1562,6 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
         repositories = (
             "cedar-workspace",
             "cedar-template-designer",
-            "cedar-model-typescript-library-demo",
         )
         for repository in repositories:
             with self.subTest(repository=repository), tempfile.TemporaryDirectory() as directory:
@@ -1923,7 +1999,6 @@ class ReleaseBuildValidationTest(unittest.TestCase):
         self.assertEqual([], install_options["openview"])
         self.assertEqual([], install_options["workspace"])
         self.assertEqual([], install_options["template-designer"])
-        self.assertEqual([], install_options["model-typescript-library-demo"])
         self.assertEqual(["--legacy-peer-deps"], install_options["monitoring"])
         self.assertEqual([], install_options["content"])
         self.assertEqual([], install_options["cee-demo-angular"])
@@ -3382,14 +3457,14 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 "packed frontend", tarball.read_bytes(), evidence["runtimeFiles"],
             )
 
-    def test_npm_pack_includes_the_demo_build_proven_by_release_validation(self):
+    def test_npm_pack_includes_a_generated_build_proven_by_release_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
-            root = workspace / "cedar-model-typescript-library-demo"
+            root = workspace / "cedar-generated-npm-surface"
             root.mkdir(parents=True)
             (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
             (root / "package.json").write_text(json.dumps({
-                "name": "cedar-model-typescript-library-demo",
+                "name": "cedar-generated-npm-surface",
                 "version": "2.9.10",
                 "main": "dist/index.js",
                 "files": ["dist"],
@@ -3403,7 +3478,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             log = Path(directory) / "build.log"
             log.write_text("build passed\n", encoding="utf-8")
             build_record = {
-                "id": "release:npm:model-typescript-library-demo:build",
+                "id": "release:npm:generated-npm-surface:build",
                 "buildOutput": str(root / "dist"),
                 "outputFiles": release_train._directory_file_hashes(root / "dist"),
                 "log": str(log),
@@ -3415,9 +3490,9 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 }},
             }, None))
             task = {
-                "id": "npm:release:model-typescript-library-demo",
+                "id": "npm:release:generated-npm-surface",
                 "kind": "npm-release",
-                "repository": "cedar-model-typescript-library-demo",
+                "repository": "cedar-generated-npm-surface",
                 "directory": ".",
                 "version": "2.9.10",
                 "registry": "https://nexus.example/repository/npm/",
@@ -3436,7 +3511,7 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 evidence["runtimeFiles"]["dist/index.js"],
             )
             publisher._verify_npm_tarball_files(
-                "packed demo", tarball.read_bytes(), evidence["runtimeFiles"],
+                "packed surface", tarball.read_bytes(), evidence["runtimeFiles"],
             )
 
 
@@ -3490,6 +3565,13 @@ class NexusCircuitBreakerTest(unittest.TestCase):
         with self.assertRaises(RetryableReleaseError):
             release_train.NexusCircuitBreaker(
                 OfflineNexus(), PREFLIGHT_ENVIRONMENT).require("snapshot publication")
+
+    def test_missing_probe_is_not_reported_as_quota_exhaustion(self):
+        http = FakeNexus(failing={release_train.NEXUS_REPOSITORY_PROBE}, status=404)
+        with self.assertRaises(ReleaseError) as raised:
+            release_train.NexusCircuitBreaker(http, PREFLIGHT_ENVIRONMENT).require('publication')
+        self.assertIn('HTTP 404', str(raised.exception))
+        self.assertNotIn('daily request budget', str(raised.exception))
 
 
 class FakeCompletedProcess:
@@ -3744,6 +3826,14 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertTrue(findings[0].fatal)
         self.assertIn("cannot serve a repository read", findings[0].message)
+
+    def test_missing_repository_probe_is_not_a_quota_diagnosis(self):
+        findings = self._preflight(http=FakeNexus(
+            failing={release_train.NEXUS_REPOSITORY_PROBE}, status=404,
+        )).check_nexus_authorization()
+        self.assertEqual(1, len(findings))
+        self.assertIn('HTTP 404', findings[0].message)
+        self.assertNotIn('daily request budget', findings[0].message)
 
     def test_status_endpoints_alone_no_longer_decide_the_check(self):
         """They stayed green through a total outage, so they cannot be the whole answer."""
@@ -5142,3 +5232,101 @@ class DockerDefaultStampingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseReadinessTest(unittest.TestCase):
+    """Preconditions answerable before a train exists, which is when repairing them is cheap."""
+
+    def _workspace(self, directory):
+        root = Path(directory)
+        ops = root / "cedar-development" / "ops"
+        ops.mkdir(parents=True)
+        return root, ops
+
+    def _write(self, ops, frontend=None, build=None):
+        (ops / "frontend-train.json").write_text(json.dumps(frontend or {}), encoding="utf-8")
+        (ops / "build-train.json").write_text(json.dumps(build or {}), encoding="utf-8")
+
+    def test_a_cee_consumer_manifest_absent_from_the_checkout_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, ops = self._workspace(directory)
+            (root / "cedar-workspace" / ".git").mkdir(parents=True)
+            self._write(ops, frontend={"frontends": [{
+                "repository": "cedar-workspace",
+                "ceeConsumer": {"manifest": "package.json", "lock": "package-lock.json"},
+            }]})
+            frontend = json.loads((ops / "frontend-train.json").read_text())
+
+            findings = cee_consumer_findings(root, frontend)
+
+            self.assertTrue(any("package.json, which is not in the checkout" in f
+                                for f in findings), findings)
+
+    def test_a_duplicated_cee_consumer_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, ops = self._workspace(directory)
+            entry = {"repository": "cedar-component-demo", "manifest": "a/package.json",
+                     "lock": "a/package-lock.json"}
+            self._write(ops, frontend={"additionalCeeConsumers": [entry, dict(entry)]})
+            frontend = json.loads((ops / "frontend-train.json").read_text())
+
+            findings = cee_consumer_findings(root, frontend)
+
+            self.assertTrue(any("declared as a CEE consumer twice" in f for f in findings), findings)
+
+    def test_a_required_artifact_no_module_builds_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, ops = self._workspace(directory)
+            (root / "cedar-parent").mkdir()
+            (root / "cedar-parent" / "pom.xml").write_text(
+                "<project><modules><module>cedar-core-library</module></modules></project>",
+                encoding="utf-8")
+            build = {"requiredArtifacts": ["cedar-core-library", "cedar-invented-library"]}
+
+            findings = required_artifact_findings(root, build)
+
+            self.assertEqual(
+                ["cedar-invented-library is required but no module in the workspace builds it"],
+                findings)
+
+    def test_the_next_version_must_follow_the_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, _ = self._workspace(directory)
+            self.assertTrue(any("does not follow the release" in f
+                                for f in version_findings("2.9.17", "2.9.16-SNAPSHOT", root)))
+            self.assertEqual([], version_findings("2.9.17", "2.9.18-SNAPSHOT", root))
+
+    def test_a_workspace_on_another_version_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, _ = self._workspace(directory)
+            (root / "cedar-parent").mkdir()
+            (root / "cedar-parent" / "pom.xml").write_text(
+                "<project><version>2.9.18-SNAPSHOT</version></project>", encoding="utf-8")
+
+            findings = version_findings("2.9.17", "2.9.18-SNAPSHOT", root)
+
+            self.assertTrue(any("releases 2.9.18 rather than 2.9.17" in f for f in findings),
+                            findings)
+
+
+class PackagingPreflightTest(unittest.TestCase):
+    """Whether a published surface can be packed the way the publisher packs it."""
+
+    def test_a_pack_that_fails_reports_the_thrown_message_not_the_stack_frame(self):
+        class Result:
+            returncode = 1
+            stdout = ("> app@1 prepack\n"
+                      "file:///tmp/throwaway/scripts/stage.mjs:20\n"
+                      "Error: Missing cedar-embeddable-designer bundle. Run npm ci\n")
+            stderr = ""
+
+        self.assertEqual(
+            "Error: Missing cedar-embeddable-designer bundle. Run npm ci",
+            _reason(Result()))
+
+    def test_a_surface_that_is_not_checked_out_is_skipped_rather_than_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            findings = packaging_findings(
+                directory, surfaces=[{"id": "absent", "repository": "nowhere", "directory": "."}])
+
+            self.assertEqual([], findings)

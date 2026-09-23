@@ -50,28 +50,48 @@ class ProdWorker(Worker):
 
     @staticmethod
     def configure_frontends():
+        """Point the three Angular payloads at this host's CEDAR domain.
+
+        Since 2.9.8 these applications compile `cedarDomain` into their bundle from
+        `src/environments/environment.production.ts`, which hardcodes `metadatacenter.org`. There is
+        no staging environment file and no build parameterisation, so a non-production host has to
+        rewrite the built artifact.
+
+        This used to rewrite `window.cedarDomain` in each dist `index.html`. Those files have
+        carried no such declaration since that change, so the command could only ever raise, and it
+        was skipped on every staging deploy in favour of a hand `sed`. Rewriting the bundle is what
+        the hand step did; doing it here is what makes the zero-match guard possible, because a
+        content-hashed filename that a stale command no longer matches is the failure a `sed` cannot
+        report.
+
+        Every other URL is derived: `appConfig.json` templates carry `{{cedarDomain}}` and
+        `AppConfig` substitutes this one value, so the separate content-host rewrite the index.html
+        needed has nothing left to act on.
+        """
         domain = invocation_environment().get(Const.CEDAR_HOST)
         if not domain:
             raise ProdError("CEDAR_HOST is not set. Load the production CEDAR profile first.")
         if not re.fullmatch(r"[A-Za-z0-9.-]+", domain):
             raise ProdError(f"CEDAR_HOST is not a valid hostname suffix: {domain}")
 
-        index_files = ProdWorker.frontend_index_files()
-        missing = [str(path) for _, path in index_files if not path.is_file()]
-        if missing:
-            raise ProdError(f"Cannot configure frontends; missing: {', '.join(missing)}")
+        payload_files = ProdWorker.frontend_payload_files()
 
         configured = []
-        for _, path in index_files:
+        for _, path in payload_files:
             content = path.read_text()
             content, replacement_count = re.subn(
-                r'window\.cedarDomain\s*=\s*"[^"]*"',
-                f'window.cedarDomain = "{domain}"',
+                r'cedarDomain:"[^"]*"',
+                f'cedarDomain:"{domain}"',
                 content,
             )
             if replacement_count == 0:
-                raise ProdError(f"Cannot find window.cedarDomain in {path}")
-            content = content.replace('content.metadatacenter.org/', f'content.{domain}/')
+                raise ProdError(
+                    f"Cannot find a compiled cedarDomain in {path}. The bundle was built without "
+                    f"one, or the property was renamed; do not assume this host is configured.")
+            if replacement_count > 1:
+                raise ProdError(
+                    f"Found {replacement_count} compiled cedarDomain values in {path}; expected "
+                    f"exactly one. Rewriting all of them may not be correct, so stop and look.")
             configured.append((path, content))
 
         temporary_files = []
@@ -82,12 +102,12 @@ class ProdWorker(Worker):
             temporary_files.append((temp_path, path))
         for temp_path, path in temporary_files:
             os.replace(temp_path, path)
-        console.print(f"[green]Configured {len(index_files)} frontend entry points for {domain}.[/green]")
+        console.print(f"[green]Configured {len(payload_files)} frontend payloads for {domain}.[/green]")
         return 0
 
     @staticmethod
     def reset_frontends():
-        for repo_dir, path in ProdWorker.frontend_index_files():
+        for repo_dir, path in ProdWorker.frontend_payload_files():
             if not repo_dir.is_dir():
                 raise ProdError(f"Cannot reset frontend; repository is missing: {repo_dir}")
             relative_path = path.relative_to(repo_dir)
@@ -100,14 +120,31 @@ class ProdWorker(Worker):
                 return result.returncode
         return 0
 
+    FRONTEND_PAYLOAD_REPOS = ('cedar-openview', 'cedar-bridging', 'cedar-monitoring')
+
     @staticmethod
-    def frontend_index_files():
+    def frontend_payload_files():
+        """The one built bundle per Angular payload that carries the compiled configuration.
+
+        The filename is content-hashed, so it changes with the build and cannot be named in advance.
+        Resolve it by glob and insist on exactly one: no match means the payload was never built,
+        and several means a previous build was left beside the current one, where picking either is
+        a guess about which tree nginx serves.
+        """
         cedar_home = Path(Util.cedar_home)
-        return [
-            (cedar_home / 'cedar-openview',
-             cedar_home / 'cedar-openview' / 'cedar-openview-dist' / 'index.html'),
-            (cedar_home / 'cedar-bridging',
-             cedar_home / 'cedar-bridging' / 'cedar-bridging-dist' / 'index.html'),
-            (cedar_home / 'cedar-monitoring',
-             cedar_home / 'cedar-monitoring' / 'cedar-monitoring-dist' / 'index.html'),
-        ]
+        payloads = []
+        for repo in ProdWorker.FRONTEND_PAYLOAD_REPOS:
+            repo_dir = cedar_home / repo
+            dist_dir = repo_dir / f'{repo}-dist'
+            bundles = sorted(dist_dir.glob('main-*.js'))
+            if not bundles:
+                raise ProdError(
+                    f"Cannot configure frontends; no built bundle in {dist_dir}. Expected one "
+                    f"main-*.js file.")
+            if len(bundles) > 1:
+                names = ', '.join(path.name for path in bundles)
+                raise ProdError(
+                    f"Cannot configure frontends; {dist_dir} holds several bundles ({names}). "
+                    f"Remove the stale one so the served payload is unambiguous.")
+            payloads.append((repo_dir, bundles[0]))
+        return payloads

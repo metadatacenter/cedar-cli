@@ -36,11 +36,6 @@ class SplitFrontendRegistrationTest(unittest.TestCase):
             self.assertIn(repo, repos.get_release_all())
             self.assertIn(repo, repos.get_frontends())
 
-        demo = repos.map["cedar-model-typescript-library-demo"]
-        self.assertFalse(demo.skip_from_release)
-        self.assertFalse(demo.allow_different_version)
-        self.assertIn(demo, repos.get_release_all())
-
         self.assertEqual(
             ["cedar-workspace", "cedar-template-designer"],
             [repo.name for repo in repos.get_split_frontends()])

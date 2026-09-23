@@ -17,6 +17,7 @@ from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.GitSync import GitSync
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.Worker import Worker
 
 console = Console()
@@ -137,6 +138,15 @@ class VersionWorker(Worker):
         return "✅"
 
     def get_version_report(self, repo, report: VersionReport):
+        # Every analyzer below opens a source-of-truth file directly, because a registered
+        # repository is expected to exist. A release that registers a new repository breaks that
+        # expectation on every host until someone clones it, and an unguarded open turns the check
+        # into an unhandled FileNotFoundError naming a path, not a repository. Answer it once here,
+        # for all repository types, and let the report say which repositories are missing.
+        if not RepoWorker.get_repo_dir_status(repo):
+            VersionWorker.mark_missing(repo, report)
+            return
+
         if repo.repo_type == RepoType.JAVA_WRAPPER or repo.repo_type == RepoType.JAVA:
             self.analyze_java_wrapper(repo, report)
         elif repo.repo_type == RepoType.ANGULAR_JS or repo.repo_type == RepoType.ANGULAR:
@@ -210,6 +220,11 @@ class VersionWorker(Worker):
     def mark_unknown(repo, report):
         dir_suffix = Util.get_repo_suffix(repo)
         report.add(repo, dir_suffix, '', VersionType.UNKNOWN, '')
+
+    @staticmethod
+    def mark_missing(repo, report: VersionReport):
+        dir_suffix = Util.get_repo_suffix(repo)
+        report.add(repo, dir_suffix, '', VersionType.MISSING, '')
 
     @staticmethod
     def mark_empty(repo, report: VersionReport):

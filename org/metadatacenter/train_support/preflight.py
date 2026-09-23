@@ -6,6 +6,8 @@ from org.metadatacenter.worker.ComponentWorker import (
     COMPONENT_REMEDY, ComponentGateError, ComponentWorker,
 )
 from org.metadatacenter.npm_policy import npm_user_config_findings
+from org.metadatacenter.release_support import packaging as _packaging_component
+from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.NexusCredentials import environment_with_nexus_credentials
 from org.metadatacenter.util.Util import Util
@@ -370,6 +372,23 @@ def _component_preflight():
                          + '; '.join(failures) + f'; {COMPONENT_REMEDY}')
 
 
+def _packaging_preflight():
+    """Require every published npm surface to pack from its own committed tree.
+
+    The train's last npm stage packs a `git archive` of each captured commit, and npm runs the
+    package's prepack script during that pack. A prepack that reads node_modules therefore
+    cannot succeed there however green the repository is locally, and the train learns it
+    twenty minutes in, at the stage that cannot be resumed past. Asking here costs seconds.
+    """
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
+    if not cedar_home:
+        raise ValueError('CEDAR_HOME is not set')
+    try:
+        _packaging_component.packaging_preflight(cedar_home)
+    except ReleaseError as error:
+        raise ValueError(str(error)) from error
+
+
 def _preflight(selected, resume):
     source_path = f'trains/{selected}.json'
     try:
@@ -424,6 +443,7 @@ def _preflight(selected, resume):
             'source repositories hold work the train cannot see: ' + '; '.join(open_work))
     settle(_component_preflight)
     settle(_npm_configuration_preflight)
+    settle(_packaging_preflight)
     if findings:
         raise ValueError(_preflight_failure(findings, remote_checked=False))
 
