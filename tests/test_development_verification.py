@@ -58,6 +58,22 @@ class DevelopmentVerificationTest(unittest.TestCase):
         self.assertEqual(2,self.acceptance._remote_state_still_holds.call_count)
         self.runner.assert_not_called()
 
+    def test_only_pending_repositories_are_polled_again(self):
+        self.repository('ready')
+        self.repository('waiting')
+        verifier = self.verifier([[self.run_record()],
+            [self.run_record(status='in_progress',conclusion=None)], [self.run_record()]])
+        verify_active_development(self.state,verifier)
+        self.assertEqual(['ready','waiting','waiting'],
+                         [call.args[0] for call in verifier.probe.call_args_list])
+
+    def test_wall_clock_deadline_prevents_another_poll(self):
+        self.repository('example')
+        verifier = self.verifier([[]],timeout=1,clock=Mock(side_effect=[0,2]))
+        with self.assertRaisesRegex(ReleaseError,'time limit'):
+            verify_active_development(self.state,verifier)
+        verifier.probe.assert_not_called()
+
     def test_failed_ci_stops_immediately_and_preserves_failure(self):
         self.repository('example')
         verifier = self.verifier([[self.run_record(conclusion='failure')]])

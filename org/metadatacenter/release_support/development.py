@@ -15,13 +15,21 @@ AGGREGATORS = {'cedar-libraries': 'ci.yml', 'cedar-project': 'ci.yml'}
 
 class DevelopmentVerifier:
     def __init__(self, state, *, acceptance=None, runner=None, probe=None, sleeper=time.sleep,
-                 polls=90, delay=20, environment=None):
+                 polls=90, delay=20, timeout=1800, clock=time.monotonic, environment=None):
         self.state = state
         self.environment = dict(invocation_environment() if environment is None else environment)
         self.acceptance = acceptance or ReleaseAcceptance(state, environment=self.environment)
-        self.runner = runner or subprocess.run
+        self.runner = runner or self._command
         self.probe = probe or probe_exact_commit
         self.sleeper, self.polls, self.delay = sleeper, polls, delay
+        self.timeout, self.clock = timeout, clock
+
+    @staticmethod
+    def _command(*args, **kwargs):
+        try:
+            return subprocess.run(*args, **kwargs, timeout=60)
+        except subprocess.TimeoutExpired as error:
+            raise OSError('GitHub verification request exceeded 60 seconds') from error
 
     def save(self, evidence):
         self.state.update_current_manifest({'developmentVerification': copy.deepcopy(evidence)})
@@ -57,17 +65,25 @@ class DevelopmentVerifier:
             if result.returncode:
                 raise ReleaseError(f'{repo} verification dispatch has an uncertain outcome; '
                     'resume to reconcile its exact-commit workflow run before dispatching again')
+        deadline = self.clock() + self.timeout
+        complete = set()
         for attempt in range(self.polls):
             pending = []
             failures = []
             for record in records.values():
                 repo, revision = record['repository'], record['develop']['commit']
+                if repo in complete:
+                    continue
+                if self.clock() >= deadline:
+                    self.save(evidence)
+                    raise ReleaseError('Next-development CI is still pending at the time limit; use release resume')
                 if not (workspace / repo).is_dir():
                     raise ReleaseError(f'Missing prepared development repository: {repo}')
                 workflows = workspace / repo / '.github' / 'workflows'
                 if not any(workflows.glob('*.y*ml')):
                     evidence['repositories'][repo] = {'revision': revision, 'status': 'no-workflow',
                         'reason': 'No workflow in the prepared source; release build gates apply'}
+                    complete.add(repo)
                     continue
                 try:
                     probe = self.probe(repo, revision, runner=self.runner, environment=self.environment,
@@ -91,6 +107,9 @@ class DevelopmentVerifier:
                      'conclusion': r.get('conclusion')} for r in latest.values()]}
                 if not latest:
                     pending.append(f'{repo}: waiting for exact-commit CI')
+                if latest and all(r.get('status') == 'completed' and
+                        r.get('conclusion') in {'success', 'skipped', 'neutral'} for r in latest.values()):
+                    complete.add(repo)
                 for name, run in latest.items():
                     if run.get('status') != 'completed':
                         pending.append(f'{repo} {name}: {run.get("status")}')
@@ -107,7 +126,7 @@ class DevelopmentVerifier:
                 return evidence
             console.print(f'Development CI: {len(pending)} pending; ' + '; '.join(pending), markup=False)
             if attempt + 1 < self.polls:
-                self.sleeper(self.delay)
+                self.sleeper(max(0, min(self.delay, deadline - self.clock())))
         raise ReleaseError('Next-development CI is still pending after bounded waiting; '
                            'release resume continues verification without rebuilding or redispatching')
 
