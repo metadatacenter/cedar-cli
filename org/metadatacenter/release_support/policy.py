@@ -206,8 +206,8 @@ MAVEN_GENERATED_VERSION_FILES = {
 }
 
 
-from org.metadatacenter.frontend_inventory import release_surfaces
-FRONTEND_BUILD_SURFACES = release_surfaces()
+from org.metadatacenter.frontend_inventory import ReleaseSurfaces
+FRONTEND_BUILD_SURFACES = ReleaseSurfaces()
 
 
 MAVEN_RELEASE_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/releases/"

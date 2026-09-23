@@ -31,3 +31,15 @@ def integration_inputs(repository):
     module, config = inventory()
     row = next(row for row in module.surfaces(config) if row['repository'] == repository)
     return row.get('integrationInputs', [])
+
+
+class ReleaseSurfaces:
+    """Load only when release planning needs the inventory, not during CLI startup."""
+    def __iter__(self):
+        return iter(release_surfaces())
+
+    def __len__(self):
+        return len(release_surfaces())
+
+    def __getitem__(self, index):
+        return release_surfaces()[index]

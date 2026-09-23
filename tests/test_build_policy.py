@@ -31,6 +31,11 @@ class BuildPolicyTest(unittest.TestCase):
         contexts = ExitStack()
         self.addCleanup(contexts.close)
         contexts.enter_context(use_context(InvocationContext(environment=os.environ)))
+        # Plan-only fixtures point CEDAR_HOME at a synthetic path. Supply the real
+        # recipe data explicitly rather than weakening missing-inventory validation.
+        from org.metadatacenter.frontend_inventory import inventory
+        recipes = inventory()
+        contexts.enter_context(patch('org.metadatacenter.frontend_inventory.inventory', return_value=recipes))
         GlobalContext.init_task_operators()
         self.runner = CliRunner()
 
@@ -42,6 +47,15 @@ class BuildPolicyTest(unittest.TestCase):
                 result.extend(task.command_list)
             result.extend(BuildPolicyTest.commands(task))
         return result
+
+    def test_release_policy_import_does_not_require_a_populated_workspace(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as home:
+            result = subprocess.run([sys.executable, '-c',
+                'from org.metadatacenter.release_support import policy'],
+                env={**os.environ, 'CEDAR_HOME':home}, text=True, capture_output=True)
+        self.assertEqual(0,result.returncode,result.stderr)
 
     @patch.object(build.plan_executor, "execute")
     def test_java_build_runs_tests_by_default(self, execute):

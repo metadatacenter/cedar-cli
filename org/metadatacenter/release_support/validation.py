@@ -109,6 +109,7 @@ class ReleaseBuildValidator:
                         "id": self._task_id(variant, "npm", surface["id"], f"verify-{index}"),
                         "variant": variant,
                         "kind": "frontend-verification",
+                        "environmentDefaults": surface.get("verificationDefaults", {}),
                         "repository": surface["repository"],
                         "cwd": str(root),
                         "command": command,
@@ -182,6 +183,11 @@ class ReleaseBuildValidator:
         environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] = "true"
         environment["CI"] = "true"
         environment["NG_CLI_ANALYTICS"] = "false"
+        for key, value in task.get('environmentDefaults', {}).items():
+            environment.setdefault(key, value)
+        environment['CEDAR_VERSION'] = manifest['versionPreparation'][task['variant']]['version']
+        environment['CEDAR_VERSION_MODIFIER'] = ''
+
         started = dt.datetime.now(dt.timezone.utc).isoformat()
         guarded_maven = task.get("kind") == "maven" and task.get("tests") is True
         if guarded_maven:
