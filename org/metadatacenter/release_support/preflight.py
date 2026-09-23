@@ -612,9 +612,13 @@ class ReleasePreflight:
             ]
             if repository in self.manifest.get("releaseRepositories", []):
                 references.append(f"refs/heads/release/post-{next_version}")
-            code, output, _ = self._capture([
+            code, output, stderr = self._capture([
                 "git", "-C", str(root), "ls-remote", "--refs", "origin", *references])
-            if code == 0 and output:
+            if code != 0:
+                findings.append(PreflightFinding(
+                    "version", "fail", f"cannot verify unused release refs in {repository}: "
+                    + (stderr.splitlines()[-1] if stderr else "remote read failed")))
+            elif output:
                 findings.append(PreflightFinding(
                     "version", "fail",
                     f"{repository} already carries release-{version} target ref(s): "
