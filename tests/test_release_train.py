@@ -4885,6 +4885,19 @@ class ReleaseSnapshotOrderingTest(unittest.TestCase):
             names.index("snapshots"), names.index("remotes"),
             "a develop push whose snapshots are not yet published sends CI looking for them")
 
+    def test_new_snapshot_policy_reuses_only_next_development_build_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _, _, manifest = ReleaseArtifactPublicationTest().make_release(directory)
+            manifest["reuseValidatedMavenCache"] = True
+            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+            tasks = publisher.snapshot_tasks(manifest)
+            for task in tasks:
+                if task['kind'] == 'maven-snapshot-deploy':
+                    repo = next(arg for arg in task['command'] if arg.startswith('-Dmaven.repo.local='))
+                    self.assertIn('/build-cache/nextDevelopment/m2/repository', repo)
+                    self.assertIn('deploy', task['command'])
+                    self.assertNotIn('clean', task['command'])
+
     def test_the_snapshot_plan_does_not_need_the_remotes_to_have_been_integrated(self):
         """This is what lets the stage run first: it binds to the verified local ref."""
         with tempfile.TemporaryDirectory() as directory:

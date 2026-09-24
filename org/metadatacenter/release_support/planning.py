@@ -505,6 +505,7 @@ class ReleasePlanner:
             "mavenRepositories": maven_repositories,
             "mavenPhases": maven_phases,
             "buildConcurrency": {"jobs": 2, "workers": 4, "mavenThreads": 2},
+            "reuseValidatedMavenCache": True,
             "publicationPlan": publication_plan,
             "dockerFrontendDefaults": docker_frontend_defaults,
             "componentWiring": component_wiring,

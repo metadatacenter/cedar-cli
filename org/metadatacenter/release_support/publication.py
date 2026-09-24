@@ -206,6 +206,9 @@ class ReleaseArtifactPublisher:
         )
         attempt = Path(manifest["frontendPreparation"]["workspace"]).parent
         tasks = []
+        local_repository = (attempt / "build-cache" / "nextDevelopment" / "m2" / "repository"
+                            if manifest.get("reuseValidatedMavenCache") else
+                            attempt / "publication-cache" / "m2" / "repository")
         for phase in phases:
             prepared = self._local_ref_record(manifest, "nextDevelopment", phase["repository"])
             root = next_workspace / phase["repository"]
@@ -221,7 +224,7 @@ class ReleaseArtifactPublisher:
                 "expectedTree": prepared["tree"],
                 "command": [
                     str(root / "mvnw"), "--batch-mode", "--no-transfer-progress",
-                    f"-Dmaven.repo.local={attempt / 'publication-cache' / 'm2' / 'repository'}",
+                    f"-Dmaven.repo.local={local_repository}",
                     "deploy", "-DskipTests", "-DretryFailedDeploymentCount=3",
                     *(["-T", str(manifest["buildConcurrency"]["mavenThreads"])]
                       if manifest.get("buildConcurrency", {}).get("mavenThreads", 1) > 1 else []),
