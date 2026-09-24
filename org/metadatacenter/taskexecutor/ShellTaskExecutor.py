@@ -80,7 +80,8 @@ class ShellTaskExecutor(TaskExecutor):
                             commands_to_execute = reactor.install_commands(commands_to_execute)
                         workers = current_context().settings.build_workers
                         environment.update({'CEDAR_TEST_WORKERS': str(workers),
-                                            'NG_BUILD_MAX_WORKERS': str(workers)})
+                                            'NG_BUILD_MAX_WORKERS': str(workers),
+                                            'VITEST_MAX_WORKERS': str(workers)})
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
                         code = self._execute_commands(

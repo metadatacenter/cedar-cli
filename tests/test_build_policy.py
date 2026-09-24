@@ -1,4 +1,4 @@
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import re
 import os
 import tempfile
@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
 
-from org.metadatacenter.util.InvocationContext import InvocationContext, use_context
+from org.metadatacenter.util.InvocationContext import InvocationContext, use_context, current_context
 from org.metadatacenter import build, clean_maven, publish
 from org.metadatacenter.config.ReposFactory import ReposFactory
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
@@ -40,12 +40,12 @@ class BuildPolicyTest(unittest.TestCase):
         self.runner = CliRunner()
 
     @staticmethod
-    def commands(plan):
+    def commands(plan, repository=None):
         result = []
         for task in plan.tasks:
-            if task.command_list:
+            if task.command_list and (repository is None or getattr(getattr(task, "repo", None), "name", None) == repository):
                 result.extend(task.command_list)
-            result.extend(BuildPolicyTest.commands(task))
+            result.extend(BuildPolicyTest.commands(task, repository))
         return result
 
     def test_release_policy_import_does_not_require_a_populated_workspace(self):
@@ -94,15 +94,15 @@ class BuildPolicyTest(unittest.TestCase):
             commands = self.commands(execute.call_args.args[0])
             self.assertIn("npm run build", commands)
             self.assertIn("npm ci", commands)
-            self.assertEqual(not skipped, "npm run test:coverage" in commands)
-            self.assertEqual(not skipped, "npm run parity:yaml" in commands)
+            model_commands = self.commands(execute.call_args.args[0], "cedar-model-typescript-library")
+            self.assertEqual(not skipped, "npm run test:ci" in model_commands)
             maven = [c for c in commands if c.startswith("./mvnw clean install")]
             self.assertTrue(maven)
             self.assertTrue(all(("-DskipTests" in c) == skipped for c in maven))
         # A previous compile-only command must not weaken the full reactor contract.
         result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("npm run test:coverage", self.commands(execute.call_args.args[0]))
+        self.assertIn("npm run test:ci", self.commands(execute.call_args.args[0], "cedar-model-typescript-library"))
 
     def test_test_option_is_only_on_commands_that_can_reach_java(self):
         for command in (
@@ -251,6 +251,29 @@ class BuildPolicyTest(unittest.TestCase):
 
         self.assertEqual(7, return_code)
         self.assertEqual(2, execute.call_count)
+
+    def test_frontend_worker_budget_overrides_inherited_runner_limits(self):
+        executor = ShellTaskExecutor()
+        task = SimpleNamespace(
+            node_id=3, repo=SimpleNamespace(name="frontend", repo_type="TYPESCRIPT"),
+            command_list=["npm run test:ci"],
+            get_parameter=lambda name: name == "isolated_frontend_build",
+        )
+        current_context().settings.build_workers = 3
+        module = "org.metadatacenter.taskexecutor.ShellTaskExecutor"
+        with ExitStack() as stack:
+            stack.enter_context(patch(module + ".Util.get_wd", return_value="/tmp/source"))
+            stack.enter_context(patch(module + ".is_frontend_build", return_value=False))
+            stack.enter_context(patch(module + ".reactor_evidence.begin"))
+            stack.enter_context(patch(module + ".reactor.resolve", return_value=[]))
+            stack.enter_context(patch(module + ".reactor.prepare_checks", return_value=[]))
+            stack.enter_context(patch(module + ".isolated_frontend_workspace", return_value=
+                nullcontext((Path("/tmp/copy"), {"VITEST_MAX_WORKERS": "99"}, []))))
+            execute = stack.enter_context(patch.object(executor, "_execute_commands", return_value=1))
+            self.assertEqual(1, executor.execute_shell_command_list(task, Mock(), dry_run=False))
+        environment = execute.call_args.args[-1]
+        for variable in ("CEDAR_TEST_WORKERS", "NG_BUILD_MAX_WORKERS", "VITEST_MAX_WORKERS"):
+            self.assertEqual("3", environment[variable])
 
     def test_test_bearing_maven_task_checks_for_mongods_before_and_after(self):
         executor = ShellTaskExecutor()
