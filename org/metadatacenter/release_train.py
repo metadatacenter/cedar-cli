@@ -241,6 +241,7 @@ from org.metadatacenter.release_support.transport import (
     _raise_command_failure,
 )
 
+from org.metadatacenter.release_support.scheduling import build_edges
 from org.metadatacenter.release_support.validation import (
     ReleaseBuildValidator,
 )
