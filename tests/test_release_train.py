@@ -1968,6 +1968,10 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             next_maven = next(
                 task for task in tasks if task["id"] == "nextDevelopment:maven:parent"
             )
+            manifest["buildConcurrency"] = {"mavenThreads": 2}
+            threaded = validator.tasks(manifest)
+            self.assertTrue(all(t["command"][-2:] == ["-T", "2"] or "-T" in t["command"]
+                                for t in threaded if t["kind"] == "maven"))
             self.assertNotIn("-DskipTests", release_maven["command"])
             self.assertIn("-DskipTests", next_maven["command"])
             self.assertTrue(release_maven["tests"])

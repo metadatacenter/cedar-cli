@@ -223,6 +223,8 @@ class ReleaseArtifactPublisher:
                     str(root / "mvnw"), "--batch-mode", "--no-transfer-progress",
                     f"-Dmaven.repo.local={attempt / 'publication-cache' / 'm2' / 'repository'}",
                     "deploy", "-DskipTests", "-DretryFailedDeploymentCount=3",
+                    *(["-T", str(manifest["buildConcurrency"]["mavenThreads"])]
+                      if manifest.get("buildConcurrency", {}).get("mavenThreads", 1) > 1 else []),
                 ],
             })
         tasks.append({

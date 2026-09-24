@@ -51,6 +51,9 @@ class ReleaseBuildValidator:
         phases = manifest.get("mavenPhases")
         if not isinstance(phases, list) or not phases:
             raise ReleaseError("release manifest has no ordered Maven build phases")
+        threads = manifest.get("buildConcurrency", {}).get("mavenThreads", 1)
+        if not isinstance(threads, int) or not 1 <= threads <= 8:
+            raise ReleaseError("Maven threads must be between 1 and 8")
         tasks = []
         attempt = Path(manifest["frontendPreparation"]["workspace"]).parent
         for variant in ("release", "nextDevelopment"):
@@ -73,6 +76,8 @@ class ReleaseBuildValidator:
                     "clean",
                     "install",
                 ]
+                if threads > 1:
+                    command.extend(["-T", str(threads)])
                 if variant == "nextDevelopment":
                     command.append("-DskipTests")
                 tasks.append({
