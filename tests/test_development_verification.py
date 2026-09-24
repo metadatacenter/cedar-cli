@@ -1,4 +1,6 @@
 import copy
+import itertools
+import threading
 import datetime as dt
 from pathlib import Path
 import tempfile
@@ -67,9 +69,26 @@ class DevelopmentVerificationTest(unittest.TestCase):
         self.assertEqual(['ready','waiting','waiting'],
                          [call.args[0] for call in verifier.probe.call_args_list])
 
+    def test_probes_overlap_without_writing_release_state_from_workers(self):
+        self.repository('one'); self.repository('two')
+        barrier = threading.Barrier(2)
+        owner = threading.get_ident()
+        original = self.state.update_current_manifest
+        def update(change):
+            self.assertEqual(owner, threading.get_ident())
+            return original(change)
+        self.state.update_current_manifest = update
+        def probe(*args, **kwargs):
+            barrier.wait(timeout=5)
+            return SimpleNamespace(runs=(self.run_record(),))
+        verifier = DevelopmentVerifier(self.state, acceptance=self.acceptance,
+            runner=self.runner, probe=probe, environment={})
+        verify_active_development(self.state, verifier)
+        self.assertEqual('development-verified', self.state.manifest['phase'])
+
     def test_wall_clock_deadline_prevents_another_poll(self):
         self.repository('example')
-        verifier = self.verifier([[]],timeout=1,clock=Mock(side_effect=[0,2]))
+        verifier = self.verifier([[]],timeout=1,clock=Mock(side_effect=itertools.chain([0], itertools.repeat(2))))
         with self.assertRaisesRegex(ReleaseError,'time limit'):
             verify_active_development(self.state,verifier)
         verifier.probe.assert_not_called()

@@ -1,5 +1,6 @@
 """Verify next-development artifacts and exact integrated CI before accepting a release."""
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import datetime as dt
 from pathlib import Path
 import subprocess
@@ -70,6 +71,21 @@ class DevelopmentVerifier:
         for attempt in range(self.polls):
             pending = []
             failures = []
+            candidates = [(record['repository'], record['develop']['commit'])
+                          for record in records.values()
+                          if record['repository'] not in complete
+                          and any((workspace / record['repository'] / '.github' / 'workflows').glob('*.y*ml'))]
+            def probe_one(item):
+                repo, revision = item
+                if self.clock() >= deadline:
+                    return ReleaseError('Next-development CI is still pending at the time limit; use release resume')
+                try:
+                    return self.probe(repo, revision, runner=self.runner, environment=self.environment,
+                                      delays=(), reporter=None)
+                except GithubCIProbeError as error:
+                    return error
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                probes = dict(zip(candidates, pool.map(probe_one, candidates)))
             for record in records.values():
                 repo, revision = record['repository'], record['develop']['commit']
                 if repo in complete:
@@ -86,8 +102,9 @@ class DevelopmentVerifier:
                     complete.add(repo)
                     continue
                 try:
-                    probe = self.probe(repo, revision, runner=self.runner, environment=self.environment,
-                                       delays=(), reporter=None)
+                    probe = probes[(repo, revision)]
+                    if isinstance(probe, Exception):
+                        raise probe
                 except GithubCIProbeError as error:
                     raise ReleaseError(str(error)) from error
                 runs = [r for r in probe.runs if r.get('head_sha') == revision
