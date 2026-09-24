@@ -1,7 +1,11 @@
 """Stream an owned subprocess; keep shell interpretation explicit at the call site."""
-from org.metadatacenter.util.InvocationContext import process_environment
+from org.metadatacenter.util.InvocationContext import (
+    process_environment, process_cancellation, cancellation_requested,
+)
 import os
 import signal
+import select
+import threading
 import subprocess
 import sys
 
@@ -71,6 +75,29 @@ def _set_foreground(group):
         signal.signal(signal.SIGTTOU, previous)
 
 
+def _output_lines(process):
+    # Poll even a silent subprocess so Ctrl-C can cancel every scheduler worker.
+    if process_cancellation.get() is None:
+        yield from iter(process.stdout.readline, b'')
+        return
+    pending = b''
+    while True:
+        if cancellation_requested():
+            raise InterruptedError('Build cancelled')
+        ready, _, _ = select.select([process.stdout], [], [], 0.2)
+        if not ready:
+            continue
+        chunk = os.read(process.stdout.fileno(), 65536)
+        if not chunk:
+            if pending:
+                yield pending
+            return
+        pending += chunk
+        while b'\n' in pending:
+            line, pending = pending.split(b'\n', 1)
+            yield line
+
+
 def run_process(argv, *, cwd=None, env=None, on_line=None):
     """Execute literal arguments and reap the process even when streaming is interrupted.
 
@@ -81,7 +108,7 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
     if isinstance(argv, (str, bytes)) or not argv:
         raise ValueError('Process arguments must be a nonempty sequence, not a shell string')
     foreground = None
-    if os.isatty(0) and os.tcgetpgrp(0) == os.getpgrp():
+    if threading.current_thread() is threading.main_thread() and os.isatty(0) and os.tcgetpgrp(0) == os.getpgrp():
         foreground = os.getpgrp()
     process = _spawn(list(argv), cwd=cwd, env=process_environment(env))
     lines = []
@@ -93,21 +120,38 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
                 os.killpg(process.pid, signal.SIGCONT)
             except ProcessLookupError:
                 pass
-        for raw in iter(process.stdout.readline, b''):
+        for raw in _output_lines(process):
             line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
             if line.strip():
                 lines.append(line)
                 if on_line is not None:
                     on_line(line)
-        return CommandOutput(lines, process.wait())
+        if process_cancellation.get() is None:
+            return CommandOutput(lines, process.wait())
+        while True:
+            if cancellation_requested():
+                raise InterruptedError('Build cancelled')
+            try:
+                return CommandOutput(lines, process.wait(timeout=0.2))
+            except subprocess.TimeoutExpired:
+                continue
     except BaseException:
         # Streaming cannot continue, so terminate the entire owned group before
         # reaping. Do not let a shell's child keep writing to an abandoned pipe.
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-        process.wait()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
         raise
     finally:
         process.stdout.close()

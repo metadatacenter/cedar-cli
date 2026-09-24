@@ -1,4 +1,5 @@
 import time
+import re
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from rich.progress import Progress
 from rich.style import Style
 
 from org.metadatacenter import reactor, reactor_evidence
+from org.metadatacenter.build_scheduler import record_timing
+from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
@@ -75,6 +78,9 @@ class ShellTaskExecutor(TaskExecutor):
                             job_progress.print(
                                 "Reactor: " + ", ".join(resolved), markup=False)
                             commands_to_execute = reactor.install_commands(commands_to_execute)
+                        workers = current_context().settings.build_workers
+                        environment.update({'CEDAR_TEST_WORKERS': str(workers),
+                                            'NG_BUILD_MAX_WORKERS': str(workers)})
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
                         code = self._execute_commands(
@@ -140,15 +146,21 @@ class ShellTaskExecutor(TaskExecutor):
             title_align="left"),
             style=Style(color="bright_cyan"))
 
+        stages = []
         def report(line):
+            match = re.fullmatch(r"\[gate\] ([\w-]+): exit (-?\d+), ([\d.]+)s", line)
+            if match:
+                stages.append({"stage": match[1], "exitCode": int(match[2]), "seconds": float(match[3])})
             job_progress.print(line, markup=False)
             job_progress.update(1, advance=1)
 
+        started = time.monotonic()
         stdout_parts = run_shell(
             command, shell=GlobalContext.get_shell(), cwd=cwd,
             env=environment, on_line=report,
         )
         return_code = stdout_parts.returncode
+        record_timing(repo.name, command, started, return_code, stages)
         description = describe_subprocess_failure(return_code)
         if return_code < 0 and not stdout_parts:
             description += "; the process produced no diagnostic output of its own"

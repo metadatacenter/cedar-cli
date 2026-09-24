@@ -16,6 +16,7 @@ from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_re
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
+from org.metadatacenter.util.InvocationContext import default_build_workers
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.smoke_gate import run_smoke
@@ -25,6 +26,16 @@ app.add_typer(maven.app, name="maven", help="Maven cache operations...")
 
 plan_executor = PlanExecutor()
 console = Console()
+
+@app.callback()
+def concurrency(
+    jobs: int = typer.Option(2, min=1, max=16, help="Concurrent frontend repositories or Maven reactor threads; 1 is serial."),
+    workers: int = typer.Option(default_build_workers(), min=1, max=16, help="Worker budget within each frontend repository."),
+):
+    from org.metadatacenter.util.InvocationContext import current_context
+    current_context().settings.build_jobs = jobs
+    current_context().settings.build_workers = workers
+
 
 JAVA_TESTS_OPTION_HELP = "Run Java test suites. Default: run."
 
@@ -50,23 +61,26 @@ def frontend_input_roots(plan):
 
 
 # Profiles and frontend configuration live in this mixed-purpose repository.
-# Backend audits, repairs and documentation are not frontend build inputs.
+# Backend audits, repairs and documentation are not build inputs, for Java either.
 FRONTEND_DEVELOPMENT_INPUTS = (
     'bin', 'ops/frontend-train.json', 'ops/frontend_inventory.py',
     'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
+    'ops/build-native-split-frontend.sh', 'ops/write-native-frontend-build-info.mjs',
 )
 
 
 def capture_build_state(home: Path, frontend_only: bool):
     state = capture_estate_state(home)
     development = (home / 'cedar-development').resolve()
-    if frontend_only and development in state:
+    if development in state:
         state[development] = tracked_path_state(development, FRONTEND_DEVELOPMENT_INPUTS)
     return state
 
 
 def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
     """Run a build while proving it did not add or alter tracked workspace changes."""
+    from org.metadatacenter.util.InvocationContext import current_context
+    plan.build_jobs = current_context().settings.build_jobs
     if dry_run or dump_plan:
         return plan_executor.execute(plan, dry_run, dump_plan)
     try:

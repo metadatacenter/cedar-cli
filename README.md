@@ -142,3 +142,14 @@ a frontend, and `--prune-baseline` after fixing existing findings. Spacing and
 geometry remain advisory. The implementation and CI contract live in
 `cedar-design-tokens/tools/check_adoption.py`; that repository's README explains
 exceptions, scope and rollout.
+
+### Build concurrency
+
+`cedarcli build --jobs 2 --workers 2 frontends` schedules independent isolated repositories
+from their package and integration-test dependencies. Repository concurrency defaults to two; workers default to half the detected CPUs,
+at least one and capped at eight. Use
+`--jobs 1 --workers 1` for serial diagnosis. Full frontend deployment and smoke gates remain
+mandatory. `cedarcli build --jobs 2 java` uses Maven's dependency-aware module scheduling,
+while preserving the parent → libraries → project → clients order and serial tests within
+individual JVMs. Options belong before the build target. Command timings and task results
+are saved to `$CEDAR_HOME/.cedar/build-reports/`, including failures.

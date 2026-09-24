@@ -1,3 +1,4 @@
+from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.TaskType import TaskType
@@ -8,16 +9,21 @@ class BuildShellTaskFactory:
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def maven_command():
+        jobs = current_context().settings.build_jobs
+        return './mvnw clean install' + (f' -T {jobs}' if jobs > 1 else '')
+
     @classmethod
     def maven_clean_install(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Maven clean install", TaskType.SHELL, repo)
-        task.command_list = ['./mvnw clean install']
+        task.command_list = [cls.maven_command()]
         return task
 
     @classmethod
     def maven_clean_install_skip_tests(cls, repo: Repo) -> PlanTask:
         task = PlanTask("Maven clean install skip tests", TaskType.SHELL, repo)
-        task.command_list = ['./mvnw clean install -DskipTests']
+        task.command_list = [cls.maven_command() + ' -DskipTests']
         return task
 
     @classmethod
