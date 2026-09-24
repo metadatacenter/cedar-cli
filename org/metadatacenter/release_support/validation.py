@@ -188,6 +188,11 @@ class ReleaseBuildValidator:
         environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] = "true"
         environment["CI"] = "true"
         environment["NG_CLI_ANALYTICS"] = "false"
+        workers = manifest.get("buildConcurrency", {}).get("workers", 4)
+        if not isinstance(workers, int) or not 1 <= workers <= 16:
+            raise ReleaseError("Frontend workers must be between 1 and 16")
+        for variable in ("CEDAR_TEST_WORKERS", "VITEST_MAX_WORKERS", "NG_BUILD_MAX_WORKERS"):
+            environment[variable] = str(workers)
         for key, value in task.get('environmentDefaults', {}).items():
             environment.setdefault(key, value)
         environment['CEDAR_VERSION'] = manifest['versionPreparation'][task['variant']]['version']

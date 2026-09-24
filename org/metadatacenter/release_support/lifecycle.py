@@ -80,36 +80,49 @@ def validate_active_release_builds(
         "buildValidation": evidence,
         "failure": None,
     })
-    for task in tasks:
-        if task["id"] in completed:
-            continue
-        task = {**task, "evidenceAttempt": evidence["attempt"]}
-        evidence["inProgressTask"] = task["id"]
-        state.update_current_manifest({
-            "phase": "validating-builds",
-            "buildValidation": evidence,
-            "failure": None,
-        })
-        console.print(
-            f"Build {len(completed) + 1}/{len(tasks)}: {task['id']}", markup=False)
+    from org.metadatacenter.build_scheduler import run_graph
+    from org.metadatacenter.release_support.scheduling import build_edges
+    pending = [{**task, "evidenceAttempt": evidence["attempt"]}
+               for task in tasks if task["id"] not in completed]
+    jobs = manifest.get("buildConcurrency", {}).get("jobs", 1)
+    if not isinstance(jobs, int) or not 1 <= jobs <= 4:
+        raise ReleaseError("Release build jobs must be between 1 and 4")
+    records, failures, active = {}, {}, set()
+
+    def run(task):
         try:
-            record = validator.run_task(manifest, task)
-        except ReleaseError as error:
+            records[task["id"]] = validator.run_task(manifest, task)
+            return 0
+        except Exception as error:
+            failures[task["id"]] = error
+            return 1
+
+    def status(index, outcome):
+        # run_graph calls this only on its coordinator, never a worker.
+        task = pending[index]
+        identity = task["id"]
+        if outcome == "running":
+            active.add(identity)
+            console.print(f"Build: {identity}", markup=False)
+        else:
+            active.discard(identity)
+        if outcome == "passed":
+            completed[identity] = records[identity]
+        if outcome == "failed":
             evidence["failedTask"] = validator.failed_task_evidence(manifest, task)
-            state.update_current_manifest({
-                "phase": "build-validation-failed",
-                "buildValidation": evidence,
-                "failure": str(error),
-            })
-            raise
-        completed[task["id"]] = record
-        evidence.pop("failedTask", None)
-        evidence.pop("inProgressTask", None)
-        state.update_current_manifest({
-            "phase": "validating-builds",
-            "buildValidation": evidence,
-            "failure": None,
-        })
+        evidence["inProgressTasks"] = sorted(active)
+        evidence["inProgressTask"] = next(iter(sorted(active)), None)
+        state.update_current_manifest({"phase": "validating-builds", "buildValidation": evidence})
+
+    run_graph(pending, build_edges(pending), run, jobs, on_status=status)
+    if failures:
+        message = "; ".join(f"{name}: {error}" for name, error in sorted(failures.items()))
+        state.update_current_manifest({"phase": "build-validation-failed",
+                                       "buildValidation": evidence, "failure": message})
+        raise ReleaseError(message)
+    evidence.pop("failedTask", None)
+    evidence.pop("inProgressTask", None)
+    evidence.pop("inProgressTasks", None)
     evidence["completedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
     completed_manifest, _ = state.update_current_manifest({
         "phase": "builds-validated",

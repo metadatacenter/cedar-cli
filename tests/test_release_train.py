@@ -2139,6 +2139,34 @@ class ReleaseBuildValidationTest(unittest.TestCase):
                 2, len(completed["buildValidation"]["completedTasks"]),
             )
 
+    def test_parallel_failure_drains_and_records_successful_sibling_for_resume(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory)
+            manifest["buildConcurrency"] = {"jobs": 2, "workers": 2}
+            state = ReleaseState(root=Path(directory) / "state")
+            state.start(manifest)
+            state.update_current_manifest({"phase": "versions-prepared"})
+            barrier = threading.Barrier(2)
+            def execute(task, environment):
+                self.assertEqual("2", environment["VITEST_MAX_WORKERS"])
+                barrier.wait(timeout=5)
+                if task["variant"] == "nextDevelopment":
+                    raise ReleaseError("parallel failure")
+                return "passed"
+            with self.assertRaisesRegex(ReleaseError, "parallel failure"):
+                validate_active_release_builds(state, ReleaseBuildValidator(state, executor=execute))
+            failed, _ = state.read_current_manifest()
+            self.assertEqual("build-validation-failed", failed["phase"])
+            self.assertEqual(["release:maven:parent"], list(failed["buildValidation"]["completedTasks"]))
+            self.assertEqual([], failed["buildValidation"]["inProgressTasks"])
+            calls = []
+            def resume(task, environment):
+                calls.append(task["id"])
+                return "passed"
+            validate_active_release_builds(state, ReleaseBuildValidator(state, executor=resume))
+            self.assertEqual(["nextDevelopment:maven:parent"], calls)
+
     def test_changed_completed_log_blocks_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = self.make_manifest(directory)

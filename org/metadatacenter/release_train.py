@@ -392,6 +392,9 @@ def start(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
     accept_main_only: list[str] = typer.Option(
         None, "--accept-main-only", help=ACCEPT_MAIN_ONLY_HELP),
+    jobs: int = typer.Option(2, "--jobs", min=1, max=4, help="Concurrent isolated release builds"),
+    workers: int = typer.Option(4, "--workers", min=1, max=16, help="Workers within each frontend build"),
+    maven_threads: int = typer.Option(2, "--maven-threads", min=1, max=8, help="Maven reactor threads per variant"),
     verbose: bool = typer.Option(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
@@ -401,6 +404,7 @@ def start(
         with state.exclusive():
             _activate_toolchain()
             manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
+            manifest["buildConcurrency"] = {"jobs": jobs, "workers": workers, "mavenThreads": maven_threads}
             _render_plan(manifest)
             _release_gate_or_exit(
                 manifest,
