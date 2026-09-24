@@ -153,3 +153,9 @@ mandatory. `cedarcli build --jobs 2 java` uses Maven's dependency-aware module s
 while preserving the parent → libraries → project → clients order and serial tests within
 individual JVMs. Options belong before the build target. Command timings and task results
 are saved to `$CEDAR_HOME/.cedar/build-reports/`, including failures.
+
+`cedarcli test e2e --rest-workers 4` runs up to four independent REST smoke suites
+concurrently, followed by the browser smoke. The REST default is two workers;
+`--rest-workers 1` restores serial suite execution. Global-state suites stay exclusive,
+all check-inventory and cleanup gates remain required, and the REST report includes
+per-suite and phase timings.

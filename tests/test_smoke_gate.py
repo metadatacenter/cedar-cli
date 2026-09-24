@@ -194,6 +194,18 @@ class RunSmokeTest(unittest.TestCase):
             self.assertTrue(rest[4].startswith("--report="))
             self.assertEqual(["npm", "run", "smoke"], browser)
 
+    def test_rest_worker_budget_only_changes_the_rest_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(),
+                environment={"PATH": "/usr/bin"}, rest_workers=4))
+            self.assertIn("--workers=4", runner.commands("npm", "run", "smoke:rest")[0])
+            self.assertEqual(["npm", "run", "smoke"], runner.commands("npm", "run", "smoke")[0])
+        for value in (0, 5, 1.5, True):
+            with self.assertRaises(ValueError):
+                run_smoke(rest_workers=value)
+
     def test_an_unhealthy_or_stale_stack_refuses_before_anything_runs(self):
         tsv = (
             "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
@@ -566,4 +578,3 @@ class SourceCurrencyTest(unittest.TestCase):
 
             self.assertEqual(1, code)
             self.assertEqual([], runner.commands("npm"))
-

@@ -256,6 +256,7 @@ def wait_out_warmup(home, problems, runner=subprocess.run, sleeper=time.sleep):
 def run_smoke(
     cedar_home=None,
     *,
+    rest_workers: int | None = None,
     runner=subprocess.run,
     clock: Callable[[], dt.datetime] = _now,
     environment: Mapping[str, str] | None = None,
@@ -267,6 +268,8 @@ def run_smoke(
     stack is a reason to stop, not evidence about the source. Both tiers run even when the first
     fails, so one command yields one complete answer.
     """
+    if rest_workers is not None and (type(rest_workers) is not int or not 1 <= rest_workers <= 4):
+        raise ValueError("REST workers must be an integer from 1 to 4")
     home = _home(cedar_home or invocation_environment().get("CEDAR_HOME"))
     environment = dict(environment if environment is not None else invocation_environment())
     e2e = home / E2E
@@ -306,6 +309,8 @@ def run_smoke(
         "rest": ["npm", "run", "smoke:rest", "--", f"--report={rest_report}"],
         "browser": ["npm", "run", "smoke"],
     }
+    if rest_workers is not None:
+        commands["rest"].append(f"--workers={rest_workers}")
 
     started = clock()
     tiers = {}

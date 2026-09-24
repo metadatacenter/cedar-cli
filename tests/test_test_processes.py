@@ -29,6 +29,17 @@ class TestProcessCommandsTest(unittest.TestCase):
         self.assertIn(".embedmongo/5.0/mongod", result.output)
         self.assertIn("127.0.0.1:42317", result.output)
 
+    @patch.object(test_processes, "run_smoke", return_value=0)
+    def test_e2e_forwards_only_valid_rest_worker_counts(self, smoke):
+        result = self.runner.invoke(test_processes.app, ["e2e", "--rest-workers", "4"])
+        self.assertEqual(0, result.exit_code, result.output)
+        smoke.assert_called_once_with(rest_workers=4)
+        smoke.reset_mock()
+        for value in ("0", "5", "invalid"):
+            result = self.runner.invoke(test_processes.app, ["e2e", "--rest-workers", value])
+            self.assertEqual(2, result.exit_code, result.output)
+        smoke.assert_not_called()
+
     @patch.object(test_processes.os, "kill")
     @patch.object(test_processes, "embedded_mongo_processes")
     def test_cleanup_sends_sigterm_only_to_the_inventory(self, inventory, kill):
