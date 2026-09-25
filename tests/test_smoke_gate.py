@@ -95,7 +95,8 @@ def rest_runner(verdict="PASS", inventory_matched=True, exit_code=0):
     return answer
 
 
-def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, browser=FakeResult(0)):
+def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, browser=FakeResult(0),
+               split=FakeResult(0)):
     controller = str(home / "cedar-development" / "ops" / "cedar-services.sh")
 
     def status(_args, kwargs):
@@ -107,6 +108,7 @@ def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, brows
         (("git", "rev-parse"), rev_parse(heads)),
         (("git", "status"), status),
         (("npm", "run", "smoke:rest"), rest or rest_runner()),
+        (("npm", "run", "smoke:workspace:modern:full"), split),
         (("npm", "run", "smoke"), browser),
     ])
 
@@ -132,6 +134,7 @@ def report_for(heads=HEADS, **overrides):
             "rest": {"verdict": "PASS", "inventoryMatched": True,
                      "finishedAt": "2026-09-07T10:01:30+00:00"},
             "browser": {"verdict": "PASS", "finishedAt": "2026-09-07T10:02:30+00:00"},
+            "split": {"verdict": "PASS", "finishedAt": "2026-09-07T10:03:30+00:00"},
         },
     }
     report.update(overrides)
@@ -149,7 +152,7 @@ class SourcesDigestTest(unittest.TestCase):
 
 
 class RunSmokeTest(unittest.TestCase):
-    """One command runs both tiers and records what they ran against."""
+    """One command runs every tier and records what they ran against."""
 
     def setUp(self):
         which = patch("org.metadatacenter.smoke_gate.shutil.which", return_value="/usr/bin/npm")
@@ -176,9 +179,10 @@ class RunSmokeTest(unittest.TestCase):
             self.assertTrue(report["tiers"]["rest"]["inventoryMatched"])
             self.assertEqual(810, report["tiers"]["rest"]["counts"]["total"])
             self.assertEqual("PASS", report["tiers"]["browser"]["verdict"])
-            self.assertEqual(150.0, report["durationSeconds"])
+            self.assertEqual("PASS", report["tiers"]["split"]["verdict"])
+            self.assertEqual(210.0, report["durationSeconds"])
 
-    def test_both_tiers_run_from_the_e2e_checkout(self):
+    def test_every_tier_runs_from_the_e2e_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)
             runner = runner_for(home)
@@ -187,12 +191,13 @@ class RunSmokeTest(unittest.TestCase):
 
             e2e = str(home / "cedar-development" / "ops" / "e2e")
             npm_calls = [(args, kwargs) for args, kwargs in runner.calls if args[0] == "npm"]
-            self.assertEqual(2, len(npm_calls))
+            self.assertEqual(3, len(npm_calls))
             self.assertTrue(all(kwargs["cwd"] == e2e for _, kwargs in npm_calls))
-            rest, browser = (args for args, _ in npm_calls)
+            rest, browser, split = (args for args, _ in npm_calls)
             self.assertEqual(["npm", "run", "smoke:rest", "--"], rest[:4])
             self.assertTrue(rest[4].startswith("--report="))
             self.assertEqual(["npm", "run", "smoke"], browser)
+            self.assertEqual(["npm", "run", "smoke:workspace:modern:full"], split)
 
     def test_rest_worker_budget_only_changes_the_rest_command(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -244,7 +249,7 @@ class RunSmokeTest(unittest.TestCase):
                              environment={"PATH": "/usr/bin"}, sleeper=slept.append)
 
             self.assertEqual(0, code, "a stack that finished warming should run the tiers")
-            self.assertEqual(2, len(runner.commands("npm")))
+            self.assertEqual(len(smoke_gate.TIERS), len(runner.commands("npm")))
             self.assertTrue(slept, "the gate should have waited rather than refused at once")
 
     def test_a_slow_probe_is_waited_out_rather_than_refused(self):
@@ -273,7 +278,7 @@ class RunSmokeTest(unittest.TestCase):
                              environment={"PATH": "/usr/bin"}, sleeper=slept.append)
 
             self.assertEqual(0, code, "a probe that answered on the next poll should run the tiers")
-            self.assertEqual(2, len(runner.commands("npm")))
+            self.assertEqual(len(smoke_gate.TIERS), len(runner.commands("npm")))
             self.assertTrue(slept, "the gate should have waited rather than refused at once")
 
     def test_a_service_that_never_warms_still_refuses(self):
@@ -303,7 +308,7 @@ class RunSmokeTest(unittest.TestCase):
             code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
 
             self.assertEqual(1, code)
-            self.assertEqual(2, len(runner.commands("npm")))
+            self.assertEqual(len(smoke_gate.TIERS), len(runner.commands("npm")))
             reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
             report = json.loads((reports / "latest.json").read_text(encoding="utf-8"))
             self.assertEqual("FAIL", report["verdict"])
