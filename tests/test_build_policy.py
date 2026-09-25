@@ -71,6 +71,23 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertTrue(all("-DskipTests" not in command for command in maven_commands))
 
     @patch.object(build.plan_executor, "execute")
+    def test_maven_threads_follow_the_host_unless_jobs_is_given(self, execute):
+        for cpus, args, threads, jobs in (
+                (16, [], 16, 2), (4, [], 4, 2), (32, [], 16, 2), (1, [], 1, 2), (None, [], 2, 2),
+                (16, ["--jobs", "3"], 3, 3), (16, ["--jobs", "1"], 1, 1)):
+            with patch("org.metadatacenter.util.InvocationContext.os.cpu_count", return_value=cpus):
+                result = self.runner.invoke(build.app, args + ["java", "--dry-run"])
+            self.assertEqual(0, result.exit_code, result.output)
+            self.assertEqual(jobs, current_context().settings.build_jobs)
+            self.assertEqual(threads, current_context().settings.maven_threads)
+            maven_commands = [command for command in self.commands(execute.call_args.args[0])
+                              if command.startswith("./mvnw clean install")]
+            self.assertTrue(maven_commands)
+            expected = f"./mvnw clean install -T {threads}" if threads > 1 else "./mvnw clean install"
+            self.assertTrue(all(command == expected for command in maven_commands),
+                            (cpus, args, maven_commands))
+
+    @patch.object(build.plan_executor, "execute")
     def test_java_build_can_explicitly_skip_tests(self, execute):
         result = self.runner.invoke(
             build.app, ["java", "--skip-tests", "--dry-run"])

@@ -12,11 +12,17 @@ def default_build_workers():
     return max(1, min(8, (os.cpu_count() or 2) // 2))
 
 
+def default_maven_threads():
+    # One Maven reactor runs at a time, so it may use every core; 16 is the option's ceiling.
+    return max(1, min(16, os.cpu_count() or 2))
+
+
 @dataclass
 class InvocationSettings:
     do_fail_on_error: bool = True
     skip_tests: bool = False
     build_jobs: int = 1
+    maven_threads: int = 1
     build_workers: int = field(default_factory=default_build_workers)
     shell_path: str = '/bin/bash'
 

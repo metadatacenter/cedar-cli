@@ -163,7 +163,8 @@ def execute(plan, jobs):
     report = directory / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8] + '.json')
     # Resolve lazy shared state before workers start.
     executors = current_context().task_executors
-    console.print(f'Build concurrency: {jobs} repositories/Maven threads; '
+    console.print(f'Build concurrency: {jobs} repositories; '
+                  f'{current_context().settings.maven_threads} Maven threads; '
                   f'{current_context().settings.build_workers} workers per frontend.')
     def run(task):
         return executors[TaskType.SHELL].execute(task, BuildProgress(console, task.repo.name), False)
@@ -174,6 +175,7 @@ def execute(plan, jobs):
             raise SystemExit(1)
     finally:
         report.write_text(json.dumps({'schemaVersion': 1, 'plan': plan.name, 'jobs': jobs,
+            'mavenThreads': current_context().settings.maven_threads,
             'workers': current_context().settings.build_workers,
             'seconds': round(time.monotonic() - start, 3), 'commands': records,
             'tasks': [{'repository': t.repo.get_fqn(), 'exitCode': results.get(i),

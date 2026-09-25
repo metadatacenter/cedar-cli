@@ -11,8 +11,8 @@ class BuildShellTaskFactory:
 
     @staticmethod
     def maven_command():
-        jobs = current_context().settings.build_jobs
-        return './mvnw clean install' + (f' -T {jobs}' if jobs > 1 else '')
+        threads = current_context().settings.maven_threads
+        return './mvnw clean install' + (f' -T {threads}' if threads > 1 else '')
 
     @classmethod
     def maven_clean_install(cls, repo: Repo) -> PlanTask:

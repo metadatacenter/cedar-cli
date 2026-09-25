@@ -149,9 +149,12 @@ exceptions, scope and rollout.
 from their package and integration-test dependencies. Repository concurrency defaults to two; workers default to half the detected CPUs,
 at least one and capped at eight. Use
 `--jobs 1 --workers 1` for serial diagnosis. Full frontend deployment and smoke gates remain
-mandatory. `cedarcli build --jobs 2 java` uses Maven's dependency-aware module scheduling,
-while preserving the parent → libraries → project → clients order and serial tests within
-individual JVMs. Options belong before the build target. Command timings and task results
+mandatory. `cedarcli build java` uses Maven's dependency-aware module scheduling, with one
+reactor thread per detected CPU, at least one and capped at sixteen. It preserves the
+parent → libraries → project → clients order and serial tests within individual JVMs.
+Only one Maven reactor runs at a time, so its thread count follows the host, while frontend
+repository concurrency stays at two because each repository also spends its own worker
+budget. An explicit `--jobs N` sets both to N. Options belong before the build target. Command timings and task results
 are saved to `$CEDAR_HOME/.cedar/build-reports/`, including failures.
 
 `cedarcli test e2e --rest-workers 4` runs up to four independent REST smoke suites

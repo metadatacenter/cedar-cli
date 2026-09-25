@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 import json
 import subprocess
 import sys
@@ -16,7 +17,7 @@ from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_re
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
-from org.metadatacenter.util.InvocationContext import default_build_workers
+from org.metadatacenter.util.InvocationContext import default_build_workers, default_maven_threads
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.smoke_gate import run_smoke
@@ -29,11 +30,16 @@ console = Console()
 
 @app.callback()
 def concurrency(
-    jobs: int = typer.Option(2, min=1, max=16, help="Concurrent frontend repositories or Maven reactor threads; 1 is serial."),
+    jobs: Optional[int] = typer.Option(
+        None, min=1, max=16,
+        help="Concurrent frontend repositories and Maven reactor threads; 1 is serial. "
+             "Default: two repositories, and one Maven thread per core up to 16."),
     workers: int = typer.Option(default_build_workers(), min=1, max=16, help="Worker budget within each frontend repository."),
 ):
     from org.metadatacenter.util.InvocationContext import current_context
-    current_context().settings.build_jobs = jobs
+    # Concurrent frontend builds multiply by their worker budget, so only Maven follows the host.
+    current_context().settings.build_jobs = jobs or 2
+    current_context().settings.maven_threads = jobs or default_maven_threads()
     current_context().settings.build_workers = workers
 
 
