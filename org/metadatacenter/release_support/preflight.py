@@ -22,6 +22,7 @@ from org.metadatacenter.util.BuildSafety import (
     wait_for_no_embedded_mongo_processes,
 )
 from pathlib import Path, PurePosixPath
+from concurrent.futures import ThreadPoolExecutor
 import dataclasses
 import fnmatch
 import json
@@ -200,6 +201,7 @@ class ReleasePreflight:
         self.ci_sleeper = ci_sleeper
         self.ci_delays = ci_delays
         self._source_path_cache: dict[str, list[str]] = {}
+        self.check_timings: dict[str, float] = {}
 
     @property
     def repositories(self) -> list[str]:
@@ -211,7 +213,7 @@ class ReleasePreflight:
             raise ReleaseError("CEDAR_HOME is not set")
         return Path(cedar_home) / repository
 
-    def _capture(self, args: list[str], *, cwd: Path | None = None) -> tuple[int, str, str]:
+    def _capture(self, args: list[str], *, cwd: Path | None = None, timeout: float | None = None) -> tuple[int, str, str]:
         """Run a command and report its outcome instead of raising on failure.
 
         A failing command is the answer to several checks rather than an error, so
@@ -225,16 +227,34 @@ class ReleasePreflight:
                 text=True,
                 capture_output=True,
                 check=False,
+                **({'timeout': timeout} if timeout is not None else {}),
             )
+        except subprocess.TimeoutExpired:
+            return 124, "", f"remote probe timed out after {timeout:g}s"
         except OSError as error:
             return 127, "", str(error)
         return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
 
     def run(self) -> list[PreflightFinding]:
-        findings: list[PreflightFinding] = []
-        for name in self.CHECKS:
-            findings.extend(getattr(self, name)())
+        return self._run_checks(self.CHECKS)
+
+    def _run_checks(self, checks):
+        findings = []
+        for name in checks:
+            started = time.monotonic()
+            try:
+                findings.extend(getattr(self, name)())
+            finally:
+                elapsed = time.monotonic() - started
+                self.check_timings[name] = elapsed
+                console.print(f"Preflight {name.removeprefix('check_')}: {elapsed:.2f}s", markup=False)
         return findings
+
+    def _repository_findings(self, probe):
+        # Each probe is read-only (or a dry-run push). Preserve repository order
+        # in the findings while bounding concurrent connections to GitHub.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            return [finding for result in pool.map(probe, self.repositories) for finding in result]
 
     def run_resume(self) -> list[PreflightFinding]:
         """Recheck only conditions still relevant to the recorded next stage."""
@@ -277,10 +297,7 @@ class ReleasePreflight:
             checks.extend(["check_nexus_authorization", "check_npm_authorization"])
         elif stage in {"development", "acceptance"}:
             checks.append("check_nexus_authorization")
-        findings = []
-        for name in checks:
-            findings.extend(getattr(self, name)())
-        return findings
+        return self._run_checks(checks)
 
     def check_no_release_in_progress(self) -> list[PreflightFinding]:
         """A release already holds the slot, and start would refuse only after planning."""
@@ -562,20 +579,20 @@ class ReleasePreflight:
         lapsed token refuses those at remote integration, after the build phase has already
         run, so the question is asked here with a push that transmits nothing.
         """
-        findings = []
         version = self.manifest.get("releaseVersion")
         next_version = self.manifest.get("nextDevelopmentVersion")
         tag = f"release-{version}"
         completed = self.manifest.get("remoteIntegration", {}).get("completedTasks", {})
-        for repository in self.repositories:
+        def probe(repository):
+            findings = []
             if isinstance(completed, dict) and repository in completed:
-                continue
+                return []
             root = self._root(repository)
             if not root.is_dir():
-                continue
+                return []
             source = self.manifest.get("sourceRepositories", {}).get(repository)
             if not source:
-                continue
+                return []
             targets = [
                 f"{source}:refs/heads/main",
                 f"{source}:refs/heads/develop",
@@ -587,7 +604,7 @@ class ReleasePreflight:
             code, _, stderr = self._capture([
                 "git", "-C", str(root), "push", "--dry-run", "--force", "origin",
                 *targets,
-            ])
+            ], timeout=60)
             if code != 0:
                 detail = stderr.splitlines()[-1] if stderr else "push refused"
                 findings.append(PreflightFinding(
@@ -596,16 +613,17 @@ class ReleasePreflight:
                     "grant push access or adjust branch protection for main, develop, release/*, "
                     "and tags",
                 ))
-        return findings
+            return findings
+        return self._repository_findings(probe)
 
     def check_target_version_unused(self) -> list[PreflightFinding]:
         version = self.manifest.get("releaseVersion")
         next_version = self.manifest.get("nextDevelopmentVersion")
-        findings = []
-        for repository in self.repositories:
+        def probe(repository):
+            findings = []
             root = self._root(repository)
             if not root.is_dir():
-                continue
+                return []
             references = [
                 f"refs/tags/release-{version}",
                 f"refs/heads/release/pre-{version}",
@@ -613,7 +631,7 @@ class ReleasePreflight:
             if repository in self.manifest.get("releaseRepositories", []):
                 references.append(f"refs/heads/release/post-{next_version}")
             code, output, stderr = self._capture([
-                "git", "-C", str(root), "ls-remote", "--refs", "origin", *references])
+                "git", "-C", str(root), "ls-remote", "--refs", "origin", *references], timeout=60)
             if code != 0:
                 findings.append(PreflightFinding(
                     "version", "fail", f"cannot verify unused release refs in {repository}: "
@@ -625,7 +643,8 @@ class ReleasePreflight:
                     + ", ".join(line.split("\t", 1)[-1] for line in output.splitlines()),
                     "choose unused release/next versions, or remove the stale refs deliberately",
                 ))
-        return findings
+            return findings
+        return self._repository_findings(probe)
 
     def _source_paths(self, repository: str) -> list[str]:
         if repository in self._source_path_cache:
