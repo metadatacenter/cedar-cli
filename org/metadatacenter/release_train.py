@@ -445,6 +445,8 @@ def start(
     console.print(f"Phase:               {active['phase']}")
     console.print(f"Internal state:      {path}")
     _render_next_steps(active['phase'])
+    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
+    render_timings(active, console, prior_timing_manifest(state, active))
 
 
 def _render_next_steps(phase):
@@ -493,6 +495,8 @@ def resume(
     console.print(f"Phase:               {manifest['phase']}")
     console.print(f"Internal state:      {path}")
     _render_next_steps(manifest['phase'])
+    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
+    render_timings(manifest, console, prior_timing_manifest(state, manifest))
 
 
 @app.command("abandon")
@@ -545,3 +549,20 @@ def status(
         for check in manifest["acceptance"]["checks"]:
             console.print(f"Accepted:            {check['detail']}")
     _render_release_status(manifest, path)
+
+
+@app.command("timings")
+def timings(compare: str = typer.Option(None, "--compare", help="Compare with a recorded release version")):
+    """Summarize measured stage execution, CI polling waits and retry backoff."""
+    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
+    state = ReleaseState()
+    try:
+        manifest, _ = state.read_current_manifest()
+        baseline = prior_timing_manifest(state, manifest)
+        if compare:
+            _validate_stable_version(compare, 'comparison release version')
+            baseline = json.loads(state.manifest_path(compare).read_text())
+        render_timings(manifest, console, baseline)
+    except (ReleaseError, OSError, ValueError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(1) from error

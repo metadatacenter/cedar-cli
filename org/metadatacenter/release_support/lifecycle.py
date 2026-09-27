@@ -5,6 +5,7 @@ import copy
 import dataclasses
 import datetime as dt
 import time
+from org.metadatacenter.release_timings import timed_stage, timed_wait
 from org.metadatacenter.release_support.acceptance import (
     ReleaseAcceptance,
 )
@@ -763,7 +764,9 @@ def advance_active_release(
         raise ReleaseError(f"a release in {phase} has no stage that can continue it")
     for stage in stages[start:]:
         console.print(f"Release phase: {stage.name}", markup=False)
-        manifest = stage(state, dependencies)
+        with timed_stage(state, stage.name):
+            manifest = stage(state, dependencies)
+        manifest, _ = state.read_current_manifest()
     return manifest
 
 
@@ -831,5 +834,6 @@ def _drive_release(
                     "recordedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
                 },
             })
-            sleeper(delay)
+            with timed_stage(state, 'retry-backoff'):
+                timed_wait('retry', sleeper, delay)
     raise ReleaseError("release exhausted its transient retries")

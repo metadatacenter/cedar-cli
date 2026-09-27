@@ -2,6 +2,7 @@
 import copy
 from concurrent.futures import ThreadPoolExecutor
 import datetime as dt
+from org.metadatacenter.release_timings import timed_wait
 from pathlib import Path
 import subprocess
 import time
@@ -147,7 +148,7 @@ class DevelopmentVerifier:
                 console.print(f'Development CI: {len(pending)} pending; ' + '; '.join(pending), markup=False)
                 last_pending, last_report = list(pending), now
             if attempt + 1 < self.polls:
-                self.sleeper(max(0, min(self.delay, deadline - self.clock())))
+                timed_wait('ci', self.sleeper, max(0, min(self.delay, deadline - self.clock())))
         raise ReleaseError('Next-development CI is still pending after bounded waiting; '
                            'release resume continues verification without rebuilding or redispatching')
 
