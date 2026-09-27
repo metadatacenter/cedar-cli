@@ -6,9 +6,11 @@ a 2xx response and stops there tells a generator nothing: the operation appears 
 return type, and the caller falls back to parsing the payload itself. An audit in September 2026
 found that shape in most operations across the eleven documents the estate commits.
 
-Generation depends on seven conditions: an operation declares a success response at all, that response
-describes its content, that description is more than a bare string, a schema reference resolves, a named schema carries a definition, a write operation
-declares the body it reads, and a schema name means the same thing in every service that uses it.
+Generation depends on explicit contracts: an operation declares a success response at all, that response
+describes its content, that description is more than a bare string, a schema reference resolves, a
+named schema carries a definition, a write operation declares the body it reads, object request
+schemas explicitly state their open/closed policy, and a schema name means the same thing in every
+service that uses it.
 Each one failed somewhere in that audit, so each stays checked rather than trusted.
 
 This module holds the rules and nothing else. Reading repositories and rendering the report belong to
@@ -54,6 +56,8 @@ SKIPPED_REPOSITORIES = {
 # instead. Every entry was read against its resource class before it was added; an entry whose route
 # later gains a requestBody is reported as stale rather than as a failure.
 BODILESS_WRITES = {
+    ('cedar-monitor-server', 'POST', '/search-index/regenerate'):
+        'starts a full rebuild with fixed server-owned options and reads no caller body',
     ('cedar-messaging-server', 'POST', '/command/mark-all-as-read'):
         'marks the caller\'s own unread messages read and returns the count',
     ('cedar-user-server', 'POST', '/users/{id}/api-keys/{keyId}/regenerate'):
@@ -111,6 +115,7 @@ RULE_BARE_STRING = 'bare string payload'
 RULE_SCHEMA_REFERENCE = 'schema reference'
 RULE_STUB_SCHEMA = 'stub schema'
 RULE_REQUEST_BODY = 'request body'
+RULE_REQUEST_CLASSIFICATION = 'request body classification'
 RULE_CROSS_SERVICE = 'cross-service agreement'
 RULE_DOCUMENT = 'document'
 
@@ -161,7 +166,7 @@ class DocumentReport:
 
 
 def analyze_document(repository: str, location: str, document: Mapping[str, Any]) -> DocumentReport:
-    """Apply the six single-document rules and report what one document holds.
+    """Apply the single-document rules and report what one document holds.
 
     Cross-service agreement needs every document at once, so cross_document_findings applies it
     separately and adds its findings to the reports this returns.
@@ -180,7 +185,7 @@ def analyze_document(repository: str, location: str, document: Mapping[str, Any]
                 continue
             report.operations += 1
             _check_responses(document, report, method, path, operation)
-            _check_request_body(report, method, path, operation)
+            _check_request_body(document, report, method, path, operation)
 
     _check_schema_references(document, report, schemas)
     _check_stub_schemas(report, schemas)
@@ -188,7 +193,7 @@ def analyze_document(repository: str, location: str, document: Mapping[str, Any]
 
 
 def cross_document_findings(documents: Mapping[str, Mapping[str, Any]]) -> Dict[str, List[Finding]]:
-    """Rule seven: where a schema name means one thing in one service and something else in another.
+    """Where a schema name means one thing in one service and something else in another.
 
     A generated client resolves a name once. Two services that answer with `FolderServerFolder` and
     disagree about its fields produce a client that is wrong for one of them, and the disagreement
@@ -271,10 +276,10 @@ def _check_responses(document: Mapping[str, Any], report: DocumentReport,
                 detail='declares no content, so a client has no type to return'))
 
 
-def _check_request_body(report: DocumentReport, method: str, path: str,
+def _check_request_body(document: Mapping[str, Any], report: DocumentReport, method: str, path: str,
                         operation: Mapping[str, Any]) -> None:
     """Rule six: every write declares the body it reads, unless its handler reads none."""
-    if method not in WRITE_METHODS:
+    if method not in WRITE_METHODS and not operation.get('requestBody'):
         return
     where = f'{method.upper()} {path}'
     allowlisted = (report.repository, method.upper(), path) in BODILESS_WRITES
@@ -284,7 +289,6 @@ def _check_request_body(report: DocumentReport, method: str, path: str,
             rule=RULE_REQUEST_BODY, location=where,
             detail='allowlist entry is stale: the operation now declares a requestBody',
             is_failure=False))
-        return
     if not declares_body and not allowlisted:
         report.writes_without_body += 1
         report.findings.append(Finding(
@@ -292,7 +296,57 @@ def _check_request_body(report: DocumentReport, method: str, path: str,
             detail='declares no requestBody, so a client cannot send the payload the handler reads'))
         return
     if declares_body:
-        _check_bare_strings(report, f'{where} request body', operation['requestBody'])
+        body = operation['requestBody']
+        seen = set()
+        while isinstance(body, Mapping) and '$ref' in body:
+            ref = body['$ref']
+            if ref in seen:
+                body = None
+                break
+            seen.add(ref)
+            body = _resolve(document, ref)
+        if not isinstance(body, Mapping) or not body.get('content'):
+            report.findings.append(Finding(RULE_REQUEST_CLASSIFICATION, where,
+                                          'request body must resolve to declared content'))
+            return
+        _check_bare_strings(report, f'{where} request body', body)
+        for media_type, media in body['content'].items():
+            schema = media.get('schema') if isinstance(media, Mapping) else None
+            _check_request_schema(document, report, f'{where} request body ({media_type})', schema)
+
+
+def _check_request_schema(document, report, where, schema, seen=frozenset()) -> None:
+    """Classify the payload object, including referenced alternatives and array members.
+
+    Properties inside an explicitly open artifact belong to the model validator, not this rule.
+    Reference cycles without a concrete schema must fail rather than silently bypass the check.
+    """
+    if not isinstance(schema, Mapping) or not schema:
+        report.findings.append(Finding(RULE_REQUEST_CLASSIFICATION, where,
+                                      'request body has no schema'))
+        return
+    if '$ref' in schema:
+        ref = schema['$ref']
+        if ref in seen:
+            report.findings.append(Finding(RULE_REQUEST_CLASSIFICATION, where,
+                                          f'cyclic request schema reference: {ref}'))
+            return
+        _check_request_schema(document, report, f'{where} -> {ref}',
+                              _resolve(document, ref), seen | {ref})
+        return
+    branches = [(key, branch) for key in ('allOf', 'oneOf', 'anyOf')
+                for branch in schema.get(key, [])]
+    declaration = schema.get('additionalProperties')
+    if schema.get('type') == 'object' or 'properties' in schema or (
+            schema.get('type') is None and not branches):
+        if not isinstance(declaration, (bool, Mapping)):
+            report.findings.append(Finding(RULE_REQUEST_CLASSIFICATION, where,
+                'object request schema must explicitly declare additionalProperties '
+                '(false for commands/options; true or a value schema for open documents/maps)'))
+    for key, branch in branches:
+        _check_request_schema(document, report, f'{where}.{key}', branch, seen)
+    if schema.get('type') == 'array':
+        _check_request_schema(document, report, f'{where}.items', schema.get('items'), seen)
 
 
 def _check_bare_strings(report: DocumentReport, where: str, payload: Mapping[str, Any]) -> None:
