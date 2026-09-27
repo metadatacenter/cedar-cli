@@ -105,12 +105,15 @@ def design_tokens(
         json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable adoption report."),
         show_all: bool = typer.Option(False, "--all", help="Include existing findings."),
         init_baseline: bool = typer.Option(False, "--init-baseline", help="Create reviewed debt baselines once; never overwrite."),
-        prune_baseline: bool = typer.Option(False, "--prune-baseline", help="Remove resolved debt without increasing allowances.")):
+        prune_baseline: bool = typer.Option(False, "--prune-baseline", help="Remove resolved debt without increasing allowances."),
+        sync_surfaces: bool = typer.Option(False, "--sync-surfaces", help="Refresh generated surface browser contracts."),
+        surface_inventory: str = typer.Option(None, "--surface-inventory", help="Write the generated Markdown surface hierarchy.")):
     """Report shared-style adoption, new drift and token dependency pins across frontends."""
     from org.metadatacenter.design_tokens import check_design_tokens
     exit_on_failure(check_design_tokens(
         repos=repo, strict=strict, json_output=json_output, show_all=show_all,
-        init_baseline=init_baseline, prune_baseline=prune_baseline))
+        init_baseline=init_baseline, prune_baseline=prune_baseline,
+        sync_surfaces=sync_surfaces, surface_inventory=surface_inventory))
 
 
 @app.command("artifact-versioning")

@@ -13,7 +13,14 @@ class DesignTokensCommandTest(unittest.TestCase):
         result = CliRunner().invoke(check.app, ['design-tokens', '--strict', '--json', '--repo', 'cedar-embeddable-designer'])
         self.assertEqual(1, result.exit_code)
         run.assert_called_once_with(repos=['cedar-embeddable-designer'], strict=True, json_output=True,
-                                    show_all=False, init_baseline=False, prune_baseline=False)
+                                    show_all=False, init_baseline=False, prune_baseline=False, sync_surfaces=False, surface_inventory=None)
+
+    @patch('org.metadatacenter.design_tokens.check_design_tokens', return_value=0)
+    def test_surface_options_reach_shared_checker(self, run):
+        result = CliRunner().invoke(check.app, ['design-tokens', '--sync-surfaces', '--surface-inventory', '/tmp/inventory.md'])
+        self.assertEqual(0, result.exit_code)
+        self.assertTrue(run.call_args.kwargs['sync_surfaces'])
+        self.assertEqual('/tmp/inventory.md', run.call_args.kwargs['surface_inventory'])
 
     def test_missing_tool_is_not_success(self):
         with tempfile.TemporaryDirectory() as root, patch.object(design_tokens.Util, 'cedar_home', root):
