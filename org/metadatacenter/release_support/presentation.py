@@ -6,6 +6,8 @@ from rich.table import Table
 from rich.text import Text
 import json
 import time
+import threading
+from contextlib import contextmanager
 import typer
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
@@ -151,6 +153,10 @@ def _render_release_status(manifest: dict, path: Path) -> None:
     console.print(f"Ledger: {manifest.get('phase')}")
     if manifest.get("lastAttempt"):
         console.print(f"Attempt: {manifest['lastAttempt']}")
+    running = ReleaseState(root=path.parent.parent).controller_running()
+    if not complete:
+        console.print('Controller: running' if running else 'Controller: stopped')
+        console.print(_release_watch_summary(manifest, _release_elapsed(manifest)), markup=False)
     table = Table(box=box.SIMPLE_HEAVY, show_header=True, pad_edge=False)
     table.add_column("Phase")
     table.add_column("State")
@@ -163,7 +169,7 @@ def _render_release_status(manifest: dict, path: Path) -> None:
             progress += f" · {row['detail']}"
         table.add_row(
             row["phase"],
-            Text(row["state"], style=style),
+            Text('running' if running and row['state'] == 'next' else row["state"], style=style),
             progress,
         )
     console.print(table)
@@ -184,7 +190,8 @@ def _render_release_status(manifest: dict, path: Path) -> None:
     next_stage = _next_release_stage(manifest)
     if next_stage:
         console.print(f"Next: {next_stage}")
-        console.print("Run:  cedarcli release resume")
+        console.print('Watch: cedarcli release status --watch' if running
+                      else 'Run:  cedarcli release resume')
     console.print(f"State: {path}")
 
 
@@ -194,7 +201,17 @@ _ACTIVE_RELEASE_SECTIONS = {
     "publishing-snapshots": "snapshotPublication",
     "integrating-remotes": "remoteIntegration",
     "publishing-artifacts": "artifactPublication",
+    "verifying-development": "developmentVerification",
 }
+
+
+def _release_elapsed(manifest):
+    import datetime as dt
+    try:
+        started = dt.datetime.fromisoformat(manifest['startedAt'])
+        return (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return 0
 
 
 def _release_watch_summary(manifest: dict, elapsed: float) -> str:
@@ -208,6 +225,8 @@ def _release_watch_summary(manifest: dict, elapsed: float) -> str:
     section_name = _ACTIVE_RELEASE_SECTIONS.get(phase)
     section = manifest.get(section_name, {}) if section_name else {}
     active = section.get("inProgressTask") if isinstance(section, dict) else None
+    if isinstance(section, dict) and section.get('inProgressTasks'):
+        active = ', '.join(section['inProgressTasks'])
     if isinstance(active, dict):
         identifier = active.get("id")
         if active.get("kind") == "maven-release-upload":
@@ -218,6 +237,27 @@ def _release_watch_summary(manifest: dict, elapsed: float) -> str:
     else:
         identifier = active
     detail = f" | active {identifier}" if identifier else ""
+    if not current:
+        progress = phase
+    elif not identifier:
+        detail = f' | {phase}'
+    if manifest.get('lastAttempt'):
+        detail += f" | logs {manifest['lastAttempt']}"
+    if phase == 'validating-builds' and manifest.get('frontendPreparation', {}).get('workspace'):
+        attempt = Path(manifest['frontendPreparation']['workspace']).parent
+        log_root = attempt / 'build-logs' / f"attempt-{section.get('attempt', 1):03d}"
+        tasks = section.get('inProgressTasks') or ([active] if isinstance(active, str) else [])
+        if tasks:
+            detail += ' | task logs ' + ', '.join(
+                str(log_root / (task.replace(':', '-') + '.log')) for task in tasks)
+    if phase == 'verifying-development':
+        pending = []
+        for repo, record in section.get('repositories', {}).items():
+            for run in record.get('runs', []):
+                if run.get('status') != 'completed':
+                    pending.append(f"{repo} {run.get('name', '')}: {run.get('status')} {run.get('url', '')}")
+        if pending:
+            detail += ' | CI ' + '; '.join(pending)
     retry = manifest.get("retry")
     if isinstance(retry, dict):
         failure = (
@@ -230,6 +270,28 @@ def _release_watch_summary(manifest: dict, elapsed: float) -> str:
     hours, minutes = divmod(minutes, 60)
     elapsed_text = f"{hours:d}:{minutes:02d}:{seconds:02d}"
     return f"Release {manifest.get('releaseVersion')} | {progress}{detail}{failure} | {elapsed_text}"
+
+
+@contextmanager
+def release_heartbeat(state, interval=60):
+    """Read-only progress while the coordinator runs a long build or registry check."""
+    stopped = threading.Event()
+    def report():
+        while not stopped.wait(interval):
+            try:
+                manifest, _ = state.read_current_manifest()
+                console.print(_release_watch_summary(manifest, _release_elapsed(manifest)),
+                              markup=False, soft_wrap=True)
+            except (ReleaseError, OSError, ValueError):
+                # A diagnostic reader must never interrupt or mutate release work.
+                continue
+    thread = threading.Thread(target=report, name='release-progress', daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join()
 
 
 def _watch_release(

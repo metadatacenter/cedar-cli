@@ -206,6 +206,8 @@ from org.metadatacenter.release_support.presentation import (
     _ACTIVE_RELEASE_SECTIONS,
     _publication_progress,
     _release_progress,
+    _release_elapsed,
+    release_heartbeat,
     _release_watch_summary,
     _render_plan,
     _render_preflight_findings,
@@ -415,7 +417,8 @@ def start(
             path = state.start(manifest)
             console.print("Compact progress is shown below; full task output is retained in attempt logs.")
             console.print("A second terminal may run: cedarcli release status --watch")
-            active = _drive_release(state, verbose=verbose)
+            with release_heartbeat(state):
+                active = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         if state.current_path.exists():
@@ -456,7 +459,8 @@ def resume(
             _release_resume_gate_or_exit(active)
             console.print("Compact progress is shown below; full task output is retained in attempt logs.")
             console.print("A second terminal may run: cedarcli release status --watch")
-            manifest = _drive_release(state, verbose=verbose)
+            with release_heartbeat(state):
+                manifest = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error

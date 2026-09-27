@@ -53,6 +53,20 @@ class ReleaseState:
     def current_path(self) -> Path:
         return self.root / "current.json"
 
+    def controller_running(self) -> bool:
+        """Use the kernel lock, not a stale PID or an unfinished ledger, as liveness proof."""
+        try:
+            lock = (self.root / 'release.lock').open('r')
+        except FileNotFoundError:
+            return False
+        with lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+
     def manifest_path(self, release_version: str) -> Path:
         return self.root / "releases" / f"{release_version}.json"
 

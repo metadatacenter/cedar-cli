@@ -1,4 +1,6 @@
 import io
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -80,3 +82,16 @@ class SubprocessOutputTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    @patch("org.metadatacenter.util.ProcessRunner._spawn")
+    def test_isolated_command_log_captures_streamed_failure(self, popen):
+        popen.return_value = self.process_with_output(b"failure detail\n", return_code=7)
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'commands.log'
+            _, code = ShellTaskExecutor().execute_shell_command(
+                SimpleNamespace(node_id=3), SimpleNamespace(name='example', repo_type='JAVA'),
+                'failing command', directory, RecordingProgress(),
+                environment={'CEDAR_BUILD_DIAGNOSTIC_LOG': str(log)})
+            self.assertEqual(7, code)
+            self.assertIn('Command: failing command', log.read_text())
+            self.assertIn('failure detail', log.read_text())

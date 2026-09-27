@@ -30,7 +30,8 @@ def validate_intent(version, next_version, cee_version, train=None):
     return dict(releaseVersion=version, nextDevelopmentVersion=next_version, ceeVersion=cee_version)
 
 
-def preflight(intent, *, source=None, environment=None, runner=None, preflight_factory=ReleasePreflight):
+def preflight(intent, *, source=None, environment=None, runner=None, preflight_factory=ReleasePreflight,
+              accepted_main_only=None):
     environment = dict(invocation_environment() if environment is None else environment)
     runner = runner or subprocess.run
     home = Path(environment['CEDAR_HOME'])
@@ -49,15 +50,18 @@ def preflight(intent, *, source=None, environment=None, runner=None, preflight_f
                     'mavenRepositories': maven, 'sourceVersion': intent['releaseVersion'] + '-SNAPSHOT',
                     'mavenPhases': ReleasePlanner._maven_phases(config, maven),
                     'publicationPlan': ReleasePlanner._publication_plan(config, release)}
-        checker = preflight_factory(manifest, environment=environment)
+        checker = preflight_factory(manifest, environment=environment,
+                                    accepted_main_only=set(accepted_main_only or []))
         checks = ('check_no_release_in_progress', 'check_toolchain', 'check_profile',
                   'check_git_identity', 'check_nexus_authorization', 'check_npm_authorization',
                   'check_npm_configuration', 'check_push_permission', 'check_target_version_unused',
-                  'check_target_artifacts_unused', 'check_source_contract', 'check_generated_version_files')
-        findings = [finding for name in checks for finding in getattr(checker, name)()]
+                  'check_target_artifacts_unused', 'check_source_contract', 'check_generated_version_files',
+                  'check_license_files', 'check_remote_survey')
+        findings = checker._run_checks(checks)
     except (ReleaseError, OSError, KeyError) as error:
         raise ValueError(f'Release prerequisite check failed: {error}') from error
-    failures = [f'{f.check}: {f.message}' for f in findings if f.fatal]
+    failures = [f'{f.check}: {f.message}' + (f'\n  {f.remedy}' if f.remedy else '')
+                for f in findings if f.fatal]
     if failures:
         raise ValueError('Release prerequisites failed before train dispatch:\n' + '\n'.join(failures))
     return findings

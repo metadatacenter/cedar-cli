@@ -30,10 +30,13 @@ def train(
         release_version: str = typer.Option(None, "--release-version", help="Check release prerequisites before this train."),
         next_version: str = typer.Option(None, "--next-version", help="Intended next MAJOR.MINOR.PATCH-SNAPSHOT."),
         cee_version: str = typer.Option(None, "--cee-version", help="Intended public CEE version; equivalence is checked after the train."),
+        accept_main_only: list[str] = typer.Option(None, "--accept-main-only", help="Accept reviewed main-only replacement for this repository; repeat at release plan/start."),
 ):
     """Publish an ordered, immutable Maven, npm, and Docker build train."""
     intent = {} if not any((release_version, next_version, cee_version)) else dict(
         release_version=release_version, next_version=next_version, cee_version=cee_version)
+    if accept_main_only:
+        intent['accept_main_only'] = accept_main_only
     raise typer.Exit(code=BuildTrainWorker.dispatch(resume=resume, dry_run=dry_run, **intent))
 
 

@@ -72,10 +72,12 @@ def _dry_run(selected, resume, command):
     return 0
 
 
-def dispatch(resume=None, dry_run=False, release_version=None, next_version=None, cee_version=None):
+def dispatch(resume=None, dry_run=False, release_version=None, next_version=None, cee_version=None, accept_main_only=None):
     from org.metadatacenter.train_support.release_intent import validate_intent, preflight
     try:
         intent = validate_intent(release_version, next_version, cee_version)
+        if accept_main_only and not intent:
+            raise ValueError('--accept-main-only requires a release-intended train')
     except ValueError as error:
         _output_component.console.print(str(error), markup=False)
         return 1
@@ -89,7 +91,7 @@ def dispatch(resume=None, dry_run=False, release_version=None, next_version=None
         try:
             validate_intent(release_version, next_version, cee_version, selected)
             source = BuildTrain._read(f'trains/{selected}.json') if resume else None
-            findings = preflight(intent, source=source)
+            findings = preflight(intent, source=source, accepted_main_only=set(accept_main_only or []))
             for finding in findings:
                 if finding.severity == 'warn':
                     _output_component.console.print(finding.message, markup=False)

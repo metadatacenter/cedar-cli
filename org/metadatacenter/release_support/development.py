@@ -68,6 +68,7 @@ class DevelopmentVerifier:
                     'resume to reconcile its exact-commit workflow run before dispatching again')
         deadline = self.clock() + self.timeout
         complete = set()
+        last_pending, last_report = None, float('-inf')
         for attempt in range(self.polls):
             pending = []
             failures = []
@@ -120,7 +121,7 @@ class DevelopmentVerifier:
                             and dt.datetime.fromisoformat(r['created_at'].replace('Z','+00:00')) >= requested]
                 latest = latest_runs_by_name(runs)
                 evidence['repositories'][repo] = {'revision': revision, 'runs': [
-                    {'id': r.get('id'), 'url': run_url(r), 'status': r.get('status'),
+                    {'id': r.get('id'), 'name': r.get('name'), 'url': run_url(r), 'status': r.get('status'),
                      'conclusion': r.get('conclusion')} for r in latest.values()]}
                 if not latest:
                     pending.append(f'{repo}: waiting for exact-commit CI')
@@ -141,7 +142,10 @@ class DevelopmentVerifier:
                 evidence['completedAt'] = dt.datetime.now(dt.timezone.utc).isoformat()
                 self.save(evidence)
                 return evidence
-            console.print(f'Development CI: {len(pending)} pending; ' + '; '.join(pending), markup=False)
+            now = self.clock()
+            if pending != last_pending or now - last_report >= 60:
+                console.print(f'Development CI: {len(pending)} pending; ' + '; '.join(pending), markup=False)
+                last_pending, last_report = list(pending), now
             if attempt + 1 < self.polls:
                 self.sleeper(max(0, min(self.delay, deadline - self.clock())))
         raise ReleaseError('Next-development CI is still pending after bounded waiting; '
