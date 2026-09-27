@@ -51,6 +51,9 @@ class ReleaseBuildValidator:
         phases = manifest.get("mavenPhases")
         if not isinstance(phases, list) or not phases:
             raise ReleaseError("release manifest has no ordered Maven build phases")
+        threads = manifest.get("buildConcurrency", {}).get("mavenThreads", 1)
+        if not isinstance(threads, int) or not 1 <= threads <= 8:
+            raise ReleaseError("Maven threads must be between 1 and 8")
         tasks = []
         attempt = Path(manifest["frontendPreparation"]["workspace"]).parent
         for variant in ("release", "nextDevelopment"):
@@ -73,6 +76,8 @@ class ReleaseBuildValidator:
                     "clean",
                     "install",
                 ]
+                if threads > 1:
+                    command.extend(["-T", str(threads)])
                 if variant == "nextDevelopment":
                     command.append("-DskipTests")
                 tasks.append({
@@ -84,7 +89,7 @@ class ReleaseBuildValidator:
                     "command": command,
                     "tests": variant == "release",
                 })
-            for surface in FRONTEND_BUILD_SURFACES:
+            for surface in manifest.get("frontendSurfaces", FRONTEND_BUILD_SURFACES):
                 root = workspace / surface["repository"] / surface["directory"]
                 if not root.is_dir():
                     if surface["repository"] not in manifest["releaseRepositories"]:
@@ -104,6 +109,17 @@ class ReleaseBuildValidator:
                     "command": install,
                     "tests": False,
                 })
+                for index, command in enumerate(surface.get("verify", [])):
+                    tasks.append({
+                        "id": self._task_id(variant, "npm", surface["id"], f"verify-{index}"),
+                        "variant": variant,
+                        "kind": "frontend-verification",
+                        "environmentDefaults": surface.get("verificationDefaults", {}),
+                        "repository": surface["repository"],
+                        "cwd": str(root),
+                        "command": command,
+                        "tests": True,
+                    })
                 if surface["build"]:
                     build_task = {
                         "id": self._task_id(variant, "npm", surface["id"], "build"),
@@ -119,6 +135,9 @@ class ReleaseBuildValidator:
                             workspace / surface["repository"] / surface["buildOutput"]
                         )
                     tasks.append(build_task)
+        # Catch prepared consumer failures before paying for the Java build. Preserve
+        # install/check/build order within each frontend and Maven dependency order.
+        tasks.sort(key=lambda task: (task["variant"] != "release", task["kind"] == "maven"))
         identifiers = [task["id"] for task in tasks]
         if len(identifiers) != len(set(identifiers)):
             raise ReleaseError("release build plan contains duplicate task identifiers")
@@ -169,6 +188,16 @@ class ReleaseBuildValidator:
         environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"] = "true"
         environment["CI"] = "true"
         environment["NG_CLI_ANALYTICS"] = "false"
+        workers = manifest.get("buildConcurrency", {}).get("workers", 4)
+        if not isinstance(workers, int) or not 1 <= workers <= 16:
+            raise ReleaseError("Frontend workers must be between 1 and 16")
+        for variable in ("CEDAR_TEST_WORKERS", "VITEST_MAX_WORKERS", "NG_BUILD_MAX_WORKERS"):
+            environment[variable] = str(workers)
+        for key, value in task.get('environmentDefaults', {}).items():
+            environment.setdefault(key, value)
+        environment['CEDAR_VERSION'] = manifest['versionPreparation'][task['variant']]['version']
+        environment['CEDAR_VERSION_MODIFIER'] = ''
+
         started = dt.datetime.now(dt.timezone.utc).isoformat()
         guarded_maven = task.get("kind") == "maven" and task.get("tests") is True
         if guarded_maven:

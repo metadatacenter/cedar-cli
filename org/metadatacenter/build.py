@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 import json
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_re
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
+from org.metadatacenter.util.InvocationContext import default_build_workers, default_maven_threads
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.smoke_gate import run_smoke
@@ -25,6 +27,21 @@ app.add_typer(maven.app, name="maven", help="Maven cache operations...")
 
 plan_executor = PlanExecutor()
 console = Console()
+
+@app.callback()
+def concurrency(
+    jobs: Optional[int] = typer.Option(
+        None, min=1, max=16,
+        help="Concurrent frontend repositories and Maven reactor threads; 1 is serial. "
+             "Default: two repositories, and one Maven thread per core up to 16."),
+    workers: int = typer.Option(default_build_workers(), min=1, max=16, help="Worker budget within each frontend repository."),
+):
+    from org.metadatacenter.util.InvocationContext import current_context
+    # Concurrent frontend builds multiply by their worker budget, so only Maven follows the host.
+    current_context().settings.build_jobs = jobs or 2
+    current_context().settings.maven_threads = jobs or default_maven_threads()
+    current_context().settings.build_workers = workers
+
 
 JAVA_TESTS_OPTION_HELP = "Run Java test suites. Default: run."
 
@@ -50,22 +67,26 @@ def frontend_input_roots(plan):
 
 
 # Profiles and frontend configuration live in this mixed-purpose repository.
-# Backend audits, repairs and documentation are not frontend build inputs.
+# Backend audits, repairs and documentation are not build inputs, for Java either.
 FRONTEND_DEVELOPMENT_INPUTS = (
-    'bin', 'ops/frontend-train.json', 'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
+    'bin', 'ops/frontend-train.json', 'ops/frontend_inventory.py',
+    'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
+    'ops/build-native-split-frontend.sh', 'ops/write-native-frontend-build-info.mjs',
 )
 
 
 def capture_build_state(home: Path, frontend_only: bool):
     state = capture_estate_state(home)
     development = (home / 'cedar-development').resolve()
-    if frontend_only and development in state:
+    if development in state:
         state[development] = tracked_path_state(development, FRONTEND_DEVELOPMENT_INPUTS)
     return state
 
 
 def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
     """Run a build while proving it did not add or alter tracked workspace changes."""
+    from org.metadatacenter.util.InvocationContext import current_context
+    plan.build_jobs = current_context().settings.build_jobs
     if dry_run or dump_plan:
         return plan_executor.execute(plan, dry_run, dump_plan)
     try:
@@ -237,7 +258,7 @@ def server_frontends(dry_run: bool = typer.Option(False, help="Dry run"),
 def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
               dump_plan: bool = typer.Option(False, help="Dump plan"),
               tests: bool = typer.Option(
-                  True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
+                  True, "--tests/--skip-tests", help="Run Java and frontend verification suites. Default: run.")):
     configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
@@ -245,5 +266,5 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.libraries(plan)
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
-    BuildPlanner.frontends(plan)
+    BuildPlanner.frontends(plan, verification=tests)
     execute_build(plan, dry_run, dump_plan)

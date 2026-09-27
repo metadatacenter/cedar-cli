@@ -72,12 +72,33 @@ def _dry_run(selected, resume, command):
     return 0
 
 
-def dispatch(resume=None, dry_run=False):
+def dispatch(resume=None, dry_run=False, release_version=None, next_version=None, cee_version=None):
+    from org.metadatacenter.train_support.release_intent import validate_intent, preflight
+    try:
+        intent = validate_intent(release_version, next_version, cee_version)
+    except ValueError as error:
+        _output_component.console.print(str(error), markup=False)
+        return 1
     try:
         selected = BuildTrain.validate(resume) if resume else BuildTrain.allocate()
     except (OSError, ValueError) as error:
         _output_component.console.print(f'[red]{error}[/red]')
         return 1
+
+    if intent:
+        try:
+            validate_intent(release_version, next_version, cee_version, selected)
+            source = BuildTrain._read(f'trains/{selected}.json') if resume else None
+            findings = preflight(intent, source=source)
+            for finding in findings:
+                if finding.severity == 'warn':
+                    _output_component.console.print(finding.message, markup=False)
+            _output_component.console.print(
+                f'Release prerequisites passed for {release_version} → {next_version}. '
+                'Artifact equivalence and final source checks run after the train.')
+        except (ValueError, OSError) as error:
+            _output_component.console.print(str(error), markup=False)
+            return 1
 
     command = [
         'gh', 'workflow', 'run', _policy_component.WORKFLOW,

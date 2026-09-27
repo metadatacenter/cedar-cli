@@ -32,7 +32,7 @@ class FrontendInputScopeTest(unittest.TestCase):
 
 
 class DevelopmentInputScopeTest(unittest.TestCase):
-    def test_backend_edits_and_commits_do_not_invalidate_frontend_inputs(self):
+    def test_backend_edits_and_commits_do_not_invalidate_build_inputs(self):
         import tempfile
         import subprocess
         with tempfile.TemporaryDirectory() as directory:
@@ -51,14 +51,14 @@ class DevelopmentInputScopeTest(unittest.TestCase):
             git('config', 'user.name', 'Test')
             git('add', '.')
             git('commit', '-m', 'Initial')
-            baseline = build.capture_build_state(home, True)
+            baseline = {flag: build.capture_build_state(home, flag) for flag in (False, True)}
             audit.write_text('changed audit')
-            self.assertEqual(baseline, build.capture_build_state(home, True))
+            self.assertEqual(baseline, {flag: build.capture_build_state(home, flag) for flag in (False, True)})
             git('add', '.')
             git('commit', '-m', 'Backend work')
-            self.assertEqual(baseline, build.capture_build_state(home, True))
+            self.assertEqual(baseline, {flag: build.capture_build_state(home, flag) for flag in (False, True)})
             profile.write_text('changed profile')
-            self.assertNotEqual(baseline, build.capture_build_state(home, True))
+            self.assertNotEqual(baseline, {flag: build.capture_build_state(home, flag) for flag in (False, True)})
             git('add', '.')
             git('commit', '-m', 'Profile work')
-            self.assertNotEqual(baseline, build.capture_build_state(home, True))
+            self.assertNotEqual(baseline, {flag: build.capture_build_state(home, flag) for flag in (False, True)})

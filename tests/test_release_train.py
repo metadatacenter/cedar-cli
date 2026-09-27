@@ -1968,6 +1968,10 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             next_maven = next(
                 task for task in tasks if task["id"] == "nextDevelopment:maven:parent"
             )
+            manifest["buildConcurrency"] = {"mavenThreads": 2}
+            threaded = validator.tasks(manifest)
+            self.assertTrue(all(t["command"][-2:] == ["-T", "2"] or "-T" in t["command"]
+                                for t in threaded if t["kind"] == "maven"))
             self.assertNotIn("-DskipTests", release_maven["command"])
             self.assertIn("-DskipTests", next_maven["command"])
             self.assertTrue(release_maven["tests"])
@@ -1975,6 +1979,41 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertIn(
                 "nextDevelopment:npm:template-editor:install", {task["id"] for task in tasks},
             )
+
+    def test_prepared_demo_checks_precede_build_and_maven_in_both_variants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory)
+            manifest["releaseRepositories"].append("cedar-component-demo")
+            for variant in manifest["versionPreparation"].values():
+                for surface in release_train.FRONTEND_BUILD_SURFACES:
+                    if surface["repository"] != "cedar-component-demo":
+                        continue
+                    root = Path(variant["workspace"]) / surface["repository"] / surface["directory"]
+                    root.mkdir(parents=True)
+                    (root / "package.json").write_text("{}")
+                    (root / "package-lock.json").write_text("{}")
+            tasks = ReleaseBuildValidator(ReleaseState(root=Path(directory) / "state")).tasks(manifest)
+            for variant in ("release", "nextDevelopment"):
+                selected = [task for task in tasks if task["variant"] == variant]
+                self.assertEqual("maven", selected[-1]["kind"])
+                for demo in ("angular", "ember", "react"):
+                    group = [task for task in selected if f":cee-demo-{demo}:" in task["id"]]
+                    self.assertEqual(["npm-install", "frontend-verification",
+                                      "frontend-verification", "frontend-build"],
+                                     [task["kind"] for task in group])
+                    self.assertTrue(group[2]["tests"])
+                    self.assertEqual("test:ember" if demo == "ember" else "test",
+                                     group[2]["command"][-1])
+
+    def test_resume_uses_the_recorded_frontend_recipe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory, include_frontend=True)
+            manifest['frontendSurfaces'] = [dict(id='recorded', repository='cedar-template-editor',
+                directory='.', install=[], build=[], verify=[['npm','run','recorded-check']])]
+            tasks = ReleaseBuildValidator(ReleaseState(root=Path(directory) / 'state')).tasks(manifest)
+            checks = [task for task in tasks if task['kind']=='frontend-verification']
+            self.assertEqual(2, len(checks))
+            self.assertTrue(all(task['command']==['npm','run','recorded-check'] for task in checks))
 
     def test_angular_builds_do_not_forward_options_past_chained_package_scripts(self):
         angular_surfaces = {"openview", "bridging", "monitoring", "cee-demo-angular"}
@@ -2099,6 +2138,34 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertEqual(
                 2, len(completed["buildValidation"]["completedTasks"]),
             )
+
+    def test_parallel_failure_drains_and_records_successful_sibling_for_resume(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory)
+            manifest["buildConcurrency"] = {"jobs": 2, "workers": 2}
+            state = ReleaseState(root=Path(directory) / "state")
+            state.start(manifest)
+            state.update_current_manifest({"phase": "versions-prepared"})
+            barrier = threading.Barrier(2)
+            def execute(task, environment):
+                self.assertEqual("2", environment["VITEST_MAX_WORKERS"])
+                barrier.wait(timeout=5)
+                if task["variant"] == "nextDevelopment":
+                    raise ReleaseError("parallel failure")
+                return "passed"
+            with self.assertRaisesRegex(ReleaseError, "parallel failure"):
+                validate_active_release_builds(state, ReleaseBuildValidator(state, executor=execute))
+            failed, _ = state.read_current_manifest()
+            self.assertEqual("build-validation-failed", failed["phase"])
+            self.assertEqual(["release:maven:parent"], list(failed["buildValidation"]["completedTasks"]))
+            self.assertEqual([], failed["buildValidation"]["inProgressTasks"])
+            calls = []
+            def resume(task, environment):
+                calls.append(task["id"])
+                return "passed"
+            validate_active_release_builds(state, ReleaseBuildValidator(state, executor=resume))
+            self.assertEqual(["nextDevelopment:maven:parent"], calls)
 
     def test_changed_completed_log_blocks_resume(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -4817,6 +4884,19 @@ class ReleaseSnapshotOrderingTest(unittest.TestCase):
         self.assertLess(
             names.index("snapshots"), names.index("remotes"),
             "a develop push whose snapshots are not yet published sends CI looking for them")
+
+    def test_new_snapshot_policy_reuses_only_next_development_build_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _, _, manifest = ReleaseArtifactPublicationTest().make_release(directory)
+            manifest["reuseValidatedMavenCache"] = True
+            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+            tasks = publisher.snapshot_tasks(manifest)
+            for task in tasks:
+                if task['kind'] == 'maven-snapshot-deploy':
+                    repo = next(arg for arg in task['command'] if arg.startswith('-Dmaven.repo.local='))
+                    self.assertIn('/build-cache/nextDevelopment/m2/repository', repo)
+                    self.assertIn('deploy', task['command'])
+                    self.assertNotIn('clean', task['command'])
 
     def test_the_snapshot_plan_does_not_need_the_remotes_to_have_been_integrated(self):
         """This is what lets the stage run first: it binds to the verified local ref."""

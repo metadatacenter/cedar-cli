@@ -142,3 +142,23 @@ a frontend, and `--prune-baseline` after fixing existing findings. Spacing and
 geometry remain advisory. The implementation and CI contract live in
 `cedar-design-tokens/tools/check_adoption.py`; that repository's README explains
 exceptions, scope and rollout.
+
+### Build concurrency
+
+`cedarcli build --jobs 2 --workers 2 frontends` schedules independent isolated repositories
+from their package and integration-test dependencies. Repository concurrency defaults to two; workers default to half the detected CPUs,
+at least one and capped at eight. Use
+`--jobs 1 --workers 1` for serial diagnosis. Full frontend deployment and smoke gates remain
+mandatory. `cedarcli build java` uses Maven's dependency-aware module scheduling, with one
+reactor thread per detected CPU, at least one and capped at sixteen. It preserves the
+parent → libraries → project → clients order and serial tests within individual JVMs.
+Only one Maven reactor runs at a time, so its thread count follows the host, while frontend
+repository concurrency stays at two because each repository also spends its own worker
+budget. An explicit `--jobs N` sets both to N. Options belong before the build target. Command timings and task results
+are saved to `$CEDAR_HOME/.cedar/build-reports/`, including failures.
+
+`cedarcli test e2e --rest-workers 4` runs up to four independent REST smoke suites
+concurrently, followed by the browser smoke. The REST default is two workers;
+`--rest-workers 1` restores serial suite execution. Global-state suites stay exclusive,
+all check-inventory and cleanup gates remain required, and the REST report includes
+per-suite and phase timings.

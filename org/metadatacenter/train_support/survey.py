@@ -10,6 +10,7 @@ from org.metadatacenter.github_ci import (
     run_url,
 )
 from org.metadatacenter.util.Util import Util
+from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 import json
@@ -177,8 +178,8 @@ def source_ci_survey(source=None, reporter=None):
         raise ValueError(f'cannot read build-train configuration: {error}') from error
     recorded = source.get('repositories', {}) if isinstance(source, dict) else {}
     report = reporter or (lambda message: _output_component.console.print(f'  [yellow]{message}[/yellow]'))
-    verdicts = []
-    for repository in build.get('repositories', []):
+    def inspect_repository(repository):
+        verdicts = []
         root = Path(cedar_home) / repository
         revision = recorded.get(repository)
         if not revision:
@@ -194,7 +195,7 @@ def source_ci_survey(source=None, reporter=None):
                     repository, '', '', 'error',
                     f'{repository}: cannot resolve develop'
                     + (f' ({detail.splitlines()[-1]})' if detail else '')))
-                continue
+                return verdicts
             revision = output.split()[0]
         has_workflow = None
         if (root / '.git').exists():
@@ -213,7 +214,7 @@ def source_ci_survey(source=None, reporter=None):
                 verdicts.append(_policy_component.SourceCIVerdict(
                     repository, revision, '', 'error',
                     f'{repository}: cannot inspect CI workflow contract ({error})'))
-                continue
+                return verdicts
             has_workflow = response.returncode == 0
             if response.returncode and 'HTTP 404' not in (response.stderr or response.stdout):
                 detail = (response.stderr or response.stdout or '').strip().splitlines()
@@ -221,18 +222,18 @@ def source_ci_survey(source=None, reporter=None):
                     repository, revision, '', 'error',
                     f'{repository}: cannot inspect CI workflow contract '
                     f'({detail[-1] if detail else f"exit {response.returncode}"})'))
-                continue
+                return verdicts
         if not has_workflow:
             verdicts.append(_policy_component.SourceCIVerdict(
                 repository, revision, '', 'advisory',
                 f'{repository} has no workflow contract; the train gates its outputs.'))
-            continue
+            return verdicts
         try:
             probe = probe_exact_commit(
                 repository, revision, reporter=report, environment=invocation_environment())
         except GithubCIProbeError as error:
             verdicts.append(_policy_component.SourceCIVerdict(repository, revision, '', 'error', str(error)))
-            continue
+            return verdicts
         runs = list(probe.runs)
         if repository == 'cedar-development':
             runs = [
@@ -243,7 +244,7 @@ def source_ci_survey(source=None, reporter=None):
             verdicts.append(_policy_component.SourceCIVerdict(
                 repository, revision, '', 'missing',
                 f'no CI run for {revision[:8]} after bounded indexing grace'))
-            continue
+            return verdicts
         for name, record in latest_runs_by_name(runs).items():
             status = record.get('status')
             conclusion = record.get('conclusion')
@@ -264,7 +265,11 @@ def source_ci_survey(source=None, reporter=None):
                 verdicts.append(_policy_component.SourceCIVerdict(
                     repository, revision, name, 'green',
                     f'{name} concluded {conclusion}', url, run_id, run_repository))
-    return verdicts
+        return verdicts
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(copy_context().run, inspect_repository, repository)
+                   for repository in build.get('repositories', [])]
+        return [verdict for future in futures for verdict in future.result()]
 
 
 @dataclass(frozen=True)

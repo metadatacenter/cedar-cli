@@ -77,6 +77,9 @@ class PlanExecutor(Executor):
         return node_id
 
     def start_long_execution(self, plan: Plan, dry_run: bool):
+        if hasattr(plan, 'build_jobs') and not dry_run:
+            from org.metadatacenter.build_scheduler import execute
+            return execute(plan, plan.build_jobs)
         max_depth = plan.get_max_depth()
 
         job_progress = Progress(

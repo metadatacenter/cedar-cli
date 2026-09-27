@@ -58,6 +58,8 @@ from org.metadatacenter.release_support.acceptance import (
     _publication_evidence_by_plan,
 )
 
+from org.metadatacenter.release_support.development import DevelopmentVerifier, verify_active_development
+
 from org.metadatacenter.release_support.distribution import (
     ReleaseDistributionMaterializer,
 )
@@ -65,6 +67,7 @@ from org.metadatacenter.release_support.distribution import (
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
     RetryableReleaseError,
+    NexusRetryableError,
 )
 
 from org.metadatacenter.release_support.hashes import (
@@ -81,6 +84,7 @@ from org.metadatacenter.release_support.integration import (
 from org.metadatacenter.release_support.lifecycle import (
     RELEASE_FINAL_PHASES,
     RELEASE_STAGES,
+    release_stages,
     RELEASE_TERMINAL_PHASE,
     REWIND_TO_FRONTENDS,
     ReleaseStage,
@@ -237,6 +241,7 @@ from org.metadatacenter.release_support.transport import (
     _raise_command_failure,
 )
 
+from org.metadatacenter.release_support.scheduling import build_edges
 from org.metadatacenter.release_support.validation import (
     ReleaseBuildValidator,
 )
@@ -388,6 +393,9 @@ def start(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
     accept_main_only: list[str] = typer.Option(
         None, "--accept-main-only", help=ACCEPT_MAIN_ONLY_HELP),
+    jobs: int = typer.Option(2, "--jobs", min=1, max=4, help="Concurrent isolated release builds"),
+    workers: int = typer.Option(4, "--workers", min=1, max=16, help="Workers within each frontend build"),
+    maven_threads: int = typer.Option(2, "--maven-threads", min=1, max=8, help="Maven reactor threads per variant"),
     verbose: bool = typer.Option(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
@@ -397,6 +405,7 @@ def start(
         with state.exclusive():
             _activate_toolchain()
             manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
+            manifest["buildConcurrency"] = {"jobs": jobs, "workers": workers, "mavenThreads": maven_threads}
             _render_plan(manifest)
             _release_gate_or_exit(
                 manifest,

@@ -263,5 +263,5 @@ class BuildTrainWorker:
         return _dispatch_component._dry_run(selected, resume, command)
 
     @staticmethod
-    def dispatch(resume=None, dry_run=False):
-        return _dispatch_component.dispatch(resume, dry_run)
+    def dispatch(resume=None, dry_run=False, **release_intent):
+        return _dispatch_component.dispatch(resume, dry_run, **release_intent)

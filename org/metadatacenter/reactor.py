@@ -250,13 +250,18 @@ def resolve(build_root, cedar_home) -> list[str]:
 
 
 def prepare_checks(repo, build_root, cedar_home, environment, commands):
-    """Give designer integration tests this run's real siblings, not optional old bundles."""
+    """Bind verification to the isolated inputs built by this reactor."""
+    if repo.name == "cedar-model-typescript-library":
+        # pretest enumerates the vendored corpus relative to cwd. Its readers must
+        # use that same corpus, never an unrelated or absent host sibling checkout.
+        environment["CEDAR_HOME"] = str(build_root)
     if repo.name != 'cedar-embeddable-designer' or 'npm run test:ci' not in commands:
         return []
     available, pending = _state(cedar_home)
     inputs = []
-    for variable, name in [('CEF_BUNDLE', 'cedar-embeddable-editor'),
-                           ('PICKER_BUNDLE', 'cedar-embeddable-term-picker')]:
+    from org.metadatacenter.frontend_inventory import integration_inputs
+    for item in integration_inputs(repo.name):
+        variable, name = item['variable'], item['repository']
         if name in pending or name not in available:
             raise ReactorError(f'Designer integration checks require a completed {name} build')
         artifact = available[name]

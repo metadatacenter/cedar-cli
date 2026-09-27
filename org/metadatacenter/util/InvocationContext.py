@@ -7,10 +7,23 @@ import os
 import platform
 
 
+def default_build_workers():
+    # Two repository jobs share the host; keep a ceiling for very large runners.
+    return max(1, min(8, (os.cpu_count() or 2) // 2))
+
+
+def default_maven_threads():
+    # One Maven reactor runs at a time, so it may use every core; 16 is the option's ceiling.
+    return max(1, min(16, os.cpu_count() or 2))
+
+
 @dataclass
 class InvocationSettings:
     do_fail_on_error: bool = True
     skip_tests: bool = False
+    build_jobs: int = 1
+    maven_threads: int = 1
+    build_workers: int = field(default_factory=default_build_workers)
     shell_path: str = '/bin/bash'
 
     def get_sed_replace_in_place(self):
@@ -111,3 +124,12 @@ class ContextAttribute:
 def process_environment(override=None):
     """Subprocesses inherit the invocation's resolved profile unless explicitly overridden."""
     return invocation_environment() if override is None else override
+
+
+# Shared by a scheduled invocation's copied contexts, but never across invocations.
+process_cancellation = ContextVar('cedar_process_cancellation', default=None)
+
+
+def cancellation_requested():
+    event = process_cancellation.get()
+    return event is not None and event.is_set()

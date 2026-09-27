@@ -206,35 +206,8 @@ MAVEN_GENERATED_VERSION_FILES = {
 }
 
 
-FRONTEND_BUILD_SURFACES = [
-    {"id": "template-editor", "repository": "cedar-template-editor", "directory": ".",
-     "install": [], "build": []},
-    {"id": "workspace", "repository": "cedar-workspace", "directory": ".",
-     "install": [], "build": []},
-    {"id": "template-designer", "repository": "cedar-template-designer", "directory": ".",
-     "install": [], "build": []},
-    {"id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-src",
-     "install": [], "build": ["npm", "run", "build"],
-     "buildOutput": "cedar-openview-src/dist/cedar-openview"},
-    {"id": "bridging", "repository": "cedar-bridging", "directory": "cedar-bridging-src",
-     "install": [], "build": ["npm", "run", "build"],
-     "buildOutput": "cedar-bridging-src/dist/cedar-bridging"},
-    {"id": "monitoring", "repository": "cedar-monitoring", "directory": "cedar-monitoring-src",
-     "install": ["--legacy-peer-deps"], "build": ["npm", "run", "build"],
-     "buildOutput": "cedar-monitoring-src/dist/cedar-monitoring"},
-    {"id": "content", "repository": "cedar-content-distribution", "directory": ".",
-     "install": [], "build": []},
-    {"id": "cee-demo-angular", "repository": "cedar-component-demo",
-     "directory": "cedar-cee-demo-angular-src", "install": [],
-     "build": ["npm", "run", "build"],
-     "buildOutput": "cedar-cee-demo-angular-src/dist/cedar-cee-demo-angular-src/browser"},
-    {"id": "cee-demo-ember", "repository": "cedar-component-demo",
-     "directory": "cedar-cee-demo-ember-src", "install": [],
-     "build": ["npm", "run", "build"]},
-    {"id": "cee-demo-react", "repository": "cedar-component-demo",
-     "directory": "cedar-cee-demo-react", "install": [],
-     "build": ["npm", "run", "build"]},
-]
+from org.metadatacenter.frontend_inventory import ReleaseSurfaces
+FRONTEND_BUILD_SURFACES = ReleaseSurfaces()
 
 
 MAVEN_RELEASE_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/releases/"

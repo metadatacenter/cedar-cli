@@ -14,6 +14,7 @@ from org.metadatacenter.release_support.distribution import (
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
     RetryableReleaseError,
+    NexusRetryableError,
 )
 from org.metadatacenter.release_support.integration import (
     ReleaseRemoteIntegrator,
@@ -79,36 +80,49 @@ def validate_active_release_builds(
         "buildValidation": evidence,
         "failure": None,
     })
-    for task in tasks:
-        if task["id"] in completed:
-            continue
-        task = {**task, "evidenceAttempt": evidence["attempt"]}
-        evidence["inProgressTask"] = task["id"]
-        state.update_current_manifest({
-            "phase": "validating-builds",
-            "buildValidation": evidence,
-            "failure": None,
-        })
-        console.print(
-            f"Build {len(completed) + 1}/{len(tasks)}: {task['id']}", markup=False)
+    from org.metadatacenter.build_scheduler import run_graph
+    from org.metadatacenter.release_support.scheduling import build_edges
+    pending = [{**task, "evidenceAttempt": evidence["attempt"]}
+               for task in tasks if task["id"] not in completed]
+    jobs = manifest.get("buildConcurrency", {}).get("jobs", 1)
+    if not isinstance(jobs, int) or not 1 <= jobs <= 4:
+        raise ReleaseError("Release build jobs must be between 1 and 4")
+    records, failures, active = {}, {}, set()
+
+    def run(task):
         try:
-            record = validator.run_task(manifest, task)
-        except ReleaseError as error:
+            records[task["id"]] = validator.run_task(manifest, task)
+            return 0
+        except Exception as error:
+            failures[task["id"]] = error
+            return 1
+
+    def status(index, outcome):
+        # run_graph calls this only on its coordinator, never a worker.
+        task = pending[index]
+        identity = task["id"]
+        if outcome == "running":
+            active.add(identity)
+            console.print(f"Build: {identity}", markup=False)
+        else:
+            active.discard(identity)
+        if outcome == "passed":
+            completed[identity] = records[identity]
+        if outcome == "failed":
             evidence["failedTask"] = validator.failed_task_evidence(manifest, task)
-            state.update_current_manifest({
-                "phase": "build-validation-failed",
-                "buildValidation": evidence,
-                "failure": str(error),
-            })
-            raise
-        completed[task["id"]] = record
-        evidence.pop("failedTask", None)
-        evidence.pop("inProgressTask", None)
-        state.update_current_manifest({
-            "phase": "validating-builds",
-            "buildValidation": evidence,
-            "failure": None,
-        })
+        evidence["inProgressTasks"] = sorted(active)
+        evidence["inProgressTask"] = next(iter(sorted(active)), None)
+        state.update_current_manifest({"phase": "validating-builds", "buildValidation": evidence})
+
+    run_graph(pending, build_edges(pending), run, jobs, on_status=status)
+    if failures:
+        message = "; ".join(f"{name}: {error}" for name, error in sorted(failures.items()))
+        state.update_current_manifest({"phase": "build-validation-failed",
+                                       "buildValidation": evidence, "failure": message})
+        raise ReleaseError(message)
+    evidence.pop("failedTask", None)
+    evidence.pop("inProgressTask", None)
+    evidence.pop("inProgressTasks", None)
     evidence["completedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
     completed_manifest, _ = state.update_current_manifest({
         "phase": "builds-validated",
@@ -505,7 +519,9 @@ def accept_active_release(
     if manifest.get("phase") == "accepted":
         state.conclude()
         return manifest
-    if manifest.get("phase") not in {"artifacts-published", "acceptance-failed"}:
+    if manifest.get("developmentVerificationPolicy") and not manifest.get("developmentVerification", {}).get("completedAt"):
+        raise ReleaseError("next-development verification must complete before acceptance")
+    if manifest.get("phase") not in {"artifacts-published", "development-verified", "acceptance-failed"}:
         raise ReleaseError(f"cannot accept a release that is {manifest.get('phase')}")
     acceptance = acceptance or ReleaseAcceptance(state)
     try:
@@ -664,6 +680,18 @@ RELEASE_STAGES = (
 )
 
 
+def release_stages(manifest):
+    if not manifest.get('developmentVerificationPolicy'):
+        return RELEASE_STAGES
+    from org.metadatacenter.release_support.development import verify_active_development
+    development = ReleaseStage('development', frozenset({
+        'artifacts-published', 'verifying-development', 'development-verification-failed'}),
+        'development-verified', lambda state, deps: verify_active_development(state, deps.get('development_verifier')))
+    acceptance = dataclasses.replace(RELEASE_STAGES[-1],
+        entry_phases=frozenset({'development-verified', 'acceptance-failed'}))
+    return (*RELEASE_STAGES[:-1], development, acceptance)
+
+
 RELEASE_TERMINAL_PHASE = RELEASE_STAGES[-1].done_phase
 
 
@@ -676,7 +704,7 @@ def _next_release_stage(manifest: dict) -> str | None:
         return None
     if phase in REWIND_TO_FRONTENDS:
         return RELEASE_STAGES[0].name
-    for stage in RELEASE_STAGES:
+    for stage in release_stages(manifest):
         if phase in stage.entry_phases:
             return stage.name
     raise ReleaseError(f"a release in {phase} has no stage that can continue it")
@@ -686,7 +714,7 @@ def _release_stage_has_finished(manifest: dict, name: str) -> bool:
     next_name = _next_release_stage(manifest)
     if next_name is None:
         return True
-    order = [stage.name for stage in RELEASE_STAGES]
+    order = [stage.name for stage in release_stages(manifest)]
     return order.index(name) < order.index(next_name)
 
 
@@ -699,6 +727,7 @@ def advance_active_release(
     remote_integrator: ReleaseRemoteIntegrator | None = None,
     artifact_publisher: ReleaseArtifactPublisher | None = None,
     acceptance: ReleaseAcceptance | None = None,
+    development_verifier=None,
 ) -> dict:
     """Run the release from the first stage that can still take its recorded phase."""
     state = state or ReleaseState()
@@ -710,6 +739,7 @@ def advance_active_release(
         "remote_integrator": remote_integrator,
         "artifact_publisher": artifact_publisher,
         "acceptance": acceptance,
+        "development_verifier": development_verifier,
     }
     manifest, _ = state.read_current_manifest()
     if manifest.get("phase") in REWIND_TO_FRONTENDS:
@@ -724,13 +754,14 @@ def advance_active_release(
         # process interruption between those two durable writes is repaired by resume.
         state.conclude()
         return manifest
+    stages = release_stages(manifest)
     start = next(
-        (index for index, stage in enumerate(RELEASE_STAGES) if phase in stage.entry_phases),
+        (index for index, stage in enumerate(stages) if phase in stage.entry_phases),
         None,
     )
     if start is None:
         raise ReleaseError(f"a release in {phase} has no stage that can continue it")
-    for stage in RELEASE_STAGES[start:]:
+    for stage in stages[start:]:
         console.print(f"Release phase: {stage.name}", markup=False)
         manifest = stage(state, dependencies)
     return manifest
@@ -761,6 +792,7 @@ def _drive_release(
     artifact_publisher = ReleaseArtifactPublisher(state, verbose=verbose)
     acceptance = ReleaseAcceptance(
         state, remote_integrator=remote_integrator, publisher=artifact_publisher)
+    nexus_failures = 0
     for attempt in range(1, TRANSIENT_RETRY_ATTEMPTS + 1):
         if attempt > 1:
             state.update_current_manifest({"retry": None, "failure": None})
@@ -776,6 +808,14 @@ def _drive_release(
                 acceptance=acceptance,
             )
         except RetryableReleaseError as error:
+            if isinstance(error, NexusRetryableError):
+                nexus_failures += 1
+                if nexus_failures >= 3:
+                    detail = (f"Nexus circuit open after {nexus_failures} transient failures: {error}. "
+                        "Health/read success does not prove upload recovery. State is retained; "
+                        "use release resume after Nexus recovers.")
+                    state.update_current_manifest({"retry": None, "failure": detail})
+                    raise ReleaseError(detail) from error
             if attempt == TRANSIENT_RETRY_ATTEMPTS:
                 raise
             delay = TRANSIENT_RETRY_BACKOFF_SECONDS[

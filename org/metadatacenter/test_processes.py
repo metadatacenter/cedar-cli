@@ -14,9 +14,10 @@ console = Console()
 
 
 @app.command("e2e")
-def e2e():
+def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
+        help="Concurrent independent REST suites; 1 preserves serial order (default: 2).")):
     """Run both whole-stack smoke tiers and record the evidence the train and release gates require."""
-    raise typer.Exit(run_smoke())
+    raise typer.Exit(run_smoke(rest_workers=rest_workers))
 
 
 @app.command("status")

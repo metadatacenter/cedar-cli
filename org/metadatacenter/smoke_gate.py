@@ -1,10 +1,11 @@
 """The whole-stack smoke run as evidence a train dispatch and a release plan are gated on.
 
 The estate's rule is that suites verify logic and a redeploy plus a smoke run verifies reality.
-Until this module nothing enforced the second half: the REST tier and the browser tier under
-`cedar-development/ops/e2e` ran when a developer remembered, and a contract regression that every
-backend-free suite passes could reach staging through a train. `cedarcli test e2e` runs both tiers
-against the native stack and records what they ran against. The train dispatch preflight and the
+Until this module nothing enforced the second half: the smoke tiers under `cedar-development/ops/e2e`
+ran when a developer remembered, and a contract regression that every backend-free suite passes
+could reach staging through a train. `cedarcli test e2e` runs every tier against the native stack
+and records what they ran against. The browser tier drives the combined AngularJS application; the
+split tier drives the Angular Workspace, the Designer host and the account pages that replace it. The train dispatch preflight and the
 release plan refuse a source that no passing run covers.
 
 A run is evidence about commits, not about a moment. The record therefore names the `develop` head
@@ -42,7 +43,7 @@ from org.metadatacenter.worker.ServerWorker import ServerWorker
 console = Console()
 
 SCHEMA_VERSION = 1
-TIERS = ("rest", "browser")
+TIERS = ("rest", "browser", "split")
 REMEDY = "run cedarcli test e2e against the stack built from this source"
 
 E2E = Path("cedar-development") / "ops" / "e2e"
@@ -256,17 +257,20 @@ def wait_out_warmup(home, problems, runner=subprocess.run, sleeper=time.sleep):
 def run_smoke(
     cedar_home=None,
     *,
+    rest_workers: int | None = None,
     runner=subprocess.run,
     clock: Callable[[], dt.datetime] = _now,
     environment: Mapping[str, str] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
-    """Run both smoke tiers and record what they ran against. Zero only when both pass.
+    """Run every smoke tier and record what they ran against. Zero only when all of them pass.
 
     The stack is judged before anything runs, and a refusal writes no record: an unhealthy or stale
-    stack is a reason to stop, not evidence about the source. Both tiers run even when the first
-    fails, so one command yields one complete answer.
+    stack is a reason to stop, not evidence about the source. Every tier runs even when an earlier
+    one fails, so one command yields one complete answer.
     """
+    if rest_workers is not None and (type(rest_workers) is not int or not 1 <= rest_workers <= 4):
+        raise ValueError("REST workers must be an integer from 1 to 4")
     home = _home(cedar_home or invocation_environment().get("CEDAR_HOME"))
     environment = dict(environment if environment is not None else invocation_environment())
     e2e = home / E2E
@@ -305,7 +309,10 @@ def run_smoke(
     commands = {
         "rest": ["npm", "run", "smoke:rest", "--", f"--report={rest_report}"],
         "browser": ["npm", "run", "smoke"],
+        "split": ["npm", "run", "smoke:workspace:modern:full"],
     }
+    if rest_workers is not None:
+        commands["rest"].append(f"--workers={rest_workers}")
 
     started = clock()
     tiers = {}
