@@ -326,13 +326,19 @@ def _check_request_schema(document, report, where, schema, seen=frozenset()) -> 
                                       'request body has no schema'))
         return
     if '$ref' in schema:
-        ref = schema['$ref']
-        if ref in seen:
-            report.findings.append(Finding(RULE_REQUEST_CLASSIFICATION, where,
-                                          f'cyclic request schema reference: {ref}'))
-            return
-        _check_request_schema(document, report, f'{where} -> {ref}',
-                              _resolve(document, ref), seen | {ref})
+        aliases = set()
+        while isinstance(schema, Mapping) and '$ref' in schema:
+            ref = schema['$ref']
+            if ref in aliases:
+                report.findings.append(Finding(RULE_REQUEST_CLASSIFICATION, where,
+                                              f'cyclic request schema alias: {ref}'))
+                return
+            if ref in seen:
+                return  # A recursive alternative already reached a concrete schema on this path.
+            aliases.add(ref)
+            where = f'{where} -> {ref}'
+            schema = _resolve(document, ref)
+        _check_request_schema(document, report, where, schema, seen | aliases)
         return
     branches = [(key, branch) for key in ('allOf', 'oneOf', 'anyOf')
                 for branch in schema.get(key, [])]

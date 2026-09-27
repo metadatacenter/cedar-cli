@@ -177,6 +177,16 @@ class OpenApiRuleTest(unittest.TestCase):
         doc['components']['requestBodies']['Body'] = {'$ref': '#/components/requestBodies/Body'}
         self.assertIn(RULE_REQUEST_CLASSIFICATION, rules(analyze_document('test', '/doc', doc)))
 
+    def test_recursive_alternatives_still_check_the_concrete_object_branch(self):
+        for classified in (True, False):
+            leaf = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
+            if classified:
+                leaf['additionalProperties'] = False
+            definitions = {'Tree': {'oneOf': [leaf, {'type': 'array', 'items': {
+                '$ref': '#/components/schemas/Tree'}}]}}
+            report = self.request_report({'$ref': '#/components/schemas/Tree'}, definitions)
+            self.assertEqual(classified, RULE_REQUEST_CLASSIFICATION not in rules(report))
+
     def test_body_classification_also_applies_to_delete_and_stale_allowlists(self):
         for repository, method, path in [('test', 'delete', '/commands'),
                 ('cedar-messaging-server', 'post', '/command/mark-all-as-read')]:
