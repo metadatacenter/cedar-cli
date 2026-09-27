@@ -324,6 +324,10 @@ def _release_resume_gate_or_exit(manifest: dict) -> None:
 
 @app.command("readiness")
 def readiness(
+    full: bool = typer.Option(False, "--full", help="Report packages, pins, exact-source CI, smoke and train eligibility together"),
+    model_version: str = typer.Option(None, "--model-version", help="Expected public TypeScript model version"),
+    cee_version: str = typer.Option(None, "--cee-version", help="Expected public CEE version"),
+    from_train: str = typer.Option(None, "--from-train", help="Completed train whose artifacts and source should be checked"),
     release_version: str = typer.Option(
         None, "--version", help="Intended CEDAR release version, to check the arithmetic"),
     next_version: str = typer.Option(
@@ -343,6 +347,20 @@ def readiness(
     if not cedar_home:
         console.print("[red]CEDAR_HOME is not set[/red]")
         raise typer.Exit(1)
+    if full:
+        from org.metadatacenter.release_readiness_report import ReadinessReport
+        rows = ReadinessReport(cedar_home).run(version=release_version, next_version=next_version,
+            model_version=model_version, cee_version=cee_version, train=from_train,
+            packaging=not skip_packaging)
+        for row in rows:
+            console.print(f"{row['status'].upper()} — {row['check']}: {row['detail']}", markup=False)
+            if row['next']:
+                console.print(f"  Next: {row['next']}", markup=False)
+        console.print('Readiness is advisory; release plan/start still enforce every release gate.')
+        raise typer.Exit(0 if all(row['status'] == 'pass' for row in rows) else 1)
+    if model_version or cee_version or from_train:
+        console.print('Package and train options require --full.')
+        raise typer.Exit(1)
     try:
         findings = readiness_findings(
             cedar_home, release_version, next_version, packaging=not skip_packaging)
@@ -351,7 +369,7 @@ def readiness(
         raise typer.Exit(1) from error
     if not findings:
         console.print("[green]Release readiness: every workspace precondition settled[/green]")
-        console.print("A train built from this source can back a release.")
+        console.print("Workspace checks passed; use --full for packages, CI, smoke and train evidence.")
         return
     console.print(f"[red]{len(findings)} precondition(s) would refuse a release:[/red]")
     for finding in findings:
