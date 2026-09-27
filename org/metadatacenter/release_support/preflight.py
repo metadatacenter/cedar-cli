@@ -259,7 +259,12 @@ class ReleasePreflight:
 
     def run_resume(self) -> list[PreflightFinding]:
         """Recheck only conditions still relevant to the recorded next stage."""
-        stage = _next_release_stage(self.manifest)
+        return self._run_checks(self.resume_check_names(self.manifest))
+
+    @staticmethod
+    def resume_check_names(manifest):
+        """The same check inventory is used by execution and the read-only preview."""
+        stage = _next_release_stage(manifest)
         checks = [
             "check_toolchain", "check_embedded_test_processes",
             "check_profile", "check_disk_space",
@@ -298,7 +303,7 @@ class ReleasePreflight:
             checks.extend(["check_nexus_authorization", "check_npm_authorization"])
         elif stage in {"development", "acceptance"}:
             checks.append("check_nexus_authorization")
-        return self._run_checks(checks)
+        return checks
 
     def check_no_release_in_progress(self) -> list[PreflightFinding]:
         """A release already holds the slot, and start would refuse only after planning."""

@@ -465,12 +465,19 @@ def _render_next_steps(phase):
 
 @app.command("resume")
 def resume(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Explain reuse, rechecks and remaining operations without executing them"),
     verbose: bool = typer.Option(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
     try:
+        if dry_run:
+            from org.metadatacenter.release_resume_preview import render_resume_preview
+            active, path = state.read_current_manifest()
+            render_resume_preview(active, console)
+            console.print(f"State: {path}")
+            return
         with state.exclusive():
             _activate_toolchain()
             active, path = state.read_current_manifest()
