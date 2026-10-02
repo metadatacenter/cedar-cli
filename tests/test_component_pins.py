@@ -14,11 +14,12 @@ from org.metadatacenter.component_pins import (
     _stamp_lock,
     _version_of,
     declared,
-    next_version,
+    development_version,
     plan,
 )
 
 CONFIG = {
+    "registry": "https://nexus.example/repository/npm-cedar/",
     "components": [
         {
             "id": "ced",
@@ -40,25 +41,24 @@ CONFIG = {
 }
 
 
-class NextVersionTest(unittest.TestCase):
+class DevelopmentVersionTest(unittest.TestCase):
 
-    def test_stamps_the_day_and_the_head_onto_the_base_the_component_carries(self):
+    def test_the_base_the_component_carries_then_the_commit_date_and_the_head(self):
         self.assertEqual("0.1.0-dev.20260917.cddaa0ce",
-                         next_version("0.1.0-dev.20260916.2593d382", "cddaa0ce", "20260917"))
+                         development_version("0.1.0-dev.20260916.2593d382", "cddaa0ce", "20260917"))
 
     def test_a_base_version_with_no_suffix_gains_one(self):
         self.assertEqual("2.0.16-dev.20260917.abcd1234",
-                         next_version("2.0.16", "abcd1234", "20260917"))
+                         development_version("2.0.16", "abcd1234", "20260917"))
 
-    def test_a_version_already_naming_this_head_is_left_alone(self):
-        """A component whose develop has not moved is not republished under a new day's stamp."""
-        published = "0.1.0-dev.20260916.2593d382"
-
-        self.assertEqual(published, next_version(published, "2593d382", "20260917"))
+    def test_the_same_head_and_commit_date_always_name_the_same_version(self):
+        """Whatever the manifest carries, so a head published once is recognised later."""
+        self.assertEqual(development_version("0.1.0-dev.20260916.2593d382", "2593d382", "20260916"),
+                         development_version("0.1.0", "2593d382", "20260916"))
 
     def test_a_version_this_cannot_advance_is_refused(self):
         with self.assertRaises(ComponentPinError):
-            next_version("^0.1.0", "abcd1234", "20260917")
+            development_version("^0.1.0", "abcd1234", "20260917")
 
 
 class DeclaredDependencyTest(unittest.TestCase):
@@ -151,10 +151,23 @@ class WorkspaceTest(unittest.TestCase):
         self.component = self._repo("cedar-embeddable-designer", {
             "name": "cedar-embeddable-designer", "version": "0.1.0-dev.20260916.aaaaaaaa"})
         self.head = self._commit(self.component, "Add the field designer")
+        self._push(self.component)
         self.host = self._repo("cedar-template-designer", {
             "name": "cedar-template-designer",
             "dependencies": {"cedar-embeddable-designer":
                              "npm:@org.metadatacenter/cedar-embeddable-designer@0.1.0-dev.20260916.aaaaaaaa"}})
+        holds = patch.object(component_pins, "_registry_holds", return_value=False)
+        self.registry = holds.start()
+        self.addCleanup(holds.stop)
+
+    def _push(self, directory):
+        subprocess.run(["git", "-C", str(directory), "update-ref", "refs/remotes/origin/develop",
+                        "develop"], check=True)
+
+    def _commit_date(self, directory):
+        return subprocess.run(
+            ["git", "-C", str(directory), "show", "-s", "--format=%cd", "--date=format:%Y%m%d",
+             "develop"], capture_output=True, text=True, check=True).stdout.strip()
 
     def _repo(self, name, package):
         directory = self.root / name
@@ -179,7 +192,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(1, len(plans))
         item = plans[0]
         self.assertTrue(item.publishes)
-        self.assertTrue(item.target.endswith(f".{self.head}"))
+        self.assertEqual(f"0.1.0-dev.{self._commit_date(self.component)}.{self.head}", item.target)
         self.assertEqual("0.1.0-dev.20260916.aaaaaaaa", item.consumers[0].current)
         self.assertEqual(item.target, item.consumers[0].target)
         self.assertTrue(item.consumers[0].moves)
@@ -189,12 +202,20 @@ class WorkspaceTest(unittest.TestCase):
         with self.assertRaises(ComponentPinError):
             declared(str(self.root), only="nope")
 
-    def test_applying_stamps_publishes_repoints_and_restages_in_that_order(self):
+    def test_applying_builds_publishes_repoints_and_restages_in_that_order(self):
         commands = []
+        built_as = []
         plans = plan(str(self.root))
+        manifest = self.component / "package.json"
+        before = manifest.read_bytes()
+
+        def run(directory, command):
+            commands.append((directory.name, command))
+            if command[:2] == ["npm", "publish"]:
+                built_as.append(json.loads(manifest.read_text())["version"])
 
         with patch.object(component_pins, "console"):
-            _apply(str(self.root), plans, run=lambda d, c: commands.append((d.name, c)))
+            _apply(str(self.root), plans, run=run)
 
         target = plans[0].target
         self.assertEqual([
@@ -205,7 +226,9 @@ class WorkspaceTest(unittest.TestCase):
             ("cedar-template-designer", ["npm", "install"]),
             ("cedar-template-designer", ["npm", "run", "prepare:components"]),
         ], commands)
-        self.assertEqual(target, json.loads((self.component / "package.json").read_text())["version"])
+        # Stamped while it built, and restored after: a committed stamp would be a new head.
+        self.assertEqual([target], built_as)
+        self.assertEqual(before, manifest.read_bytes())
         self.assertEqual(
             f"npm:@org.metadatacenter/cedar-embeddable-designer@{target}",
             json.loads((self.host / "package.json").read_text())
@@ -254,6 +277,39 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn((nested, ['npm', 'install']), commands)
         self.assertNotIn((self.host, ['npm', 'install']), commands)
         self.assertIn((self.host, ['npm', 'run', 'prepare:components']), commands)
+
+    def test_a_head_the_registry_already_holds_is_not_published_again(self):
+        """Its consumers still follow it, on any later day."""
+        self.registry.return_value = True
+
+        item = plan(str(self.root))[0]
+
+        self.assertFalse(item.publishes)
+        self.assertTrue(item.moves)
+        self.assertTrue(item.consumers[0].moves)
+
+    def test_an_unpushed_head_is_not_published(self):
+        """The package would name a commit no other checkout can reach."""
+        self._commit(self.component, "Not yet pushed")
+
+        item = plan(str(self.root))[0]
+
+        self.assertIn("not the pushed origin/develop", item.blocked)
+        self.assertFalse(item.publishes)
+        self.assertFalse(item.moves)
+
+    def test_the_stamp_is_undone_even_when_the_build_fails(self):
+        manifest = self.component / "package.json"
+        before = manifest.read_bytes()
+
+        def run(directory, command):
+            if command == ["npm", "run", "dist"]:
+                raise ComponentPinError("dist failed")
+
+        with patch.object(component_pins, "console"), self.assertRaises(ComponentPinError):
+            _apply(str(self.root), plan(str(self.root)), run=run)
+
+        self.assertEqual(before, manifest.read_bytes())
 
     def test_a_repository_with_uncommitted_tracked_changes_is_refused(self):
         """The diffs this leaves must be its own, so a review sees nothing else."""
@@ -556,6 +612,7 @@ class CiPublishedComponentTest(unittest.TestCase):
     def test_cee_is_skipped_when_this_run_has_just_moved_its_own_pins(self):
         """The CI package for its head was built before the tokens this run gave it."""
         WorkspaceTest._commit(self, self.tokens, "Change a token")
+        self._push(self.tokens)
         commands = []
         plans = plan(str(self.root))
 
@@ -566,3 +623,63 @@ class CiPublishedComponentTest(unittest.TestCase):
         self.assertNotIn((self.workspace, ["npm", "install"]), commands)
         self.assertEqual("2.0.19", json.loads((self.workspace / "package.json").read_text())
                          ["dependencies"]["cedar-embeddable-editor"])
+
+
+
+TWO_COMPONENTS = {
+    "registry": "https://nexus.example/repository/npm-cedar/",
+    "components": [
+        {"id": "tokens", "repository": "cedar-design-tokens",
+         "publishedName": "@org.metadatacenter/cedar-design-tokens",
+         "stagedPackage": ".", "distCommand": ["npm", "run", "build"],
+         "consumers": [{"repository": "cedar-embeddable-designer",
+                        "dependency": "@org.metadatacenter/cedar-design-tokens",
+                        "manifest": "package.json", "lock": "package-lock.json"}]},
+        {"id": "ced", "repository": "cedar-embeddable-designer",
+         "publishedName": "@org.metadatacenter/cedar-embeddable-designer",
+         "stagedPackage": "dist-npm/cedar-embeddable-designer", "distCommand": ["npm", "run", "dist"],
+         "consumers": [{"repository": "cedar-template-designer", "dependency": "cedar-embeddable-designer",
+                        "manifest": "package.json", "lock": "package-lock.json"}]},
+    ],
+}
+
+
+class ChainedComponentTest(unittest.TestCase):
+    """A component that consumes another: the designer takes the design tokens."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        config = self.root / "cedar-development" / "ops"
+        config.mkdir(parents=True)
+        (config / "frontend-train.json").write_text(json.dumps(TWO_COMPONENTS))
+        for name, package in (
+                ("cedar-design-tokens", {"name": "@org.metadatacenter/cedar-design-tokens",
+                                         "version": "0.1.0-dev.20261001.aaaaaaaa"}),
+                ("cedar-embeddable-designer", {
+                    "name": "cedar-embeddable-designer", "version": "0.1.0-dev.20261001.bbbbbbbb",
+                    "devDependencies": {"@org.metadatacenter/cedar-design-tokens": "0.1.0-dev.20261001.aaaaaaaa"}}),
+                ("cedar-template-designer", {
+                    "name": "cedar-template-designer",
+                    "dependencies": {"cedar-embeddable-designer":
+                                     "npm:@org.metadatacenter/cedar-embeddable-designer@0.1.0-dev.20261001.bbbbbbbb"}})):
+            directory = WorkspaceTest._repo(self, name, package)
+            subprocess.run(["git", "-C", str(directory), "update-ref", "refs/remotes/origin/develop",
+                            "develop"], check=True)
+        holds = patch.object(component_pins, "_registry_holds", return_value=False)
+        holds.start()
+        self.addCleanup(holds.stop)
+
+    def test_a_component_whose_pins_this_run_moved_is_not_published_from_a_head_without_them(self):
+        """Its package would be named after a commit that does not hold the pins it was built with."""
+        commands = []
+
+        with patch.object(component_pins, "console"):
+            _apply(str(self.root), plan(str(self.root)),
+                   run=lambda d, c: commands.append((d.name, c)))
+
+        self.assertIn(("cedar-design-tokens", ["npm", "publish", ".", "--tag=dev"]), commands)
+        self.assertIn(("cedar-embeddable-designer", ["npm", "install"]), commands)
+        self.assertNotIn(("cedar-embeddable-designer", ["npm", "run", "dist"]), commands)
+        self.assertFalse(any(directory == "cedar-template-designer" for directory, _ in commands))

@@ -16,10 +16,16 @@ rewrote package.json and package-lock.json would mutate tracked files mid-build,
 frontend workspace already refuses, and it would make a train's output depend on when it ran rather
 than on the commits it captured.
 
-So the work is explicit, and it is the same three steps a person otherwise does by hand: stamp the
-component's next development version from its develop head, publish the package it stages, and
-repoint every declared consumer's manifest, lock and served bundles onto it. Nothing is committed.
-The diffs are source changes and belong to whoever reviews them.
+So the work is explicit, and it is the same three steps a person otherwise does by hand: derive the
+component's development version from its pushed develop head, build and publish the package that
+version names, and repoint every declared consumer's manifest, lock and served bundles onto it.
+Nothing is committed. The diffs are source changes and belong to whoever reviews them.
+
+The version is written into the component's manifest only while its package builds, and the
+manifest is restored afterwards. A committed stamp would itself be a new head, and the next run
+would publish that head again under a version naming it, then ask for that stamp to be committed in
+turn. The version is a property of the commit instead, `<base>-dev.<commit date>.<head>`, and
+whether it is published is the registry's answer, not the manifest's.
 
 Some components are published by something else, and are followed rather than published here. The
 build train publishes the model library's development snapshots. CEE's own CI publishes a development
@@ -29,7 +35,6 @@ release they stayed on the public CEE until someone moved all of them by hand.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 import re
 import subprocess
@@ -99,8 +104,10 @@ class ComponentPlan:
     # Followed from the package its CI published for its develop head, rather than from a
     # reference consumer.
     follows_head: bool = False
-    # Why a followed component has no version to move its consumers to.
+    # Why a component has no version to move its consumers to.
     blocked: str | None = None
+    # Whether the registry already holds the version this component's head publishes.
+    held: bool = False
 
     @property
     def publishes(self) -> bool:
@@ -111,9 +118,9 @@ class ComponentPlan:
         declared here to be followed rather than published: its target is the version the
         reference consumer already carries, and no version is stamped.
         """
-        if self.published_by:
+        if self.published_by or self.blocked:
             return False
-        return self.published != self.target
+        return not self.held
 
     @property
     def moves(self) -> bool:
@@ -168,13 +175,14 @@ def declared(cedar_home, only=None):
     for item in items:
         if not isinstance(item, dict):
             raise ComponentPinError(f"{CONFIG} has a component that is not an object")
+        item = dict(item, registry=item.get("registry") or config.get("registry"))
         required = ("id", "repository", "publishedName")
         if item.get("followsHead"):
             required += ("registry",)
         elif item.get("publishedBy"):
             required += ("reference",)
         else:
-            required += ("stagedPackage", "distCommand")
+            required += ("stagedPackage", "distCommand", "registry")
         for field in required:
             if not item.get(field):
                 raise ComponentPinError(f"{CONFIG} component {item.get('id')!r} has no {field}")
@@ -216,7 +224,6 @@ def _ci_published(config):
 
 def plan(cedar_home, only=None):
     """What each declared component and each of its consumers would move to."""
-    today = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
     plans = []
     for item in declared(cedar_home, only=only):
         directory = Path(cedar_home) / item["repository"]
@@ -224,12 +231,14 @@ def plan(cedar_home, only=None):
         head = _head(directory)
         published_by = item.get("publishedBy")
         blocked = None
+        held = False
         if item.get("followsHead"):
             target, blocked = _ci_head_version(cedar_home, item)
         elif published_by:
             target = _reference_version(cedar_home, item)
         else:
-            target = next_version(published, head, today)
+            target, blocked = _publishable_version(cedar_home, item, published, head)
+            held = bool(target) and _registry_holds(item["registry"], item["publishedName"], target)
         consumers = tuple(
             _consumer_plan(cedar_home, consumer, item["publishedName"], target)
             for consumer in item.get("consumers", [])
@@ -248,22 +257,37 @@ def plan(cedar_home, only=None):
             published_by=published_by,
             follows_head=bool(item.get("followsHead")),
             blocked=blocked,
+            held=held,
         ))
     return plans
 
 
-def next_version(published: str, head: str, today: str) -> str:
-    """The development version for this head, keeping the base the component already carries.
+def development_version(carried: str, head: str, date: str) -> str:
+    """The development version a head publishes: the base the component carries, then the date
+    of the head's commit and the head itself.
 
-    A published version that already names this head is returned unchanged, so a component whose
-    develop has not moved is not republished under a new day's stamp.
+    The date is the commit's rather than the day of publication, as CEE's CI names its packages,
+    so a head published once is recognised as published on any later day.
     """
-    match = VERSION.match(published or "")
+    match = VERSION.match(carried or "")
     if not match:
-        raise ComponentPinError(f"{published!r} is not a version this can advance")
-    if published.endswith(f".{head}"):
-        return published
-    return f"{match.group('base')}-dev.{today}.{head}"
+        raise ComponentPinError(f"{carried!r} is not a version this can advance")
+    return f"{match.group('base')}-dev.{date}.{head}"
+
+
+def _publishable_version(cedar_home, item, carried, head):
+    """The version this component's develop head publishes under, or why it cannot publish.
+
+    A package names the commit it was built from, so only a pushed head may be published: an
+    unpushed one names a commit that no other checkout can reach.
+    """
+    directory = Path(cedar_home) / item["repository"]
+    if _git(directory, ["rev-parse", "--verify", "origin/develop"]) != \
+            _git(directory, ["rev-parse", "--verify", "develop"]):
+        return None, "develop is not the pushed origin/develop, so a package could not name it"
+    date = _git(directory, ["show", "-s", "--format=%cd", "--date=format:%Y%m%d", "develop"],
+                environment={"TZ": "UTC"})
+    return development_version(carried, head, date), None
 
 
 def _reference_version(cedar_home, item):
@@ -427,22 +451,15 @@ def _apply(cedar_home, plans, run=None):
     for item in plans:
         if not item.moves:
             continue
-        if item.follows_head and item.repository in written:
-            # Its CI package was built before the pins this run just gave it.
-            console.print(f"[yellow]{item.repository}[/yellow] moved in this run, so its CI has not "
-                          "published it yet: commit and push it, then run this again.")
+        if (item.publishes or item.follows_head) and item.repository in written:
+            # Its head does not hold the pins this run just gave it, so no package names them.
+            console.print(f"[yellow]{item.repository}[/yellow] moved in this run, so no package "
+                          "holds what it now declares: commit and push it, then run this again.")
             continue
         directory = Path(cedar_home) / item.repository
         if item.publishes:
-            written.add(item.repository)
             console.print(f"[bold]{item.repository}[/bold] → {item.target}")
-            _stamp(directory / "package.json", item.target)
-            _stamp_lock(directory / "package-lock.json", item.target)
-            # Consumer pins may have moved without replacing local reactor installs.
-            # Publish against the declared locks, never whatever node_modules contains.
-            run(directory, ["npm", "ci"])
-            run(directory, list(item.dist))
-            run(directory, ["npm", "publish", _publish_target(item.staged), "--tag=dev"])
+            _publish(directory, item, run)
         for consumer in item.consumers:
             if not consumer.moves:
                 continue
@@ -460,6 +477,26 @@ def _apply(cedar_home, plans, run=None):
     if preserve_runtime:
         console.print("Active development reactor preserved; pins updated without replacing installed or served bundles.")
     console.print("\nNothing is committed. Review each repository's diff, then commit and push it.")
+
+
+def _publish(directory, item, run):
+    """Build and publish the head's package, with its version stamped only while it builds.
+
+    The manifest and lock are restored whatever happens. Consumer pins may have moved without
+    replacing local reactor installs, so the build installs from the declared lock rather than from
+    whatever node_modules holds.
+    """
+    manifest, lock = directory / "package.json", directory / "package-lock.json"
+    originals = {path: path.read_bytes() for path in (manifest, lock) if path.is_file()}
+    try:
+        _stamp(manifest, item.target)
+        _stamp_lock(lock, item.target)
+        run(directory, ["npm", "ci"])
+        run(directory, list(item.dist))
+        run(directory, ["npm", "publish", _publish_target(item.staged), "--tag=dev"])
+    finally:
+        for path, payload in originals.items():
+            path.write_bytes(payload)
 
 
 def _require_clean(cedar_home, plans):
@@ -564,7 +601,8 @@ def _report(plans, apply):
             surface,
             item.published,
             "[dim]not published here[/dim]" if item.published_by
-            else (item.target if item.publishes else "[green]current[/green]"),
+            else "[yellow]held back[/yellow]" if item.blocked
+            else (item.target if item.publishes else "[green]published[/green]"),
         )
         if item.blocked:
             table.add_row("", f"  [yellow]consumers stay: {item.blocked}[/yellow]", "", "")
