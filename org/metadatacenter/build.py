@@ -268,3 +268,28 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
     execute_build(plan, dry_run, dump_plan)
+
+
+@app.command("diagnostics")
+def diagnostics(
+    days: int = typer.Option(14, min=0, help="Retain completed failure bundles younger than this many days"),
+    max_mib: int = typer.Option(1024, min=0, help="Total retained diagnostic bundle budget in MiB"),
+    apply: bool = typer.Option(False, "--apply", help="Delete selected bundles; default only previews"),
+):
+    """Preview or apply age/size retention to managed failed-build diagnostics."""
+    from org.metadatacenter.build_diagnostics import prune_failures
+    from org.metadatacenter.util.InvocationContext import invocation_environment
+    home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
+    if not home:
+        console.print('CEDAR_HOME is not set')
+        raise typer.Exit(1)
+    try:
+        rows = prune_failures(home, days=days, max_bytes=max_mib * 1024 * 1024, apply=apply)
+        for row in rows:
+            console.print(f"{row['action']}: {row['path']} ({row['bytes']} bytes; {row['reason']})", markup=False)
+        console.print(f"{len(rows)} recognized completed bundles. Unrecognized, incomplete and symlinked entries are left alone.")
+        if not apply:
+            console.print('Preview only; add --apply to remove the selected diagnostic bundles.')
+    except (OSError, ValueError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(1) from error

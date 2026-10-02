@@ -151,6 +151,14 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # The leader has already been reaped on this path. macOS may
+                # refuse signaling the remaining orphan/zombie group. Preserve
+                # the original interruption, but don't silently claim cleanup.
+                if process.returncode is None:
+                    raise
+                print(f'Cleanup warning: process group {process.pid} could not be '
+                      'signaled after its parent exited; inspect surviving children.', file=sys.stderr)
             process.wait()
         raise
     finally:

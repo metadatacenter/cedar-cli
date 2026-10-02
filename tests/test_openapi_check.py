@@ -14,6 +14,7 @@ from org.metadatacenter.util.OpenApiContract import (
     RULE_NO_SUCCESS,
     RULE_CROSS_SERVICE,
     RULE_REQUEST_BODY,
+    RULE_REQUEST_CLASSIFICATION,
     RULE_RESPONSE_CONTENT,
     RULE_SCHEMA_REFERENCE,
     RULE_STUB_SCHEMA,
@@ -44,7 +45,7 @@ def rules(report):
 
 
 class OpenApiRuleTest(unittest.TestCase):
-    """The five rules, each failing on a document that breaks it and passing on one that does not."""
+    """The contract rules, each failing on a document that breaks it and passing on one that does not."""
 
     def test_success_response_must_describe_its_content(self):
         described = analyze_document('cedar-user-server', '/doc', document(
@@ -110,7 +111,7 @@ class OpenApiRuleTest(unittest.TestCase):
 
     def test_a_write_must_declare_the_body_it_reads(self):
         declared = analyze_document('cedar-user-server', '/doc', document(
-            {'/users': {'post': {'requestBody': {'content': {'application/json': {}}},
+            {'/users': {'post': {'requestBody': {'content': {'application/json': {'schema': {'type': 'object', 'additionalProperties': False}}}},
                                  'responses': {'200': USER_RESPONSE}}}}))
         silent = analyze_document('cedar-user-server', '/doc', document(
             {'/users': {'post': {'responses': {'200': USER_RESPONSE}}}}))
@@ -130,12 +131,68 @@ class OpenApiRuleTest(unittest.TestCase):
     def test_an_allowlisted_write_that_gained_a_body_is_reported_without_failing(self):
         report = analyze_document('cedar-messaging-server', '/doc', document(
             {'/command/mark-all-as-read': {'post': {
-                'requestBody': {'content': {'application/json': {}}},
+                'requestBody': {'content': {'application/json': {'schema': {'type': 'object', 'additionalProperties': False}}}},
                 'responses': {'200': USER_RESPONSE}}}}))
 
         self.assertEqual([], rules(report))
         self.assertEqual([RULE_REQUEST_BODY], [finding.rule for finding in report.warnings])
         self.assertIn('stale', report.warnings[0].detail)
+
+    def test_request_objects_must_explicitly_choose_open_or_closed(self):
+        for declaration, valid in [(None, False), (False, True), (True, True),
+                                   ({'type': 'string'}, True), ('false', False)]:
+            with self.subTest(declaration=declaration):
+                schema = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
+                if declaration is not None:
+                    schema['additionalProperties'] = declaration
+                report = self.request_report(schema)
+                self.assertEqual(valid, RULE_REQUEST_CLASSIFICATION not in rules(report))
+
+    def request_report(self, schema, schemas=None):
+        return analyze_document('test', '/doc', document({
+            '/command': {'post': {'requestBody': {'content': {'application/json': {'schema': schema}}},
+                                  'responses': {'204': {'description': 'Done'}}}}}, schemas))
+
+    def test_request_alternatives_and_arrays_cannot_hide_unclassified_objects(self):
+        for wrapper in [lambda x: {'oneOf': [x]}, lambda x: {'anyOf': [x]},
+                        lambda x: {'allOf': [x]}, lambda x: {'type': 'array', 'items': x}]:
+            report = self.request_report(wrapper({'$ref': '#/components/schemas/User'}))
+            self.assertIn(RULE_REQUEST_CLASSIFICATION, rules(report))
+
+    def test_request_references_are_resolved_and_cycles_fail(self):
+        for schema, definitions, valid in [
+            ({'$ref': '#/components/schemas/Open'},
+             {'Open': {'type': 'object', 'additionalProperties': True}}, True),
+            ({'$ref': '#/components/schemas/Loop'},
+             {'Loop': {'$ref': '#/components/schemas/Loop'}}, False),
+            ({}, {}, False)]:
+            self.assertEqual(valid, RULE_REQUEST_CLASSIFICATION not in
+                             rules(self.request_report(schema, definitions)))
+        doc = document({'/command': {'post': {
+            'requestBody': {'$ref': '#/components/requestBodies/Body'},
+            'responses': {'204': {'description': 'Done'}}}}})
+        doc['components']['requestBodies'] = {'Body': {'content': {'application/json': {
+            'schema': {'type': 'object', 'additionalProperties': True}}}}}
+        self.assertNotIn(RULE_REQUEST_CLASSIFICATION, rules(analyze_document('test', '/doc', doc)))
+        doc['components']['requestBodies']['Body'] = {'$ref': '#/components/requestBodies/Body'}
+        self.assertIn(RULE_REQUEST_CLASSIFICATION, rules(analyze_document('test', '/doc', doc)))
+
+    def test_recursive_alternatives_still_check_the_concrete_object_branch(self):
+        for classified in (True, False):
+            leaf = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
+            if classified:
+                leaf['additionalProperties'] = False
+            definitions = {'Tree': {'oneOf': [leaf, {'type': 'array', 'items': {
+                '$ref': '#/components/schemas/Tree'}}]}}
+            report = self.request_report({'$ref': '#/components/schemas/Tree'}, definitions)
+            self.assertEqual(classified, RULE_REQUEST_CLASSIFICATION not in rules(report))
+
+    def test_body_classification_also_applies_to_delete_and_stale_allowlists(self):
+        for repository, method, path in [('test', 'delete', '/commands'),
+                ('cedar-messaging-server', 'post', '/command/mark-all-as-read')]:
+            doc = document({path: {method: {'requestBody': {'content': {'application/json': {
+                'schema': {'type': 'object'}}}}, 'responses': {'204': {'description': 'Done'}}}}})
+            self.assertIn(RULE_REQUEST_CLASSIFICATION, rules(analyze_document(repository, '/doc', doc)))
 
     def test_a_schema_name_must_mean_the_same_thing_in_every_service(self):
         agreeing = cross_document_findings({

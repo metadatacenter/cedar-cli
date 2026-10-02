@@ -44,6 +44,7 @@ from org.metadatacenter.release_support.output import (
     console,
 )
 from org.metadatacenter.release_support.policy import (
+    NPM_RELEASE_SURFACES,
     CHECKOUT_BYTES_PER_REPOSITORY,
     FRONTEND_BUILD_SURFACES,
     FRONTEND_BYTES_PER_SURFACE_VARIANT,
@@ -258,7 +259,12 @@ class ReleasePreflight:
 
     def run_resume(self) -> list[PreflightFinding]:
         """Recheck only conditions still relevant to the recorded next stage."""
-        stage = _next_release_stage(self.manifest)
+        return self._run_checks(self.resume_check_names(self.manifest))
+
+    @staticmethod
+    def resume_check_names(manifest):
+        """The same check inventory is used by execution and the read-only preview."""
+        stage = _next_release_stage(manifest)
         checks = [
             "check_toolchain", "check_embedded_test_processes",
             "check_profile", "check_disk_space",
@@ -297,7 +303,7 @@ class ReleasePreflight:
             checks.extend(["check_nexus_authorization", "check_npm_authorization"])
         elif stage in {"development", "acceptance"}:
             checks.append("check_nexus_authorization")
-        return self._run_checks(checks)
+        return checks
 
     def check_no_release_in_progress(self) -> list[PreflightFinding]:
         """A release already holds the slot, and start would refuse only after planning."""
@@ -1118,7 +1124,17 @@ class ReleasePreflight:
             return [PreflightFinding("remote", "fail", str(error))]
         findings = []
         for repository, paths in sorted(replaced.items()):
-            listing = ", ".join(paths)
+            # Classification is evidence for review, never permission to discard a file.
+            outputs = [surface for surface in NPM_RELEASE_SURFACES
+                       if surface['repository'] == repository and surface.get('buildOutput')]
+            def describe(path):
+                for surface in outputs:
+                    directory = PurePosixPath(surface['directory'])
+                    relative = PurePosixPath(path)
+                    if directory in relative.parents and str(relative.relative_to(directory)) not in surface.get('preserveFiles', []):
+                        return f"{path} [declared generated distribution; rebuilt from {surface['buildOutput']}]"
+                return f"{path} [source or unclassified; review required]"
+            listing = ", ".join(describe(path) for path in paths)
             if repository in self.accepted_main_only:
                 findings.append(PreflightFinding(
                     "remote", "warn",

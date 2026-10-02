@@ -1,3 +1,4 @@
+import io
 import os
 import errno
 import pty
@@ -9,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from org.metadatacenter.util.ProcessRunner import run_process, run_shell
 from org.metadatacenter.worker.Worker import Worker
@@ -68,6 +69,21 @@ class ProcessRunnerTest(unittest.TestCase):
                                     text=True, capture_output=True).stdout.strip()
             # An orphan zombie may await init's reap, but no child may keep running.
             self.assertTrue(not status or status.startswith('Z'), status)
+
+    def test_permission_error_after_reap_preserves_original_interruption(self):
+        process = Mock(pid=12345, returncode=-15, stdout=io.BytesIO(b'output\n'))
+        error = RuntimeError('original renderer failure')
+        def interrupt(_line):
+            raise error
+        with patch('org.metadatacenter.util.ProcessRunner._spawn', return_value=process), \
+             patch('org.metadatacenter.util.ProcessRunner.os.killpg', side_effect=[None, PermissionError()]), \
+             patch('org.metadatacenter.util.ProcessRunner.os.isatty', return_value=False), \
+             patch('org.metadatacenter.util.ProcessRunner.sys.stderr', new_callable=io.StringIO) as warning:
+            with self.assertRaisesRegex(RuntimeError, 'original renderer failure'):
+                run_process(['fixture'], on_line=interrupt)
+            self.assertIn('Cleanup warning', warning.getvalue())
+        self.assertTrue(process.stdout.closed)
+        self.assertEqual(2, process.wait.call_count)
 
     def test_ambiguous_inputs_are_rejected(self):
         with self.assertRaises(ValueError):

@@ -1,3 +1,4 @@
+import copy
 import io
 import unittest
 import urllib.error
@@ -60,6 +61,12 @@ class NexusHardeningTest(unittest.TestCase):
 
     def test_release_stops_after_three_nexus_faults_without_losing_state(self):
         state=Mock()
+        manifest = {'releaseVersion': '1.0.0', 'phase': 'publishing-artifacts'}
+        state.read_current_manifest.side_effect = lambda: (copy.deepcopy(manifest), None)
+        def update_manifest(changes):
+            manifest.update(copy.deepcopy(changes))
+            return copy.deepcopy(manifest), None
+        state.update_current_manifest.side_effect = update_manifest
         with patch.object(lifecycle,'advance_active_release',side_effect=NexusRetryableError('PUT HTTP 502')) as advance:
             with self.assertRaisesRegex(ReleaseError,'circuit open after 3'):
                 lifecycle._drive_release(state,sleeper=Mock())
@@ -67,3 +74,6 @@ class NexusHardeningTest(unittest.TestCase):
         update=state.update_current_manifest.call_args.args[0]
         self.assertIsNone(update['retry'])
         self.assertIn('State is retained',update['failure'])
+        self.assertEqual(2, len(manifest['stageTimings']))
+        self.assertTrue(all(record['stage'] == 'retry-backoff' for record in manifest['stageTimings']))
+        self.assertTrue(all(record['status'] == 'complete' for record in manifest['stageTimings']))

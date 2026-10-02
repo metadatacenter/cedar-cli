@@ -206,6 +206,8 @@ from org.metadatacenter.release_support.presentation import (
     _ACTIVE_RELEASE_SECTIONS,
     _publication_progress,
     _release_progress,
+    _release_elapsed,
+    release_heartbeat,
     _release_watch_summary,
     _render_plan,
     _render_preflight_findings,
@@ -322,6 +324,10 @@ def _release_resume_gate_or_exit(manifest: dict) -> None:
 
 @app.command("readiness")
 def readiness(
+    full: bool = typer.Option(False, "--full", help="Report packages, pins, exact-source CI, smoke and train eligibility together"),
+    model_version: str = typer.Option(None, "--model-version", help="Expected public TypeScript model version"),
+    cee_version: str = typer.Option(None, "--cee-version", help="Expected public CEE version"),
+    from_train: str = typer.Option(None, "--from-train", help="Completed train whose artifacts and source should be checked"),
     release_version: str = typer.Option(
         None, "--version", help="Intended CEDAR release version, to check the arithmetic"),
     next_version: str = typer.Option(
@@ -341,6 +347,20 @@ def readiness(
     if not cedar_home:
         console.print("[red]CEDAR_HOME is not set[/red]")
         raise typer.Exit(1)
+    if full:
+        from org.metadatacenter.release_readiness_report import ReadinessReport
+        rows = ReadinessReport(cedar_home).run(version=release_version, next_version=next_version,
+            model_version=model_version, cee_version=cee_version, train=from_train,
+            packaging=not skip_packaging)
+        for row in rows:
+            console.print(f"{row['status'].upper()} — {row['check']}: {row['detail']}", markup=False)
+            if row['next']:
+                console.print(f"  Next: {row['next']}", markup=False)
+        console.print('Readiness is advisory; release plan/start still enforce every release gate.')
+        raise typer.Exit(0 if all(row['status'] == 'pass' for row in rows) else 1)
+    if model_version or cee_version or from_train:
+        console.print('Package and train options require --full.')
+        raise typer.Exit(1)
     try:
         findings = readiness_findings(
             cedar_home, release_version, next_version, packaging=not skip_packaging)
@@ -349,7 +369,7 @@ def readiness(
         raise typer.Exit(1) from error
     if not findings:
         console.print("[green]Release readiness: every workspace precondition settled[/green]")
-        console.print("A train built from this source can back a release.")
+        console.print("Workspace checks passed; use --full for packages, CI, smoke and train evidence.")
         return
     console.print(f"[red]{len(findings)} precondition(s) would refuse a release:[/red]")
     for finding in findings:
@@ -415,7 +435,8 @@ def start(
             path = state.start(manifest)
             console.print("Compact progress is shown below; full task output is retained in attempt logs.")
             console.print("A second terminal may run: cedarcli release status --watch")
-            active = _drive_release(state, verbose=verbose)
+            with release_heartbeat(state):
+                active = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         if state.current_path.exists():
@@ -424,6 +445,8 @@ def start(
     console.print(f"Phase:               {active['phase']}")
     console.print(f"Internal state:      {path}")
     _render_next_steps(active['phase'])
+    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
+    render_timings(active, console, prior_timing_manifest(state, active))
 
 
 def _render_next_steps(phase):
@@ -444,19 +467,27 @@ def _render_next_steps(phase):
 
 @app.command("resume")
 def resume(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Explain reuse, rechecks and remaining operations without executing them"),
     verbose: bool = typer.Option(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
     try:
+        if dry_run:
+            from org.metadatacenter.release_resume_preview import render_resume_preview
+            active, path = state.read_current_manifest()
+            render_resume_preview(active, console)
+            console.print(f"State: {path}")
+            return
         with state.exclusive():
             _activate_toolchain()
             active, path = state.read_current_manifest()
             _release_resume_gate_or_exit(active)
             console.print("Compact progress is shown below; full task output is retained in attempt logs.")
             console.print("A second terminal may run: cedarcli release status --watch")
-            manifest = _drive_release(state, verbose=verbose)
+            with release_heartbeat(state):
+                manifest = _drive_release(state, verbose=verbose)
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
@@ -464,6 +495,8 @@ def resume(
     console.print(f"Phase:               {manifest['phase']}")
     console.print(f"Internal state:      {path}")
     _render_next_steps(manifest['phase'])
+    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
+    render_timings(manifest, console, prior_timing_manifest(state, manifest))
 
 
 @app.command("abandon")
@@ -516,3 +549,20 @@ def status(
         for check in manifest["acceptance"]["checks"]:
             console.print(f"Accepted:            {check['detail']}")
     _render_release_status(manifest, path)
+
+
+@app.command("timings")
+def timings(compare: str = typer.Option(None, "--compare", help="Compare with a recorded release version")):
+    """Summarize measured stage execution, CI polling waits and retry backoff."""
+    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
+    state = ReleaseState()
+    try:
+        manifest, _ = state.read_current_manifest()
+        baseline = prior_timing_manifest(state, manifest)
+        if compare:
+            _validate_stable_version(compare, 'comparison release version')
+            baseline = json.loads(state.manifest_path(compare).read_text())
+        render_timings(manifest, console, baseline)
+    except (ReleaseError, OSError, ValueError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(1) from error

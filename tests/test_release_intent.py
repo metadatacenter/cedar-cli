@@ -43,13 +43,19 @@ class ReleaseIntentTest(unittest.TestCase):
             self.assertEqual(1,dispatch.dispatch(release_version='2.9.19'))
             allocate.assert_not_called()
 
+    def test_main_only_acceptance_requires_release_intent(self):
+        with patch.object(dispatch.BuildTrain, 'allocate') as allocate:
+            self.assertEqual(1, dispatch.dispatch(accept_main_only=['example']))
+            allocate.assert_not_called()
+
     def test_dry_run_checks_release_readiness_without_dispatching(self):
         with patch.object(dispatch.BuildTrain,'allocate', return_value='2.9.19-dev.20260923.0622'), \
              patch.object(release_intent,'preflight',return_value=[]) as check, \
              patch.object(dispatch,'_dry_run',return_value=0) as dry, \
              patch.object(dispatch.subprocess,'run') as run:
             self.assertEqual(0,dispatch.dispatch(dry_run=True,release_version='2.9.19',
-                next_version='2.9.20-SNAPSHOT',cee_version='2.0.17'))
+                next_version='2.9.20-SNAPSHOT',cee_version='2.0.17', accept_main_only=['example']))
             check.assert_called_once()
+            self.assertEqual({'example'}, check.call_args.kwargs['accepted_main_only'])
             dry.assert_called_once()
             run.assert_not_called()

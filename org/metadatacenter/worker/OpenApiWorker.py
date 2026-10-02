@@ -66,9 +66,8 @@ class OpenApiWorker(Worker):
         failing = [report for report in reports if report.failures]
         if failing:
             console.print(
-                '\nAn operation that describes no content generates as an operation with no type, '
-                'and the caller parses the payload itself. Describe the response on the resource '
-                'method with the schema it answers with, then run this check again.')
+                '\nRepair the reported request or response contract in the resource annotations or '
+                'OpenAPI base document, regenerate the committed documents, then run this check again.')
             return 1
         console.print('\n[green]Every checked document describes what a client needs.[/green]')
         return 0

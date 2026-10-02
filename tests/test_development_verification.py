@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from org.metadatacenter.release_support.development import DevelopmentVerifier, verify_active_development
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.release_support.lifecycle import _next_release_stage, release_stages
@@ -138,3 +138,12 @@ class DevelopmentVerificationTest(unittest.TestCase):
         stages=release_stages(self.manifest)
         for first,second in zip(stages,stages[1:]):
             self.assertIn(first.done_phase,second.entry_phases)
+
+    def test_unchanged_pending_ci_is_quiet_between_heartbeats(self):
+        self.repository('example')
+        pending = self.run_record(status='in_progress', conclusion=None)
+        verifier = self.verifier([[pending], [pending], [self.run_record()]], clock=lambda: 0)
+        with patch('org.metadatacenter.release_support.development.console.print') as output:
+            verify_active_development(self.state, verifier)
+        reports = [call for call in output.call_args_list if 'pending' in str(call)]
+        self.assertEqual(1, len(reports))

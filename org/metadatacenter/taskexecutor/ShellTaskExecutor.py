@@ -9,6 +9,7 @@ from rich.progress import Progress
 from rich.style import Style
 
 from org.metadatacenter import reactor, reactor_evidence
+from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
 from org.metadatacenter.build_scheduler import record_timing
 from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
@@ -61,7 +62,9 @@ class ShellTaskExecutor(TaskExecutor):
                 parameter = getattr(task, "get_parameter", lambda _name: None)
                 if parameter("isolated_frontend_build") is True:
                     identity = reactor_evidence.begin(cwd)
-                    with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions):
+                    with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions), \
+                            failure_diagnostics(isolated_cwd, Util.cedar_home, job_progress.print) as outcome:
+                        environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(isolated_cwd / COMMAND_LOG)
                         if collisions:
                             processes = ", ".join(f"PID {pid}" for pid, _ in collisions)
                             job_progress.print(
@@ -93,6 +96,7 @@ class ShellTaskExecutor(TaskExecutor):
                             stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)
+                        outcome['exitCode'] = code
                         return code
                 if parameter("in_place_frontend_build") is True:
                     require_no_frontend_runtime_collision(Path(cwd))
@@ -156,10 +160,20 @@ class ShellTaskExecutor(TaskExecutor):
             job_progress.update(1, advance=1)
 
         started = time.monotonic()
-        stdout_parts = run_shell(
-            command, shell=GlobalContext.get_shell(), cwd=cwd,
-            env=environment, on_line=report,
-        )
+        log_path = (environment or {}).get('CEDAR_BUILD_DIAGNOSTIC_LOG')
+        with (Path(log_path).open('a', encoding='utf-8') if log_path else nullcontext()) as log:
+            if log:
+                log.write(f'\nCommand: {command}\n')
+                log.flush()
+            def logged_report(line):
+                if log:
+                    log.write(line + '\n')
+                    log.flush()
+                report(line)
+            stdout_parts = run_shell(
+                command, shell=GlobalContext.get_shell(), cwd=cwd,
+                env=environment, on_line=logged_report,
+            )
         return_code = stdout_parts.returncode
         record_timing(repo.name, command, started, return_code, stages)
         description = describe_subprocess_failure(return_code)
