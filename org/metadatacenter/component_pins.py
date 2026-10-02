@@ -20,6 +20,11 @@ So the work is explicit, and it is the same three steps a person otherwise does 
 component's next development version from its develop head, publish the package it stages, and
 repoint every declared consumer's manifest, lock and served bundles onto it. Nothing is committed.
 The diffs are source changes and belong to whoever reviews them.
+
+Some components are published by something else, and are followed rather than published here. The
+build train publishes the model library's development snapshots. CEE's own CI publishes a development
+package from every push to develop, and nothing else ever repointed CEE's consumers to one: after a
+release they stayed on the public CEE until someone moved all of them by hand.
 """
 
 from __future__ import annotations
@@ -28,6 +33,8 @@ import datetime as dt
 import json
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +58,12 @@ ALIAS_PREFIX = "npm:"
 # Long enough to stay unambiguous in every CEDAR repository, and what the components already carry.
 SHA_LENGTH = 8
 
+# CEE's CI names the commit it built in seven characters.
+CI_SHA_LENGTH = 7
+
+# The name every CEE consumer knows the editor by, public or development.
+CEE_DEPENDENCY = "cedar-embeddable-editor"
+
 
 class ComponentPinError(Exception):
     """The work could not be planned or carried out, as distinct from having nothing to do."""
@@ -68,7 +81,7 @@ class ConsumerPlan:
 
     @property
     def moves(self) -> bool:
-        return self.current != self.target
+        return self.target is not None and self.current != self.target
 
 
 @dataclass(frozen=True)
@@ -83,6 +96,11 @@ class ComponentPlan:
     target: str
     consumers: tuple[ConsumerPlan, ...]
     published_by: str | None = None
+    # Followed from the package its CI published for its develop head, rather than from a
+    # reference consumer.
+    follows_head: bool = False
+    # Why a followed component has no version to move its consumers to.
+    blocked: str | None = None
 
     @property
     def publishes(self) -> bool:
@@ -99,6 +117,8 @@ class ComponentPlan:
 
     @property
     def moves(self) -> bool:
+        if self.blocked:
+            return False
         return self.publishes or any(consumer.moves for consumer in self.consumers)
 
 
@@ -143,12 +163,18 @@ def declared(cedar_home, only=None):
     items = config.get("components")
     if not isinstance(items, list) or not items:
         raise ComponentPinError(f"{CONFIG} declares no components")
+    items = items + _ci_published(config)
     selected = []
     for item in items:
         if not isinstance(item, dict):
             raise ComponentPinError(f"{CONFIG} has a component that is not an object")
         required = ("id", "repository", "publishedName")
-        required += ("reference",) if item.get("publishedBy") else ("stagedPackage", "distCommand")
+        if item.get("followsHead"):
+            required += ("registry",)
+        elif item.get("publishedBy"):
+            required += ("reference",)
+        else:
+            required += ("stagedPackage", "distCommand")
         for field in required:
             if not item.get(field):
                 raise ComponentPinError(f"{CONFIG} component {item.get('id')!r} has no {field}")
@@ -161,6 +187,33 @@ def declared(cedar_home, only=None):
     return selected
 
 
+def _ci_published(config):
+    """CEE, whose development packages its own CI publishes from every push to develop.
+
+    Its consumers are the inventory a release pins the public CEE into, each frontend's
+    `ceeConsumer` and the additional ones, so the two lists cannot drift apart.
+    """
+    cee = config.get("cee")
+    if not isinstance(cee, dict) or not cee.get("repository"):
+        return []
+    consumers = [dict(item["ceeConsumer"], repository=item["repository"])
+                 for item in config.get("frontends", [])
+                 if isinstance(item, dict) and isinstance(item.get("ceeConsumer"), dict)]
+    consumers += [dict(item) for item in config.get("additionalCeeConsumers", [])
+                  if isinstance(item, dict)]
+    return [{
+        "id": "cee",
+        "repository": cee["repository"],
+        "publishedName": cee.get("publishedName"),
+        "sourceManifest": cee.get("sourceManifest", "package.json"),
+        "publishedBy": "repository's CI",
+        "followsHead": True,
+        "registry": config.get("registry"),
+        "consumers": [dict(consumer, dependency=consumer.get("dependency", CEE_DEPENDENCY))
+                      for consumer in consumers],
+    }]
+
+
 def plan(cedar_home, only=None):
     """What each declared component and each of its consumers would move to."""
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
@@ -170,8 +223,13 @@ def plan(cedar_home, only=None):
         published = _manifest_version(directory / item.get("sourceManifest", "package.json"))
         head = _head(directory)
         published_by = item.get("publishedBy")
-        target = (_reference_version(cedar_home, item) if published_by
-                  else next_version(published, head, today))
+        blocked = None
+        if item.get("followsHead"):
+            target, blocked = _ci_head_version(cedar_home, item)
+        elif published_by:
+            target = _reference_version(cedar_home, item)
+        else:
+            target = next_version(published, head, today)
         consumers = tuple(
             _consumer_plan(cedar_home, consumer, item["publishedName"], target)
             for consumer in item.get("consumers", [])
@@ -188,6 +246,8 @@ def plan(cedar_home, only=None):
             target=target,
             consumers=consumers,
             published_by=published_by,
+            follows_head=bool(item.get("followsHead")),
+            blocked=blocked,
         ))
     return plans
 
@@ -226,6 +286,57 @@ def _reference_version(cedar_home, item):
             f"{reference['repository']} does not declare {reference['dependency']}, "
             f"so {item['id']} has no version to follow")
     return version
+
+
+def _ci_head_version(cedar_home, item):
+    """The development version the component's CI published from its develop head, or why none.
+
+    The CI names its package `<base>-dev.<date>.<sha7>` after the commit it built, reading the base
+    from the committed manifest and the date with the git invocation below, so this derives it the
+    same way. A head that is not pushed, a tree holding changes no commit carries, a release
+    preparation head, and a version the registry does not hold yet each leave the consumers where
+    they are, and the plan says which.
+    """
+    directory = Path(cedar_home) / item["repository"]
+    head = _git(directory, ["rev-parse", "--verify", "develop"])
+    if head is None:
+        raise ComponentPinError(f"cannot read the develop head of {directory.name}")
+    if _git(directory, ["rev-parse", "--verify", "origin/develop"]) != head:
+        return None, "develop is not the pushed origin/develop, so its CI has not built it"
+    if _git(directory, ["status", "--porcelain=v1", "--untracked-files=no"]):
+        return None, ("uncommitted changes, which no CI package contains; "
+                      "commit and push them, then run this again")
+    manifest = item.get("sourceManifest", "package.json")
+    committed = _git(directory, ["show", f"develop:{manifest}"])
+    try:
+        version = json.loads(committed or "")["version"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise ComponentPinError(f"{directory.name}'s committed {manifest} declares no version") from error
+    if "-dev." not in version:
+        return None, (f"develop carries the release version {version}, "
+                      "from which its CI publishes no development package")
+    date = _git(directory, ["show", "-s", "--format=%cd", "--date=format:%Y%m%d", "develop"],
+                environment={"TZ": "UTC"})
+    sha = _git(directory, ["rev-parse", f"--short={CI_SHA_LENGTH}", "develop"])
+    target = f"{version.split('-')[0]}-dev.{date}.{sha}"
+    if not _registry_holds(item["registry"], item["publishedName"], target):
+        return None, f"{target} is not in the registry yet; its CI run on {sha} publishes it"
+    return target, None
+
+
+def _registry_holds(registry, package, version):
+    """Whether the registry serves this exact version's tarball."""
+    name = package.rsplit("/", 1)[-1]
+    url = f"{registry.rstrip('/')}/{package}/-/{name}-{version}.tgz"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=30) as response:
+            return 200 <= response.status < 300
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise ComponentPinError(f"{url} answered HTTP {error.code}") from error
+    except (urllib.error.URLError, OSError) as error:
+        raise ComponentPinError(f"cannot reach {registry}: {error}") from error
 
 
 def _consumer_plan(cedar_home, consumer, package, target):
@@ -281,10 +392,10 @@ def _head(directory):
     return completed
 
 
-def _git(directory, arguments):
+def _git(directory, arguments, environment=None):
     completed = subprocess.run(["git", "-C", str(directory)] + arguments,
                                capture_output=True, text=True, check=False,
-                               env=invocation_environment())
+                               env={**invocation_environment(), **(environment or {})})
     return completed.stdout.strip() if completed.returncode == 0 else None
 
 
@@ -312,11 +423,18 @@ def _apply(cedar_home, plans, run=None):
         invocation_environment().get("CEDAR_PROFILE") != "server"
         and (Path(cedar_home) / ".reactor/runtime.json").is_file()
     )
+    written = set()
     for item in plans:
         if not item.moves:
             continue
+        if item.follows_head and item.repository in written:
+            # Its CI package was built before the pins this run just gave it.
+            console.print(f"[yellow]{item.repository}[/yellow] moved in this run, so its CI has not "
+                          "published it yet: commit and push it, then run this again.")
+            continue
         directory = Path(cedar_home) / item.repository
         if item.publishes:
+            written.add(item.repository)
             console.print(f"[bold]{item.repository}[/bold] → {item.target}")
             _stamp(directory / "package.json", item.target)
             _stamp_lock(directory / "package-lock.json", item.target)
@@ -329,6 +447,7 @@ def _apply(cedar_home, plans, run=None):
             if not consumer.moves:
                 continue
             console.print(f"  {consumer.repository}: {consumer.dependency} → {item.target}")
+            written.add(consumer.repository)
             consumer_directory = Path(cedar_home) / consumer.repository
             _repoint(consumer_directory / consumer.manifest, consumer.dependency,
                      item.package, item.target)
@@ -395,18 +514,21 @@ def _stamp_lock(path, version):
 
 
 def _repoint(path, dependency, package, version):
-    """Write the new version into the consumer's manifest, keeping the form it already uses."""
+    """Write the new version into the consumer's manifest.
+
+    A consumer that names the published package itself gets a plain version, which is what npm
+    canonicalizes a same-name alias to. One that knows it by another name needs the alias, and that
+    is decided by the names rather than by the pin it replaces: CEE's consumers carry the public
+    `cedar-embeddable-editor` plainly after a release, and its development package is scoped.
+    """
     manifest = _read_json(path)
     if manifest is None:
         raise ComponentPinError(f"cannot read {path}")
     for section in ("dependencies", "devDependencies", "optionalDependencies"):
         declared_section = manifest.get(section)
         if isinstance(declared_section, dict) and dependency in declared_section:
-            current = str(declared_section[dependency]).strip()
             declared_section[dependency] = (
-                f"{ALIAS_PREFIX}{package}@{version}" if current.startswith(ALIAS_PREFIX)
-                else version
-            )
+                version if dependency == package else f"{ALIAS_PREFIX}{package}@{version}")
             _write_json(path, manifest)
             return
     raise ComponentPinError(f"{path} does not declare {dependency}")
@@ -444,12 +566,15 @@ def _report(plans, apply):
             "[dim]not published here[/dim]" if item.published_by
             else (item.target if item.publishes else "[green]current[/green]"),
         )
+        if item.blocked:
+            table.add_row("", f"  [yellow]consumers stay: {item.blocked}[/yellow]", "", "")
         for consumer in item.consumers:
             table.add_row(
                 "",
                 f"  {consumer.repository} pin",
                 consumer.current or "[yellow]not declared[/yellow]",
-                consumer.target if consumer.moves else "[green]current[/green]",
+                consumer.target if consumer.moves
+                else "[yellow]stays[/yellow]" if item.blocked else "[green]current[/green]",
             )
     moving = [item for item in plans if item.moves]
     table.caption = (f"{len(moving)}/{len(plans)} components would move"

@@ -383,3 +383,186 @@ class FollowedComponentTest(unittest.TestCase):
             plan(str(self.root))
 
         self.assertIn("no version to follow", str(refused.exception))
+
+
+class RepointAcrossNamesTest(unittest.TestCase):
+
+    def test_a_public_pin_moves_to_the_scoped_development_package_through_an_alias(self):
+        """After a release CEE's consumers name the public editor plainly, and its development
+        package is scoped, so the form follows the names rather than the pin being replaced."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "package.json"
+            path.write_text(json.dumps({"dependencies": {"cedar-embeddable-editor": "2.0.19"}}))
+
+            _repoint(path, "cedar-embeddable-editor",
+                     "@org.metadatacenter/cedar-embeddable-editor", "2.0.20-dev.20261002.a9eab88")
+
+            self.assertEqual(
+                "npm:@org.metadatacenter/cedar-embeddable-editor@2.0.20-dev.20261002.a9eab88",
+                json.loads(path.read_text())["dependencies"]["cedar-embeddable-editor"])
+
+
+CI_PUBLISHED = {
+    "registry": "https://nexus.example/repository/npm-cedar/",
+    "components": [{
+        "id": "tokens",
+        "repository": "cedar-design-tokens",
+        "publishedName": "@org.metadatacenter/cedar-design-tokens",
+        "stagedPackage": ".",
+        "distCommand": ["npm", "run", "build"],
+        "consumers": [{
+            "repository": "cedar-embeddable-editor",
+            "dependency": "@org.metadatacenter/cedar-design-tokens",
+            "manifest": "package.json",
+            "lock": "package-lock.json",
+        }],
+    }],
+    "cee": {
+        "repository": "cedar-embeddable-editor",
+        "sourceManifest": "package.json",
+        "publishedName": "@org.metadatacenter/cedar-embeddable-editor",
+    },
+    "frontends": [
+        {"id": "workspace", "repository": "cedar-workspace",
+         "ceeConsumer": {"manifest": "package.json", "lock": "package-lock.json"}},
+        {"id": "monitoring", "repository": "cedar-monitoring"},
+    ],
+    "additionalCeeConsumers": [
+        {"repository": "cedar-component-demo", "label": "react-demo",
+         "manifest": "react/package.json", "lock": "react/package-lock.json"},
+    ],
+}
+
+
+class CiPublishedComponentTest(unittest.TestCase):
+    """CEE, whose CI publishes a development package from every push to develop."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        config = self.root / "cedar-development" / "ops"
+        config.mkdir(parents=True)
+        (config / "frontend-train.json").write_text(json.dumps(CI_PUBLISHED))
+        self.tokens = WorkspaceTest._repo(self, "cedar-design-tokens", {
+            "name": "@org.metadatacenter/cedar-design-tokens", "version": "0.1.0-dev.20261001.aaaaaaaa"})
+        self.cee = WorkspaceTest._repo(self, "cedar-embeddable-editor", {
+            "name": "cedar-embeddable-editor", "version": "2.0.20-dev.20261002.d48218d3",
+            "devDependencies": {"@org.metadatacenter/cedar-design-tokens": "0.1.0-dev.20261001.aaaaaaaa"}})
+        self._push(self.cee)
+        self.workspace = WorkspaceTest._repo(self, "cedar-workspace", {
+            "name": "cedar-workspace", "dependencies": {"cedar-embeddable-editor": "2.0.19"}})
+        demo = self.root / "cedar-component-demo"
+        (demo / "react").mkdir(parents=True)
+        (demo / "react" / "package.json").write_text(json.dumps({"dependencies": {
+            "cedar-embeddable-editor":
+                "npm:@org.metadatacenter/cedar-embeddable-editor@2.0.19-dev.20261001.1111111"}}))
+        for command in (["init", "--initial-branch", "develop"],
+                        ["config", "user.email", "t@t.com"], ["config", "user.name", "t"],
+                        ["add", "-A"], ["commit", "-m", "Publish"]):
+            subprocess.run(["git", "-C", str(demo)] + command, capture_output=True, check=True)
+        self.demo = demo
+        holds = patch.object(component_pins, "_registry_holds", return_value=True)
+        self.registry = holds.start()
+        self.addCleanup(holds.stop)
+
+    def _push(self, directory):
+        subprocess.run(["git", "-C", str(directory), "update-ref", "refs/remotes/origin/develop",
+                        "develop"], check=True)
+
+    def _git(self, *arguments, environment=None):
+        import os
+        return subprocess.run(["git", "-C", str(self.cee), *arguments], capture_output=True,
+                              text=True, check=True,
+                              env={**os.environ, **(environment or {})}).stdout.strip()
+
+    def _expected(self):
+        """What CEE's CI names the package it publishes, by its own commands."""
+        date = self._git("show", "-s", "--format=%cd", "--date=format:%Y%m%d", "develop",
+                         environment={"TZ": "UTC"})
+        return f"2.0.20-dev.{date}.{self._git('rev-parse', '--short=7', 'develop')}"
+
+    def _cee(self):
+        return plan(str(self.root), only="cee")[0]
+
+    def test_the_target_is_the_package_its_ci_names_after_the_develop_head(self):
+        item = self._cee()
+
+        self.assertEqual(self._expected(), item.target)
+        self.assertTrue(item.follows_head)
+        self.assertFalse(item.publishes)
+        self.assertIsNone(item.blocked)
+        self.registry.assert_called_once_with(
+            CI_PUBLISHED["registry"], "@org.metadatacenter/cedar-embeddable-editor", item.target)
+
+    def test_its_consumers_are_the_release_inventory_known_by_the_public_name(self):
+        """Each frontend's ceeConsumer and the additional ones; a frontend with none is not one."""
+        consumers = self._cee().consumers
+
+        self.assertEqual(["cedar-workspace", "cedar-component-demo"],
+                         [consumer.repository for consumer in consumers])
+        self.assertEqual({"cedar-embeddable-editor"}, {consumer.dependency for consumer in consumers})
+        self.assertEqual("2.0.19", consumers[0].current)
+        self.assertTrue(all(consumer.moves for consumer in consumers))
+
+    def test_applying_repoints_every_consumer_and_builds_or_publishes_nothing(self):
+        commands = []
+        plans = plan(str(self.root), only="cee")
+
+        with patch.object(component_pins, "console"):
+            _apply(str(self.root), plans, run=lambda d, c: commands.append((d, c)))
+
+        target = plans[0].target
+        self.assertEqual([(self.workspace, ["npm", "install"]),
+                          (self.demo / "react", ["npm", "install"])], commands)
+        for manifest in (self.workspace / "package.json", self.demo / "react" / "package.json"):
+            self.assertEqual(f"npm:@org.metadatacenter/cedar-embeddable-editor@{target}",
+                             json.loads(manifest.read_text())["dependencies"]["cedar-embeddable-editor"])
+
+    def _assert_stays(self, reason):
+        item = self._cee()
+
+        self.assertIsNone(item.target)
+        self.assertIn(reason, item.blocked)
+        self.assertFalse(item.moves)
+        self.assertFalse(any(consumer.moves for consumer in item.consumers))
+
+    def test_an_unpushed_head_leaves_the_consumers_where_they_are(self):
+        WorkspaceTest._commit(self, self.cee, "Not yet pushed")
+
+        self._assert_stays("not the pushed origin/develop")
+
+    def test_uncommitted_changes_leave_the_consumers_where_they_are(self):
+        """No CI package contains them, so following the head would serve something else."""
+        manifest = self.cee / "package.json"
+        manifest.write_text(manifest.read_text().replace("aaaaaaaa", "bbbbbbbb"))
+
+        self._assert_stays("uncommitted changes")
+
+    def test_a_release_preparation_head_leaves_the_consumers_where_they_are(self):
+        """Its CI publishes nothing: the release publishes itself to npmjs."""
+        manifest = self.cee / "package.json"
+        manifest.write_text(json.dumps({"name": "cedar-embeddable-editor", "version": "2.0.20"}))
+        subprocess.run(["git", "-C", str(self.cee), "commit", "-qam", "Prepare 2.0.20"], check=True)
+        self._push(self.cee)
+
+        self._assert_stays("release version 2.0.20")
+
+    def test_a_version_the_registry_does_not_hold_yet_leaves_the_consumers_where_they_are(self):
+        self.registry.return_value = False
+
+        self._assert_stays("not in the registry yet")
+
+    def test_cee_is_skipped_when_this_run_has_just_moved_its_own_pins(self):
+        """The CI package for its head was built before the tokens this run gave it."""
+        WorkspaceTest._commit(self, self.tokens, "Change a token")
+        commands = []
+        plans = plan(str(self.root))
+
+        with patch.object(component_pins, "console"):
+            _apply(str(self.root), plans, run=lambda d, c: commands.append((d, c)))
+
+        self.assertIn((self.cee, ["npm", "install"]), commands)
+        self.assertNotIn((self.workspace, ["npm", "install"]), commands)
+        self.assertEqual("2.0.19", json.loads((self.workspace / "package.json").read_text())
+                         ["dependencies"]["cedar-embeddable-editor"])
