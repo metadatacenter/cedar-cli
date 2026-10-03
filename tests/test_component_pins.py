@@ -683,3 +683,85 @@ class ChainedComponentTest(unittest.TestCase):
         self.assertIn(("cedar-embeddable-designer", ["npm", "install"]), commands)
         self.assertNotIn(("cedar-embeddable-designer", ["npm", "run", "dist"]), commands)
         self.assertFalse(any(directory == "cedar-template-designer" for directory, _ in commands))
+
+
+MODEL_FOLLOWS_HEAD = {
+    "registry": "https://nexus.example/repository/npm-cedar/",
+    "components": [{
+        "id": "model",
+        "repository": "cedar-model-typescript-library",
+        "publishedName": "@org.metadatacenter/cedar-model-typescript-library",
+        "sourceManifest": "package.json",
+        "publishedBy": "repository's CI",
+        "followsHead": True,
+        "consumers": [
+            {"repository": "cedar-embeddable-editor", "dependency": "cedar-model-typescript-library",
+             "manifest": "package.json", "lock": "package-lock.json"},
+            {"repository": "cedar-embeddable-designer", "dependency": "cedar-model-typescript-library",
+             "manifest": "package.json", "lock": "package-lock.json"},
+        ],
+    }],
+    "cee": {
+        "repository": "cedar-embeddable-editor",
+        "publishedName": "@org.metadatacenter/cedar-embeddable-editor",
+        "modelDependency": "cedar-model-typescript-library",
+        "additionalModelConsumers": [{"manifest": "visual/package.json", "lock": "visual/package-lock.json"}],
+    },
+}
+
+
+class ModelFollowsItsHeadTest(unittest.TestCase):
+    """The model library's CI publishes from every push, as CEE's does."""
+
+    OLD = "npm:@org.metadatacenter/cedar-model-typescript-library@1.0.16-dev.20260926.069bfeb"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        config = self.root / "cedar-development" / "ops"
+        config.mkdir(parents=True)
+        (config / "frontend-train.json").write_text(json.dumps(MODEL_FOLLOWS_HEAD))
+        self.model = WorkspaceTest._repo(self, "cedar-model-typescript-library", {
+            "name": "cedar-model-typescript-library", "version": "1.0.16-dev.20260926.aafcfc6"})
+        self.cee = WorkspaceTest._repo(self, "cedar-embeddable-editor", {
+            "name": "cedar-embeddable-editor", "version": "2.0.20-dev.20261002.c4c43ce0",
+            "dependencies": {"cedar-model-typescript-library": self.OLD}})
+        (self.cee / "visual").mkdir()
+        (self.cee / "visual" / "package.json").write_text(json.dumps(
+            {"dependencies": {"cedar-model-typescript-library": self.OLD}}))
+        subprocess.run(["git", "-C", str(self.cee), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.cee), "commit", "-qm", "Add the visual suite"], check=True)
+        self.ced = WorkspaceTest._repo(self, "cedar-embeddable-designer", {
+            "name": "cedar-embeddable-designer", "dependencies": {"cedar-model-typescript-library": self.OLD}})
+        for directory in (self.model, self.cee):
+            subprocess.run(["git", "-C", str(directory), "update-ref", "refs/remotes/origin/develop",
+                            "develop"], check=True)
+        holds = patch.object(component_pins, "_registry_holds", return_value=True)
+        holds.start()
+        self.addCleanup(holds.stop)
+
+    def test_the_target_is_its_ci_package_and_ceees_visual_pin_follows_its_root_pin(self):
+        item = plan(str(self.root), only="model")[0]
+
+        sha = subprocess.run(["git", "-C", str(self.model), "rev-parse", "--short=7", "develop"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        self.assertTrue(item.follows_head)
+        self.assertFalse(item.publishes)
+        self.assertTrue(item.target.startswith("1.0.16-dev.") and item.target.endswith(f".{sha}"))
+        self.assertEqual([("cedar-embeddable-editor", "package.json"),
+                          ("cedar-embeddable-designer", "package.json"),
+                          ("cedar-embeddable-editor", "visual/package.json")],
+                         [(consumer.repository, consumer.manifest) for consumer in item.consumers])
+
+    def test_applying_repoints_all_three_pins(self):
+        plans = plan(str(self.root), only="model")
+
+        with patch.object(component_pins, "console"):
+            _apply(str(self.root), plans, run=lambda d, c: None)
+
+        expected = f"npm:@org.metadatacenter/cedar-model-typescript-library@{plans[0].target}"
+        for manifest in (self.cee / "package.json", self.cee / "visual" / "package.json",
+                         self.ced / "package.json"):
+            self.assertEqual(expected, json.loads(manifest.read_text())
+                             ["dependencies"]["cedar-model-typescript-library"])

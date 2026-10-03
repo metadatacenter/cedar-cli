@@ -28,9 +28,9 @@ turn. The version is a property of the commit instead, `<base>-dev.<commit date>
 whether it is published is the registry's answer, not the manifest's.
 
 Some components are published by something else, and are followed rather than published here. The
-build train publishes the model library's development snapshots. CEE's own CI publishes a development
-package from every push to develop, and nothing else ever repointed CEE's consumers to one: after a
-release they stayed on the public CEE until someone moved all of them by hand.
+model library's CI and CEE's each publish a development package from every push to develop, and
+nothing else ever repointed their consumers to one: after a release CEE's consumers stayed on the
+public CEE until someone moved all of them by hand.
 """
 
 from __future__ import annotations
@@ -113,10 +113,8 @@ class ComponentPlan:
     def publishes(self) -> bool:
         """Whether this command would publish, which a component it does not own never does.
 
-        The TypeScript model library's development snapshots are published by the build train,
-        which also advances CEE's pin. Nothing advanced the other consumers, so the library is
-        declared here to be followed rather than published: its target is the version the
-        reference consumer already carries, and no version is stamped.
+        A followed component's target is the package something else published: the one its CI
+        published for its develop head, or the version a reference consumer already carries.
         """
         if self.published_by or self.blocked:
             return False
@@ -170,7 +168,7 @@ def declared(cedar_home, only=None):
     items = config.get("components")
     if not isinstance(items, list) or not items:
         raise ComponentPinError(f"{CONFIG} declares no components")
-    items = items + _ci_published(config)
+    items = [_with_cee_model_pins(item, config) for item in items] + _ci_published(config)
     selected = []
     for item in items:
         if not isinstance(item, dict):
@@ -193,6 +191,26 @@ def declared(cedar_home, only=None):
         names = ", ".join(sorted(item["id"] for item in items if isinstance(item, dict)))
         raise ComponentPinError(f"no component is declared as {only!r}; declared: {names}")
     return selected
+
+
+def _with_cee_model_pins(item, config):
+    """A component that repoints CEE's model pin repoints all of them.
+
+    CEE pins the model library twice, in its root manifest and in its visual suite's, and the
+    configuration records the second under `cee.additionalModelConsumers` rather than as a
+    consumer of its own, since the suite is not a surface anything verifies.
+    """
+    cee = config.get("cee")
+    if not isinstance(item, dict) or not isinstance(cee, dict):
+        return item
+    dependency = cee.get("modelDependency")
+    consumers = item.get("consumers") or []
+    if not any(isinstance(consumer, dict) and consumer.get("repository") == cee.get("repository")
+               and consumer.get("dependency") == dependency for consumer in consumers):
+        return item
+    extra = [dict(consumer, repository=cee["repository"], dependency=dependency)
+             for consumer in cee.get("additionalModelConsumers", []) if isinstance(consumer, dict)]
+    return dict(item, consumers=list(consumers) + extra)
 
 
 def _ci_published(config):
