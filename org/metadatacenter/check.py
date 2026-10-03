@@ -100,8 +100,8 @@ def ci(
 
 @app.command("design-tokens")
 def design_tokens(
-        repo: list[str] = typer.Option(None, "--repo", help="Frontend repository; repeat to select several."),
-        strict: bool = typer.Option(False, "--strict", help="Fail on new color/typography drift or missing baselines."),
+        repo: list[str] = typer.Option(None, "--repo", help="Repository path under CEDAR_HOME, such as cedar-workspace or mcp/cedar-cee-mcp; repeat to select several."),
+        strict: bool = typer.Option(False, "--strict", help="Fail on new style drift, missing or stale baselines, or invalid token pins."),
         json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable adoption report."),
         show_all: bool = typer.Option(False, "--all", help="Include existing findings."),
         init_baseline: bool = typer.Option(False, "--init-baseline", help="Create reviewed debt baselines once; never overwrite."),
