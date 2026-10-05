@@ -16,6 +16,8 @@ _cedarcli_run() {
   fi
   if (
     cd "$CEDAR_HOME/cedar-cli" || exit 1
+    # The CLI runs from its own checkout, so a path the caller typed is resolved against this.
+    export CEDAR_CLI_CALLER_DIR="$cedar_cli_cwd"
     # Checked before activating: activate is a plain shell script and still sources cleanly after
     # the interpreter it was built against has been upgraded away, so sourcing first turns a
     # recoverable environment into a silent exit.

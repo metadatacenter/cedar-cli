@@ -39,5 +39,18 @@ class DesignTokensCommandTest(unittest.TestCase):
             self.assertEqual(['--repo', 'cedar-embeddable-designer', '--prune-baseline'], args[-3:])
 
 
+    @patch('org.metadatacenter.design_tokens.subprocess.run')
+    def test_a_relative_surface_inventory_lands_where_the_caller_stands(self, run):
+        with tempfile.TemporaryDirectory() as root, patch.object(design_tokens.Util, 'cedar_home', root), \
+                patch.dict('os.environ', {'CEDAR_CLI_CALLER_DIR': '/work/here'}):
+            path = Path(root) / 'cedar-design-tokens/tools/check_adoption.py'
+            path.parent.mkdir(parents=True)
+            path.touch()
+            run.return_value.returncode = 0
+            design_tokens.check_design_tokens(surface_inventory='ui-surfaces.md')
+            self.assertEqual(['--surface-inventory', '/work/here/ui-surfaces.md'], run.call_args.args[0][-2:])
+            design_tokens.check_design_tokens(surface_inventory='/elsewhere/ui-surfaces.md')
+            self.assertEqual(['--surface-inventory', '/elsewhere/ui-surfaces.md'], run.call_args.args[0][-2:])
+
 if __name__ == '__main__':
     unittest.main()
