@@ -1,10 +1,11 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from org.metadatacenter import npm_install
+from org.metadatacenter import build_scheduler, npm_install
 from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
 
@@ -77,18 +78,28 @@ class ExecutorReinstallTest(unittest.TestCase):
             write_log(self.cache, f"{execute.calls:02d}_000",
                       CLEAN + (DROPPED.format("/build") if dropped else ""))
             execute.calls += 1
+            build_scheduler.record_timing(repo.name, command, time.monotonic(), code)
             return [], code
         execute.calls = 0
-        with patch.object(GlobalContext, "fail_on_error", return_value=True), \
-                patch.object(self.executor, "execute_shell_command", side_effect=execute) as shell:
-            code = self.executor._execute_commands(
-                self.task, self.task.repo, commands, "/build/repo", Mock(),
-                self.environment if environment is None else environment)
+        self.records = []
+        token = build_scheduler._timings.set(self.records)
+        try:
+            with patch.object(GlobalContext, "fail_on_error", return_value=True), \
+                    patch.object(self.executor, "execute_shell_command", side_effect=execute) as shell:
+                code = self.executor._execute_commands(
+                    self.task, self.task.repo, commands, "/build/repo", Mock(),
+                    self.environment if environment is None else environment)
+        finally:
+            build_scheduler._timings.reset(token)
         return code, shell.call_count
+
+    def dropped_per_attempt(self):
+        return [record.get("droppedOptionalDependencies") for record in self.records]
 
     def test_a_failed_postinstall_after_a_drop_is_installed_again(self):
         self.assertEqual((0, 2), self.run_commands(["npm install"], [(1, True), (0, False)]))
         self.assertIn("so the install runs again", self.command_log.read_text())
+        self.assertEqual([["@esbuild/darwin-arm64"], None], self.dropped_per_attempt())
 
     def test_a_drop_behind_a_successful_install_is_installed_again(self):
         self.assertEqual((0, 2), self.run_commands(["npm ci"], [(0, True), (0, False)]))
@@ -97,10 +108,12 @@ class ExecutorReinstallTest(unittest.TestCase):
         self.assertEqual((1, 2), self.run_commands(["npm --prefix visual install"],
                                                    [(0, True), (0, True)]))
         self.assertIn("@esbuild/darwin-arm64 again", self.command_log.read_text())
+        self.assertEqual([["@esbuild/darwin-arm64"]] * 2, self.dropped_per_attempt())
 
     def test_any_other_install_failure_is_not_retried(self):
         self.assertEqual((1, 1), self.run_commands(["npm install"], [(1, False)]))
         self.assertFalse(self.command_log.exists())
+        self.assertEqual([None], self.dropped_per_attempt())
 
     def test_commands_that_are_not_installs_run_once(self):
         self.assertEqual((0, 1), self.run_commands(["npm run build"], [(0, True)]))

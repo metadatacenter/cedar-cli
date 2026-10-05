@@ -10,7 +10,7 @@ from rich.style import Style
 
 from org.metadatacenter import npm_install, reactor, reactor_evidence
 from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
-from org.metadatacenter.build_scheduler import record_timing
+from org.metadatacenter.build_scheduler import record_dropped_optional_dependencies, record_timing
 from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
@@ -162,6 +162,7 @@ class ShellTaskExecutor(TaskExecutor):
             dropped = npm_install.dropped_optional_dependencies(npm_cache, before)
             if not dropped:
                 return return_code
+            record_dropped_optional_dependencies(repo.name, command, dropped)
             noun = "dependency" if len(dropped) == 1 else "dependencies"
             what = f"the optional {noun} {', '.join(dropped)}"
             if attempt == 1:
