@@ -2,7 +2,8 @@ import copy
 import unittest
 from unittest.mock import patch
 from typer.testing import CliRunner
-from org.metadatacenter.release_resume_preview import resume_preview
+from rich.console import Console
+from org.metadatacenter.release_resume_preview import render_resume_preview, resume_preview
 from org.metadatacenter.release_support.preflight import ReleasePreflight
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter import release_train
@@ -18,6 +19,15 @@ class ResumePreviewTest(unittest.TestCase):
         self.assertEqual(['release:maven:parent'], build['recordedTasks'])
         self.assertTrue(build['pending'])
         self.assertFalse(report['stages'][0]['pending'])
+
+    def test_preview_names_the_acceptances_resume_applies_again(self):
+        manifest = {'releaseVersion': '1.0.0', 'phase': 'build-validation-failed',
+                    'acceptances': {'redDevelop': {'cedar-repo-server': '42'}, 'mainOnly': ['cedar-workspace']}}
+        console = Console(record=True, width=200)
+        render_resume_preview(manifest, console)
+        output = console.export_text()
+        self.assertIn('red develop cedar-repo-server=42', output)
+        self.assertIn('main-only cedar-workspace', output)
 
     def test_version_failure_rewinds_and_terminal_cases_are_honest(self):
         report = resume_preview({'phase':'version-preparation-failed'})

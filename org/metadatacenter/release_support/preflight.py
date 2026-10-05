@@ -143,6 +143,25 @@ class ReleaseSpaceEstimator:
         return ReleaseSpaceBudget(components, headroom)
 
 
+def record_acceptances(manifest: dict, red_develop: dict[str, str], main_only: set[str]) -> None:
+    """Keep the acceptances a release starts with, so that resuming it applies them again.
+
+    Resume repeats the checks its next stage depends on, red develop CI and main-only files among
+    them. Without the record, a release that needed an acceptance and stopped early would refuse
+    its own resume on the finding the operator had already accepted.
+    """
+    manifest["acceptances"] = {
+        "redDevelop": dict(sorted(red_develop.items())),
+        "mainOnly": sorted(main_only),
+    }
+
+
+def recorded_acceptances(manifest: dict) -> tuple[dict[str, str], set[str]]:
+    """The acceptances `record_acceptances` kept; a ledger written before it recorded none."""
+    recorded = manifest.get("acceptances") or {}
+    return dict(recorded.get("redDevelop") or {}), set(recorded.get("mainOnly") or ())
+
+
 class ReleasePreflight:
     """Settle every release precondition that is knowable before the first build.
 

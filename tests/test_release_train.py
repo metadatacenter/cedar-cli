@@ -4471,6 +4471,67 @@ class ReleaseMainOnlyFilesTest(unittest.TestCase):
         self.assertEqual([], self._preflight_with_survey({}))
 
 
+class ReleaseAcceptanceRecordTest(unittest.TestCase):
+    """An acceptance given to start must survive into the resume of the same release."""
+
+    @patch.object(release_train, "_drive_release", side_effect=ReleaseError("stopped after start"))
+    @patch.object(release_train, "_activate_toolchain")
+    @patch.object(ReleasePreflight, "run", return_value=[])
+    @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
+    def test_start_records_its_acceptances_in_the_ledger(self, _build, _preflight, _toolchain, _drive):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
+        ):
+            result = CliRunner().invoke(release_train.app, [
+                "start",
+                "--version", "2.9.3",
+                "--next-version", "2.9.4-SNAPSHOT",
+                "--from-train", TRAIN,
+                "--cee-version", PUBLIC_VERSION,
+                "--accept-red-develop", "cedar-repo-server=33211136456",
+                "--accept-main-only", "cedar-template-editor",
+                "--accept-main-only", " cedar-workspace ",
+            ])
+            self.assertEqual(1, result.exit_code, result.output)
+            manifest, _path = ReleaseState().read_current_manifest()
+
+        self.assertEqual({
+            "redDevelop": {"cedar-repo-server": "33211136456"},
+            "mainOnly": ["cedar-template-editor", "cedar-workspace"],
+        }, manifest["acceptances"])
+
+    def test_resume_applies_the_recorded_acceptances(self):
+        manifest = manifest_fixture()
+        preflight.record_acceptances(
+            manifest, {"cedar-repo-server": "33211136456"}, {"cedar-template-editor"})
+
+        with patch.object(release_train, "ReleasePreflight") as gate:
+            gate.return_value.run_resume.return_value = []
+            release_train._release_resume_gate_or_exit(manifest)
+
+        _args, options = gate.call_args
+        self.assertEqual({"cedar-repo-server": "33211136456"}, options["accepted_red_develop"])
+        self.assertEqual({"cedar-template-editor"}, options["accepted_main_only"])
+
+    def test_a_recorded_main_only_acceptance_lets_the_resumed_survey_pass(self):
+        manifest = manifest_fixture()
+        preflight.record_acceptances(manifest, {}, {"cedar-template-editor"})
+        accepted_red_develop, accepted_main_only = preflight.recorded_acceptances(manifest)
+        resumed = ReleasePreflightTest._preflight(
+            ReleasePreflightTest(), manifest=manifest, accepted=accepted_red_develop,
+            accepted_main_only=accepted_main_only)
+
+        with patch.object(release_train.ReleaseRemoteIntegrator, "survey",
+                          return_value={"cedar-template-editor": ["app/one.html"]}):
+            findings = resumed.check_remote_survey()
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal, "the resume refused what start had accepted")
+
+    def test_a_ledger_written_before_the_record_resumes_with_no_acceptances(self):
+        self.assertEqual(({}, set()), preflight.recorded_acceptances(manifest_fixture()))
+
+
 class ReleaseLicenseStampingTest(unittest.TestCase):
     """A release, rather than the turn of a year, is what keeps the copyright current."""
 

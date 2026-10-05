@@ -1,7 +1,7 @@
 """Explain the controller's next actions without executing checks or changing state."""
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.release_support.lifecycle import release_stages, _next_release_stage, REWIND_TO_FRONTENDS
-from org.metadatacenter.release_support.preflight import ReleasePreflight
+from org.metadatacenter.release_support.preflight import ReleasePreflight, recorded_acceptances
 
 SECTIONS = {'frontends':'frontendPreparation', 'versions':'versionPreparation',
     'builds':'buildValidation', 'local-refs':'localRefs', 'snapshots':'snapshotPublication',
@@ -47,6 +47,11 @@ def render_resume_preview(manifest, console):
     console.print(f"Resume preview — {manifest.get('releaseVersion')} ({preview['phase']})", markup=False)
     console.print(preview['note'], markup=False)
     console.print('Checks to repeat: ' + (', '.join(name.removeprefix('check_') for name in preview['checks']) or 'none'), markup=False)
+    red_develop, main_only = recorded_acceptances(manifest)
+    accepted = ([f'red develop {repository}={run_id}' for repository, run_id in sorted(red_develop.items())]
+                + [f'main-only {repository}' for repository in sorted(main_only)])
+    if accepted:
+        console.print('Acceptances recorded at start, applied again: ' + ', '.join(accepted), markup=False)
     for row in preview['stages']:
         console.print(f"{row['stage']}: {row['action']}", markup=False)
         if row['recordedTasks']:

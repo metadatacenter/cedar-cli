@@ -200,6 +200,8 @@ from org.metadatacenter.release_support.preflight import (
     ReleasePreflight,
     ReleaseSpaceBudget,
     ReleaseSpaceEstimator,
+    record_acceptances,
+    recorded_acceptances,
 )
 
 from org.metadatacenter.release_support.presentation import (
@@ -314,8 +316,13 @@ def _release_gate_or_exit(
 
 
 def _release_resume_gate_or_exit(manifest: dict) -> None:
+    accepted_red_develop, accepted_main_only = recorded_acceptances(manifest)
     try:
-        findings = ReleasePreflight(manifest).run_resume()
+        findings = ReleasePreflight(
+            manifest,
+            accepted_red_develop=accepted_red_develop,
+            accepted_main_only=accepted_main_only,
+        ).run_resume()
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from error
@@ -426,12 +433,11 @@ def start(
             _activate_toolchain()
             manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
             manifest["buildConcurrency"] = {"jobs": jobs, "workers": workers, "mavenThreads": maven_threads}
+            accepted_red_develop = _parse_accepted_red_develop(accept_red_develop)
+            accepted_main_only = {value.strip() for value in (accept_main_only or []) if value.strip()}
+            record_acceptances(manifest, accepted_red_develop, accepted_main_only)
             _render_plan(manifest)
-            _release_gate_or_exit(
-                manifest,
-                _parse_accepted_red_develop(accept_red_develop),
-                {value.strip() for value in (accept_main_only or []) if value.strip()},
-            )
+            _release_gate_or_exit(manifest, accepted_red_develop, accepted_main_only)
             path = state.start(manifest)
             console.print("Compact progress is shown below; full task output is retained in attempt logs.")
             console.print("A second terminal may run: cedarcli release status --watch")
