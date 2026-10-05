@@ -303,6 +303,11 @@ def _publishable_version(cedar_home, item, carried, head):
     if _git(directory, ["rev-parse", "--verify", "origin/develop"]) != \
             _git(directory, ["rev-parse", "--verify", "develop"]):
         return None, "develop is not the pushed origin/develop, so a package could not name it"
+    # The package is built from the checkout, so a checkout elsewhere would publish other source
+    # under develop's name.
+    if _git(directory, ["rev-parse", "--verify", "HEAD"]) != \
+            _git(directory, ["rev-parse", "--verify", "develop"]):
+        return None, "the checkout is not at develop's head, so the package would not hold what it names"
     date = _git(directory, ["show", "-s", "--format=%cd", "--date=format:%Y%m%d", "develop"],
                 environment={"TZ": "UTC"})
     return development_version(carried, head, date), None

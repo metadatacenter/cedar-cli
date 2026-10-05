@@ -298,6 +298,19 @@ class WorkspaceTest(unittest.TestCase):
         self.assertFalse(item.publishes)
         self.assertFalse(item.moves)
 
+    def test_a_checkout_away_from_develop_is_not_published(self):
+        """The build reads the checkout, and the version names develop's head."""
+        subprocess.run(["git", "-C", str(self.component), "checkout", "-b", "feature"],
+                       capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(self.component), "commit", "--allow-empty", "-m", "Elsewhere"],
+                       capture_output=True, check=True)
+
+        item = plan(str(self.root))[0]
+
+        self.assertIn("not at develop's head", item.blocked)
+        self.assertFalse(item.publishes)
+        self.assertFalse(item.moves)
+
     def test_the_stamp_is_undone_even_when_the_build_fails(self):
         manifest = self.component / "package.json"
         before = manifest.read_bytes()
