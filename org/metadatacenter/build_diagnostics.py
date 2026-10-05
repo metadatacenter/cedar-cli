@@ -1,4 +1,4 @@
-"""Retain bounded, allowlisted test evidence before isolated build cleanup."""
+"""Retain bounded, allowlisted build and test evidence before isolated build cleanup."""
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -11,15 +11,49 @@ REPORT_DIRECTORIES = {'test-results', 'playwright-report', 'surefire-reports',
                       'failsafe-reports', 'coverage'}
 SKIP_DIRECTORIES = {'node_modules', '.git', '.angular', 'npm-cache'}
 COMMAND_LOG = '.cedar-build-commands.log'
+# Where a bundle keeps npm's debug logs. A workspace file is retained only at the workspace root or
+# inside a report directory, so none can land at the same path.
+NPM_LOGS = 'npm-logs'
 MAX_BYTES = 250 * 1024 * 1024
 
 
-def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES):
+def _npm_debug_logs(directory):
+    if directory is None:
+        return []
+    directory = Path(directory)
+    if directory.is_symlink() or not directory.is_dir():
+        return []
+    return sorted(path for path in directory.glob('*.log') if path.is_file() and not path.is_symlink())
+
+
+def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None):
+    """Copy a failed build's evidence out of its workspace before the workspace is deleted.
+
+    `npm_logs` is the directory npm writes its debug logs to. It lies outside the workspace, in
+    the build's npm cache, and its logs are the only record of what an install did. They are small
+    and come first, so a large test report cannot crowd them out of the budget.
+    """
     workspace = Path(workspace)
     destination = Path(cedar_home) / '.cedar' / 'build-reports' / 'failures' / (
         datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8])
     destination.mkdir(parents=True, mode=0o700)
     copied, skipped, total = [], [], 0
+
+    def keep(source, target):
+        nonlocal total
+        size = source.stat().st_size
+        if total + size > limit:
+            skipped.append(str(target))
+            return
+        output = destination / target
+        output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.copyfile(source, output)
+        output.chmod(0o600)
+        copied.append(str(target))
+        total += size
+
+    for source in _npm_debug_logs(npm_logs):
+        keep(source, Path(NPM_LOGS) / source.name)
     for directory, children, files in os.walk(workspace, followlinks=False):
         root = Path(directory)
         children[:] = sorted(name for name in children
@@ -32,17 +66,7 @@ def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES):
             if not (REPORT_DIRECTORIES.intersection(relative.parts)
                     or (relative == Path('.') and name == COMMAND_LOG)):
                 continue
-            target = source.relative_to(workspace)
-            size = source.stat().st_size
-            if total + size > limit:
-                skipped.append(str(target))
-                continue
-            output = destination / target
-            output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            shutil.copyfile(source, output)
-            output.chmod(0o600)
-            copied.append(str(target))
-            total += size
+            keep(source, source.relative_to(workspace))
     (destination / 'manifest.json').write_text(json.dumps({
         'kind': 'cedar-failed-build-diagnostics', 'createdAt': datetime.now(timezone.utc).isoformat(),
         'workspace': str(workspace), 'bytes': total, 'limitBytes': limit,
@@ -52,7 +76,7 @@ def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES):
 
 
 @contextmanager
-def failure_diagnostics(workspace, cedar_home, report):
+def failure_diagnostics(workspace, cedar_home, report, *, npm_logs=None):
     outcome = {'exitCode': None}
     try:
         yield outcome
@@ -60,7 +84,7 @@ def failure_diagnostics(workspace, cedar_home, report):
         # None also covers exceptions/interruptions before a command returned.
         if outcome['exitCode'] != 0:
             try:
-                path = retain_failure(workspace, cedar_home)
+                path = retain_failure(workspace, cedar_home, npm_logs=npm_logs)
                 report(f'Failed build diagnostics: {path}', markup=False)
             except (OSError, TypeError, ValueError) as error:
                 report(f'Could not retain failed build diagnostics: {error}', markup=False)

@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.progress import Progress
 from rich.style import Style
 
-from org.metadatacenter import reactor, reactor_evidence
+from org.metadatacenter import npm_install, reactor, reactor_evidence
 from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
 from org.metadatacenter.build_scheduler import record_timing
 from org.metadatacenter.util.InvocationContext import current_context
@@ -63,7 +63,10 @@ class ShellTaskExecutor(TaskExecutor):
                 if parameter("isolated_frontend_build") is True:
                     identity = reactor_evidence.begin(cwd)
                     with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions), \
-                            failure_diagnostics(isolated_cwd, Util.cedar_home, job_progress.print) as outcome:
+                            failure_diagnostics(
+                                isolated_cwd, Util.cedar_home, job_progress.print,
+                                npm_logs=npm_install.log_directory(environment.get('npm_config_cache')),
+                            ) as outcome:
                         environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(isolated_cwd / COMMAND_LOG)
                         if collisions:
                             processes = ", ".join(f"PID {pid}" for pid, _ in collisions)
@@ -118,6 +121,8 @@ class ShellTaskExecutor(TaskExecutor):
 
     def _execute_commands(self, task, repo, commands, cwd, job_progress, environment):
         first_failure = 0
+        # Only an isolated build sets npm's cache, which is where npm writes its debug logs.
+        npm_cache = (environment or {}).get('npm_config_cache')
         for command in commands:
             guarded_maven = is_test_bearing_maven_command(command)
             if guarded_maven:
@@ -126,9 +131,13 @@ class ShellTaskExecutor(TaskExecutor):
             workspace = (executable_build_workspace(environment, java=True)
                          if is_maven_command(command) else nullcontext((None, environment)))
             with workspace as (_, child_environment):
-                stdout_parts, return_code = self.execute_shell_command(
-                    task, repo, command, cwd, job_progress, environment=child_environment,
-                )
+                if npm_cache and npm_install.is_install(command):
+                    return_code = self._execute_npm_install(
+                        task, repo, command, cwd, job_progress, child_environment, npm_cache)
+                else:
+                    _, return_code = self.execute_shell_command(
+                        task, repo, command, cwd, job_progress, environment=child_environment,
+                    )
                 if guarded_maven:
                     wait_for_no_embedded_mongo_processes(
                         f"completion of test-bearing Maven task for {repo.name}")
@@ -138,6 +147,40 @@ class ShellTaskExecutor(TaskExecutor):
                 if GlobalContext.fail_on_error():
                     return return_code
         return first_failure
+
+    def _execute_npm_install(self, task, repo, command, cwd, job_progress, environment, npm_cache):
+        """Install once more if npm dropped an optional dependency, and fail if it does so again.
+
+        npm_install explains why such an install cannot be trusted whatever its exit code. A second
+        run needs no cleanup. An isolated build starts without node_modules, a failed install
+        removes what it added, and running a successful one again adds just the package it dropped.
+        """
+        for attempt in (1, 2):
+            before = npm_install.debug_logs(npm_cache)
+            _, return_code = self.execute_shell_command(
+                task, repo, command, cwd, job_progress, environment=environment)
+            dropped = npm_install.dropped_optional_dependencies(npm_cache, before)
+            if not dropped:
+                return return_code
+            noun = "dependency" if len(dropped) == 1 else "dependencies"
+            what = f"the optional {noun} {', '.join(dropped)}"
+            if attempt == 1:
+                self._note(job_progress, environment,
+                           f"npm dropped {what}, most likely after a failed download, "
+                           f"so the install runs again.")
+            else:
+                self._note(job_progress, environment,
+                           f"npm dropped {what} again, so the install fails rather than "
+                           f"leave the build without it.")
+        return return_code or 1
+
+    @staticmethod
+    def _note(job_progress, environment, message):
+        job_progress.print(message, markup=False)
+        log_path = (environment or {}).get('CEDAR_BUILD_DIAGNOSTIC_LOG')
+        if log_path:
+            with Path(log_path).open('a', encoding='utf-8') as log:
+                log.write(message + '\n')
 
     def execute_shell_command(
         self, task: PlanTask, repo, command, cwd, job_progress: Progress, environment=None,

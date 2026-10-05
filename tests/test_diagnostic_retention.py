@@ -36,3 +36,28 @@ class DiagnosticRetentionTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'symlinked'):
                 prune_failures(home, apply=True)
             self.assertTrue(moved.exists())
+
+
+class NpmDebugLogRetentionTest(unittest.TestCase):
+    """npm writes its debug logs into its cache, beside the workspace rather than inside it."""
+
+    def test_npm_logs_are_kept_first_and_symlinks_are_not_followed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory); work = home/'work'; logs = home/'npm-cache'/'_logs'
+            (work/'coverage').mkdir(parents=True); logs.mkdir(parents=True)
+            (work/'coverage'/'summary.json').write_text('x' * 64)
+            (logs/'2026-10-05T02_48_57_158Z-debug-0.log').write_text('21 verbose reify failed optional dependency\n')
+            (logs/'linked.log').symlink_to(work/'coverage'/'summary.json')
+            bundle = retain_failure(work, home, npm_logs=logs, limit=60)
+            files = json.loads((bundle/'manifest.json').read_text())
+            self.assertEqual(['npm-logs/2026-10-05T02_48_57_158Z-debug-0.log'], files['files'])
+            self.assertEqual(['coverage/summary.json'], files['omittedForSize'])
+            self.assertIn('failed optional dependency',
+                          (bundle/'npm-logs'/'2026-10-05T02_48_57_158Z-debug-0.log').read_text())
+
+    def test_an_absent_log_directory_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory); work = home/'work'; work.mkdir()
+            for logs in (None, home/'missing'):
+                bundle = retain_failure(work, home, npm_logs=logs)
+                self.assertEqual([], json.loads((bundle/'manifest.json').read_text())['files'])
