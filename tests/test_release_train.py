@@ -4259,6 +4259,40 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertFalse(findings[0].fatal)
         self.assertIn("accepted explicitly", findings[0].message)
 
+    def test_resume_keeps_a_red_develop_acceptance_that_start_recorded(self):
+        """The resume gate repeats the CI check through the build stage."""
+        commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
+            ("gh", "api"): FakeCompletedProcess(
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "failure", "status": "completed",
+                    "id": 33211149320, "name": "CI",
+                }]})),
+        })
+
+        def resume_gate(manifest):
+            def build(payload, **options):
+                return self._preflight(
+                    commands=commands, manifest=payload,
+                    accepted=options.get("accepted_red_develop"),
+                    accepted_main_only=options.get("accepted_main_only"))
+            others = {name: (lambda *_: []) for name in ReleasePreflight.resume_check_names(manifest)
+                      if name != "check_develop_is_green"}
+            with patch.object(release_train, "ReleasePreflight", side_effect=build), \
+                    patch.multiple(ReleasePreflight, **others):
+                release_train._release_resume_gate_or_exit(manifest)
+
+        recorded = self._release_of("repo-one")
+        recorded["phase"] = "build-validation-failed"
+        self.assertIn("check_develop_is_green", ReleasePreflight.resume_check_names(recorded))
+        preflight.record_acceptances(recorded, {"repo-one": "33211149320"}, set())
+        resume_gate(recorded)
+
+        unrecorded = self._release_of("repo-one")
+        unrecorded["phase"] = "build-validation-failed"
+        with self.assertRaises(typer.Exit):
+            resume_gate(unrecorded)
+
     def test_accepting_a_different_run_does_not_clear_the_current_one(self):
         manifest = self._release_of("repo-one")
         commands = FakeCommands({
