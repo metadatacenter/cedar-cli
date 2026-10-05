@@ -1067,12 +1067,29 @@ class SmokeGatePreflightTest(unittest.TestCase):
             patch.object(Util, 'cedar_home', '/tmp/cedar-smoke'),
             patch.object(smoke_gate, 'train_repositories', return_value=['cedar-a', 'cedar-b']),
             patch.object(smoke_gate, 'develop_heads', return_value=(self.HEADS, [], [])) as heads,
+            patch.object(smoke_gate, 'absent_repositories', return_value=[]),
             patch.object(smoke_gate, 'findings_for', return_value=[]) as findings,
         ):
             BuildTrainWorker._smoke_gate_preflight(None)
 
         heads.assert_called_once_with('/tmp/cedar-smoke', ['cedar-a', 'cedar-b'])
         findings.assert_called_once_with('/tmp/cedar-smoke', self.HEADS)
+
+    def test_a_repository_not_checked_out_here_refuses_a_new_train(self):
+        # The train would capture it from GitHub, carrying code no run on this machine tested, as a
+        # resumed train and a release already say of a source the record does not name.
+        with (
+            patch.object(Util, 'cedar_home', '/tmp/cedar-smoke'),
+            patch.object(smoke_gate, 'train_repositories', return_value=['cedar-a', 'cedar-b']),
+            patch.object(smoke_gate, 'develop_heads', return_value=({'cedar-a': 'a' * 40}, [], [])),
+            patch.object(smoke_gate, 'absent_repositories', return_value=['cedar-b']),
+            patch.object(smoke_gate, 'findings_for', return_value=[]) as findings,
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._smoke_gate_preflight(None)
+
+        self.assertIn('cedar-b are not checked out here', str(refused.exception))
+        findings.assert_not_called()
 
     def test_a_resumed_train_is_judged_by_its_recorded_source(self):
         recorded = {'cedar-a': 'c' * 40}
@@ -1091,6 +1108,7 @@ class SmokeGatePreflightTest(unittest.TestCase):
             patch.object(Util, 'cedar_home', '/tmp/cedar-smoke'),
             patch.object(smoke_gate, 'train_repositories', return_value=['cedar-a']),
             patch.object(smoke_gate, 'develop_heads', return_value=(self.HEADS, [], [])),
+            patch.object(smoke_gate, 'absent_repositories', return_value=[]),
             patch.object(smoke_gate, 'findings_for', return_value=[
                 'cedar-a: the smoke run at T tested 11111111, this source is aaaaaaaa',
                 'the browser smoke was FAIL at T',

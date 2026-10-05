@@ -99,15 +99,25 @@ def _capture(runner, args, cwd=None) -> tuple[int, str, str]:
     return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
 
 
+def absent_repositories(cedar_home, repositories: Iterable[str]) -> list[str]:
+    """The train repositories not checked out on this machine, which no run here can have tested."""
+    home = _home(cedar_home)
+    return [repository for repository in repositories if not (home / repository / ".git").exists()]
+
+
 def develop_heads(
     cedar_home, repositories: Iterable[str], runner=subprocess.run,
 ) -> tuple[dict[str, str], list[str], list[str]]:
     """Every checked-out train repository's local `develop`, and which of them hold uncommitted work.
 
-    A repository absent from this machine is left out rather than reported: the train captures it
-    from GitHub, and the dispatch alignment check applies the same rule. Untracked files do not make
-    a repository dirty, for the reason the train's own open-work check gives: they are ordinary
-    while a developer works, and the train cannot ship them either way.
+    What the stack runs is the working tree, so the record can name `develop` only when the working
+    tree is `develop`. A checkout on another branch, or detached at another commit, is a problem
+    rather than a head: a run against it would certify `develop` for code that is not on it.
+
+    An untracked file makes a repository dirty. The train cannot ship it, but the build compiled it
+    and the stack ran it, so a record that called the repository clean would say the run tested a
+    commit that does not hold it. A repository absent from this machine is left out here and named
+    by ``absent_repositories``.
     """
     home = _home(cedar_home)
     heads: dict[str, str] = {}
@@ -122,9 +132,15 @@ def develop_heads(
             problems.append(f"{repository} has no local develop branch"
                             + (f": {detail.splitlines()[-1]}" if detail else ""))
             continue
+        code, checked_out, _ = _capture(runner, ["git", "rev-parse", "HEAD"], cwd=root)
+        if code == 0 and checked_out and checked_out != head:
+            _, branch, _ = _capture(runner, ["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=root)
+            where = f"{branch} checked out" if branch else f"a detached HEAD at {checked_out[:8]}"
+            problems.append(f"{repository} has {where}, not develop, so the stack runs code that is "
+                            "not on develop")
+            continue
         heads[repository] = head
-        code, status, _ = _capture(
-            runner, ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root)
+        code, status, _ = _capture(runner, ["git", "status", "--porcelain"], cwd=root)
         if code == 0 and status:
             dirty.append(repository)
     return heads, dirty, problems
@@ -291,7 +307,8 @@ def run_smoke(
         console.print("Bring every service to healthy and current, then rerun cedarcli test e2e.")
         return 1
 
-    heads, dirty, head_problems = develop_heads(home, train_repositories(home), runner)
+    repositories = train_repositories(home)
+    heads, dirty, head_problems = develop_heads(home, repositories, runner)
     if head_problems:
         console.print("[red]Source heads cannot be recorded:[/red]")
         for problem in head_problems:
@@ -301,6 +318,12 @@ def run_smoke(
         console.print(
             "[yellow]Uncommitted changes in: " + ", ".join(dirty)
             + ". The run is recorded, and the gate will refuse it for these repositories.[/yellow]")
+    absent = absent_repositories(home, repositories)
+    if absent:
+        console.print(
+            "[yellow]Not checked out here: " + ", ".join(absent)
+            + ". The run cannot have tested them, and the gate will refuse a train or release that "
+              "captures them.[/yellow]")
 
     digest = sources_digest(heads)
     reports = reports_dir(home)

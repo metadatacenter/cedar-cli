@@ -50,9 +50,15 @@ def configure_java_tests(tests: bool):
     GlobalContext.mark_skip_tests(not tests)
 
 
-def frontend_input_roots(plan):
-    """Frontend inputs and their build tooling; unrelated backend work is independent."""
-    home = Path(Util.cedar_home)
+def build_input_roots(plan):
+    """The repositories a build reads: those its plan builds, and the build tooling.
+
+    Work elsewhere in the estate is not an input, for a Java build as for a frontend one, so an edit
+    to an unrelated repository does not fail a build that never read it. The roots are resolved,
+    because the captured state is keyed by resolved paths and a symlinked CEDAR_HOME otherwise
+    matches nothing, which silently disables the invariant.
+    """
+    home = Path(Util.cedar_home).resolve()
     roots = {home / 'cedar-cli', home / 'cedar-development'}
     def visit(task):
         repo = getattr(task, 'repo', None)
@@ -63,7 +69,7 @@ def frontend_input_roots(plan):
         for child in task.tasks:
             visit(child)
     visit(plan)
-    return roots
+    return {root.resolve() for root in roots}
 
 
 # Profiles and frontend configuration live in this mixed-purpose repository.
@@ -94,7 +100,7 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
     except BuildSafetyError as error:
         console.print(str(error), markup=False)
         raise typer.Exit(code=1) from error
-    input_roots = frontend_input_roots(plan) if frontend_only else None
+    input_roots = build_input_roots(plan)
     before = capture_build_state(Path(Util.cedar_home), frontend_only)
     failure = None
     try:
@@ -107,9 +113,7 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
     except BaseException as error:
         failure = error
     after = capture_build_state(Path(Util.cedar_home), frontend_only)
-    changed = changed_repositories(before, after)
-    if input_roots is not None:
-        changed = [path for path in changed if path in input_roots]
+    changed = [path for path in changed_repositories(before, after) if path in input_roots]
     if changed:
         names = ", ".join(path.name for path in changed)
         console.print(Panel(

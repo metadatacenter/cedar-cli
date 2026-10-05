@@ -38,7 +38,15 @@ class GitWorker(Worker):
         table = Table("Repo", "Output", "Error", "Suggested", show_lines=True, title="Repos that require attention")
         cnt = 0
         for triple in result.results:
-            if "our branch is behind" in triple.out:
+            # A diverged branch is neither ahead nor behind in git's wording, and a detached HEAD is
+            # on no branch at all, so neither would otherwise be named although each needs a hand.
+            if "have diverged" in triple.out:
+                self.register_active_repo(triple, table, active_repos, "Pull with merge or rebase, then push")
+                cnt += 1
+            elif "HEAD detached" in triple.out or "Not currently on any branch" in triple.out:
+                self.register_active_repo(triple, table, active_repos, "Check out develop")
+                cnt += 1
+            elif "our branch is behind" in triple.out:
                 self.register_active_repo(triple, table, active_repos, "Pull")
                 cnt += 1
             elif "ntracked files" in triple.out:

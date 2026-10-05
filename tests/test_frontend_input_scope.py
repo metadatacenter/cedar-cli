@@ -10,13 +10,28 @@ class FrontendInputScopeTest(unittest.TestCase):
         repo = SimpleNamespace(name='cedar-openview-src', parent_repo=parent)
         plan = SimpleNamespace(tasks=[SimpleNamespace(repo=repo, tasks=[])])
         with patch.object(build.Util, 'cedar_home', '/tmp/cedar'):
-            roots = build.frontend_input_roots(plan)
-        self.assertEqual(roots, {Path('/tmp/cedar') / name for name in
+            roots = build.build_input_roots(plan)
+        self.assertEqual(roots, {Path('/tmp/cedar').resolve() / name for name in
                                 ['cedar-openview', 'cedar-cli', 'cedar-development']})
+
+    def test_a_symlinked_home_still_matches_the_resolved_state(self):
+        # The captured state is keyed by resolved paths. Unresolved roots matched none of them under
+        # a home reached through a symlink, such as /tmp on macOS, and the invariant never fired.
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            real = Path(directory).resolve() / 'real'
+            (real / 'cedar-workspace').mkdir(parents=True)
+            link = Path(directory) / 'link'
+            link.symlink_to(real)
+            plan = SimpleNamespace(tasks=[SimpleNamespace(
+                repo=SimpleNamespace(name='cedar-workspace', parent_repo=None), tasks=[])])
+            with patch.object(build.Util, 'cedar_home', str(link)):
+                roots = build.build_input_roots(plan)
+            self.assertIn(real / 'cedar-workspace', roots)
 
     def test_changed_frontend_still_fails_but_unrelated_change_does_not(self):
         plan = SimpleNamespace(tasks=[SimpleNamespace(repo=SimpleNamespace(name='cedar-workspace', parent_repo=None), tasks=[])])
-        home = Path('/tmp/cedar')
+        home = Path('/tmp/cedar').resolve()
         for name, fails in [('cedar-workspace', True), ('cedar-model-validation-library', False)]:
             with self.subTest(name=name), patch.object(build.Util, 'cedar_home', str(home)), \
                     patch.object(build, 'require_plan_node'), \

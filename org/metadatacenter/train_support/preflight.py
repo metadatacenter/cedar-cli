@@ -343,6 +343,13 @@ def _smoke_gate_preflight(source=None):
         expected, _dirty, problems = smoke_gate.develop_heads(cedar_home, repositories)
         if problems:
             raise ValueError('source heads cannot be resolved: ' + '; '.join(problems))
+        # The train captures these from GitHub, so it would carry code no run on this machine tested.
+        # A resumed train and a release already refuse them, as sources the record does not name.
+        absent = smoke_gate.absent_repositories(cedar_home, repositories)
+        if absent:
+            raise ValueError('no passing whole-stack smoke run covers this source: '
+                             + ', '.join(absent) + ' are not checked out here, so no smoke run on '
+                             'this machine tested them')
     findings = smoke_gate.findings_for(cedar_home, expected)
     if findings:
         raise ValueError(

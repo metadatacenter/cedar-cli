@@ -65,13 +65,20 @@ class GitSync:
 
         An ahead/behind count is only as fresh as the remote-tracking ref it compares against, so a
         caller reporting the count should be able to say how old it is. FETCH_HEAD is written by
-        fetch and by pull, and is absent in a clone that has done neither.
+        fetch and by pull. A clone that has done neither last heard from its remote when it was
+        cloned, which its packed refs date; reading it as unknown let a clone never fetched pass a
+        check that refuses one fetched yesterday. Git resolves both paths, because a worktree's
+        ``.git`` is a file naming another directory.
         """
-        marker = os.path.join(root, ".git", "FETCH_HEAD")
-        try:
-            return time.time() - os.path.getmtime(marker)
-        except OSError:
-            return None
+        for marker in ("FETCH_HEAD", "packed-refs"):
+            path = GitSync._run(root, ["rev-parse", "--git-path", marker])
+            if path is None:
+                continue
+            try:
+                return time.time() - os.path.getmtime(os.path.join(root, path))
+            except OSError:
+                continue
+        return None
 
     @staticmethod
     def _run(cwd: str, arguments) -> Optional[str]:
