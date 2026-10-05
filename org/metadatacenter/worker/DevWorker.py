@@ -139,6 +139,9 @@ echo
 
     @staticmethod
     def generate_api_key(user_id: str):
+        # The server derived each new account's key this way until 3 September 2026, when it
+        # began issuing random keys (cedar-microservice-libraries b8da2d21). This reproduces the
+        # key of an account created before then; no salt reproduces one created since.
         if Const.CEDAR_SALT_API_KEY in invocation_environment():
             salt = invocation_environment()[Const.CEDAR_SALT_API_KEY]
         else:
