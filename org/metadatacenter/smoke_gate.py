@@ -51,7 +51,7 @@ REPORTS = E2E / "reports" / "smoke-gate"
 BUILD_TRAIN = Path("cedar-development") / "ops" / "build-train.json"
 CONTROLLER = Path("cedar-development") / "ops" / "cedar-services.sh"
 
-HEALTHY = {"healthy", "docker"}
+HEALTHY = {"healthy"}
 SUMMARY_LIMIT = 5
 
 
@@ -168,10 +168,17 @@ def stack_findings(cedar_home, runner=subprocess.run) -> list[str]:
         service = row["service"]
         if row["pid"].startswith("!"):
             findings.append(f"{service} is served by a process the controller does not manage")
+        elif row["health"] == "docker":
+            # A container answers for an image, and nothing here says which commit built it.
+            findings.append(f"{service} is served by a container, so the run cannot say which commit "
+                            "it tested")
         elif row["health"] not in HEALTHY:
             findings.append(f"{service} is {row['health']}")
         if row["binary"] == "STALE":
             findings.append(f"{service} is stale: its process predates the code it should serve")
+        elif row["binary"] == "MISSING":
+            findings.append(f"{service} runs with no jar built for its version, so its process "
+                            "predates a version change")
     findings.extend(source_currency_findings(
         cedar_home,
         [row["service"] for row in rows if row["binary"] in {"current", "STALE"}],
@@ -181,9 +188,18 @@ def stack_findings(cedar_home, runner=subprocess.run) -> list[str]:
 
 
 def application_jar(cedar_home, service: str) -> Path | None:
-    """The jar the controller would run for a microservice, or None when it has not been built."""
+    """The jar the controller would run for a microservice, or None when it has not been built.
+
+    The controller runs the jar for ``CEDAR_VERSION`` and no other. Taking the newest jar of any
+    version instead compared a jar the stack does not run, which after a version change can be the
+    only current one in the directory.
+    """
     target = (_home(cedar_home) / f"cedar-{service}-server"
               / f"cedar-{service}-server-application" / "target")
+    version = invocation_environment().get("CEDAR_VERSION")
+    if version:
+        jar = target / f"cedar-{service}-server-application-{version}.jar"
+        return jar if jar.is_file() else None
     jars = [
         path for path in target.glob(f"cedar-{service}-server-application-*.jar")
         if not path.name.startswith("original-")
