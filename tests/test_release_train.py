@@ -1112,6 +1112,50 @@ class ReleaseStateAndCliTest(unittest.TestCase):
                 list((Path(directory) / "releases").iterdir()),
             )
 
+    def test_pruning_a_ledger_keeps_its_stage_timings_for_comparison(self):
+        from org.metadatacenter.release_timings import prior_timing_manifest, recorded_timings
+        timings = [{"stage": "builds", "attempt": 1, "status": "complete", "workload": "w",
+                    "elapsedSeconds": 12.0, "executionSeconds": 12.0,
+                    "ciWaitSeconds": 0, "retryWaitSeconds": 0}]
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
+        ):
+            state = ReleaseState(root=Path(directory))
+            old = manifest_fixture()
+            old["releaseVersion"] = "2.9.2"
+            state.start(old)
+            state.update_current_manifest({"stageTimings": timings})
+            state.conclude()
+
+            current = manifest_fixture()
+            state.start(current)
+            state.update_current_manifest({"stageTimings": timings})
+
+            kept = json.loads(state.timing_record_path("2.9.2").read_text())
+            self.assertEqual(timings, kept["stageTimings"])
+            self.assertEqual("2.9.2", prior_timing_manifest(state, current)["releaseVersion"])
+            self.assertEqual(kept, recorded_timings(state, "2.9.2"))
+            compared = CliRunner().invoke(release_train.app, ["timings", "--compare", "2.9.2"])
+            self.assertEqual(0, compared.exit_code, compared.output)
+            self.assertIn("execution delta +0.0s vs 2.9.2", compared.output)
+            missing = CliRunner().invoke(release_train.app, ["timings", "--compare", "2.9.1"])
+            self.assertEqual(1, missing.exit_code, missing.output)
+            self.assertIn("no ledger or timing record holds release 2.9.1", missing.output)
+
+    def test_pruning_keeps_no_record_for_a_ledger_without_timings_or_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            (Path(directory) / "releases" / "2.9.2.json").write_text(
+                json.dumps({"releaseVersion": "2.9.2"}), encoding="utf-8")
+            (Path(directory) / "releases" / "unsafe.json").write_text(
+                json.dumps({"releaseVersion": "../2.9.1", "stageTimings": [{"stage": "builds"}]}),
+                encoding="utf-8")
+
+            state._prune_obsolete()
+
+            self.assertFalse((Path(directory) / "timings").exists())
+
     def test_internal_pruning_preserves_only_the_current_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
             state = ReleaseState(root=Path(directory))

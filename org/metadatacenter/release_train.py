@@ -12,7 +12,6 @@ import fnmatch
 import gzip
 import hashlib
 import io
-import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
@@ -560,14 +559,14 @@ def status(
 @app.command("timings")
 def timings(compare: str = typer.Option(None, "--compare", help="Compare with a recorded release version")):
     """Summarize measured stage execution, CI polling waits and retry backoff."""
-    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
+    from org.metadatacenter.release_timings import render_timings, prior_timing_manifest, recorded_timings
     state = ReleaseState()
     try:
         manifest, _ = state.read_current_manifest()
         baseline = prior_timing_manifest(state, manifest)
         if compare:
             _validate_stable_version(compare, 'comparison release version')
-            baseline = json.loads(state.manifest_path(compare).read_text())
+            baseline = recorded_timings(state, compare)
         render_timings(manifest, console, baseline)
     except (ReleaseError, OSError, ValueError) as error:
         console.print(str(error), markup=False)
