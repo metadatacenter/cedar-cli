@@ -51,6 +51,14 @@ class DockerCommandPathsTest(unittest.TestCase):
         self.assertEqual('immutable-train-version', versions['CEDAR_WORKSPACE_NPM_VERSION'])
         self.assertEqual('1.2.3', versions['NGINX_VERSION'])
 
+    def test_the_frontend_npm_registry_is_a_build_argument(self):
+        with patch.object(DockerImages, '_manifest_path', return_value='/tmp/cedar-images-base.sh'):
+            with patch('builtins.open', unittest.mock.mock_open(
+                    read_data='export CEDAR_NPM_REGISTRY=https://nexus.example/npm-cedar\n'
+                              'export CEDAR_IMAGE_PREFIX=metadatacenter\n')):
+                versions = DockerImages.server_versions({})
+        self.assertEqual({'CEDAR_NPM_REGISTRY': 'https://nexus.example/npm-cedar'}, versions)
+
     @patch("org.metadatacenter.docker_support.images._prepare_frontend_volumes", return_value=True)
     @patch('org.metadatacenter.worker.DockerWorker.DockerImages.manifest',
            return_value=([], '2.9.3-SNAPSHOT', 'metadatacenter'))
