@@ -7,6 +7,7 @@ from org.metadatacenter.worker.ComponentWorker import (
 from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
     GithubCIProbeError,
+    develop_runs,
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
@@ -798,12 +799,7 @@ class ReleasePreflight:
                     "ci", "fail", str(error),
                 ))
                 continue
-            runs = list(probe.runs)
-            if repository == "cedar-development":
-                runs = [
-                    record for record in runs
-                    if record.get("path") != ".github/workflows/build-train.yml"
-                ]
+            runs = develop_runs(probe.runs, source)
             if not runs:
                 findings.append(PreflightFinding(
                     "ci", "fail",

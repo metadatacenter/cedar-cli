@@ -4138,7 +4138,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "success", "status": "completed", "id": 1, "name": "CI",
+                    "conclusion": "success", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40, "id": 1, "name": "CI",
                 }]})),
         })
         self._preflight(
@@ -4166,7 +4166,7 @@ class ReleasePreflightTest(unittest.TestCase):
                 ".github/workflows/release-tooling-ci.yml"),
             ("gh", "api"): FakeCompletedProcess(stdout=json.dumps({
                 "workflow_runs": [{
-                    "conclusion": None, "status": "in_progress", "id": 1,
+                    "conclusion": None, "status": "in_progress", "event": "push", "head_branch": "develop", "head_sha": "a" * 40, "id": 1,
                     "name": "Immutable development build train",
                     "path": ".github/workflows/build-train.yml",
                 }],
@@ -4197,7 +4197,7 @@ class ReleasePreflightTest(unittest.TestCase):
         commands = FakeCommands({
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(stdout=json.dumps({"workflow_runs": [{
-                "conclusion": None, "status": "in_progress", "id": 7, "name": "CI",
+                "conclusion": None, "status": "in_progress", "event": "push", "head_branch": "develop", "head_sha": "a" * 40, "id": 7, "name": "CI",
             }]})),
         })
         findings = self._preflight(
@@ -4213,7 +4213,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "cancelled", "status": "completed",
+                    "conclusion": "cancelled", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33226052977, "name": "Build train",
                 }]})),
         })
@@ -4230,7 +4230,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "failure", "status": "completed",
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4247,7 +4247,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "failure", "status": "completed",
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4265,7 +4265,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "failure", "status": "completed",
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4299,7 +4299,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "failure", "status": "completed",
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4315,7 +4315,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "success", "status": "completed",
+                    "conclusion": "success", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })

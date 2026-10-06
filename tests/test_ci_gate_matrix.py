@@ -67,6 +67,7 @@ def runs_for(status, conclusion):
     if status is None:
         return ()
     return ({'name': 'CI', 'status': status, 'conclusion': conclusion, 'id': 7,
+             'event': 'push', 'head_branch': 'develop', 'head_sha': REVISION,
              'html_url': 'https://github.example/runs/7',
              'repository': {'full_name': 'metadatacenter/cedar-a'}},)
 
@@ -154,6 +155,49 @@ class CIGateMatrixTest(unittest.TestCase):
         closed = [state for state in KNOWN if state not in differences]
         self.assertEqual({}, unlisted)
         self.assertEqual([], closed, 'a listed divergence no longer occurs; remove it from KNOWN')
+
+
+class CIGateEventMatrixTest(CIGateMatrixTest):
+    """Which runs at a commit answer for develop.
+
+    A commit can carry runs other than develop's own: a pull request whose head is that commit runs
+    the same workflow under the same name. The next-development check counts only the runs a push or
+    a dispatch on develop started. The gates here take the newest run of each name, so a pull
+    request's run could stand in for develop's.
+    """
+
+    CASES = [
+        ('a push on develop that succeeded', [('push', 'develop', 'success')], 'passes'),
+        ('a dispatch on develop that succeeded', [('workflow_dispatch', 'develop', 'success')], 'passes'),
+        ('only a pull request that succeeded', [('pull_request', 'feature', 'success')], 'blocks'),
+        ('a pull request that succeeded after develop failed',
+         [('pull_request', 'feature', 'success'), ('push', 'develop', 'failure')], 'blocks'),
+        ('a pull request that failed after develop succeeded',
+         [('pull_request', 'feature', 'failure'), ('push', 'develop', 'success')], 'passes'),
+    ]
+
+    def _runs(self, case):
+        return tuple({'name': 'CI', 'status': 'completed', 'conclusion': conclusion, 'id': 7 - index,
+                      'event': event, 'head_branch': branch, 'head_sha': REVISION,
+                      'html_url': f'https://github.example/runs/{7 - index}',
+                      'repository': {'full_name': 'metadatacenter/cedar-a'}}
+                     for index, (event, branch, conclusion) in enumerate(case))
+
+    def test_every_gate_answers_every_ci_state_by_one_rule(self):
+        differences = {}
+        for name, case, rule in self.CASES:
+            runs = self._runs(case)
+            with patch('tests.test_ci_gate_matrix.runs_for', side_effect=lambda *_a: runs):
+                verdicts = self._survey(None, None)
+                answers = {
+                    'check ci': self._check_ci(verdicts),
+                    'train preflight': self._train_preflight(verdicts),
+                    'release preflight': self._release_preflight(None, None),
+                }
+            wrong = {gate: answer for gate, answer in answers.items() if answer != rule}
+            if wrong:
+                differences[name] = wrong
+        self.assertEqual({}, differences)
 
 
 if __name__ == '__main__':

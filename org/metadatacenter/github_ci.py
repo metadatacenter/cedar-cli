@@ -120,6 +120,30 @@ def probe_exact_commit(
     raise AssertionError("unreachable GitHub CI probe state")
 
 
+DEVELOP_EVENTS = frozenset({"push", "workflow_dispatch"})
+TRAIN_WORKFLOW_PATH = ".github/workflows/build-train.yml"
+
+
+def develop_runs(runs: tuple[dict, ...] | list[dict], revision: str) -> list[dict]:
+    """The runs that answer for a commit on develop.
+
+    A commit carries more runs than develop's own. A pull request whose head is that commit runs
+    the same workflow under the same name, and cedar-development's train workflow runs at the
+    commit it was dispatched from. The gates take the newest run of each name, so either could
+    answer in develop's place: a green pull request hid a red develop, a red one refused a green
+    develop, and one alone passed a commit develop had not tested. Only a push or a dispatch on
+    develop at that commit says whether develop is green there.
+    """
+    return [
+        run for run in runs
+        if isinstance(run, dict)
+        and run.get("head_sha") == revision
+        and run.get("head_branch") == "develop"
+        and run.get("event") in DEVELOP_EVENTS
+        and run.get("path") != TRAIN_WORKFLOW_PATH
+    ]
+
+
 def latest_runs_by_name(runs: tuple[dict, ...] | list[dict]) -> dict[str, dict]:
     latest = {}
     for record in runs:

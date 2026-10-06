@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
     GithubCIProbeError,
+    develop_runs,
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
@@ -239,12 +240,7 @@ def source_ci_survey(source=None, reporter=None):
         except GithubCIProbeError as error:
             verdicts.append(_policy_component.SourceCIVerdict(repository, revision, '', 'error', str(error)))
             return verdicts
-        runs = list(probe.runs)
-        if repository == 'cedar-development':
-            runs = [
-                record for record in runs
-                if record.get('path') != '.github/workflows/build-train.yml'
-            ]
+        runs = develop_runs(probe.runs, revision)
         if not runs:
             verdicts.append(_policy_component.SourceCIVerdict(
                 repository, revision, '', 'missing',

@@ -651,7 +651,7 @@ class OpenWorkRefusalTest(unittest.TestCase):
             (workflows / 'ci.yml').write_text('name: CI\n', encoding='utf-8')
             run = {
                 'name': 'CI', 'status': 'completed', 'conclusion': 'success',
-                'id': 7,
+                'id': 7, 'event': 'push', 'head_branch': 'develop', 'head_sha': 'a' * 40,
             }
             with (
                     patch.object(Util, 'cedar_home', directory),
@@ -677,6 +677,7 @@ class OpenWorkRefusalTest(unittest.TestCase):
             run = {
                 'name': 'CI', 'status': 'in_progress', 'conclusion': None,
                 'id': 7, 'html_url': 'https://github.example/runs/7',
+                'event': 'push', 'head_branch': 'develop', 'head_sha': 'a' * 40,
             }
             with (
                     patch.object(Util, 'cedar_home', directory),
@@ -942,8 +943,10 @@ class PreflightReportTest(unittest.TestCase):
             raise AssertionError(arguments)
 
         runs = {
-            'cedar-a': ({'name': 'CI', 'status': 'completed', 'conclusion': 'success', 'id': 5},),
+            'cedar-a': ({'name': 'CI', 'status': 'completed', 'conclusion': 'success', 'id': 5,
+                         'event': 'push', 'head_branch': 'develop', 'head_sha': sha},),
             'cedar-b': ({'name': 'CI', 'status': 'completed', 'conclusion': 'failure', 'id': 7,
+                         'event': 'push', 'head_branch': 'develop', 'head_sha': sha,
                          'html_url': 'https://github.example/runs/7',
                          'repository': {'full_name': 'metadatacenter/cedar-b'}},),
         }
