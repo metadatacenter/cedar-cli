@@ -59,6 +59,7 @@ from org.metadatacenter.release_support.policy import (
     NEXUS_AUTHENTICATED_ENDPOINT,
     NEXUS_HOST,
     NEXUS_NPM_REGISTRY,
+    NEXUS_NPM_RETAINED_REGISTRY,
     NEXUS_REPOSITORY_PROBE,
     NEXUS_WRITABLE_ENDPOINT,
     NPM_VERSION_SURFACES,
@@ -562,15 +563,18 @@ class ReleasePreflight:
         return None
 
     def check_npm_authorization(self) -> list[PreflightFinding]:
-        code, _, stderr = self._capture(
-            ["npm", "whoami", "--registry", NEXUS_NPM_REGISTRY])
-        if code == 0:
-            return []
-        return [PreflightFinding(
-            "npm", "fail",
-            f"npm is not authenticated against {NEXUS_NPM_REGISTRY}: {stderr.splitlines()[-1] if stderr else 'no identity'}",
-            f"npm login --registry {NEXUS_NPM_REGISTRY}",
-        )]
+        # A release publishes every npm surface to both registries, so it needs both identities.
+        findings = []
+        for registry in (NEXUS_NPM_REGISTRY, NEXUS_NPM_RETAINED_REGISTRY):
+            code, _, stderr = self._capture(["npm", "whoami", "--registry", registry])
+            if code == 0:
+                continue
+            findings.append(PreflightFinding(
+                "npm", "fail",
+                f"npm is not authenticated against {registry}: {stderr.splitlines()[-1] if stderr else 'no identity'}",
+                f"npm login --registry {registry}",
+            ))
+        return findings
 
     def check_npm_configuration(self) -> list[PreflightFinding]:
         configured = self.environment.get("NPM_CONFIG_USERCONFIG") \
@@ -731,9 +735,11 @@ class ReleasePreflight:
                     f"Maven releases already contains {len(items)} artifact record(s) for {version}",
                     "choose an unused release version",
                 ))
-        registry = self.manifest.get("publicationPlan", {}).get("npm", {}).get(
-            "registry", NEXUS_NPM_REGISTRY)
-        for surface in self.manifest.get("publicationPlan", {}).get("npm", {}).get("surfaces", []):
+        npm = self.manifest.get("publicationPlan", {}).get("npm", {})
+        registries = [npm.get("registry", NEXUS_NPM_REGISTRY)]
+        if npm.get("retainedRegistry"):
+            registries.append(npm["retainedRegistry"])
+        for surface in npm.get("surfaces", []):
             repository = surface.get("repository")
             directory = surface.get("directory", ".")
             relative = "package.json" if directory == "." else f"{directory}/package.json"
@@ -743,17 +749,18 @@ class ReleasePreflight:
                 findings.append(PreflightFinding(
                     "source", "fail", f"cannot determine npm identity from {repository}:{relative}"))
                 continue
-            url = registry.rstrip("/") + "/" + urllib.parse.quote(name, safe="")
-            try:
-                record = self.http.read_json(url, missing_ok=True)
-            except ReleaseError as error:
-                findings.append(PreflightFinding("version", "fail", str(error)))
-                continue
-            if record is not None and isinstance(record[0].get("versions", {}).get(version), dict):
-                findings.append(PreflightFinding(
-                    "version", "fail", f"npm registry already contains {name}@{version}",
-                    "choose an unused release version",
-                ))
+            for registry in registries:
+                url = registry.rstrip("/") + "/" + urllib.parse.quote(name, safe="")
+                try:
+                    record = self.http.read_json(url, missing_ok=True)
+                except ReleaseError as error:
+                    findings.append(PreflightFinding("version", "fail", str(error)))
+                    continue
+                if record is not None and isinstance(record[0].get("versions", {}).get(version), dict):
+                    findings.append(PreflightFinding(
+                        "version", "fail", f"npm registry {registry} already contains {name}@{version}",
+                        "choose an unused release version",
+                    ))
         return findings
 
     def check_develop_is_green(self) -> list[PreflightFinding]:
@@ -1017,16 +1024,16 @@ class ReleasePreflight:
                         f"train source {repository}:{relative} does not contain {marker!r}",
                     ))
             if repository == "cedar-docker-build":
-                defaults = (self.manifest.get("dockerFrontendDefaults") or {}).get(
-                    "nextDevelopment", {})
-                for variable in sorted(defaults):
+                defaults = self.manifest.get("dockerFrontendDefaults") or {}
+                variables = set(defaults.get("nextDevelopment", {})) | set(defaults.get("release", {}))
+                for variable in sorted(variables):
                     declared = content is not None and re.search(
                         rf"^export {re.escape(variable)}=", content, re.MULTILINE)
                     if not declared:
                         findings.append(PreflightFinding(
                             "source", "fail",
                             f"train source {repository}:{relative} does not declare {variable}, "
-                            "which the train's Docker inputs name",
+                            "which the release stamps into its Docker defaults",
                             "declare the variable in the images base script, or drop it from "
                             "frontend-train.json, and build a new train",
                         ))

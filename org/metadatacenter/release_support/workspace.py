@@ -19,6 +19,7 @@ from org.metadatacenter.release_support.output import (
 )
 from org.metadatacenter.release_support.policy import (
     GIT_SHA_RE,
+    NEXUS_HOST,
 )
 from org.metadatacenter.release_support.state import (
     ReleaseState,
@@ -150,6 +151,39 @@ class ReleaseWorkspacePreparer:
             "resolved": installed["resolved"],
         }
 
+    @staticmethod
+    def _require_retained_pins(workspace: Path, repositories: list[str], retained: str) -> None:
+        """Refuse a release tree whose lockfiles install a Nexus tarball from outside `retained`.
+
+        Nexus deletes what the other CEDAR registries hold within days or weeks, and a lockfile
+        that names a deleted tarball cannot be installed again. The check reads the lockfiles
+        alone, so it costs no registry request.
+        """
+        nexus = f"{NEXUS_HOST}/repository/"
+        stray = []
+        for repository in repositories:
+            root = workspace / repository
+            locks = [*root.rglob("package-lock.json"), *root.rglob("npm-shrinkwrap.json")]
+            for lock in sorted(locks):
+                relative = lock.relative_to(root)
+                if "node_modules" in relative.parts:
+                    continue
+                try:
+                    packages = json.loads(lock.read_bytes()).get("packages") or {}
+                except (OSError, json.JSONDecodeError, AttributeError) as error:
+                    raise ReleaseError(f"cannot read lockfile {lock}: {error}") from error
+                for path, record in sorted(packages.items()):
+                    resolved = record.get("resolved") if isinstance(record, dict) else None
+                    if (isinstance(resolved, str) and resolved.startswith(nexus)
+                            and not resolved.startswith(retained)):
+                        name = path.rsplit("node_modules/", 1)[-1]
+                        stray.append(f"{repository}/{relative.as_posix()} pins "
+                                     f"{name}@{record.get('version')} from {resolved}")
+        if stray:
+            raise ReleaseError(
+                f"release lockfiles pin Nexus tarballs outside {retained}, which Nexus will "
+                "delete: " + "; ".join(stray))
+
     def prepare(self, manifest: dict, attempt: Path) -> dict:
         consumers = manifest.get("cee", {}).get("consumers", [])
         # Planning settles which consumers there are, against both the captured configuration
@@ -206,6 +240,11 @@ class ReleaseWorkspacePreparer:
                     else f"npm:{package['name']}@{package['version']}")
             command = ['npm', 'install', '--package-lock-only', '--ignore-scripts',
                        '--save-exact', f"{consumer['dependency']}@{spec}"]
+            if package.get('registry') and package['name'].startswith('@'):
+                # Resolving the scope from the retained registry is what makes the lock record
+                # the retained tarball. The bytes, and so the integrity, are the train's.
+                scope = package['name'].split('/', 1)[0]
+                command.append(f"--{scope}:registry={package['registry']}")
             if consumer.get('legacyPeerDeps'):
                 command.append('--legacy-peer-deps')
             self._run(command, cwd=manifest_path.parent, environment=command_environment)
@@ -229,6 +268,15 @@ class ReleaseWorkspacePreparer:
             "\n".join(output for output in (apply_output, check_output) if output) + "\n",
             encoding="utf-8",
         )
+
+        retained = manifest.get("publicationPlan", {}).get("npm", {}).get("retainedRegistry")
+        if retained:
+            self._require_retained_pins(
+                workspace,
+                sorted({consumer["repository"] for consumer in consumers}
+                       | {consumer["repository"] for consumer in manifest.get("componentWiring", [])}),
+                retained,
+            )
 
         verified = []
         for record in component_evidence:

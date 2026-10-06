@@ -18,12 +18,14 @@ from org.metadatacenter.release_support.packages import (
 )
 from org.metadatacenter.release_support.policy import (
     DEV_CEE_NAME,
+    DOCKER_NPM_REGISTRY_VARIABLE,
     FRONTEND_BUILD_SURFACES,
     GIT_SHA_RE,
     INDEPENDENT_RELEASE_REPOSITORIES,
     MAVEN_RELEASE_REPOSITORY,
     MAVEN_SNAPSHOT_REPOSITORY,
     NEXT_VERSION_RE,
+    NEXUS_NPM_RETAINED_REGISTRY,
     NPM_RELEASE_SURFACES,
     PUBLIC_CEE_NAME,
     PUBLIC_NPM_REGISTRY,
@@ -149,6 +151,7 @@ class ReleasePlanner:
             },
             "npm": {
                 "registry": "https://nexus.bmir.stanford.edu/repository/npm-cedar/",
+                "retainedRegistry": NEXUS_NPM_RETAINED_REGISTRY,
                 "surfaces": npm_surfaces,
             },
         }
@@ -167,9 +170,10 @@ class ReleasePlanner:
         argument it verified. The next-development tree takes those as they are: they exist the
         moment the release pushes, so the Docker build's CI at the post-release commit resolves
         them, and they are the newest development packages there are. The release tree takes what
-        outlives them. Nexus keeps only the last couple of trains' development packages and never
-        removes a release, so the released frontends are named at the release version and
-        OpenView's Editor at the public CEE version.
+        outlives them. Nexus removes a development package from the train registry three days
+        after upload and a release thirty days after, so the released frontends are named at the
+        release version in the retained registry, which nothing cleans up, and OpenView's Editor
+        at the public CEE version on npmjs.
         """
         inputs = npm_completion.get("dockerInputs")
         if inputs is None:
@@ -190,6 +194,11 @@ class ReleasePlanner:
         cee_variable = frontend_config.get("dockerCeeVersionVariable")
         if isinstance(cee_variable, str) and cee_variable in inputs:
             release_values[cee_variable] = cee_version
+        retained = publication_plan["npm"].get("retainedRegistry")
+        if retained:
+            # The frontend images download the released package and install the shared
+            # components it names, both of which only the retained registry keeps.
+            release_values[DOCKER_NPM_REGISTRY_VARIABLE] = retained.rstrip("/")
         return {"release": release_values, "nextDevelopment": dict(inputs)}
 
     @staticmethod
@@ -455,23 +464,40 @@ class ReleasePlanner:
 
         # Carry the train's shared-component graph through release preparation too.
         # Otherwise replacing CEE alone silently restores old tokens/CED/CETP locks.
+        # The release pins the train's own copy in the retained registry: the same version and
+        # bytes, at an address Nexus does not clean up three days after the train.
         component_wiring = []
         consumer_repositories = {consumer['repository'] for consumer in consumers} | set(release_repositories)
+        retained_registry = publication_plan['npm']['retainedRegistry']
+        if npm_plan.get('components') and npm_completion.get('retainedRegistry') != retained_registry:
+            raise ReleaseError(
+                f"train {train} did not retain its shared components in {retained_registry}; "
+                "a release lockfile would pin tarballs Nexus deletes, so build a new train")
         for component in npm_plan.get('components', []):
             if source.get('repositories', {}).get(component['repository']) != component['revision']:
                 raise ReleaseError('Shared component revision disagrees with train source')
+            identity = f"{component['name']}@{component['version']}"
             recorded = next((package for package in npm_completion.get('packages', [])
                              if package.get('name') == component['name']
                              and package.get('version') == component['version']), None)
             if not recorded or recorded.get('revision') != component['revision']:
                 raise ReleaseError(f"Train has no verified component {component['name']}")
-            payload = self.http.read(recorded['tarball'])
-            _verify_integrity(component['name'], payload, recorded['integrity'])
-            if _sha256(payload) != recorded['tarballSha256']:
+            retained = next((package for package in npm_completion.get('retainedPackages', [])
+                             if package.get('name') == component['name']
+                             and package.get('version') == component['version']), None)
+            if not retained or any(retained.get(field) != recorded.get(field)
+                                   for field in ('integrity', 'tarballSha256')):
+                raise ReleaseError(f"Train has no retained copy of {identity}")
+            if not str(retained.get('tarball', '')).startswith(retained_registry):
+                raise ReleaseError(f"Train's retained copy of {identity} is outside {retained_registry}")
+            payload = self.http.read(retained['tarball'])
+            _verify_integrity(component['name'], payload, retained['integrity'])
+            if _sha256(payload) != retained['tarballSha256']:
                 raise ReleaseError('Train component tarball hash mismatch')
+            package = {**retained, 'registry': retained_registry}
             for consumer in component['consumers']:
                 if consumer['repository'] in consumer_repositories:
-                    component_wiring.append({**consumer, 'package': recorded})
+                    component_wiring.append({**consumer, 'package': package})
 
         return {
             "schemaVersion": 1,
