@@ -4233,22 +4233,39 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertTrue(findings[0].fatal)
         self.assertIn("still in_progress", findings[0].message)
 
-    def test_a_cancelled_run_is_advisory_rather_than_blocking(self):
-        """Cancelling is something done to a workflow, not something learned about the code."""
+    def test_a_commit_whose_only_run_was_cancelled_blocks_until_it_is_rerun(self):
+        """Cancelling is something done to a workflow, so a cancelled run answers nothing."""
         commands = FakeCommands({
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
                     "conclusion": "cancelled", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
-                    "id": 33226052977, "name": "Build train",
+                    "id": 33226052977, "name": "CI",
                 }]})),
         })
         findings = self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
 
         self.assertEqual(1, len(findings))
-        self.assertFalse(findings[0].fatal)
+        self.assertTrue(findings[0].fatal)
         self.assertIn("was cancelled", findings[0].message)
+        self.assertIn("rerun", findings[0].remedy)
+
+    def test_a_cancelled_run_gives_way_to_the_newest_run_that_finished(self):
+        commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
+            ("gh", "api"): FakeCompletedProcess(
+                stdout=json.dumps({"workflow_runs": [
+                    {"conclusion": "cancelled", "status": "completed", "event": "push", "head_branch": "develop",
+                     "head_sha": "a" * 40, "id": 33226052978, "name": "CI"},
+                    {"conclusion": "success", "status": "completed", "event": "push", "head_branch": "develop",
+                     "head_sha": "a" * 40, "id": 33226052977, "name": "CI"},
+                ]})),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertEqual([], findings)
 
     def test_a_red_develop_blocks_the_release(self):
         manifest = self._release_of("repo-one")

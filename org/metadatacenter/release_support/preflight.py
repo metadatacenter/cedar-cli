@@ -8,6 +8,7 @@ from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
     GithubCIProbeError,
     develop_runs,
+    finished_runs,
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
@@ -799,12 +800,16 @@ class ReleasePreflight:
                     "ci", "fail", str(error),
                 ))
                 continue
-            runs = develop_runs(probe.runs, source)
+            ran = develop_runs(probe.runs, source)
+            runs = finished_runs(ran)
             if not runs:
                 findings.append(PreflightFinding(
                     "ci", "fail",
+                    f"{repository}: every CI run for the train source {source[:8]} was cancelled"
+                    if ran else
                     f"{repository} has no CI run for the train source {source[:8]} "
                     "after bounded indexing grace",
+                    "rerun the cancelled run" if ran else "",
                 ))
                 continue
             for name, record in latest_runs_by_name(runs).items():
@@ -822,15 +827,6 @@ class ReleasePreflight:
                     ))
                     continue
                 if conclusion in GREEN_CONCLUSIONS:
-                    continue
-                if conclusion == "cancelled":
-                    # Somebody stopped this run. That is an action taken about the workflow,
-                    # never a result about the code, so it is reported and not blocked on.
-                    findings.append(PreflightFinding(
-                        "ci", "warn",
-                        f"{repository} {name} was cancelled for the train source "
-                        f"{source[:8]} in run {run_id}{where}",
-                    ))
                     continue
                 if self.accepted_red_develop.get(repository) == run_id:
                     findings.append(PreflightFinding(

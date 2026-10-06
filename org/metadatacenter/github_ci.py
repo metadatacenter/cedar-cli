@@ -144,6 +144,18 @@ def develop_runs(runs: tuple[dict, ...] | list[dict], revision: str) -> list[dic
     ]
 
 
+def finished_runs(runs: list[dict]) -> list[dict]:
+    """The runs that reached a result, leaving out those somebody cancelled.
+
+    A cancelled run says something about the workflow, never about the code, so it answers
+    nothing: the newest run of the same workflow that finished answers in its place. A commit whose
+    every run was cancelled has no answer, and a gate holds it back as it holds back a commit with
+    no run at all, until somebody reruns it.
+    """
+    return [run for run in runs
+            if not (run.get("status") == "completed" and run.get("conclusion") == "cancelled")]
+
+
 def latest_runs_by_name(runs: tuple[dict, ...] | list[dict]) -> dict[str, dict]:
     latest = {}
     for record in runs:

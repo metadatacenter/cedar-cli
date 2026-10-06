@@ -7,10 +7,9 @@ one answer from all three, so a commit a train refuses is not one a release then
 
 The answer is the rule the gates agree on: a run that succeeded, was skipped or was neutral lets a
 commit through, and any other conclusion, a run not yet completed, and a commit with no run at all
-hold it back. A cancelled run is where they disagree. The train and `check ci` hold a commit back
-for one, and the release preflight reports it and lets the commit through, because cancelling is
-something done to a workflow and says nothing about the code. That is a decision still to be made,
-so the matrix names it and fails once it is settled either way.
+hold it back. A cancelled run answers nothing, since cancelling is something done to a workflow
+and says nothing about the code: the newest run of the same workflow that finished answers in its
+place, and a commit whose only run was cancelled is held back as one with no run is.
 """
 
 import json
@@ -56,7 +55,7 @@ STATES = [
 PASSES = {'success', 'skipped', 'neutral'}
 
 # The states the gates answer differently on purpose, until someone decides which answer is right.
-KNOWN = {('completed', 'cancelled'): 'the train and check ci hold a cancelled run back; the release preflight lets it through'}
+KNOWN = {}
 
 
 def expected(status, conclusion):
@@ -163,7 +162,8 @@ class CIGateEventMatrixTest(CIGateMatrixTest):
     A commit can carry runs other than develop's own: a pull request whose head is that commit runs
     the same workflow under the same name. The next-development check counts only the runs a push or
     a dispatch on develop started. The gates here take the newest run of each name, so a pull
-    request's run could stand in for develop's.
+    request's run could stand in for develop's. A cancelled run answers for nothing, and the newest
+    run that finished answers in its place.
     """
 
     CASES = [
@@ -174,6 +174,12 @@ class CIGateEventMatrixTest(CIGateMatrixTest):
          [('pull_request', 'feature', 'success'), ('push', 'develop', 'failure')], 'blocks'),
         ('a pull request that failed after develop succeeded',
          [('pull_request', 'feature', 'failure'), ('push', 'develop', 'success')], 'passes'),
+        ('a cancelled run after one that succeeded',
+         [('push', 'develop', 'cancelled'), ('push', 'develop', 'success')], 'passes'),
+        ('a cancelled run after one that failed',
+         [('push', 'develop', 'cancelled'), ('push', 'develop', 'failure')], 'blocks'),
+        ('a cancelled dispatch after a push that succeeded',
+         [('workflow_dispatch', 'develop', 'cancelled'), ('push', 'develop', 'success')], 'passes'),
     ]
 
     def _runs(self, case):
