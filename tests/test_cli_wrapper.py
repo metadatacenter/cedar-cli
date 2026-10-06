@@ -103,6 +103,20 @@ class CliWrapperTest(unittest.TestCase):
             self.assertEqual(0, result.returncode)
             self.assertIn(f'SURVIVED:37:{Path(directory).resolve()}', result.stdout)
 
+    def test_the_cli_learns_the_directory_it_was_called_from(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, script = self.make_fixture(directory, 0)
+            caller = home / 'caller'
+            caller.mkdir()
+            (home / 'cedar-cli' / 'cedar.py').write_text(
+                'import os\nprint("CALLER:" + os.environ["CEDAR_CLI_CALLER_DIR"])\n')
+            result = subprocess.run(
+                ['bash', '-c', 'source "$1" status; echo "AFTER:${CEDAR_CLI_CALLER_DIR:-unset}"',
+                 'test', str(script)], cwd=caller,
+                env={**os.environ, 'CEDAR_HOME': str(home)}, capture_output=True, text=True)
+            self.assertIn(f'CALLER:{caller.resolve()}', result.stdout)
+            self.assertIn('AFTER:unset', result.stdout, 'the variable leaked into the calling shell')
+
     def test_setup_failures_never_invoke_python_or_change_cwd(self):
         for failure in ('directory', 'activation', 'interpreter'):
             with tempfile.TemporaryDirectory() as directory:

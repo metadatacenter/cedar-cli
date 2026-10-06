@@ -173,13 +173,27 @@ def evaluate_pin(host: str,
                  pinned: str | None,
                  head: str | None,
                  unseen: tuple[str, ...],
-                 reachable: bool) -> ComponentFinding:
+                 reachable: bool,
+                 clone: str = "current") -> ComponentFinding:
     """The verdict for one host's pin on one component.
 
     An unreachable pin is a failure rather than an unknown. The pin names a commit, the component
     is in the workspace, and a commit its history does not hold means the artifact was built from
     something the source no longer accounts for: a purged snapshot, or a branch rewritten under it.
+
+    That holds only for a clone that knows its remote. ``clone`` says whether it does: ``behind``
+    when the remote's develop holds the pinned commit and the local branch has not been pulled, and
+    ``unfetched`` when the commit is absent from a clone that has not heard from its remote
+    recently. Either way the pin may be sound, and only pulling or fetching can say.
     """
+    if not reachable and clone == "behind":
+        return ComponentFinding(host, component, Surface.PIN, ComponentState.UNRESOLVED,
+                                f"{version} was built from {pinned[:8]}, which the local {component} "
+                                f"develop has not pulled; pull {component} and check again")
+    if not reachable and clone == "unfetched":
+        return ComponentFinding(host, component, Surface.PIN, ComponentState.UNRESOLVED,
+                                f"{version} was built from {pinned[:8]}, which the local {component} "
+                                f"clone does not hold; fetch {component} and check again")
     if pinned is None:
         return ComponentFinding(host, component, Surface.PIN, ComponentState.UNRESOLVED,
                                 f"{version} names no source commit and no release tag")

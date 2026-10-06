@@ -32,8 +32,14 @@ class VersionReport:
         pass
 
     def summarize(self):
+        # The target is what the current checkouts declare. A clone behind its remote declares the
+        # remote's past, so counting it let a workspace where most clones were unpulled choose the
+        # old version and fail the pulled ones for being right.
+        current = [entry for entry in self.entries
+                   if entry.version and not entry.sync.explains_a_stale_version()
+                   and entry.version_type not in (VersionType.MISSING, VersionType.EMPTY)]
         freq = {}
-        for entry in self.entries:
+        for entry in current or self.entries:
             version = entry.version
             if version in freq:
                 freq[version] += 1

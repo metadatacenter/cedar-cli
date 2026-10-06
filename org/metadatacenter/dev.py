@@ -36,6 +36,6 @@ def copy_keycloak_listener():
 
 
 @app.command("generate-api-key")
-def generate_api_key(user_id: str = typer.Argument('', help="User id")):
-    """Generate the deterministic CEDAR API key for a user identifier."""
+def generate_api_key(user_id: str = typer.Argument(..., help="The account's CEDAR user identifier")):
+    """Derive the API key the server gave an account created before its keys became random."""
     run_dev_action(lambda: DevWorker.generate_api_key(user_id))

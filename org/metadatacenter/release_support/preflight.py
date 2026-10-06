@@ -7,6 +7,7 @@ from org.metadatacenter.worker.ComponentWorker import (
 from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
     GithubCIProbeError,
+    develop_runs,
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
@@ -141,6 +142,25 @@ class ReleaseSpaceEstimator:
             subtotal * SPACE_HEADROOM_PERCENT // 100,
         )
         return ReleaseSpaceBudget(components, headroom)
+
+
+def record_acceptances(manifest: dict, red_develop: dict[str, str], main_only: set[str]) -> None:
+    """Keep the acceptances a release starts with, so that resuming it applies them again.
+
+    Resume repeats the checks its next stage depends on, red develop CI and main-only files among
+    them. Without the record, a release that needed an acceptance and stopped early would refuse
+    its own resume on the finding the operator had already accepted.
+    """
+    manifest["acceptances"] = {
+        "redDevelop": dict(sorted(red_develop.items())),
+        "mainOnly": sorted(main_only),
+    }
+
+
+def recorded_acceptances(manifest: dict) -> tuple[dict[str, str], set[str]]:
+    """The acceptances `record_acceptances` kept; a ledger written before it recorded none."""
+    recorded = manifest.get("acceptances") or {}
+    return dict(recorded.get("redDevelop") or {}), set(recorded.get("mainOnly") or ())
 
 
 class ReleasePreflight:
@@ -779,12 +799,7 @@ class ReleasePreflight:
                     "ci", "fail", str(error),
                 ))
                 continue
-            runs = list(probe.runs)
-            if repository == "cedar-development":
-                runs = [
-                    record for record in runs
-                    if record.get("path") != ".github/workflows/build-train.yml"
-                ]
+            runs = develop_runs(probe.runs, source)
             if not runs:
                 findings.append(PreflightFinding(
                     "ci", "fail",

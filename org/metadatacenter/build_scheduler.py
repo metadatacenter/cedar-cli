@@ -32,6 +32,20 @@ def record_timing(repo, command, started, code, stages=()):
                         'stages': list(stages)})
 
 
+def record_dropped_optional_dependencies(repo, command, packages):
+    """Name the optional dependencies npm dropped in the latest recorded run of a command.
+
+    The run after it, if any, shows whether installing again recovered them.
+    """
+    records = _timings.get()
+    if records is None:
+        return
+    for record in reversed(records):
+        if record['repository'] == repo and record['command'] == command:
+            record['droppedOptionalDependencies'] = list(packages)
+            return
+
+
 def shell_tasks(plan):
     result = []
     def visit(node):

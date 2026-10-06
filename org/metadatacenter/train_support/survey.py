@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
     GithubCIProbeError,
+    develop_runs,
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
@@ -94,12 +95,17 @@ def _source_alignment(max_workers=12):
         code, branch, _ = _git_component._git(root, 'rev-parse', '--abbrev-ref', 'HEAD')
         if code != 0:
             return found
-        if branch != 'develop':
-            found.append(f'{repository} is on {branch}, not develop')
         code, local, _ = _git_component._git(root, 'rev-parse', 'refs/heads/develop')
         if code != 0:
             found.append(f'{repository} has no local develop branch')
             return found
+        # What matters is the commit checked out, which is what the stack ran and the smoke record
+        # names. A checkout detached at develop's head holds develop exactly; one on another commit
+        # does not, whatever its branch is called.
+        _code, checked_out, _ = _git_component._git(root, 'rev-parse', 'HEAD')
+        if branch != 'develop' and checked_out != local:
+            where = 'a detached HEAD' if branch == 'HEAD' else branch
+            found.append(f'{repository} is on {where}, not develop')
         code, remote, detail = _git_component._git(
             root, 'ls-remote', '--heads', 'origin', 'refs/heads/develop')
         if code != 0 or not remote:
@@ -234,12 +240,7 @@ def source_ci_survey(source=None, reporter=None):
         except GithubCIProbeError as error:
             verdicts.append(_policy_component.SourceCIVerdict(repository, revision, '', 'error', str(error)))
             return verdicts
-        runs = list(probe.runs)
-        if repository == 'cedar-development':
-            runs = [
-                record for record in runs
-                if record.get('path') != '.github/workflows/build-train.yml'
-            ]
+        runs = develop_runs(probe.runs, revision)
         if not runs:
             verdicts.append(_policy_component.SourceCIVerdict(
                 repository, revision, '', 'missing',

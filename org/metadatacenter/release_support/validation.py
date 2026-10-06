@@ -1,5 +1,6 @@
 """CEDAR release validation."""
 from __future__ import annotations
+from org.metadatacenter import npm_install
 from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
@@ -212,7 +213,15 @@ class ReleaseBuildValidator:
             ) as (_, environment):
                 command_failure = None
                 try:
-                    if self.executor is None:
+                    if self.executor is None and npm_install.is_install(" ".join(task["command"])):
+                        # A release built from an install npm dropped an optional dependency from
+                        # fails later, or ships without it, so the install runs again first.
+                        npm_install.install(
+                            lambda attempt: self._stream_command(
+                                attempt, Path(task["cwd"]), environment, log, verbose=self.verbose),
+                            task["command"], lambda message: print(message, flush=True), ReleaseError,
+                        )
+                    elif self.executor is None:
                         self._stream_command(
                             task["command"], Path(task["cwd"]), environment, log,
                             verbose=self.verbose,

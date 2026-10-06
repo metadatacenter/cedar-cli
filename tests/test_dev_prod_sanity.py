@@ -50,6 +50,14 @@ class DevSanityTest(unittest.TestCase):
         self.assertNotIn("do-not-print-this", rendered_cells)
         self.assertIn("user-id", rendered_cells)
 
+    @patch("org.metadatacenter.dev.DevWorker.generate_api_key")
+    def test_api_key_requires_the_account_it_derives(self, generate):
+        # An empty identifier derived a key no account ever held.
+        result = self.runner.invoke(dev.app, ["generate-api-key"])
+
+        self.assertNotEqual(0, result.exit_code)
+        generate.assert_not_called()
+
     @patch("org.metadatacenter.dev.DevWorker.create_directories", return_value=6)
     def test_dev_command_propagates_worker_failure(self, create_directories):
         result = self.runner.invoke(dev.app, ["create-directories"])

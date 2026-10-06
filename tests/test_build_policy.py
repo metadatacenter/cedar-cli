@@ -222,15 +222,30 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertFalse(any(command.startswith(("cp -a ", "cat ")) for command in commands))
 
     def test_build_fails_when_tracked_estate_state_changes_from_its_baseline(self):
-        baseline = {Path("/tmp/cedar-example"): b"pre-existing diff"}
-        changed = {Path("/tmp/cedar-example"): b"build-generated diff"}
+        home = Path("/tmp").resolve()
+        built = Plan("guarded")
+        built.tasks.append(SimpleNamespace(repo=SimpleNamespace(name="cedar-example", parent_repo=None),
+                                           tasks=[]))
+        baseline = {home / "cedar-example": b"pre-existing diff"}
+        changed = {home / "cedar-example": b"build-generated diff"}
         with patch.object(build, "capture_estate_state", side_effect=[baseline, changed]), \
                 patch.object(build.plan_executor, "execute"), \
                 patch.object(Util, "cedar_home", "/tmp"):
             with self.assertRaises(SystemExit) as raised:
-                build.execute_build(Plan("guarded"), dry_run=False, dump_plan=False)
+                build.execute_build(built, dry_run=False, dump_plan=False)
 
         self.assertEqual(1, raised.exception.code)
+
+    def test_a_java_build_ignores_a_change_in_a_repository_it_does_not_build(self):
+        # The invariant covers the inputs of the build, not the whole estate, for Java as for the
+        # frontends: another session's edit to an unrelated repository is not this build's doing.
+        home = Path("/tmp").resolve()
+        baseline = {home / "cedar-embeddable-designer": b"before"}
+        changed = {home / "cedar-embeddable-designer": b"edited elsewhere"}
+        with patch.object(build, "capture_estate_state", side_effect=[baseline, changed]), \
+                patch.object(build.plan_executor, "execute"), \
+                patch.object(Util, "cedar_home", "/tmp"):
+            build.execute_build(Plan("guarded"), dry_run=False, dump_plan=False)
 
     @patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
     @patch.object(Util, "cedar_home", "/tmp/CEDAR")

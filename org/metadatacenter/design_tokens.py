@@ -1,4 +1,5 @@
 """Run the same offline adoption checker used by the frontend CI jobs."""
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -25,5 +26,18 @@ def check_design_tokens(repos=None, strict=False, json_output=False, show_all=Fa
         if enabled:
             command.append(flag)
     if surface_inventory:
-        command += ['--surface-inventory', str(surface_inventory)]
+        command += ['--surface-inventory', str(_from_caller(surface_inventory))]
     return subprocess.run(command, env=invocation_environment()).returncode
+
+
+def _from_caller(path):
+    """Resolve a path the operator typed against the directory they typed it in.
+
+    The wrapper runs the CLI from its own checkout, so this process's working directory is never
+    the caller's, and the checker would otherwise write a relative file into cedar-cli.
+    """
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    caller = invocation_environment().get('CEDAR_CLI_CALLER_DIR') or os.getcwd()
+    return Path(caller) / candidate

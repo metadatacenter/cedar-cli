@@ -136,10 +136,11 @@ infrastructure running; bare `restart` retains that behavior. The old flat synta
 ### Design-token adoption
 
 `cedarcli check design-tokens` reports shared-style debt and token dependency pins
-across the embeddable editor, designer and term picker. Use `--strict` to fail
-on new color/typography findings, `--json` for automation, `--repo <name>` to select
-a frontend, and `--prune-baseline` after fixing existing findings. Spacing and
-geometry remain advisory. The implementation and CI contract live in
+across the CEDAR frontends and the session page that `cedar-cee-mcp` serves. Use
+`--strict` to fail on new style findings, missing or stale baselines and invalid pins,
+`--json` for automation, `--repo <path>` to select one repository by its path under
+`CEDAR_HOME`, such as `cedar-workspace` or `mcp/cedar-cee-mcp`, and `--prune-baseline`
+after fixing existing findings. The implementation and CI contract live in
 `cedar-design-tokens/tools/check_adoption.py`; that repository's README explains
 exceptions, scope and rollout.
 

@@ -6,7 +6,9 @@ from org.metadatacenter.release_timings import timed_wait
 from pathlib import Path
 import subprocess
 import time
-from org.metadatacenter.github_ci import probe_exact_commit, latest_runs_by_name, run_url, GithubCIProbeError
+from org.metadatacenter.github_ci import (
+    probe_exact_commit, develop_runs, latest_runs_by_name, run_url, GithubCIProbeError,
+)
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.release_support.acceptance import ReleaseAcceptance
 from org.metadatacenter.release_support.output import console
@@ -109,10 +111,7 @@ class DevelopmentVerifier:
                         raise probe
                 except GithubCIProbeError as error:
                     raise ReleaseError(str(error)) from error
-                runs = [r for r in probe.runs if r.get('head_sha') == revision
-                        and r.get('head_branch') == 'develop'
-                        and r.get('event') in {'push', 'workflow_dispatch'}
-                        and r.get('path') != '.github/workflows/build-train.yml']
+                runs = develop_runs(probe.runs, revision)
                 if repo in AGGREGATORS:
                     requested = dt.datetime.fromisoformat(evidence['dispatches'][repo]['requestedAt'])
                     # GitHub timestamps have second precision; use the request's second.

@@ -164,7 +164,7 @@ class ServerWorker(Worker):
 
     @staticmethod
     def style_binary(value):
-        if value == "STALE":
+        if value in {"STALE", "MISSING"}:
             return Text(value, style="bold red")
         if value == "current":
             return Text(value, style="green")
@@ -203,6 +203,11 @@ class ServerWorker(Worker):
         stale_jars = [service for service in stale if service not in EDITOR_FRONTENDS]
         if stale_jars:
             warnings.append(f"stale binaries: {', '.join(stale_jars)}; restart them")
+        missing = [row["service"] for row in native_rows if row["binary"] == "MISSING"]
+        if missing:
+            warnings.append(
+                f"running with no jar built for their version: {', '.join(missing)}; a version "
+                "change left them up, so build them and restart, or a smoke run tests the old version")
         # `current` says a process is not older than its jar. It says nothing about whether the
         # jar holds the repository's current source, and an operator reads the column as though
         # it did: every row read `current` while one jar sat half an hour behind its own head.

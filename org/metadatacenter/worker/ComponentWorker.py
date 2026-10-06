@@ -20,6 +20,8 @@ from org.metadatacenter.util.ComponentFreshness import (
     release_tag,
     unscoped,
 )
+from org.metadatacenter.model.VersionReport import VersionReport
+from org.metadatacenter.util.GitSync import GitSync
 from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.Util import Util
 
@@ -227,7 +229,24 @@ class ComponentWorker:
             return evaluate_pin(host, component, version, commit, head, (), True)
         reachable = ComponentWorker._is_ancestor(directory, commit)
         unseen = ComponentWorker._subjects(directory, commit) if reachable else ()
-        return evaluate_pin(host, component, version, commit, head, unseen, reachable)
+        clone = "current" if reachable else ComponentWorker._clone_state(directory, commit)
+        return evaluate_pin(host, component, version, commit, head, unseen, reachable, clone)
+
+    @staticmethod
+    def _clone_state(directory, commit):
+        """Whether a pin the local develop does not hold could still be on the remote's.
+
+        CI publishes a component from every push to develop, so a host's pin can name a commit this
+        clone has not pulled. Only a clone that holds the commit, or has fetched recently enough to
+        have it if it existed, can call the pin unaccounted for.
+        """
+        if ComponentWorker._is_ancestor(directory, commit, "origin/develop"):
+            return "behind"
+        present = ComponentWorker._git(directory, ["cat-file", "-e", f"{commit}^{{commit}}"]) is not None
+        age = GitSync.state_for_dir(str(directory)).fetch_age_seconds
+        if not present and (age is None or age >= VersionReport.STALE_FETCH_SECONDS):
+            return "unfetched"
+        return "current"
 
     @staticmethod
     def _evaluate_staged(host, directory):
@@ -292,9 +311,9 @@ class ComponentWorker:
         return ComponentWorker._git(directory, ["rev-parse", "--verify", f"{tag}^{{commit}}"]) if tag else None
 
     @staticmethod
-    def _is_ancestor(directory, commit):
+    def _is_ancestor(directory, commit, branch="develop"):
         completed = subprocess.run(
-            ["git", "-C", str(directory), "merge-base", "--is-ancestor", commit, "develop"],
+            ["git", "-C", str(directory), "merge-base", "--is-ancestor", commit, branch],
             capture_output=True, text=True, check=False, env=invocation_environment())
         return completed.returncode == 0
 

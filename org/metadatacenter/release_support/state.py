@@ -8,6 +8,7 @@ import datetime as dt
 import fcntl
 import json
 import os
+import re
 import shutil
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
@@ -69,6 +70,39 @@ class ReleaseState:
 
     def manifest_path(self, release_version: str) -> Path:
         return self.root / "releases" / f"{release_version}.json"
+
+    def timing_record_path(self, release_version: str) -> Path:
+        return self.root / "timings" / f"{release_version}.json"
+
+    def _keep_timings(self, ledger: Path) -> None:
+        """Keep a pruned ledger's stage timings, the one part a later release compares against.
+
+        The ledger goes with its attempt, because holding operational state is what the
+        retention policy exists to stop. Its timings are a few records, and without them
+        `release timings` has no earlier release to compare with once the next one starts.
+        """
+        try:
+            value = json.loads(ledger.read_bytes())
+        except (OSError, json.JSONDecodeError):
+            return
+        version = value.get("releaseVersion")
+        timings = value.get("stageTimings")
+        if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version) or not timings:
+            return
+        path = self.timing_record_path(version)
+        try:
+            kept = json.loads(path.read_bytes())
+        except (OSError, json.JSONDecodeError):
+            kept = {}
+        # An abandoned attempt and its successor share a version; the later one describes it.
+        if (kept.get("startedAt") or "") > (value.get("startedAt") or ""):
+            return
+        self._write(path, {
+            "schemaVersion": 1,
+            "releaseVersion": version,
+            "startedAt": value.get("startedAt"),
+            "stageTimings": timings,
+        })
 
     def _next_manifest_path(self, release_version: str) -> Path:
         path = self.manifest_path(release_version)
@@ -172,6 +206,7 @@ class ReleaseState:
             for ledger in sorted(releases.iterdir()):
                 if not ledger.is_file() or ledger.resolve() == manifest:
                     continue
+                self._keep_timings(ledger)
                 ledger.unlink()
                 removed_ledgers.append(str(ledger))
         return {"attempts": removed_attempts, "ledgers": removed_ledgers}

@@ -1112,6 +1112,50 @@ class ReleaseStateAndCliTest(unittest.TestCase):
                 list((Path(directory) / "releases").iterdir()),
             )
 
+    def test_pruning_a_ledger_keeps_its_stage_timings_for_comparison(self):
+        from org.metadatacenter.release_timings import prior_timing_manifest, recorded_timings
+        timings = [{"stage": "builds", "attempt": 1, "status": "complete", "workload": "w",
+                    "elapsedSeconds": 12.0, "executionSeconds": 12.0,
+                    "ciWaitSeconds": 0, "retryWaitSeconds": 0}]
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
+        ):
+            state = ReleaseState(root=Path(directory))
+            old = manifest_fixture()
+            old["releaseVersion"] = "2.9.2"
+            state.start(old)
+            state.update_current_manifest({"stageTimings": timings})
+            state.conclude()
+
+            current = manifest_fixture()
+            state.start(current)
+            state.update_current_manifest({"stageTimings": timings})
+
+            kept = json.loads(state.timing_record_path("2.9.2").read_text())
+            self.assertEqual(timings, kept["stageTimings"])
+            self.assertEqual("2.9.2", prior_timing_manifest(state, current)["releaseVersion"])
+            self.assertEqual(kept, recorded_timings(state, "2.9.2"))
+            compared = CliRunner().invoke(release_train.app, ["timings", "--compare", "2.9.2"])
+            self.assertEqual(0, compared.exit_code, compared.output)
+            self.assertIn("execution delta +0.0s vs 2.9.2", compared.output)
+            missing = CliRunner().invoke(release_train.app, ["timings", "--compare", "2.9.1"])
+            self.assertEqual(1, missing.exit_code, missing.output)
+            self.assertIn("no ledger or timing record holds release 2.9.1", missing.output)
+
+    def test_pruning_keeps_no_record_for_a_ledger_without_timings_or_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            (Path(directory) / "releases" / "2.9.2.json").write_text(
+                json.dumps({"releaseVersion": "2.9.2"}), encoding="utf-8")
+            (Path(directory) / "releases" / "unsafe.json").write_text(
+                json.dumps({"releaseVersion": "../2.9.1", "stageTimings": [{"stage": "builds"}]}),
+                encoding="utf-8")
+
+            state._prune_obsolete()
+
+            self.assertFalse((Path(directory) / "timings").exists())
+
     def test_internal_pruning_preserves_only_the_current_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
             state = ReleaseState(root=Path(directory))
@@ -2061,6 +2105,32 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertEqual("true", captured[0][1]["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"])
             self.assertEqual("true", captured[0][1]["CI"])
             self.assertEqual("false", captured[0][1]["NG_CLI_ANALYTICS"])
+
+    def test_release_npm_install_runs_again_when_npm_drops_an_optional_dependency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory, include_frontend=True)
+            validator = ReleaseBuildValidator(ReleaseState(root=Path(directory) / "state"))
+            task = next(
+                item for item in validator.tasks(manifest)
+                if item["id"] == "release:npm:template-editor:install"
+            )
+            commands = []
+
+            def stream(command, _cwd, _environment, log, *, verbose=False):
+                commands.append(command)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("installed\n", encoding="utf-8")
+                logs = next(a.split("=", 1)[1] for a in command if a.startswith("--logs-dir="))
+                if len(commands) == 1:
+                    (Path(logs) / "2026-10-06T03_00_00_000Z-debug-0.log").write_text(
+                        "21 verbose reify failed optional dependency /r/node_modules/@esbuild/x\n")
+
+            with patch.object(ReleaseBuildValidator, "_stream_command", side_effect=stream), \
+                    patch("builtins.print"):
+                validator.run_task(manifest, task)
+
+            self.assertEqual(2, len(commands))
+            self.assertEqual(task["command"], commands[1][:len(task["command"])])
 
     def test_release_maven_task_checks_for_mongods_before_and_after(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -4094,7 +4164,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "success", "status": "completed", "id": 1, "name": "CI",
+                    "conclusion": "success", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40, "id": 1, "name": "CI",
                 }]})),
         })
         self._preflight(
@@ -4122,7 +4192,7 @@ class ReleasePreflightTest(unittest.TestCase):
                 ".github/workflows/release-tooling-ci.yml"),
             ("gh", "api"): FakeCompletedProcess(stdout=json.dumps({
                 "workflow_runs": [{
-                    "conclusion": None, "status": "in_progress", "id": 1,
+                    "conclusion": None, "status": "in_progress", "event": "push", "head_branch": "develop", "head_sha": "a" * 40, "id": 1,
                     "name": "Immutable development build train",
                     "path": ".github/workflows/build-train.yml",
                 }],
@@ -4153,7 +4223,7 @@ class ReleasePreflightTest(unittest.TestCase):
         commands = FakeCommands({
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(stdout=json.dumps({"workflow_runs": [{
-                "conclusion": None, "status": "in_progress", "id": 7, "name": "CI",
+                "conclusion": None, "status": "in_progress", "event": "push", "head_branch": "develop", "head_sha": "a" * 40, "id": 7, "name": "CI",
             }]})),
         })
         findings = self._preflight(
@@ -4169,7 +4239,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "cancelled", "status": "completed",
+                    "conclusion": "cancelled", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33226052977, "name": "Build train",
                 }]})),
         })
@@ -4186,7 +4256,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "failure", "status": "completed",
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4203,7 +4273,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "failure", "status": "completed",
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4215,13 +4285,47 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertFalse(findings[0].fatal)
         self.assertIn("accepted explicitly", findings[0].message)
 
+    def test_resume_keeps_a_red_develop_acceptance_that_start_recorded(self):
+        """The resume gate repeats the CI check through the build stage."""
+        commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
+            ("gh", "api"): FakeCompletedProcess(
+                stdout=json.dumps({"workflow_runs": [{
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
+                    "id": 33211149320, "name": "CI",
+                }]})),
+        })
+
+        def resume_gate(manifest):
+            def build(payload, **options):
+                return self._preflight(
+                    commands=commands, manifest=payload,
+                    accepted=options.get("accepted_red_develop"),
+                    accepted_main_only=options.get("accepted_main_only"))
+            others = {name: (lambda *_: []) for name in ReleasePreflight.resume_check_names(manifest)
+                      if name != "check_develop_is_green"}
+            with patch.object(release_train, "ReleasePreflight", side_effect=build), \
+                    patch.multiple(ReleasePreflight, **others):
+                release_train._release_resume_gate_or_exit(manifest)
+
+        recorded = self._release_of("repo-one")
+        recorded["phase"] = "build-validation-failed"
+        self.assertIn("check_develop_is_green", ReleasePreflight.resume_check_names(recorded))
+        preflight.record_acceptances(recorded, {"repo-one": "33211149320"}, set())
+        resume_gate(recorded)
+
+        unrecorded = self._release_of("repo-one")
+        unrecorded["phase"] = "build-validation-failed"
+        with self.assertRaises(typer.Exit):
+            resume_gate(unrecorded)
+
     def test_accepting_a_different_run_does_not_clear_the_current_one(self):
         manifest = self._release_of("repo-one")
         commands = FakeCommands({
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "failure", "status": "completed",
+                    "conclusion": "failure", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4237,7 +4341,7 @@ class ReleasePreflightTest(unittest.TestCase):
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
-                    "conclusion": "success", "status": "completed",
+                    "conclusion": "success", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
                     "id": 33211149320, "name": "CI",
                 }]})),
         })
@@ -4469,6 +4573,67 @@ class ReleaseMainOnlyFilesTest(unittest.TestCase):
 
     def test_a_clean_survey_reports_nothing(self):
         self.assertEqual([], self._preflight_with_survey({}))
+
+
+class ReleaseAcceptanceRecordTest(unittest.TestCase):
+    """An acceptance given to start must survive into the resume of the same release."""
+
+    @patch.object(release_train, "_drive_release", side_effect=ReleaseError("stopped after start"))
+    @patch.object(release_train, "_activate_toolchain")
+    @patch.object(ReleasePreflight, "run", return_value=[])
+    @patch.object(ReleasePlanner, "build", return_value=manifest_fixture())
+    def test_start_records_its_acceptances_in_the_ledger(self, _build, _preflight, _toolchain, _drive):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CEDAR_RELEASE_STATE_DIR": directory}, clear=False,
+        ):
+            result = CliRunner().invoke(release_train.app, [
+                "start",
+                "--version", "2.9.3",
+                "--next-version", "2.9.4-SNAPSHOT",
+                "--from-train", TRAIN,
+                "--cee-version", PUBLIC_VERSION,
+                "--accept-red-develop", "cedar-repo-server=33211136456",
+                "--accept-main-only", "cedar-template-editor",
+                "--accept-main-only", " cedar-workspace ",
+            ])
+            self.assertEqual(1, result.exit_code, result.output)
+            manifest, _path = ReleaseState().read_current_manifest()
+
+        self.assertEqual({
+            "redDevelop": {"cedar-repo-server": "33211136456"},
+            "mainOnly": ["cedar-template-editor", "cedar-workspace"],
+        }, manifest["acceptances"])
+
+    def test_resume_applies_the_recorded_acceptances(self):
+        manifest = manifest_fixture()
+        preflight.record_acceptances(
+            manifest, {"cedar-repo-server": "33211136456"}, {"cedar-template-editor"})
+
+        with patch.object(release_train, "ReleasePreflight") as gate:
+            gate.return_value.run_resume.return_value = []
+            release_train._release_resume_gate_or_exit(manifest)
+
+        _args, options = gate.call_args
+        self.assertEqual({"cedar-repo-server": "33211136456"}, options["accepted_red_develop"])
+        self.assertEqual({"cedar-template-editor"}, options["accepted_main_only"])
+
+    def test_a_recorded_main_only_acceptance_lets_the_resumed_survey_pass(self):
+        manifest = manifest_fixture()
+        preflight.record_acceptances(manifest, {}, {"cedar-template-editor"})
+        accepted_red_develop, accepted_main_only = preflight.recorded_acceptances(manifest)
+        resumed = ReleasePreflightTest._preflight(
+            ReleasePreflightTest(), manifest=manifest, accepted=accepted_red_develop,
+            accepted_main_only=accepted_main_only)
+
+        with patch.object(release_train.ReleaseRemoteIntegrator, "survey",
+                          return_value={"cedar-template-editor": ["app/one.html"]}):
+            findings = resumed.check_remote_survey()
+
+        self.assertEqual(1, len(findings))
+        self.assertFalse(findings[0].fatal, "the resume refused what start had accepted")
+
+    def test_a_ledger_written_before_the_record_resumes_with_no_acceptances(self):
+        self.assertEqual(({}, set()), preflight.recorded_acceptances(manifest_fixture()))
 
 
 class ReleaseLicenseStampingTest(unittest.TestCase):

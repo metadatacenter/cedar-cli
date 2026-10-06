@@ -107,3 +107,24 @@ class SchedulerTest(unittest.TestCase):
         finally:
             _cancel.reset(token)
             timer.join()
+
+
+class DroppedOptionalDependencyRecordTest(unittest.TestCase):
+    def test_marks_only_the_latest_run_of_that_command_in_that_repository(self):
+        from org.metadatacenter import build_scheduler
+        records = []
+        token = build_scheduler._timings.set(records)
+        try:
+            for repo, command in (("cee", "npm install"), ("cee", "npm install"),
+                                  ("cee", "npm --prefix visual install"), ("cetp", "npm install")):
+                build_scheduler.record_timing(repo, command, time.monotonic(), 0)
+            build_scheduler.record_dropped_optional_dependencies(
+                "cee", "npm install", ["@esbuild/darwin-arm64"])
+        finally:
+            build_scheduler._timings.reset(token)
+        self.assertEqual([None, ["@esbuild/darwin-arm64"], None, None],
+                         [record.get("droppedOptionalDependencies") for record in records])
+
+    def test_does_nothing_outside_a_recorded_build(self):
+        from org.metadatacenter import build_scheduler
+        build_scheduler.record_dropped_optional_dependencies("cee", "npm install", ["x"])

@@ -6,6 +6,8 @@ import hashlib
 import json
 import time
 
+from org.metadatacenter.release_support.errors import ReleaseError
+
 _current_waits = ContextVar('release_stage_waits', default=None)
 
 
@@ -101,9 +103,18 @@ def render_timings(manifest, console, baseline=None):
     console.print('Workload-matched comparisons are observations, not controlled benchmarks; source and network conditions may differ.')
 
 
+def recorded_timings(state, release_version):
+    """The timings of one release: its ledger while it is current, its kept record after."""
+    for path in (state.manifest_path(release_version), state.timing_record_path(release_version)):
+        if path.is_file():
+            return json.loads(path.read_text())
+    raise ReleaseError(f'no ledger or timing record holds release {release_version}')
+
+
 def prior_timing_manifest(state, current):
     candidates = []
-    for path in (state.root / 'releases').glob('*.json'):
+    paths = [*(state.root / 'releases').glob('*.json'), *(state.root / 'timings').glob('*.json')]
+    for path in paths:
         try:
             value = json.loads(path.read_text())
             if value.get('releaseVersion') != current.get('releaseVersion') and value.get('stageTimings'):
