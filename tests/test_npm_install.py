@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import time
 import unittest
@@ -120,6 +121,95 @@ class ExecutorReinstallTest(unittest.TestCase):
 
     def test_a_build_without_its_own_npm_cache_runs_an_install_once(self):
         self.assertEqual((0, 1), self.run_commands(["npm install"], [(0, True)], environment={}))
+
+
+
+def logs_dir_of(command):
+    return Path(next(arg for arg in command if arg.startswith("--logs-dir=")).split("=", 1)[1])
+
+
+class InstallTest(unittest.TestCase):
+    """An install outside the build executor, under the same rule, reading only its own log."""
+
+    def attempts(self, outcomes, failure=RuntimeError):
+        """Each outcome is (whether the attempt raises, whether its log reports a drop)."""
+        outcomes = iter(outcomes)
+        commands, notes = [], []
+
+        def run(command):
+            commands.append(command)
+            raises, dropped = next(outcomes)
+            (logs_dir_of(command) / "2026-10-06T03_00_00_000Z-debug-0.log").write_text(
+                CLEAN + (DROPPED.format("/repo") if dropped else ""))
+            if raises:
+                raise subprocess.CalledProcessError(1, command)
+
+        npm_install.install(run, ["npm", "ci"], notes.append, failure)
+        return commands, notes
+
+    def test_a_clean_install_runs_once_with_a_log_directory_of_its_own(self):
+        commands, notes = self.attempts([(False, False)])
+        self.assertEqual(1, len(commands))
+        self.assertEqual(["npm", "ci"], commands[0][:2])
+        self.assertFalse(logs_dir_of(commands[0]).exists(), "the log directory is removed afterwards")
+        self.assertEqual([], notes)
+
+    def test_a_drop_runs_the_install_again_whether_or_not_npm_failed(self):
+        for raises in (False, True):
+            commands, notes = self.attempts([(raises, True), (False, False)])
+            self.assertEqual(2, len(commands))
+            self.assertNotEqual(logs_dir_of(commands[0]), logs_dir_of(commands[1]))
+            self.assertIn("so the install runs again", notes[0])
+
+    def test_a_second_drop_fails_with_the_callers_error(self):
+        with self.assertRaises(KeyError) as raised:
+            self.attempts([(False, True), (False, True)], failure=KeyError)
+        self.assertIn("@esbuild/darwin-arm64 again", str(raised.exception))
+
+    def test_a_failure_with_nothing_dropped_is_raised_as_it_was_and_not_retried(self):
+        outcomes = iter([(True, False)])
+        calls = []
+
+        def run(command):
+            calls.append(command)
+            raise subprocess.CalledProcessError(7, command)
+
+        with self.assertRaises(subprocess.CalledProcessError) as raised:
+            npm_install.install(run, ["npm", "install"], lambda _m: None)
+        self.assertEqual(7, raised.exception.returncode)
+        self.assertEqual(1, len(calls))
+
+
+class CommandLineTest(unittest.TestCase):
+    """The entry point a shell script calls, run against a stand-in for npm."""
+
+    def fake_npm(self, directory, script):
+        npm = Path(directory) / "npm"
+        npm.write_text("#!/bin/sh\n" + script)
+        npm.chmod(0o755)
+        return {"PATH": f"{directory}:/usr/bin:/bin"}
+
+    def run_main(self, script):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.fake_npm(directory, script)
+            with patch.dict("os.environ", path):
+                return npm_install.main(["npm_install.py", "npm", "ci", "--no-audit"])
+
+    def test_a_clean_install_exits_zero(self):
+        self.assertEqual(0, self.run_main("exit 0\n"))
+
+    def test_npm_failing_without_a_drop_passes_its_exit_code_through(self):
+        self.assertEqual(3, self.run_main("exit 3\n"))
+
+    def test_a_drop_on_every_attempt_exits_one(self):
+        log_drop = ('for arg in "$@"; do case "$arg" in --logs-dir=*) dir="${arg#--logs-dir=}";; esac; done\n'
+                    'echo "21 verbose reify failed optional dependency /r/node_modules/@esbuild/x" '
+                    '> "$dir/2026-10-06T03_00_00_000Z-debug-0.log"\nexit 0\n')
+        self.assertEqual(1, self.run_main(log_drop))
+
+    def test_anything_but_an_npm_install_is_refused(self):
+        self.assertEqual(2, npm_install.main(["npm_install.py", "npm", "run", "build"]))
+        self.assertEqual(2, npm_install.main(["npm_install.py"]))
 
 
 if __name__ == "__main__":

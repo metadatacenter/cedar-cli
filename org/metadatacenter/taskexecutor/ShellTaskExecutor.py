@@ -163,16 +163,7 @@ class ShellTaskExecutor(TaskExecutor):
             if not dropped:
                 return return_code
             record_dropped_optional_dependencies(repo.name, command, dropped)
-            noun = "dependency" if len(dropped) == 1 else "dependencies"
-            what = f"the optional {noun} {', '.join(dropped)}"
-            if attempt == 1:
-                self._note(job_progress, environment,
-                           f"npm dropped {what}, most likely after a failed download, "
-                           f"so the install runs again.")
-            else:
-                self._note(job_progress, environment,
-                           f"npm dropped {what} again, so the install fails rather than "
-                           f"leave the build without it.")
+            self._note(job_progress, environment, npm_install.dropped_message(dropped, attempt == 2))
         return return_code or 1
 
     @staticmethod

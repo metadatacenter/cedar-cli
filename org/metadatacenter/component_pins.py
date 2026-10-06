@@ -46,6 +46,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Column, Table
 
+from org.metadatacenter import npm_install
 from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.Util import Util
 
@@ -599,6 +600,16 @@ def _write_json(path, payload):
 
 
 def _run(directory, command):
+    """Run a command, and an npm install under the rule that it runs again if npm dropped an
+    optional dependency: a publish built from such an install ships without that dependency."""
+    if npm_install.is_install(" ".join(command)):
+        npm_install.install(lambda attempt: _run_once(directory, attempt), command,
+                            lambda message: console.print(message, markup=False), ComponentPinError)
+    else:
+        _run_once(directory, command)
+
+
+def _run_once(directory, command):
     completed = subprocess.run(command, cwd=str(directory), check=False,
                                env=invocation_environment())
     if completed.returncode:

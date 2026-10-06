@@ -2106,6 +2106,32 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertEqual("true", captured[0][1]["CI"])
             self.assertEqual("false", captured[0][1]["NG_CLI_ANALYTICS"])
 
+    def test_release_npm_install_runs_again_when_npm_drops_an_optional_dependency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory, include_frontend=True)
+            validator = ReleaseBuildValidator(ReleaseState(root=Path(directory) / "state"))
+            task = next(
+                item for item in validator.tasks(manifest)
+                if item["id"] == "release:npm:template-editor:install"
+            )
+            commands = []
+
+            def stream(command, _cwd, _environment, log, *, verbose=False):
+                commands.append(command)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text("installed\n", encoding="utf-8")
+                logs = next(a.split("=", 1)[1] for a in command if a.startswith("--logs-dir="))
+                if len(commands) == 1:
+                    (Path(logs) / "2026-10-06T03_00_00_000Z-debug-0.log").write_text(
+                        "21 verbose reify failed optional dependency /r/node_modules/@esbuild/x\n")
+
+            with patch.object(ReleaseBuildValidator, "_stream_command", side_effect=stream), \
+                    patch("builtins.print"):
+                validator.run_task(manifest, task)
+
+            self.assertEqual(2, len(commands))
+            self.assertEqual(task["command"], commands[1][:len(task["command"])])
+
     def test_release_maven_task_checks_for_mongods_before_and_after(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = self.make_manifest(directory)

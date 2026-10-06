@@ -344,6 +344,40 @@ class WorkspaceTest(unittest.TestCase):
             declared(None)
 
 
+
+class InstallRetryTest(unittest.TestCase):
+    """The real runner installs again when npm drops an optional dependency, and only for an install."""
+
+    def run_with(self, command, drops):
+        drops = iter(drops)
+        seen = []
+
+        def fake_run(args, cwd, check, env):
+            seen.append(list(args))
+            logs = next((a.split("=", 1)[1] for a in args if a.startswith("--logs-dir=")), None)
+            if logs and next(drops):
+                (Path(logs) / "2026-10-06T03_00_00_000Z-debug-0.log").write_text(
+                    "21 verbose reify failed optional dependency /r/node_modules/@esbuild/darwin-arm64\n")
+            return subprocess.CompletedProcess(args, 0)
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(component_pins.subprocess, "run", side_effect=fake_run), \
+                patch.object(component_pins, "console"):
+            component_pins._run(Path(directory), command)
+        return seen
+
+    def test_an_install_that_dropped_a_dependency_runs_again(self):
+        seen = self.run_with(["npm", "ci"], [True, False])
+        self.assertEqual([["npm", "ci"], ["npm", "ci"]], [args[:2] for args in seen])
+
+    def test_a_second_drop_is_a_component_pin_error(self):
+        with self.assertRaises(component_pins.ComponentPinError):
+            self.run_with(["npm", "install"], [True, True])
+
+    def test_any_other_command_runs_once_as_given(self):
+        self.assertEqual([["npm", "run", "dist"]], self.run_with(["npm", "run", "dist"], []))
+
+
 if __name__ == "__main__":
     unittest.main()
 
