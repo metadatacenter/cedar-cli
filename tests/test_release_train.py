@@ -711,8 +711,14 @@ class ReleasePlannerTest(unittest.TestCase):
     COMPONENT_RETAINED_URL = (
         "https://nexus.bmir.stanford.edu/repository/npm-cedar-releases/"
         "@org.metadatacenter/cedar-embeddable-designer/-/designer.tgz")
+    MODEL = "@org.metadatacenter/cedar-model-typescript-library"
+    MODEL_VERSION = "1.0.18-dev.202608261554.g999999999999"
+    MODEL_BYTES = b"model tarball"
+    MODEL_RETAINED_URL = (
+        "https://nexus.bmir.stanford.edu/repository/npm-cedar-releases/"
+        "@org.metadatacenter/cedar-model-typescript-library/-/model.tgz")
 
-    def make_planner(self, allow_scripts=None, components=False):
+    def make_planner(self, allow_scripts=None, components=False, model=False):
         if allow_scripts:
             policy = (
                 b",allowScripts:"
@@ -767,6 +773,8 @@ class ReleasePlannerTest(unittest.TestCase):
         }
         if components:
             source["repositories"]["cedar-embeddable-designer"] = "f" * 40
+        if model:
+            source["repositories"]["cedar-model-typescript-library"] = "9" * 40
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
         frontend_config = {
             "dockerCeeVersionVariable": "CEDAR_OPENVIEW_CEE_NPM_VERSION",
@@ -793,6 +801,21 @@ class ReleasePlannerTest(unittest.TestCase):
                 for framework in ("angular", "ember", "react")
             ],
         }
+        if model:
+            # The train configuration says which repositories follow the model. CEE does too,
+            # but the release pins the public CEE rather than wiring the train's model into it.
+            frontend_config["components"] = [{
+                "id": "model", "repository": "cedar-model-typescript-library",
+                "publishedName": self.MODEL, "publishedBy": "repository's CI",
+                "consumers": [
+                    {"repository": "cedar-embeddable-editor",
+                     "dependency": "cedar-model-typescript-library",
+                     "manifest": "package.json", "lock": "package-lock.json"},
+                    {"repository": "cedar-embeddable-designer",
+                     "dependency": "cedar-model-typescript-library",
+                     "manifest": "package.json", "lock": "package-lock.json"},
+                ],
+            }]
         build_config = {
             "repositories": list(source["repositories"]),
             "mavenRepositories": ["frontend-main"],
@@ -833,6 +856,11 @@ class ReleasePlannerTest(unittest.TestCase):
                 "consumers": [{"repository": "frontend-main", "dependency": "cedar-embeddable-designer",
                                "manifest": "package.json", "lock": "package-lock.json"}],
             }]
+        if model:
+            npm_plan["model"] = {
+                "name": self.MODEL, "version": self.MODEL_VERSION,
+                "repository": "cedar-model-typescript-library", "revision": "9" * 40,
+            }
         npm_plan_content = (
             json.dumps(npm_plan, indent=2, sort_keys=True) + "\n"
         ).encode()
@@ -867,6 +895,16 @@ class ReleasePlannerTest(unittest.TestCase):
                 {**recorded, "tarball": self.COMPONENT_RETAINED_URL}]
             # Only the retained copy is readable, as it is once the train registry has purged it.
             contents[self.COMPONENT_RETAINED_URL] = self.COMPONENT_BYTES
+        if model:
+            recorded = {
+                "name": self.MODEL, "version": self.MODEL_VERSION,
+                "integrity": integrity(self.MODEL_BYTES),
+                "tarballSha256": hashlib.sha256(self.MODEL_BYTES).hexdigest(),
+                "repository": "cedar-model-typescript-library", "revision": "9" * 40,
+            }
+            npm_completion["packages"].append({**recorded, "tarball": "https://nexus.example/model.tgz"})
+            npm_completion["retainedPackages"].append({**recorded, "tarball": self.MODEL_RETAINED_URL})
+            contents[self.MODEL_RETAINED_URL] = self.MODEL_BYTES
         docker_images = [
             {
                 "image": f"cedar-image-{index:02d}",
@@ -974,6 +1012,28 @@ class ReleasePlannerTest(unittest.TestCase):
         self.assertEqual(integrity(self.COMPONENT_BYTES), package["integrity"])
         self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY,
                          manifest["publicationPlan"]["npm"]["retainedRegistry"])
+
+    def test_release_pins_the_train_s_retained_model_into_the_components_built_against_it(self):
+        manifest = self.build_release(self.make_planner(components=True, model=True))
+
+        wired = {(item["repository"], item["dependency"]): item["package"]
+                 for item in manifest["componentWiring"]}
+        model = wired[("cedar-embeddable-designer", "cedar-model-typescript-library")]
+        self.assertEqual(self.MODEL, model["name"])
+        self.assertEqual(self.MODEL_VERSION, model["version"])
+        self.assertEqual(self.MODEL_RETAINED_URL, model["tarball"])
+        self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY, model["registry"])
+        self.assertEqual(integrity(self.MODEL_BYTES), model["integrity"])
+        # The public CEE carries its own public model; the train's model is never wired into it.
+        self.assertNotIn("cedar-embeddable-editor", {repository for repository, _ in wired})
+
+    def test_release_refuses_a_train_that_did_not_retain_the_model_its_components_follow(self):
+        planner = self.make_planner(components=True, model=True)
+        completion = planner.state.values[f"npm/completed/{TRAIN}.json"][0]
+        completion["retainedPackages"] = [package for package in completion["retainedPackages"]
+                                          if package["name"] != self.MODEL]
+        with self.assertRaisesRegex(ReleaseError, "no retained copy of .*cedar-model-typescript"):
+            self.build_release(planner)
 
     def test_release_refuses_a_train_that_retained_no_shared_components(self):
         planner = self.make_planner(components=True)
@@ -1504,6 +1564,50 @@ class ReleaseWorkspaceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result, commands = self.prepare_retained_component(directory, retained)
         [command] = commands
+        self.assertIn(f"--@org.metadatacenter:registry={NEXUS_NPM_RETAINED_REGISTRY}", command)
+        self.assertEqual(retained, result['components'][0]['package']['tarball'])
+
+    def test_the_model_a_component_follows_is_installed_under_its_alias_from_the_retained_registry(self):
+        # A component names the model unscoped and installs the scoped package under that alias,
+        # so the release pins the alias, and the scope override is what reaches the retained copy.
+        name = '@org.metadatacenter/cedar-model-typescript-library'
+        dependency = 'cedar-model-typescript-library'
+        version = '1.0.18-dev.train'
+        retained = f"{NEXUS_NPM_RETAINED_REGISTRY}{name}/-/cedar-model-typescript-library-{version}.tgz"
+        spec = f"npm:{name}@{version}"
+        with tempfile.TemporaryDirectory() as directory:
+            cedar_home, manifest = self.make_workspace(directory)
+            model = {'name': name, 'version': version, 'tarball': retained,
+                     'integrity': 'sha512-model', 'registry': NEXUS_NPM_RETAINED_REGISTRY}
+            manifest['componentWiring'] = [{
+                'repository': 'frontend-main', 'manifest': 'package.json',
+                'lock': 'package-lock.json', 'dependency': dependency, 'package': model}]
+            manifest['publicationPlan'] = {'npm': {'retainedRegistry': NEXUS_NPM_RETAINED_REGISTRY}}
+            normal_runner = self._successful_runner(manifest['cee']['consumers'])
+            commands = []
+
+            def runner(args, **kwargs):
+                if args[0] != 'npm':
+                    return normal_runner(args, **kwargs)
+                commands.append(args)
+                root = Path(kwargs['cwd'])
+                package = json.loads((root / 'package.json').read_text())
+                lock = json.loads((root / 'package-lock.json').read_text())
+                package['dependencies'][dependency] = spec
+                lock['packages']['']['dependencies'][dependency] = spec
+                lock['packages']['node_modules/' + dependency] = {
+                    'name': name, 'version': version, 'resolved': retained,
+                    'integrity': model['integrity']}
+                (root / 'package.json').write_text(json.dumps(package))
+                (root / 'package-lock.json').write_text(json.dumps(lock))
+                return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+
+            preparer = ReleaseWorkspacePreparer(
+                ReleaseState(root=Path(directory) / 'state'), command_runner=runner,
+                environment={'CEDAR_HOME': str(cedar_home)})
+            result = preparer.prepare(manifest, Path(directory) / 'attempt')
+        [command] = commands
+        self.assertIn(f"{dependency}@{spec}", command)
         self.assertIn(f"--@org.metadatacenter:registry={NEXUS_NPM_RETAINED_REGISTRY}", command)
         self.assertEqual(retained, result['components'][0]['package']['tarball'])
 

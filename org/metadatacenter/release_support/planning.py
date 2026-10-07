@@ -473,31 +473,53 @@ class ReleasePlanner:
             raise ReleaseError(
                 f"train {train} did not retain its shared components in {retained_registry}; "
                 "a release lockfile would pin tarballs Nexus deletes, so build a new train")
-        for component in npm_plan.get('components', []):
-            if source.get('repositories', {}).get(component['repository']) != component['revision']:
+        def retained_copy(published: dict) -> dict:
+            if source.get('repositories', {}).get(published['repository']) != published['revision']:
                 raise ReleaseError('Shared component revision disagrees with train source')
-            identity = f"{component['name']}@{component['version']}"
+            identity = f"{published['name']}@{published['version']}"
             recorded = next((package for package in npm_completion.get('packages', [])
-                             if package.get('name') == component['name']
-                             and package.get('version') == component['version']), None)
-            if not recorded or recorded.get('revision') != component['revision']:
-                raise ReleaseError(f"Train has no verified component {component['name']}")
+                             if package.get('name') == published['name']
+                             and package.get('version') == published['version']), None)
+            if not recorded or recorded.get('revision') != published['revision']:
+                raise ReleaseError(f"Train has no verified component {published['name']}")
             retained = next((package for package in npm_completion.get('retainedPackages', [])
-                             if package.get('name') == component['name']
-                             and package.get('version') == component['version']), None)
+                             if package.get('name') == published['name']
+                             and package.get('version') == published['version']), None)
             if not retained or any(retained.get(field) != recorded.get(field)
                                    for field in ('integrity', 'tarballSha256')):
                 raise ReleaseError(f"Train has no retained copy of {identity}")
             if not str(retained.get('tarball', '')).startswith(retained_registry):
                 raise ReleaseError(f"Train's retained copy of {identity} is outside {retained_registry}")
             payload = self.http.read(retained['tarball'])
-            _verify_integrity(component['name'], payload, retained['integrity'])
+            _verify_integrity(published['name'], payload, retained['integrity'])
             if _sha256(payload) != retained['tarballSha256']:
                 raise ReleaseError('Train component tarball hash mismatch')
-            package = {**retained, 'registry': retained_registry}
+            return {**retained, 'registry': retained_registry}
+
+        for component in npm_plan.get('components', []):
+            package = retained_copy(component)
             for consumer in component['consumers']:
                 if consumer['repository'] in consumer_repositories:
                     component_wiring.append({**consumer, 'package': package})
+
+        # The train builds a shared component that follows the model library against the model it
+        # published itself, so that model belongs to the component's graph too. Left alone, the
+        # component's lockfile keeps the development model its checkout pinned, which Nexus deletes.
+        # CEE also follows the model, but the release pins the public CEE in its place.
+        model = npm_plan.get('model') or {}
+        component_repositories = {component['repository']
+                                  for component in npm_plan.get('components', [])}
+        model_consumers = [
+            consumer
+            for followed in frontend_config.get('components', [])
+            if model and followed.get('repository') == model.get('repository')
+            for consumer in followed.get('consumers', [])
+            if consumer['repository'] in component_repositories
+            and consumer['repository'] in consumer_repositories
+        ]
+        if model_consumers:
+            package = retained_copy(model)
+            component_wiring.extend({**consumer, 'package': package} for consumer in model_consumers)
 
         return {
             "schemaVersion": 1,
