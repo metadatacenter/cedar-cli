@@ -388,6 +388,17 @@ NEXUS_HOST = "https://nexus.bmir.stanford.edu"
 NEXUS_NPM_REGISTRY = f"{NEXUS_HOST}/repository/npm-cedar/"
 
 
+# Nexus removes a prerelease from NEXUS_NPM_REGISTRY three days after upload and a release thirty
+# days after. This registry has no cleanup policy and refuses a second upload of a version, so a
+# release names it for every Nexus package its trees pin, and publishes its own packages there too.
+NEXUS_NPM_RETAINED_REGISTRY = f"{NEXUS_HOST}/repository/npm-cedar-releases/"
+
+
+# The cedar-images-base.sh declaration naming the registry the frontend images install from. A
+# release tree points it at NEXUS_NPM_RETAINED_REGISTRY.
+DOCKER_NPM_REGISTRY_VARIABLE = "CEDAR_NPM_REGISTRY"
+
+
 # Anonymous callers receive 403 from this endpoint, so a 200 proves the configured
 # credentials authenticate. It does not prove the deploy privilege on a given
 # repository, which only a write can establish.

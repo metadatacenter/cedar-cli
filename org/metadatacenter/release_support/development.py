@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import time
 from org.metadatacenter.github_ci import (
-    probe_exact_commit, develop_runs, latest_runs_by_name, run_url, GithubCIProbeError,
+    probe_exact_commit, develop_runs, finished_runs, latest_runs_by_name, run_url, GithubCIProbeError,
 )
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.release_support.acceptance import ReleaseAcceptance
@@ -111,7 +111,7 @@ class DevelopmentVerifier:
                         raise probe
                 except GithubCIProbeError as error:
                     raise ReleaseError(str(error)) from error
-                runs = develop_runs(probe.runs, revision)
+                runs = finished_runs(develop_runs(probe.runs, revision))
                 if repo in AGGREGATORS:
                     requested = dt.datetime.fromisoformat(evidence['dispatches'][repo]['requestedAt'])
                     # GitHub timestamps have second precision; use the request's second.

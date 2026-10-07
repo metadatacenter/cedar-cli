@@ -23,6 +23,10 @@ from org.metadatacenter import release_train
 from org.metadatacenter.release_support import integration, lifecycle, preflight, validation
 from org.metadatacenter.release_support import publication
 from org.metadatacenter.release_support.publication import _extract_source_archive
+from org.metadatacenter.release_support.policy import (
+    NEXUS_NPM_REGISTRY,
+    NEXUS_NPM_RETAINED_REGISTRY,
+)
 from org.metadatacenter.release_train import (
     DEV_CEE_NAME,
     PUBLIC_CEE_NAME,
@@ -698,7 +702,17 @@ class CeePromotionTest(unittest.TestCase):
 
 
 class ReleasePlannerTest(unittest.TestCase):
-    def make_planner(self, allow_scripts=None):
+    COMPONENT = "@org.metadatacenter/cedar-embeddable-designer"
+    COMPONENT_VERSION = "0.1.0-dev.20260826.gffffffffffff.t1554"
+    COMPONENT_BYTES = b"designer tarball"
+    COMPONENT_TRAIN_URL = (
+        "https://nexus.bmir.stanford.edu/repository/npm-cedar/"
+        "@org.metadatacenter/cedar-embeddable-designer/-/designer.tgz")
+    COMPONENT_RETAINED_URL = (
+        "https://nexus.bmir.stanford.edu/repository/npm-cedar-releases/"
+        "@org.metadatacenter/cedar-embeddable-designer/-/designer.tgz")
+
+    def make_planner(self, allow_scripts=None, components=False):
         if allow_scripts:
             policy = (
                 b",allowScripts:"
@@ -751,6 +765,8 @@ class ReleasePlannerTest(unittest.TestCase):
                 "cedar-template-designer": "e" * 40,
             },
         }
+        if components:
+            source["repositories"]["cedar-embeddable-designer"] = "f" * 40
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
         frontend_config = {
             "dockerCeeVersionVariable": "CEDAR_OPENVIEW_CEE_NPM_VERSION",
@@ -810,6 +826,13 @@ class ReleasePlannerTest(unittest.TestCase):
                 for framework in ("angular", "ember", "react")
             ],
         }
+        if components:
+            npm_plan["components"] = [{
+                "id": "ced", "name": self.COMPONENT, "version": self.COMPONENT_VERSION,
+                "repository": "cedar-embeddable-designer", "revision": "f" * 40,
+                "consumers": [{"repository": "frontend-main", "dependency": "cedar-embeddable-designer",
+                               "manifest": "package.json", "lock": "package-lock.json"}],
+            }]
         npm_plan_content = (
             json.dumps(npm_plan, indent=2, sort_keys=True) + "\n"
         ).encode()
@@ -830,6 +853,20 @@ class ReleasePlannerTest(unittest.TestCase):
                 "tarballSha256": hashlib.sha256(dev).hexdigest(),
             }],
         }
+        contents = {dev_url: dev}
+        if components:
+            recorded = {
+                "name": self.COMPONENT, "version": self.COMPONENT_VERSION,
+                "integrity": integrity(self.COMPONENT_BYTES),
+                "tarballSha256": hashlib.sha256(self.COMPONENT_BYTES).hexdigest(),
+                "repository": "cedar-embeddable-designer", "revision": "f" * 40,
+            }
+            npm_completion["packages"].append({**recorded, "tarball": self.COMPONENT_TRAIN_URL})
+            npm_completion["retainedRegistry"] = NEXUS_NPM_RETAINED_REGISTRY
+            npm_completion["retainedPackages"] = [
+                {**recorded, "tarball": self.COMPONENT_RETAINED_URL}]
+            # Only the retained copy is readable, as it is once the train registry has purged it.
+            contents[self.COMPONENT_RETAINED_URL] = self.COMPONENT_BYTES
         docker_images = [
             {
                 "image": f"cedar-image-{index:02d}",
@@ -872,8 +909,9 @@ class ReleasePlannerTest(unittest.TestCase):
                 },
             },
         }
+        contents[public_url] = public
         http = FakeHttp(
-            {dev_url: dev, public_url: public},
+            contents,
             metadata,
             frontend_config,
             build_config,
@@ -919,6 +957,47 @@ class ReleasePlannerTest(unittest.TestCase):
             defaults["nextDevelopment"]["CEDAR_WORKSPACE_NPM_VERSION"],
             defaults["release"]["CEDAR_WORKSPACE_NPM_VERSION"],
         )
+
+    def build_release(self, planner):
+        return planner.build(
+            release_version="2.9.3", next_version="2.9.4-SNAPSHOT",
+            train=TRAIN, cee_version=PUBLIC_VERSION)
+
+    def test_release_pins_the_train_s_retained_copy_of_each_shared_component(self):
+        manifest = self.build_release(self.make_planner(components=True))
+
+        [wiring] = manifest["componentWiring"]
+        self.assertEqual("frontend-main", wiring["repository"])
+        package = wiring["package"]
+        self.assertEqual(self.COMPONENT_RETAINED_URL, package["tarball"])
+        self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY, package["registry"])
+        self.assertEqual(integrity(self.COMPONENT_BYTES), package["integrity"])
+        self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY,
+                         manifest["publicationPlan"]["npm"]["retainedRegistry"])
+
+    def test_release_refuses_a_train_that_retained_no_shared_components(self):
+        planner = self.make_planner(components=True)
+        completion = planner.state.values[f"npm/completed/{TRAIN}.json"][0]
+        del completion["retainedRegistry"]
+        del completion["retainedPackages"]
+        with self.assertRaisesRegex(ReleaseError, "did not retain its shared components"):
+            self.build_release(planner)
+
+    def test_release_refuses_a_retained_copy_that_differs_from_the_train_bytes(self):
+        planner = self.make_planner(components=True)
+        completion = planner.state.values[f"npm/completed/{TRAIN}.json"][0]
+        completion["retainedPackages"][0]["integrity"] = integrity(b"other bytes")
+        with self.assertRaisesRegex(ReleaseError, "no retained copy"):
+            self.build_release(planner)
+
+    def test_release_docker_defaults_install_from_the_retained_registry(self):
+        inputs = {"CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4"}
+        plan = {"npm": {"surfaces": [], "retainedRegistry": NEXUS_NPM_RETAINED_REGISTRY}}
+        defaults = ReleasePlanner._docker_frontend_defaults(
+            {}, {"dockerInputs": inputs}, plan, "2.9.8", "2.0.6")
+        self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY.rstrip("/"),
+                         defaults["release"]["CEDAR_NPM_REGISTRY"])
+        self.assertNotIn("CEDAR_NPM_REGISTRY", defaults["nextDevelopment"])
 
     def test_release_docker_defaults_name_released_frontends_and_the_public_editor(self):
         frontend_config = {
@@ -1383,6 +1462,58 @@ class ReleaseWorkspaceTest(unittest.TestCase):
             result = preparer.prepare(manifest, Path(directory) / 'attempt')
             self.assertEqual(component, result['components'][0]['package'])
             self.assertNotIn('devDependencies', json.loads((cedar_home / 'frontend-main/package.json').read_text()))
+
+    def prepare_retained_component(self, directory, tarball):
+        """Wire one component whose release copy lives in the retained registry."""
+        cedar_home, manifest = self.make_workspace(directory)
+        component = {'name': '@org.metadatacenter/tokens', 'version': '0.1.0-dev.train',
+                     'tarball': tarball, 'integrity': 'sha512-tokens',
+                     'registry': NEXUS_NPM_RETAINED_REGISTRY}
+        dependency = '@org.metadatacenter/tokens'
+        manifest['componentWiring'] = [{
+            'repository': 'frontend-main', 'manifest': 'package.json', 'lock': 'package-lock.json',
+            'dependency': dependency, 'package': component}]
+        manifest['publicationPlan'] = {'npm': {'retainedRegistry': NEXUS_NPM_RETAINED_REGISTRY}}
+        normal_runner = self._successful_runner(manifest['cee']['consumers'])
+        commands = []
+
+        def runner(args, **kwargs):
+            if args[0] != 'npm':
+                return normal_runner(args, **kwargs)
+            commands.append(args)
+            root = Path(kwargs['cwd'])
+            package = json.loads((root / 'package.json').read_text())
+            lock = json.loads((root / 'package-lock.json').read_text())
+            package['dependencies'][dependency] = component['version']
+            lock['packages']['']['dependencies'][dependency] = component['version']
+            lock['packages']['node_modules/' + dependency] = {
+                'version': component['version'], 'resolved': tarball,
+                'integrity': component['integrity']}
+            (root / 'package.json').write_text(json.dumps(package))
+            (root / 'package-lock.json').write_text(json.dumps(lock))
+            return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+
+        preparer = ReleaseWorkspacePreparer(
+            ReleaseState(root=Path(directory) / 'state'), command_runner=runner,
+            environment={'CEDAR_HOME': str(cedar_home)})
+        return preparer.prepare(manifest, Path(directory) / 'attempt'), commands
+
+    def test_retained_components_resolve_their_scope_from_the_retained_registry(self):
+        retained = (f"{NEXUS_NPM_RETAINED_REGISTRY}@org.metadatacenter/tokens/-/"
+                    "tokens-0.1.0-dev.train.tgz")
+        with tempfile.TemporaryDirectory() as directory:
+            result, commands = self.prepare_retained_component(directory, retained)
+        [command] = commands
+        self.assertIn(f"--@org.metadatacenter:registry={NEXUS_NPM_RETAINED_REGISTRY}", command)
+        self.assertEqual(retained, result['components'][0]['package']['tarball'])
+
+    def test_a_release_lockfile_pinning_the_train_registry_is_refused(self):
+        purged = ("https://nexus.bmir.stanford.edu/repository/npm-cedar/"
+                  "@org.metadatacenter/tokens/-/tokens-0.1.0-dev.train.tgz")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ReleaseError, "frontend-main/package-lock.json pins "
+                                                      "@org.metadatacenter/tokens@0.1.0-dev.train"):
+                self.prepare_retained_component(directory, purged)
 
     REPOSITORY_CONSUMERS = {
         "frontend-main": [("main", "package.json", "package-lock.json")],
@@ -3548,6 +3679,62 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             log = attempt / "publication-logs" / "npm-release-frontend.log"
             self.assertEqual("registry refused\n", log.read_text(encoding="utf-8"))
 
+    RETAINED_TASK = {
+        "id": "npm:release:frontend",
+        "kind": "npm-release",
+        "version": "2.9.3",
+        "registry": "https://nexus.example/repository/npm/",
+        "retainedRegistry": "https://nexus.example/repository/npm-retained/",
+    }
+
+    def test_npm_release_publishes_the_same_tarball_to_the_retained_registry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            attempt = Path(directory) / "attempt"
+            workspace = attempt / "workspace"
+            workspace.mkdir(parents=True)
+            tarball = attempt / "cedar-frontend-2.9.3.tgz"
+            tarball.write_bytes(b"packed")
+            task = {**self.RETAINED_TASK, "workspace": str(workspace)}
+            evidence = {"name": "cedar-frontend", "integrity": "sha512-evidence",
+                        "tarballSha256": "0" * 64}
+            publisher = ReleaseArtifactPublisher(ReleaseState(root=Path(directory) / "state"))
+            published = []
+
+            def run(command, **_kwargs):
+                published.append(command)
+                return FakeCompletedProcess(returncode=0, stdout=f"published to {command[6]}")
+
+            def verify(verified_task, verified_evidence, *, wait):
+                return {**verified_evidence, "verifiedAt": "now",
+                        "tarball": verified_task["registry"] + "cedar-frontend-2.9.3.tgz"}
+
+            with patch.object(publisher, "_pack_npm", return_value=(tarball, evidence)), \
+                    patch.object(publisher, "_npm_version_record", return_value=None), \
+                    patch.object(publisher, "_verify_npm_package", side_effect=verify), \
+                    patch.object(release_train.subprocess, "run", side_effect=run):
+                record = publisher._publish_npm(task)
+
+            self.assertEqual([task["registry"], task["retainedRegistry"]],
+                             [command[6] for command in published])
+            self.assertEqual({str(tarball)}, {command[2] for command in published})
+            self.assertEqual(task["registry"] + "cedar-frontend-2.9.3.tgz", record["tarball"])
+            retained = record["retained"]
+            self.assertEqual(task["retainedRegistry"] + "cedar-frontend-2.9.3.tgz", retained["tarball"])
+            self.assertEqual(f"published to {task['retainedRegistry']}\n",
+                             Path(retained["log"]).read_text(encoding="utf-8"))
+
+    def test_a_recorded_npm_release_without_its_retained_copy_does_not_verify(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "npm-release-frontend.log"
+            log.write_text("published\n", encoding="utf-8")
+            record = {**self.RETAINED_TASK, "log": str(log),
+                      "logSha256": hashlib.sha256(b"published\n").hexdigest()}
+            publisher = ReleaseArtifactPublisher(ReleaseState(root=Path(directory) / "state"))
+            with patch.object(publisher, "_verify_workspace"), \
+                    patch.object(publisher, "_verify_npm_package"):
+                with self.assertRaisesRegex(ReleaseError, "no retained copy"):
+                    publisher.verify_record({}, record, tasks=[self.RETAINED_TASK])
+
     def test_npm_pack_is_archived_from_the_integrated_commit_with_git_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
@@ -3983,8 +4170,22 @@ class ReleasePreflightTest(unittest.TestCase):
         })
         findings = self._preflight(commands=commands).check_npm_authorization()
 
-        self.assertEqual(1, len(findings))
-        self.assertIn("npm login", findings[0].remedy)
+        # A release publishes to the train registry and to the retained one, so both must answer.
+        self.assertEqual(
+            [f"npm login --registry {NEXUS_NPM_REGISTRY}",
+             f"npm login --registry {NEXUS_NPM_RETAINED_REGISTRY}"],
+            [finding.remedy for finding in findings])
+
+    def test_npm_needs_an_identity_for_the_retained_registry_too(self):
+        def capture(args, **_kwargs):
+            if args[-1] == NEXUS_NPM_RETAINED_REGISTRY:
+                return 1, "", "ENEEDAUTH"
+            return 0, "", ""
+
+        preflight_check = self._preflight(commands=FakeCommands({}))
+        with patch.object(preflight_check, "_capture", side_effect=capture):
+            [finding] = preflight_check.check_npm_authorization()
+        self.assertIn(NEXUS_NPM_RETAINED_REGISTRY, finding.message)
 
     def test_a_remote_that_refuses_main_is_found_before_the_build(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -4074,6 +4275,9 @@ class ReleasePreflightTest(unittest.TestCase):
             manifest["dockerFrontendDefaults"] = {"nextDevelopment": {
                 "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.3-dev.202608262030.gmain.p4",
                 "CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202608262030.gwork.p4",
+            }, "release": {
+                # Only the release tree names a registry, so it is checked too.
+                "CEDAR_NPM_REGISTRY": NEXUS_NPM_RETAINED_REGISTRY.rstrip("/"),
             }}
             script = (
                 "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
@@ -4092,6 +4296,8 @@ class ReleasePreflightTest(unittest.TestCase):
         messages = [finding.message for finding in findings]
         self.assertTrue(any(
             "does not declare CEDAR_WORKSPACE_NPM_VERSION" in message for message in messages))
+        self.assertTrue(any(
+            "does not declare CEDAR_NPM_REGISTRY" in message for message in messages))
         self.assertFalse(any("CEDAR_TEMPLATE_EDITOR_NPM_VERSION" in message for message in messages))
         self.assertFalse(any("does not contain" in message for message in messages))
 
@@ -4233,22 +4439,39 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertTrue(findings[0].fatal)
         self.assertIn("still in_progress", findings[0].message)
 
-    def test_a_cancelled_run_is_advisory_rather_than_blocking(self):
-        """Cancelling is something done to a workflow, not something learned about the code."""
+    def test_a_commit_whose_only_run_was_cancelled_blocks_until_it_is_rerun(self):
+        """Cancelling is something done to a workflow, so a cancelled run answers nothing."""
         commands = FakeCommands({
             ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
             ("gh", "api"): FakeCompletedProcess(
                 stdout=json.dumps({"workflow_runs": [{
                     "conclusion": "cancelled", "status": "completed", "event": "push", "head_branch": "develop", "head_sha": "a" * 40,
-                    "id": 33226052977, "name": "Build train",
+                    "id": 33226052977, "name": "CI",
                 }]})),
         })
         findings = self._preflight(
             commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
 
         self.assertEqual(1, len(findings))
-        self.assertFalse(findings[0].fatal)
+        self.assertTrue(findings[0].fatal)
         self.assertIn("was cancelled", findings[0].message)
+        self.assertIn("rerun", findings[0].remedy)
+
+    def test_a_cancelled_run_gives_way_to_the_newest_run_that_finished(self):
+        commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/ci.yml"),
+            ("gh", "api"): FakeCompletedProcess(
+                stdout=json.dumps({"workflow_runs": [
+                    {"conclusion": "cancelled", "status": "completed", "event": "push", "head_branch": "develop",
+                     "head_sha": "a" * 40, "id": 33226052978, "name": "CI"},
+                    {"conclusion": "success", "status": "completed", "event": "push", "head_branch": "develop",
+                     "head_sha": "a" * 40, "id": 33226052977, "name": "CI"},
+                ]})),
+        })
+        findings = self._preflight(
+            commands=commands, manifest=self._release_of("repo-one")).check_develop_is_green()
+
+        self.assertEqual([], findings)
 
     def test_a_red_develop_blocks_the_release(self):
         manifest = self._release_of("repo-one")

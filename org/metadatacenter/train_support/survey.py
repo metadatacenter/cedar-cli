@@ -6,6 +6,7 @@ from org.metadatacenter.github_ci import (
     GREEN_CONCLUSIONS,
     GithubCIProbeError,
     develop_runs,
+    finished_runs,
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
@@ -240,11 +241,13 @@ def source_ci_survey(source=None, reporter=None):
         except GithubCIProbeError as error:
             verdicts.append(_policy_component.SourceCIVerdict(repository, revision, '', 'error', str(error)))
             return verdicts
-        runs = develop_runs(probe.runs, revision)
+        ran = develop_runs(probe.runs, revision)
+        runs = finished_runs(ran)
         if not runs:
             verdicts.append(_policy_component.SourceCIVerdict(
                 repository, revision, '', 'missing',
-                f'no CI run for {revision[:8]} after bounded indexing grace'))
+                f'every CI run for {revision[:8]} was cancelled; rerun it' if ran
+                else f'no CI run for {revision[:8]} after bounded indexing grace'))
             return verdicts
         for name, record in latest_runs_by_name(runs).items():
             status = record.get('status')

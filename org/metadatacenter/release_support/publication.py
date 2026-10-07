@@ -152,6 +152,7 @@ class ReleaseArtifactPublisher:
                 "variant": "release",
                 "version": manifest["releaseVersion"],
                 "registry": npm.get("registry"),
+                "retainedRegistry": npm.get("retainedRegistry"),
                 "workspace": str(release_workspace),
                 "expectedCommit": integration["main"]["commit"],
                 "expectedTree": integration["main"]["tree"],
@@ -715,15 +716,44 @@ class ReleaseArtifactPublisher:
 
     def _publish_npm(self, task: dict) -> dict:
         tarball, evidence = self._pack_npm(task)
-        existing = self._npm_version_record(task["registry"], evidence["name"], task["version"])
         attempt = Path(task["workspace"]).parent
         log = attempt / "publication-logs" / f"{task['id'].replace(':', '-')}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
+        self._publish_npm_tarball(task, evidence, tarball, task["registry"], log)
+        verified = self._verify_npm_package(task, evidence, wait=True)
+        record = {
+            **task,
+            **verified,
+            "log": str(log),
+            "logSha256": _file_sha256(log),
+            "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        retained = task.get("retainedRegistry")
+        if retained:
+            # The same packed bytes again, to the registry no cleanup policy touches: the train
+            # registry deletes a release thirty days after upload.
+            retained_log = log.with_name(f"{log.stem}-retained.log")
+            self._publish_npm_tarball(task, evidence, tarball, retained, retained_log)
+            copy = self._verify_npm_package({**task, "registry": retained}, evidence, wait=True)
+            record["retained"] = {
+                "registry": retained,
+                "tarball": copy["tarball"],
+                "log": str(retained_log),
+                "logSha256": _file_sha256(retained_log),
+                "verifiedAt": copy["verifiedAt"],
+            }
+        return record
+
+    def _publish_npm_tarball(
+        self, task: dict, evidence: dict, tarball: Path, registry: str, log: Path,
+    ) -> None:
+        """Publish one packed tarball to one registry, unless that registry already holds it."""
+        existing = self._npm_version_record(registry, evidence["name"], task["version"])
         output = "already present; publication skipped"
         if existing is None:
             command = [
                 "npm", "publish", str(tarball), "--tag", "latest",
-                "--registry", task["registry"], "--loglevel=notice",
+                "--registry", registry, "--loglevel=notice",
             ]
             npm_environment = dict(self.environment)
             npm_environment["npm_config_cache"] = str(
@@ -753,14 +783,6 @@ class ReleaseArtifactPublisher:
                 )
         if existing is not None:
             log.write_text(output + "\n", encoding="utf-8")
-        verified = self._verify_npm_package(task, evidence, wait=True)
-        return {
-            **task,
-            **verified,
-            "log": str(log),
-            "logSha256": _file_sha256(log),
-            "publishedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
-        }
 
     def _deploy_snapshot(self, manifest: dict, task: dict) -> dict:
         self._verify_workspace(task)
@@ -818,6 +840,17 @@ class ReleaseArtifactPublisher:
             log = Path(record.get("log", ""))
             if not log.is_file() or _file_sha256(log) != record.get("logSha256"):
                 raise ReleaseError(f"recorded npm publication log changed for {task['id']}")
+            if task.get("retainedRegistry"):
+                retained = record.get("retained")
+                if (not isinstance(retained, dict)
+                        or retained.get("registry") != task["retainedRegistry"]):
+                    raise ReleaseError(
+                        f"recorded npm publication has no retained copy for {task['id']}")
+                self._verify_npm_package(
+                    {**task, "registry": task["retainedRegistry"]}, record, wait=False)
+                retained_log = Path(retained.get("log", ""))
+                if not retained_log.is_file() or _file_sha256(retained_log) != retained.get("logSha256"):
+                    raise ReleaseError(f"recorded retained npm publication log changed for {task['id']}")
         elif task["kind"] == "maven-snapshot-deploy":
             self._verify_snapshot_workspace(manifest, task)
             log = Path(record.get("log", ""))

@@ -157,12 +157,13 @@ class DockerImages:
         Every `export <NAME>_VERSION=` in the manifest other than the CEDAR image version itself,
         so adding a server here is a one-line change to the manifest and nothing else. The
         Dockerfiles declare these as build arguments with no default, so a version missing here
-        fails the build rather than being silently substituted.
+        fails the build rather than being silently substituted. The npm registry the frontend
+        images install from travels the same way, because a release tree names a different one.
         """
         environment = invocation_environment() if environment is None else environment
         with open(cls._manifest_path(), encoding='utf-8') as manifest:
             text = manifest.read()
-        found = re.findall(r'^export ([A-Z0-9_]+(?:_VERSION|_SHA256))=(\S+)', text, re.M)
+        found = re.findall(r'^export ([A-Z0-9_]+(?:_VERSION|_SHA256|_REGISTRY))=(\S+)', text, re.M)
         return {
             name: environment.get(name, value)
             for name, value in found
