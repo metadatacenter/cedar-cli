@@ -158,6 +158,14 @@ repository concurrency stays at two because each repository also spends its own 
 budget. An explicit `--jobs N` sets both to N. Options belong before the build target. Command timings and task results
 are saved to `$CEDAR_HOME/.cedar/build-reports/`, including failures.
 
+`cedarcli test cee-demos` always lints, tests and builds the Angular, React and Ember
+consumer demos in isolated copies. It tests their checked-out CEE pins by default;
+`--cee-package /absolute/path/to/staged-package-or.tgz` checks a candidate instead.
+Everyday frontend builds exclude these demos from the main graph and run a conditional
+gate against the just-built CEE only when embedding API/packaging, consumer pins or
+demo inputs change (or no passing evidence exists). Explicit checks and CEE release
+checks always run. Trains keep all three demos in their verification inventory.
+
 `cedarcli test e2e --rest-workers 4` runs up to four independent REST smoke suites
 concurrently, followed by the browser smoke. The REST default is two workers;
 `--rest-workers 1` restores serial suite execution. Global-state suites stay exclusive,

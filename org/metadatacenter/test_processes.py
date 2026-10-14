@@ -1,6 +1,8 @@
 import os
 import signal
 import time
+from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -11,6 +13,19 @@ from org.metadatacenter.util.BuildSafety import embedded_mongo_processes
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
+
+
+@app.command("cee-demos")
+def cee_demos(cee_package: Optional[Path] = typer.Option(
+        None, help="Test a staged CEE package directory or tarball; default tests the demos' checked-out pins.")):
+    """Always lint, test and build the Angular, React and Ember CEE demos in isolated copies."""
+    from org.metadatacenter.cee_demos import run_demos
+    from org.metadatacenter.util.BuildSafety import BuildSafetyError
+    try:
+        raise typer.Exit(run_demos(cee_package))
+    except BuildSafetyError as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(1) from error
 
 
 @app.command("e2e")

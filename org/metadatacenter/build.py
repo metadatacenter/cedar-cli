@@ -211,6 +211,8 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.frontends(plan)
     selection = execute_build(plan, dry_run, dump_plan, frontend_only=True)
     if not dry_run and not dump_plan:
+        from org.metadatacenter.cee_demos import check_selection
+        check_selection(selection)
         reactor.activate_runtime(Util.cedar_home, selection)
         console.print(f"Reactor build evidence: {reactor.store_root(Util.cedar_home) / 'builds' / (selection.evidence + '.json')}")
         console.print("Restarting local frontends with this reactor's exact component selection.")
@@ -271,7 +273,10 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
-    execute_build(plan, dry_run, dump_plan)
+    selection = execute_build(plan, dry_run, dump_plan)
+    if tests and not dry_run and not dump_plan:
+        from org.metadatacenter.cee_demos import check_selection
+        check_selection(selection)
 
 
 @app.command("diagnostics")

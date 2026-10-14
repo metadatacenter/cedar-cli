@@ -47,7 +47,8 @@ class BuildPlanner(Planner):
         plan.add_task(
             "Build frontends",
             TaskType.BUILD,
-            GlobalContext.repos.get_frontends(),
+            [repo for repo in GlobalContext.repos.get_frontends()
+             if repo.name != 'cedar-component-demo'],
             parameters={"force_frontend_build": True},
         )
         if not verification:
