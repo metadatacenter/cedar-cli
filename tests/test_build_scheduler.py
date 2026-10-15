@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 from contextvars import ContextVar
 
-from org.metadatacenter.build_scheduler import dependencies, run_graph, _cancel
+from org.metadatacenter.build_scheduler import dependencies, package_ready, run_graph, _cancel
 from org.metadatacenter.util.ProcessRunner import run_process
 
 
@@ -55,6 +55,45 @@ class SchedulerTest(unittest.TestCase):
         results = run_graph([0,1], {0:set(),1:set()}, lambda i: seen.append(i) or 9, 1)
         self.assertEqual([0], seen)
         self.assertEqual(125, results[1])
+
+    def test_a_consumer_starts_once_its_producer_has_packaged(self):
+        consumer_started = threading.Event()
+        def run(i):
+            if i == 0:
+                package_ready()
+                self.assertTrue(consumer_started.wait(timeout=5), "the consumer waited for the checks")
+            else:
+                consumer_started.set()
+            return 0
+        states = []
+        results = run_graph([0, 1], {0: set(), 1: {0}}, run, 2,
+                            on_status=lambda i, state: states.append((i, state)))
+        self.assertEqual({0: 0, 1: 0}, results)
+        self.assertLess(states.index((0, 'packaged')), states.index((1, 'running')))
+        self.assertLess(states.index((1, 'running')), states.index((0, 'passed')))
+
+    def test_checks_that_fail_after_packaging_block_the_consumers_still_waiting(self):
+        first_consumer_started = threading.Event()
+        producer_failed = threading.Event()
+        def run(i):
+            if i == 0:
+                package_ready()
+                self.assertTrue(first_consumer_started.wait(timeout=5))
+                return 7
+            first_consumer_started.set()
+            # Hold the only free slot until the failure is recorded, so the second consumer is
+            # still waiting for it then.
+            self.assertTrue(producer_failed.wait(timeout=5))
+            return 0
+        def status(i, state):
+            if (i, state) == (0, 'failed'):
+                producer_failed.set()
+        results = run_graph([0, 1, 2], {0: set(), 1: {0}, 2: {0}}, run, 2, fail_fast=False,
+                            on_status=status)
+        self.assertEqual({0: 7, 1: 0, 2: 125}, results)
+
+    def test_package_ready_outside_a_scheduled_build_does_nothing(self):
+        package_ready()
 
     def test_nested_alias_dependency_and_exclusive_barrier(self):
         with tempfile.TemporaryDirectory() as directory:

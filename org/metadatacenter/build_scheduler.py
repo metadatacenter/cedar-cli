@@ -3,8 +3,9 @@
 Only isolated frontend tasks overlap. Other commands remain exclusive barriers in
 plan order. Context copies retain this invocation's artifact selection and evidence.
 """
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context, ContextVar
+import queue
 from datetime import datetime, timezone
 import json
 import os
@@ -22,6 +23,18 @@ from org.metadatacenter.util.Util import Util
 
 from org.metadatacenter.util.InvocationContext import process_cancellation as _cancel
 _timings = ContextVar('build_timings', default=None)
+_package_ready = ContextVar('build_package_ready', default=None)
+
+
+def package_ready():
+    """Tell the scheduler that the running task has packaged what it publishes.
+
+    Its consumers may then start while its own checks continue. Outside a scheduled build this
+    does nothing.
+    """
+    notify = _package_ready.get()
+    if notify is not None:
+        notify()
 
 
 def record_timing(repo, command, started, code, stages=()):
@@ -103,8 +116,22 @@ def dependencies(tasks):
 
 
 def run_graph(nodes, edges, run, jobs, *, fail_fast=True, on_status=lambda *_: None):
-    """Drain running jobs on failure; never launch a failed producer's consumers."""
-    remaining, running, results = set(range(len(nodes))), {}, {}
+    """Drain running jobs on failure; never launch a failed producer's consumers.
+
+    A consumer starts once every producer has either finished or called `package_ready`. A
+    producer that packages early still occupies its slot until its checks finish, and if they fail
+    its waiting consumers are blocked as if it had failed before packaging.
+    """
+    remaining, running, results, packaged = set(range(len(nodes))), {}, {}, set()
+    events = queue.SimpleQueue()
+
+    def satisfied(producer):
+        return results.get(producer) == 0 or (producer in packaged and producer not in results)
+
+    def body(i):
+        _package_ready.set(lambda: events.put(('packaged', i)))
+        return run(nodes[i])
+
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         try:
             while remaining or running:
@@ -118,11 +145,13 @@ def run_graph(nodes, edges, run, jobs, *, fail_fast=True, on_status=lambda *_: N
                     for i in sorted(remaining.copy()):
                         if len(running) >= jobs:
                             break
-                        if not edges[i] <= results.keys():
+                        if not all(satisfied(producer) for producer in edges[i]):
                             continue
                         remaining.remove(i)
                         on_status(i, 'running')
-                        running[pool.submit(copy_context().run, run, nodes[i])] = i
+                        future = pool.submit(copy_context().run, body, i)
+                        running[future] = i
+                        future.add_done_callback(lambda _future, i=i: events.put(('done', i)))
                 if not running:
                     if remaining:
                         if failed and fail_fast:
@@ -134,11 +163,15 @@ def run_graph(nodes, edges, run, jobs, *, fail_fast=True, on_status=lambda *_: N
                             continue
                         raise RuntimeError('No runnable build tasks')
                     break
-                done, _ = wait(running, return_when=FIRST_COMPLETED)
-                for future in done:
-                    i = running.pop(future)
-                    results[i] = future.result() or 0
-                    on_status(i, 'passed' if results[i] == 0 else 'failed')
+                kind, i = events.get()
+                if kind == 'packaged':
+                    packaged.add(i)
+                    on_status(i, 'packaged')
+                    continue
+                future = next(future for future, index in running.items() if index == i)
+                running.pop(future)
+                results[i] = future.result() or 0
+                on_status(i, 'passed' if results[i] == 0 else 'failed')
         except BaseException:
             event = _cancel.get()
             if event is not None:
@@ -182,9 +215,15 @@ def execute(plan, jobs):
                   f'{current_context().settings.build_workers} workers per frontend.')
     def run(task):
         return executors[TaskType.SHELL].execute(task, BuildProgress(console, task.repo.name), False)
+    # Seconds from the start of the build at which each task reached each state, so a report shows
+    # what waited on what rather than only how long each command took.
+    timeline = {}
+    def status(i, state):
+        timeline.setdefault(i, {})[state] = round(time.monotonic() - start, 3)
+        console.print(f'{state}: {tasks[i].repo.get_fqn()}', markup=False)
     try:
         results = run_graph(tasks, edges, run, jobs, fail_fast=GlobalContext.fail_on_error(),
-                            on_status=lambda i, state: console.print(f'{state}: {tasks[i].repo.get_fqn()}', markup=False))
+                            on_status=status)
         if any(results.values()):
             raise SystemExit(1)
     finally:
@@ -193,7 +232,8 @@ def execute(plan, jobs):
             'workers': current_context().settings.build_workers,
             'seconds': round(time.monotonic() - start, 3), 'commands': records,
             'tasks': [{'repository': t.repo.get_fqn(), 'exitCode': results.get(i),
-                       'dependencies': [tasks[d].repo.get_fqn() for d in sorted(edges[i])]}
+                       'dependencies': [tasks[d].repo.get_fqn() for d in sorted(edges[i])],
+                       'timeline': timeline.get(i, {})}
                       for i, t in enumerate(tasks)]}, indent=2) + '\n')
         console.print(f'Build timings: {report}', markup=False)
         _timings.reset(timing_token)

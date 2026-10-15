@@ -10,7 +10,11 @@ from rich.style import Style
 
 from org.metadatacenter import npm_install, reactor, reactor_evidence
 from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
-from org.metadatacenter.build_scheduler import record_dropped_optional_dependencies, record_timing
+from org.metadatacenter.build_scheduler import (
+    package_ready,
+    record_dropped_optional_dependencies,
+    record_timing,
+)
 from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
@@ -90,9 +94,9 @@ class ShellTaskExecutor(TaskExecutor):
                                             'VITEST_MAX_WORKERS': str(workers)})
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
-                        code = self._execute_commands(
-                            task, repo, commands_to_execute, str(isolated_cwd),
-                            job_progress, environment,
+                        code = self._execute_packaged_commands(
+                            task, repo, commands_to_execute, isolated_cwd, job_progress,
+                            environment, parameter("package_ready_after"), cedar_home,
                         )
                         if code == 0:
                             reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
@@ -118,6 +122,31 @@ class ShellTaskExecutor(TaskExecutor):
         else:
             time.sleep(0.1)
         return 0
+
+    def _execute_packaged_commands(self, task, repo, commands, build_root, job_progress, environment,
+                                   ready_after, cedar_home):
+        """Run a reactor build's commands, offering its package once the first `ready_after` pass.
+
+        A surface with a package phase stores its package provisionally at that point and tells the
+        scheduler, so consumers can start while this build's own checks run on. Without one, the
+        commands run as a single list.
+        """
+        if not ready_after:
+            return self._execute_commands(task, repo, commands, str(build_root), job_progress, environment)
+        code = self._execute_commands(
+            task, repo, commands[:ready_after], str(build_root), job_progress, environment)
+        if code == 0:
+            stored = reactor.publish(repo, build_root, cedar_home, environment, provisional=True)
+            if stored:
+                job_progress.print(
+                    f"Reactor: packaged {stored} for this build's consumers; its checks continue",
+                    markup=False)
+                package_ready()
+        elif GlobalContext.fail_on_error():
+            return code
+        rest = self._execute_commands(
+            task, repo, commands[ready_after:], str(build_root), job_progress, environment)
+        return code or rest
 
     def _execute_commands(self, task, repo, commands, cwd, job_progress, environment):
         first_failure = 0
