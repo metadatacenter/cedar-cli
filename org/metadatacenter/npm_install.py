@@ -2,8 +2,8 @@
 
 When an optional package fails to install, npm discards the error, logs one verbose line, and
 leaves the package on disk until the lifecycle scripts have run. It deletes it afterwards. The
-platform binaries that esbuild and rolldown ship are optional packages, and a fresh build cache
-downloads them every time. When a download breaks mid-transfer, the outcome depends on the
+platform binaries that esbuild and rolldown ship are optional packages, which a build downloads
+whenever its npm cache lacks them. When a download breaks mid-transfer, the outcome depends on the
 package. esbuild's postinstall executes the truncated binary and fails with EBADMACHO, reported
 as "Unknown system error -88". rolldown has no install script, so the install succeeds and the
 build fails later with "Cannot find native binding".
@@ -29,22 +29,30 @@ def is_install(command: str) -> bool:
     return tokens[:1] == ["npm"] and "run" not in tokens and bool({"ci", "install"} & set(tokens))
 
 
-def log_directory(cache) -> Path | None:
-    """Where npm writes its debug logs when `npm_config_cache` is `cache`."""
+def log_directory(environment) -> Path | None:
+    """Where npm writes its debug logs under `environment`, or None when it sets neither location.
+
+    `npm_config_logs_dir` names the directory. Without it npm writes them in its cache, under
+    `_logs`, where any other install sharing that cache writes them too.
+    """
+    environment = environment or {}
+    if environment.get("npm_config_logs_dir"):
+        return Path(environment["npm_config_logs_dir"])
+    cache = environment.get("npm_config_cache")
     return Path(cache) / "_logs" if cache else None
 
 
-def debug_logs(cache) -> set[Path]:
-    directory = log_directory(cache)
+def debug_logs(directory) -> set[Path]:
+    """The debug logs in `directory`, a directory `log_directory` returned."""
     if directory is None or directory.is_symlink() or not directory.is_dir():
         return set()
     return {path for path in directory.glob("*-debug-*.log")
             if path.is_file() and not path.is_symlink()}
 
 
-def dropped_optional_dependencies(cache, before: set[Path]) -> list[str]:
-    """The packages that npm logs written since `before` report as dropped, by package name."""
-    return _dropped_in(sorted(debug_logs(cache) - before))
+def dropped_optional_dependencies(directory, before: set[Path]) -> list[str]:
+    """The packages that logs written to `directory` since `before` report as dropped, by name."""
+    return _dropped_in(sorted(debug_logs(directory) - before))
 
 
 def _dropped_in(logs) -> list[str]:
@@ -73,7 +81,7 @@ def dropped_message(dropped: list[str], again: bool) -> str:
 def install(run, command: list[str], note, failure=RuntimeError) -> None:
     """Run an npm install, once more if npm dropped an optional dependency, and fail if it drops one again.
 
-    The build executor reads the debug logs in the cache an isolated build gives npm. An install
+    The build executor reads the debug logs in the directory an isolated build gives npm. An install
     elsewhere shares the user's cache with whatever else npm is doing, so each attempt here writes
     its debug log to a directory of its own and the check reads that log alone.
 

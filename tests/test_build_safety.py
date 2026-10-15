@@ -12,6 +12,7 @@ from org.metadatacenter.util.BuildSafety import (
     capture_estate_state,
     changed_repositories,
     embedded_mongo_processes,
+    frontend_npm_cache,
     is_test_bearing_maven_command,
     isolated_frontend_workspace,
     require_no_frontend_runtime_collision,
@@ -38,7 +39,7 @@ class BuildSafetyTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(repo), "commit", "--quiet", "-m", "fixture"], check=True)
         return repo
 
-    def test_isolated_build_has_private_cache_and_preserves_preexisting_diff(self):
+    def test_isolated_build_shares_the_npm_cache_and_preserves_preexisting_diff(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = self.repository(Path(directory))
             (repo / "source.txt").write_text("developer change\n", encoding="utf-8")
@@ -52,13 +53,36 @@ class BuildSafetyTest(unittest.TestCase):
                     self.assertEqual("developer change\n", (workspace / "source.txt").read_text())
                     (workspace / "source.txt").write_text("generated\n", encoding="utf-8")
                     self.assertEqual("true", environment["CI"])
-                    self.assertTrue(environment["npm_config_cache"].startswith(str(workspace.parent)))
+                    self.assertEqual(str(Path(directory) / ".cedar" / "frontend-npm-cache"),
+                                     environment["npm_config_cache"])
+                    self.assertTrue(environment["npm_config_logs_dir"].startswith(str(workspace.parent)))
                     self.assertEqual(
                         str(workspace / "node_modules" / ".bin"),
                         environment["PATH"].split(os.pathsep)[0],
                     )
                     self.assertEqual([(42, "ng serve")], collisions)
             self.assertEqual("developer change\n", (repo / "source.txt").read_text())
+
+    def test_successive_builds_share_one_npm_cache_and_keep_their_own_logs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.repository(Path(directory))
+            seen = []
+            with patch('org.metadatacenter.util.BuildSafety.invocation_environment',
+                       return_value={**os.environ, 'CEDAR_HOME': directory}), patch(
+                "org.metadatacenter.util.BuildSafety.frontend_runtime_collisions", return_value=[],
+            ):
+                for _ in range(2):
+                    with isolated_frontend_workspace(repo) as (_workspace, environment, _collisions):
+                        seen.append((environment["npm_config_cache"], environment["npm_config_logs_dir"]))
+                        (Path(environment["npm_config_cache"]) / "entry").write_text("downloaded\n")
+            (cache_one, logs_one), (cache_two, logs_two) = seen
+            self.assertEqual(cache_one, cache_two)
+            self.assertNotEqual(logs_one, logs_two)
+            self.assertEqual("downloaded\n", (Path(cache_one) / "entry").read_text(),
+                             "the cache outlives the builds that filled it")
+
+    def test_a_build_without_cedar_home_keeps_a_private_npm_cache(self):
+        self.assertEqual(Path("/w/npm-cache"), frontend_npm_cache({}, Path("/w")))
 
     def test_estate_snapshot_detects_only_changes_after_the_baseline(self):
         with tempfile.TemporaryDirectory() as directory:

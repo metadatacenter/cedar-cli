@@ -65,7 +65,7 @@ class ShellTaskExecutor(TaskExecutor):
                     with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions), \
                             failure_diagnostics(
                                 isolated_cwd, Util.cedar_home, job_progress.print,
-                                npm_logs=npm_install.log_directory(environment.get('npm_config_cache')),
+                                npm_logs=npm_install.log_directory(environment),
                             ) as outcome:
                         environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(isolated_cwd / COMMAND_LOG)
                         if collisions:
@@ -121,8 +121,8 @@ class ShellTaskExecutor(TaskExecutor):
 
     def _execute_commands(self, task, repo, commands, cwd, job_progress, environment):
         first_failure = 0
-        # Only an isolated build sets npm's cache, which is where npm writes its debug logs.
-        npm_cache = (environment or {}).get('npm_config_cache')
+        # Only an isolated build tells npm where to write its debug logs.
+        npm_logs = npm_install.log_directory(environment)
         for command in commands:
             guarded_maven = is_test_bearing_maven_command(command)
             if guarded_maven:
@@ -131,9 +131,9 @@ class ShellTaskExecutor(TaskExecutor):
             workspace = (executable_build_workspace(environment, java=True)
                          if is_maven_command(command) else nullcontext((None, environment)))
             with workspace as (_, child_environment):
-                if npm_cache and npm_install.is_install(command):
+                if npm_logs and npm_install.is_install(command):
                     return_code = self._execute_npm_install(
-                        task, repo, command, cwd, job_progress, child_environment, npm_cache)
+                        task, repo, command, cwd, job_progress, child_environment, npm_logs)
                 else:
                     _, return_code = self.execute_shell_command(
                         task, repo, command, cwd, job_progress, environment=child_environment,
@@ -148,7 +148,7 @@ class ShellTaskExecutor(TaskExecutor):
                     return return_code
         return first_failure
 
-    def _execute_npm_install(self, task, repo, command, cwd, job_progress, environment, npm_cache):
+    def _execute_npm_install(self, task, repo, command, cwd, job_progress, environment, npm_logs):
         """Install once more if npm dropped an optional dependency, and fail if it does so again.
 
         npm_install explains why such an install cannot be trusted whatever its exit code. A second
@@ -156,10 +156,10 @@ class ShellTaskExecutor(TaskExecutor):
         removes what it added, and running a successful one again adds just the package it dropped.
         """
         for attempt in (1, 2):
-            before = npm_install.debug_logs(npm_cache)
+            before = npm_install.debug_logs(npm_logs)
             _, return_code = self.execute_shell_command(
                 task, repo, command, cwd, job_progress, environment=environment)
-            dropped = npm_install.dropped_optional_dependencies(npm_cache, before)
+            dropped = npm_install.dropped_optional_dependencies(npm_logs, before)
             if not dropped:
                 return return_code
             record_dropped_optional_dependencies(repo.name, command, dropped)
