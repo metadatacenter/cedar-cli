@@ -205,10 +205,14 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("frontends")
 def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
-              dump_plan: bool = typer.Option(False, help="Dump plan")):
+              dump_plan: bool = typer.Option(False, help="Dump plan"),
+              reuse: bool = typer.Option(
+                  True, "--reuse/--no-reuse",
+                  help="Take a repository's earlier passing result when everything it reads is "
+                       "unchanged. --no-reuse runs every repository's checks again.")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
-    BuildPlanner.frontends(plan)
+    BuildPlanner.frontends(plan, reuse=reuse)
     selection = execute_build(plan, dry_run, dump_plan, frontend_only=True)
     if not dry_run and not dump_plan:
         from org.metadatacenter.cee_demos import check_selection

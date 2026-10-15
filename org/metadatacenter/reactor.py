@@ -258,6 +258,44 @@ def publish(repo, build_root, cedar_home, environment=None, *, provisional=False
     return name
 
 
+def reuse(repo, build_root, cedar_home, digest) -> str | None:
+    """Accept the package an earlier build stored and verified for exactly these inputs.
+
+    The package joins this build as if the repository had just published it, so it is advertised
+    under the same rule: only once every producer it resolved from this build has been.
+    """
+    if not repo.published_package_path:
+        return None
+    store = store_root(cedar_home).resolve()
+    artifact = store / "artifacts" / f"{digest}.tgz"
+    try:
+        if hashlib.sha256(artifact.read_bytes()).hexdigest() != digest:
+            raise ValueError(f"artifact {artifact} no longer has its digest")
+        (store / "refs").mkdir(parents=True, exist_ok=True)
+        build = _build(cedar_home)
+        if build is None:
+            _advertise(store, repo.name, digest)
+            return repo.name
+        with build.lock:
+            build.available[repo.name] = artifact
+            build.pending.discard(repo.name)
+            build.deferred.append(
+                (repo.name, digest, build.producers.get(str(Path(build_root).resolve()), set())))
+            _advertise_settled(build, store)
+    except (OSError, ValueError) as error:
+        raise ReactorError(f"Cannot reuse {repo.name}: {error}") from error
+    return repo.name
+
+
+def selected_digest(repo, cedar_home) -> str | None:
+    """The digest of the package this build selected for `repo`, if it publishes one."""
+    if not repo.published_package_path:
+        return None
+    available, _pending = _state(cedar_home)
+    artifact = available.get(repo.name)
+    return artifact.stem if artifact is not None else None
+
+
 def _advertise(store, name, digest):
     with tempfile.TemporaryDirectory(prefix="ref-", dir=store) as temporary:
         ref = Path(temporary) / "reference.json"

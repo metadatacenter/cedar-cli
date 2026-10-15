@@ -74,7 +74,8 @@ def begin(source):
     return identity
 
 
-def record(source, copy, identity, commands, checks=()):
+def record(source, copy, identity, commands, checks=(), reused=None):
+    """Record what a reactor task built from; `reused` names the earlier passing result it took."""
     if identity is None:
         return
     if source_identity(source) != identity:
@@ -98,11 +99,14 @@ def record(source, copy, identity, commands, checks=()):
                         if isinstance(spec, str) and spec.startswith('file:') and spec.endswith('.tgz'):
                             edges.append({'manifest': relative, 'section': section,
                                           'dependency': dependency, 'sha256': Path(spec[5:]).stem})
-    _build.get()[str(Path(source).resolve())] = {
+    entry = {
         'source': identity, 'commands': list(commands), 'dependencies': edges,
         'testDependencies': list(checks),
         'resolvedManifests': manifests,
     }
+    if reused is not None:
+        entry['reused'] = {'fingerprint': reused['fingerprint'], 'passedAt': reused['passedAt']}
+    _build.get()[str(Path(source).resolve())] = entry
 
 
 def finish(home, packages):

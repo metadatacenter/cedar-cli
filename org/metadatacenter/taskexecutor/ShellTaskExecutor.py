@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.progress import Progress
 from rich.style import Style
 
-from org.metadatacenter import npm_install, reactor, reactor_evidence
+from org.metadatacenter import npm_install, reactor, reactor_evidence, reactor_results
 from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
 from org.metadatacenter.build_scheduler import (
     package_ready,
@@ -94,15 +94,35 @@ class ShellTaskExecutor(TaskExecutor):
                                             'VITEST_MAX_WORKERS': str(workers)})
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
+                        ready_after = parameter("package_ready_after")
+                        result = None
+                        if parameter("reuse_passing_result") is True and identity is not None:
+                            result = self._reusable(repo, isolated_cwd, identity, commands_to_execute,
+                                                    ready_after, checks, cedar_home, job_progress)
+                        if result is not None and result[2] is not None:
+                            key, _inputs, reused = result
+                            started = time.monotonic()
+                            reactor.reuse(repo, isolated_cwd, cedar_home, reused['package'])
+                            reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute,
+                                                    checks, reused=reused)
+                            record_timing(repo.name, f"reuse {key[:12]}", started, 0)
+                            job_progress.print(
+                                f"Reactor: inputs unchanged since the result that passed at "
+                                f"{reused['passedAt']} ({key[:12]}); reusing it", markup=False)
+                            outcome['exitCode'] = 0
+                            return 0
                         code = self._execute_packaged_commands(
                             task, repo, commands_to_execute, isolated_cwd, job_progress,
-                            environment, parameter("package_ready_after"), cedar_home,
+                            environment, ready_after, cedar_home,
                         )
                         if code == 0:
                             reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
                             stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)
+                            if result is not None:
+                                reactor_results.save(cedar_home, result[0], result[1],
+                                                     reactor.selected_digest(repo, cedar_home))
                         outcome['exitCode'] = code
                         return code
                 if parameter("in_place_frontend_build") is True:
@@ -122,6 +142,21 @@ class ShellTaskExecutor(TaskExecutor):
         else:
             time.sleep(0.1)
         return 0
+
+    @staticmethod
+    def _reusable(repo, build_root, identity, commands, ready_after, checks, cedar_home, job_progress):
+        """This task's fingerprint, its inputs, and the passing result recorded for them, if any.
+
+        A fingerprint that cannot be computed reuses nothing and records nothing, so the task
+        runs as it would without reuse.
+        """
+        try:
+            key, inputs = reactor_results.fingerprint(
+                repo, build_root, identity, commands, ready_after, checks, cedar_home)
+        except reactor_results.ResultError as error:
+            job_progress.print(f"Reactor: {error}; running the checks", markup=False)
+            return None
+        return key, inputs, reactor_results.lookup(cedar_home, key, repo)
 
     def _execute_packaged_commands(self, task, repo, commands, build_root, job_progress, environment,
                                    ready_after, cedar_home):

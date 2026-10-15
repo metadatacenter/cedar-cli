@@ -43,7 +43,7 @@ class BuildPlanner(Planner):
         )
 
     @staticmethod
-    def frontends(plan: Plan, *, verification: bool = True):
+    def frontends(plan: Plan, *, verification: bool = True, reuse: bool = False):
         plan.add_task(
             "Build frontends",
             TaskType.BUILD,
@@ -67,6 +67,8 @@ class BuildPlanner(Planner):
                         raise ValueError(f"Frontend {task.repo.name} declares a package phase but publishes no package")
                     # Its consumers may start once these commands pass, while its checks run on.
                     task.parameters["package_ready_after"] = check.package_ready_after
+                # A passing result recorded for exactly these inputs stands for running them again.
+                task.parameters["reuse_passing_result"] = reuse
             for child in task.tasks:
                 verify(child)
         verify(plan)
