@@ -11,6 +11,7 @@ import tempfile
 import dataclasses
 import inspect
 import re
+import shutil
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -2954,7 +2955,20 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
         ], check=True)
         return remote
 
-    def make_integrated_release(self, directory):
+    @staticmethod
+    def _integrator(state, cedar_home, remotes):
+        return ReleaseRemoteIntegrator(
+            state,
+            remote_resolver=lambda repository: str(remotes[repository]),
+            environment={
+                "CEDAR_HOME": str(cedar_home),
+                "CEDAR_RELEASE_GIT_NAME": "CEDAR Release Test",
+                "CEDAR_RELEASE_GIT_EMAIL": "release-test@metadatacenter.org",
+            },
+        )
+
+    @classmethod
+    def _build_integrated_release(cls, directory):
         state, creator, cedar_home, _release_workspace, _next_workspace = (
             ReleaseLocalRefsTest().make_release(directory)
         )
@@ -2965,50 +2979,84 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
         state.update_current_manifest({"phase": "snapshots-published"})
         manifest, _ = state.read_current_manifest()
         remotes = {
-            repository: self._bare_remote(
+            repository: cls._bare_remote(
                 Path(directory), repository, cedar_home / repository, revision,
             )
             for repository, revision in manifest["sourceRepositories"].items()
         }
-        integrator = ReleaseRemoteIntegrator(
-            state,
-            remote_resolver=lambda repository: str(remotes[repository]),
-            environment={
-                "CEDAR_HOME": str(cedar_home),
-                "CEDAR_RELEASE_GIT_NAME": "CEDAR Release Test",
-                "CEDAR_RELEASE_GIT_EMAIL": "release-test@metadatacenter.org",
-            },
+        completed = integrate_active_release(
+            state, cls._integrator(state, cedar_home, remotes),
         )
-        completed = integrate_active_release(state, integrator)
-        return state, integrator, remotes, completed
+        return cedar_home, remotes, completed
+
+    # The root of the module's one integrated release and what its build returned, kept
+    # from the first call of make_integrated_release until tearDownModule removes it.
+    _integrated_release = None
+
+    @classmethod
+    def make_integrated_release(cls):
+        """Return the module's integrated release, restored to exactly what its build left.
+
+        Building one runs two repositories through cloning, local release refs, bare remotes
+        and a full remote integration, all in git subprocesses, and takes seconds. The module
+        builds it once and keeps a pristine copy. The manifest records absolute paths, so each
+        call restores that copy at the path the build used and returns new state, integrator
+        and remotes objects over it. No test sees another test's changes to the ledger, the
+        workspaces, the remotes or the integrator.
+        """
+        if cls._integrated_release is None:
+            root = Path(tempfile.mkdtemp(prefix="cedar-integrated-release-"))
+            try:
+                cedar_home, remotes, completed = cls._build_integrated_release(root / "live")
+                (root / "live").rename(root / "pristine")
+            except BaseException:
+                shutil.rmtree(root, ignore_errors=True)
+                raise
+            cls._integrated_release = (root, cedar_home, remotes, completed)
+        root, cedar_home, remotes, completed = cls._integrated_release
+        live = root / "live"
+        if live.exists():
+            shutil.rmtree(live)
+        shutil.copytree(root / "pristine", live, symlinks=True)
+        state = ReleaseState(root=live / "state")
+        remotes = dict(remotes)
+        return (
+            state, cls._integrator(state, cedar_home, remotes), remotes,
+            copy.deepcopy(completed),
+        )
+
+    @classmethod
+    def remove_integrated_release(cls):
+        if cls._integrated_release is not None:
+            shutil.rmtree(cls._integrated_release[0], ignore_errors=True)
+            cls._integrated_release = None
 
     def test_integrates_exact_release_and_next_trees_into_main_and_develop(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state, _integrator, remotes, completed = self.make_integrated_release(directory)
+        state, _integrator, remotes, completed = self.make_integrated_release()
 
-            self.assertEqual("remote-integrated", completed["phase"])
-            records = completed["remoteIntegration"]["completedTasks"]
-            self.assertEqual({"repo-main", "cedar-workspace"}, set(records))
-            for repository, record in records.items():
-                main = ReleaseLocalRefsTest._git(
-                    remotes[repository], "rev-parse", "refs/heads/main",
-                )
-                develop = ReleaseLocalRefsTest._git(
-                    remotes[repository], "rev-parse", "refs/heads/develop",
-                )
-                self.assertEqual(record["main"]["commit"], main)
-                self.assertEqual(record["develop"]["commit"], develop)
-                main_tree = ReleaseLocalRefsTest._git(
-                    remotes[repository], "rev-parse", f"{main}^{{tree}}",
-                )
-                develop_tree = ReleaseLocalRefsTest._git(
-                    remotes[repository], "rev-parse", f"{develop}^{{tree}}",
-                )
-                self.assertEqual(record["main"]["tree"], main_tree)
-                self.assertEqual(record["develop"]["tree"], develop_tree)
+        self.assertEqual("remote-integrated", completed["phase"])
+        records = completed["remoteIntegration"]["completedTasks"]
+        self.assertEqual({"repo-main", "cedar-workspace"}, set(records))
+        for repository, record in records.items():
+            main = ReleaseLocalRefsTest._git(
+                remotes[repository], "rev-parse", "refs/heads/main",
+            )
+            develop = ReleaseLocalRefsTest._git(
+                remotes[repository], "rev-parse", "refs/heads/develop",
+            )
+            self.assertEqual(record["main"]["commit"], main)
+            self.assertEqual(record["develop"]["commit"], develop)
+            main_tree = ReleaseLocalRefsTest._git(
+                remotes[repository], "rev-parse", f"{main}^{{tree}}",
+            )
+            develop_tree = ReleaseLocalRefsTest._git(
+                remotes[repository], "rev-parse", f"{develop}^{{tree}}",
+            )
+            self.assertEqual(record["main"]["tree"], main_tree)
+            self.assertEqual(record["develop"]["tree"], develop_tree)
 
-            resumed = integrate_active_release(state, _integrator)
-            self.assertEqual(records, resumed["remoteIntegration"]["completedTasks"])
+        resumed = integrate_active_release(state, _integrator)
+        self.assertEqual(records, resumed["remoteIntegration"]["completedTasks"])
 
     @staticmethod
     def _commit_on_remote_main(remote, relative, content, message, branch="main"):
@@ -3155,34 +3203,36 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
 
     def test_integration_leaves_the_release_workspace_on_the_main_commit(self):
         """Publication packs from the workspace's checked-out commit and refuses any other."""
-        with tempfile.TemporaryDirectory() as directory:
-            _state, _integrator, _remotes, completed = self.make_integrated_release(directory)
-            release_workspace = Path(completed["frontendPreparation"]["workspace"])
-            # repo-main carries a separate next-development workspace, so its release
-            # workspace keeps the main integration checkout. cedar-workspace integrates both
-            # variants in one directory and publishes through its own path, so it is excluded.
-            record = completed["remoteIntegration"]["completedTasks"]["repo-main"]
-            root = release_workspace / "repo-main"
-            self.assertEqual(
-                record["main"]["commit"],
-                ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD"),
-            )
-            self.assertEqual(
-                record["main"]["tree"],
-                ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}"),
-            )
+        _state, _integrator, _remotes, completed = self.make_integrated_release()
+        release_workspace = Path(completed["frontendPreparation"]["workspace"])
+        # repo-main carries a separate next-development workspace, so its release
+        # workspace keeps the main integration checkout. cedar-workspace integrates both
+        # variants in one directory and publishes through its own path, so it is excluded.
+        record = completed["remoteIntegration"]["completedTasks"]["repo-main"]
+        root = release_workspace / "repo-main"
+        self.assertEqual(
+            record["main"]["commit"],
+            ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD"),
+        )
+        self.assertEqual(
+            record["main"]["tree"],
+            ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}"),
+        )
 
     def test_changed_remote_ref_blocks_resume(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state, integrator, remotes, completed = self.make_integrated_release(directory)
-            record = completed["remoteIntegration"]["completedTasks"]["repo-main"]
-            subprocess.run([
-                "git", "--git-dir", str(remotes["repo-main"]), "update-ref",
-                "refs/heads/develop", record["sourceRevision"],
-            ], check=True)
-            state.update_current_manifest({"phase": "remote-integration-failed"})
-            with self.assertRaisesRegex(ReleaseError, "remote refs changed"):
-                integrate_active_release(state, integrator)
+        state, integrator, remotes, completed = self.make_integrated_release()
+        record = completed["remoteIntegration"]["completedTasks"]["repo-main"]
+        subprocess.run([
+            "git", "--git-dir", str(remotes["repo-main"]), "update-ref",
+            "refs/heads/develop", record["sourceRevision"],
+        ], check=True)
+        state.update_current_manifest({"phase": "remote-integration-failed"})
+        with self.assertRaisesRegex(ReleaseError, "remote refs changed"):
+            integrate_active_release(state, integrator)
+
+
+def tearDownModule():
+    ReleaseRemoteIntegrationTest.remove_integrated_release()
 
 
 class ReleaseBranchRetirementTest(unittest.TestCase):
@@ -3218,50 +3268,48 @@ class ReleaseBranchRetirementTest(unittest.TestCase):
                 ], check=True)
 
     def test_accepting_a_release_retires_superseded_branches_and_keeps_its_own(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state, integrator, remotes, _completed = (
-                ReleaseRemoteIntegrationTest().make_integrated_release(directory)
+        state, integrator, remotes, _completed = (
+            ReleaseRemoteIntegrationTest.make_integrated_release()
+        )
+        manifest, _ = state.read_current_manifest()
+        self._strand_older_releases(remotes)
+        keep = {
+            f"release/pre-{manifest['releaseVersion']}",
+            f"release/post-{manifest['nextDevelopmentVersion']}",
+        }
+        for remote in remotes.values():
+            self.assertTrue(keep & self._branches(remote), "the release wrote no branch to keep")
+
+        retirement = integrator.retire_superseded_release_branches(manifest)
+
+        self.assertEqual([], retirement["failures"])
+        self.assertEqual(sorted(keep), retirement["kept"])
+        self.assertEqual(4 * len(remotes), retirement["branchCount"])
+        for repository, remote in remotes.items():
+            surviving = self._branches(remote)
+            self.assertEqual(
+                keep & surviving, surviving,
+                f"{repository} kept a superseded release branch",
             )
-            manifest, _ = state.read_current_manifest()
-            self._strand_older_releases(remotes)
-            keep = {
-                f"release/pre-{manifest['releaseVersion']}",
-                f"release/post-{manifest['nextDevelopmentVersion']}",
-            }
-            for remote in remotes.values():
-                self.assertTrue(keep & self._branches(remote), "the release wrote no branch to keep")
-
-            retirement = integrator.retire_superseded_release_branches(manifest)
-
-            self.assertEqual([], retirement["failures"])
-            self.assertEqual(sorted(keep), retirement["kept"])
-            self.assertEqual(4 * len(remotes), retirement["branchCount"])
-            for repository, remote in remotes.items():
-                surviving = self._branches(remote)
-                self.assertEqual(
-                    keep & surviving, surviving,
-                    f"{repository} kept a superseded release branch",
-                )
 
     def test_a_remote_that_refuses_a_delete_is_reported_rather_than_raised(self):
         """The release is already accepted by the time this runs, so it cannot fail it."""
-        with tempfile.TemporaryDirectory() as directory:
-            state, integrator, remotes, _completed = (
-                ReleaseRemoteIntegrationTest().make_integrated_release(directory)
-            )
-            manifest, _ = state.read_current_manifest()
-            self._strand_older_releases(remotes)
-            refused = sorted(remotes)[0]
-            integrator.remote_resolver = (
-                lambda repository: "/nonexistent/remote.git"
-                if repository == refused else str(remotes[repository])
-            )
+        state, integrator, remotes, _completed = (
+            ReleaseRemoteIntegrationTest.make_integrated_release()
+        )
+        manifest, _ = state.read_current_manifest()
+        self._strand_older_releases(remotes)
+        refused = sorted(remotes)[0]
+        integrator.remote_resolver = (
+            lambda repository: "/nonexistent/remote.git"
+            if repository == refused else str(remotes[repository])
+        )
 
-            retirement = integrator.retire_superseded_release_branches(manifest)
+        retirement = integrator.retire_superseded_release_branches(manifest)
 
-            self.assertEqual([refused], [item["repository"] for item in retirement["failures"]])
-            swept = {item["repository"] for item in retirement["repositories"]}
-            self.assertEqual(set(remotes) - {refused}, swept)
+        self.assertEqual([refused], [item["repository"] for item in retirement["failures"]])
+        swept = {item["repository"] for item in retirement["repositories"]}
+        self.assertEqual(set(remotes) - {refused}, swept)
 
 
 class ReleaseNexusInventorySearchTest(unittest.TestCase):
@@ -3440,86 +3488,85 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             },
         }
 
-    def make_release(self, directory):
+    @classmethod
+    def make_release(cls):
         state, integrator, remotes, completed = (
-            ReleaseRemoteIntegrationTest().make_integrated_release(directory)
+            ReleaseRemoteIntegrationTest.make_integrated_release()
         )
         state.update_current_manifest({
-            "publicationPlan": self._publication_plan(),
+            "publicationPlan": cls._publication_plan(),
             "mavenPhases": [{"name": "main", "repository": "repo-main"}],
         })
         manifest, _ = state.read_current_manifest()
         return state, integrator, remotes, manifest
 
     def test_publication_plan_uses_release_git_provenance_and_only_stable_npm(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state, _integrator, _remotes, manifest = self.make_release(directory)
-            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
-            tasks = publisher.tasks(manifest)
-            identifiers = [task["id"] for task in tasks]
-            self.assertEqual([
-                "maven:release:publish",
-                "maven:release:verify",
-                "npm:release:main",
-            ], identifiers)
-            # The snapshots are their own plan because they are deployed before the remotes
-            # are integrated, so they cannot be bound to the integration record.
-            self.assertEqual([
-                "maven:nextDevelopment:main",
-                "maven:nextDevelopment:verify",
-            ], [task["id"] for task in publisher.snapshot_tasks(manifest)])
-            npm_task = tasks[2]
-            integration = manifest["remoteIntegration"]["completedTasks"]["repo-main"]
-            self.assertEqual(integration["main"]["commit"], npm_task["expectedCommit"])
-            self.assertNotIn("npm:nextDevelopment", " ".join(identifiers))
+        state, _integrator, _remotes, manifest = self.make_release()
+        publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+        tasks = publisher.tasks(manifest)
+        identifiers = [task["id"] for task in tasks]
+        self.assertEqual([
+            "maven:release:publish",
+            "maven:release:verify",
+            "npm:release:main",
+        ], identifiers)
+        # The snapshots are their own plan because they are deployed before the remotes
+        # are integrated, so they cannot be bound to the integration record.
+        self.assertEqual([
+            "maven:nextDevelopment:main",
+            "maven:nextDevelopment:verify",
+        ], [task["id"] for task in publisher.snapshot_tasks(manifest)])
+        npm_task = tasks[2]
+        integration = manifest["remoteIntegration"]["completedTasks"]["repo-main"]
+        self.assertEqual(integration["main"]["commit"], npm_task["expectedCommit"])
+        self.assertNotIn("npm:nextDevelopment", " ".join(identifiers))
 
     def test_failed_publication_resumes_after_verified_completed_tasks(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state, integrator, _remotes, manifest = self.make_release(directory)
-            calls = []
+        state, integrator, _remotes, manifest = self.make_release()
+        calls = []
 
-            class FakePublisher:
-                @staticmethod
-                def ensure_nexus_ready(_purpose):
-                    return None
+        class FakePublisher:
+            @staticmethod
+            def ensure_nexus_ready(_purpose):
+                return None
 
-                @staticmethod
-                def tasks(_manifest):
-                    return [
-                        {"id": "one", "kind": "fake"},
-                        {"id": "two", "kind": "fake"},
-                        {"id": "three", "kind": "fake"},
-                    ]
+            @staticmethod
+            def tasks(_manifest):
+                return [
+                    {"id": "one", "kind": "fake"},
+                    {"id": "two", "kind": "fake"},
+                    {"id": "three", "kind": "fake"},
+                ]
 
-                @staticmethod
-                def snapshot_tasks(_manifest):
-                    return []
+            @staticmethod
+            def snapshot_tasks(_manifest):
+                return []
 
-                def run_task(self, _manifest, task):
-                    calls.append(task["id"])
-                    if task["id"] == "two" and calls.count("two") == 1:
-                        raise ReleaseError("registry unavailable")
-                    return {**task, "proof": task["id"]}
+            def run_task(self, _manifest, task):
+                calls.append(task["id"])
+                if task["id"] == "two" and calls.count("two") == 1:
+                    raise ReleaseError("registry unavailable")
+                return {**task, "proof": task["id"]}
 
-                @staticmethod
-                def verify_record(_manifest, record, _tasks=None):
-                    if record.get("proof") != record.get("id"):
-                        raise ReleaseError("publication proof changed")
+            @staticmethod
+            def verify_record(_manifest, record, _tasks=None):
+                if record.get("proof") != record.get("id"):
+                    raise ReleaseError("publication proof changed")
 
-            publisher = FakePublisher()
-            with self.assertRaisesRegex(ReleaseError, "registry unavailable"):
-                publish_active_release(
-                    state, publisher, remote_integrator=integrator,
-                )
-            failed, _ = state.read_current_manifest()
-            self.assertEqual("artifact-publication-failed", failed["phase"])
-            self.assertEqual({"one"}, set(failed["artifactPublication"]["completedTasks"]))
-
-            completed = publish_active_release(
+        publisher = FakePublisher()
+        with self.assertRaisesRegex(ReleaseError, "registry unavailable"):
+            publish_active_release(
                 state, publisher, remote_integrator=integrator,
             )
-            self.assertEqual("artifacts-published", completed["phase"])
-            self.assertEqual(["one", "two", "two", "three"], calls)
+        failed, _ = state.read_current_manifest()
+        self.assertEqual("artifact-publication-failed", failed["phase"])
+        self.assertEqual({"one"}, set(failed["artifactPublication"]["completedTasks"]))
+
+        completed = publish_active_release(
+            state, publisher, remote_integrator=integrator,
+        )
+        self.assertEqual("artifacts-published", completed["phase"])
+        self.assertEqual(["one", "two", "two", "three"], calls)
 
     def test_old_ledger_snapshot_records_are_classified_by_task_identity(self):
         class FakePublisher:
@@ -3557,18 +3604,17 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             def ensure_nexus_ready(_purpose):
                 raise ReleaseError("Nexus circuit breaker is open")
 
-        with tempfile.TemporaryDirectory() as directory:
-            state, integrator, _remotes, _manifest = self.make_release(directory)
-            before, path = state.read_current_manifest()
-            before_bytes = path.read_bytes()
+        state, integrator, _remotes, _manifest = self.make_release()
+        before, path = state.read_current_manifest()
+        before_bytes = path.read_bytes()
 
-            with self.assertRaisesRegex(ReleaseError, "circuit breaker is open"):
-                publish_active_release(
-                    state, OpenCircuit(), remote_integrator=integrator)
+        with self.assertRaisesRegex(ReleaseError, "circuit breaker is open"):
+            publish_active_release(
+                state, OpenCircuit(), remote_integrator=integrator)
 
-            after, _ = state.read_current_manifest()
-            self.assertEqual(before, after)
-            self.assertEqual(before_bytes, path.read_bytes())
+        after, _ = state.read_current_manifest()
+        self.assertEqual(before, after)
+        self.assertEqual(before_bytes, path.read_bytes())
 
     def test_maven_release_upload_accepts_only_identical_existing_bytes(self):
         class ExistingHttp:
@@ -3681,19 +3727,18 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
                 })
                 raise ReleaseError("connection reset")
 
-        with tempfile.TemporaryDirectory() as directory:
-            state, integrator, _remotes, _manifest = self.make_release(directory)
-            external_progress = []
-            publisher = ProgressThenFailure()
-            publisher.progress_reporter = external_progress.append
-            for _attempt in range(2):
-                with self.assertRaisesRegex(ReleaseError, "connection reset"):
-                    publish_active_release(
-                        state, publisher, remote_integrator=integrator,
-                    )
-            manifest, path = state.read_current_manifest()
-            with release_train.console.capture() as capture:
-                release_train._render_release_status(manifest, path)
+        state, integrator, _remotes, _manifest = self.make_release()
+        external_progress = []
+        publisher = ProgressThenFailure()
+        publisher.progress_reporter = external_progress.append
+        for _attempt in range(2):
+            with self.assertRaisesRegex(ReleaseError, "connection reset"):
+                publish_active_release(
+                    state, publisher, remote_integrator=integrator,
+                )
+        manifest, path = state.read_current_manifest()
+        with release_train.console.capture() as capture:
+            release_train._render_release_status(manifest, path)
 
         self.assertEqual(2, len(external_progress))
         progress = manifest["artifactPublication"]["inProgressTask"]
@@ -5378,50 +5423,47 @@ class ReleaseSnapshotOrderingTest(unittest.TestCase):
             "a develop push whose snapshots are not yet published sends CI looking for them")
 
     def test_new_snapshot_policy_reuses_only_next_development_build_cache(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state, _, _, manifest = ReleaseArtifactPublicationTest().make_release(directory)
-            manifest["reuseValidatedMavenCache"] = True
-            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
-            tasks = publisher.snapshot_tasks(manifest)
-            for task in tasks:
-                if task['kind'] == 'maven-snapshot-deploy':
-                    repo = next(arg for arg in task['command'] if arg.startswith('-Dmaven.repo.local='))
-                    self.assertIn('/build-cache/nextDevelopment/m2/repository', repo)
-                    self.assertIn('deploy', task['command'])
-                    self.assertNotIn('clean', task['command'])
+        state, _, _, manifest = ReleaseArtifactPublicationTest.make_release()
+        manifest["reuseValidatedMavenCache"] = True
+        publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+        tasks = publisher.snapshot_tasks(manifest)
+        for task in tasks:
+            if task['kind'] == 'maven-snapshot-deploy':
+                repo = next(arg for arg in task['command'] if arg.startswith('-Dmaven.repo.local='))
+                self.assertIn('/build-cache/nextDevelopment/m2/repository', repo)
+                self.assertIn('deploy', task['command'])
+                self.assertNotIn('clean', task['command'])
 
     def test_the_snapshot_plan_does_not_need_the_remotes_to_have_been_integrated(self):
         """This is what lets the stage run first: it binds to the verified local ref."""
-        with tempfile.TemporaryDirectory() as directory:
-            state, _integrator, _remotes, manifest = (
-                ReleaseArtifactPublicationTest().make_release(directory)
-            )
-            without_integration = copy.deepcopy(manifest)
-            without_integration.pop("remoteIntegration")
-            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+        state, _integrator, _remotes, manifest = (
+            ReleaseArtifactPublicationTest.make_release()
+        )
+        without_integration = copy.deepcopy(manifest)
+        without_integration.pop("remoteIntegration")
+        publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
 
-            snapshots = publisher.snapshot_tasks(without_integration)
+        snapshots = publisher.snapshot_tasks(without_integration)
 
-            self.assertTrue(snapshots)
-            with self.assertRaisesRegex(ReleaseError, "no verified remote integration"):
-                publisher.tasks(without_integration)
+        self.assertTrue(snapshots)
+        with self.assertRaisesRegex(ReleaseError, "no verified remote integration"):
+            publisher.tasks(without_integration)
 
     def test_a_snapshot_task_carries_the_prepared_tree_the_integration_will_push(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state, _integrator, _remotes, manifest = (
-                ReleaseArtifactPublicationTest().make_release(directory)
-            )
-            publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
-            deploy = next(task for task in publisher.snapshot_tasks(manifest)
-                          if task["kind"] == "maven-snapshot-deploy")
-            integration = manifest["remoteIntegration"]["completedTasks"][deploy["repository"]]
+        state, _integrator, _remotes, manifest = (
+            ReleaseArtifactPublicationTest.make_release()
+        )
+        publisher = ReleaseArtifactPublisher(state, executor=lambda *_args: {})
+        deploy = next(task for task in publisher.snapshot_tasks(manifest)
+                      if task["kind"] == "maven-snapshot-deploy")
+        integration = manifest["remoteIntegration"]["completedTasks"][deploy["repository"]]
 
-            self.assertEqual(integration["develop"]["tree"], deploy["expectedTree"])
+        self.assertEqual(integration["develop"]["tree"], deploy["expectedTree"])
 
     def test_snapshot_evidence_accepts_the_recorded_develop_integration_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             state, _integrator, _remotes, manifest = (
-                ReleaseArtifactPublicationTest().make_release(directory)
+                ReleaseArtifactPublicationTest.make_release()
             )
             publisher = ReleaseArtifactPublisher(state)
             tasks = publisher.snapshot_tasks(manifest)
@@ -5443,7 +5485,7 @@ class ReleaseSnapshotOrderingTest(unittest.TestCase):
     def test_snapshot_evidence_rejects_an_unrecorded_same_tree_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             state, _integrator, _remotes, manifest = (
-                ReleaseArtifactPublicationTest().make_release(directory)
+                ReleaseArtifactPublicationTest.make_release()
             )
             publisher = ReleaseArtifactPublisher(state)
             tasks = publisher.snapshot_tasks(manifest)
