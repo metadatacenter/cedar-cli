@@ -175,6 +175,13 @@ STATES = {
     "no upstream": no_upstream,
 }
 
+# What the gates must decide for each state, beyond agreeing with one another. Agreement alone
+# passes a recorder that refuses everything: every gate would refuse every state and still agree.
+# A state passes exactly when the subject's checkout holds the commit a train would capture and
+# nothing besides, so its record certifies what the stack ran.
+PASSES = {"clean", "detached at develop", "no upstream"}
+
+
 # What `git status` must ask of the operator for each state, or None where git cannot tell.
 # A stale fetch is invisible until a fetch; a checkout on another branch is a legitimate place for
 # a repository git status knows nothing about; a repository with no upstream has nothing to compare.
@@ -279,6 +286,10 @@ class RepositoryStateMatrix(unittest.TestCase):
         passes = {gate for gate, refusal in verdicts.items() if refusal is None}
         self.assertIn(passes, (set(), set(verdicts)),
                       f"the gates disagree about one record: {json.dumps(verdicts, indent=2)}")
+        expected = set(verdicts) if state in PASSES else set()
+        self.assertEqual(expected, passes,
+                         f"{state}: the gates should {'pass' if expected else 'refuse'} it: "
+                         f"{json.dumps(verdicts, indent=2)}")
         if state in STATUS_SUGGESTIONS:
             self.check_status(estate, state)
 

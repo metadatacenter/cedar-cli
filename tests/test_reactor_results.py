@@ -77,6 +77,71 @@ class FingerprintTest(unittest.TestCase):
             reactor_results.fingerprint(application(), self.root, {}, [], None, [], "/h")
 
 
+class ToolingTest(unittest.TestCase):
+    """The reactor's own part of every key, computed from real checkouts rather than a stand-in.
+
+    Every other test here patches tooling() away, so without this one the key could stop covering
+    cedar-cli or the cedar-development frontend inputs, and a full reactor would then certify checks
+    the current tooling never ran.
+    """
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
+        from org.metadatacenter.build import FRONTEND_DEVELOPMENT_INPUTS
+        self.inputs = []
+        for entry in FRONTEND_DEVELOPMENT_INPUTS:
+            # A directory entry such as `bin` stands for the files under it.
+            self.inputs.append(entry + "/profile.sh" if "." not in Path(entry).name else entry)
+        self.cli = self.repository("cedar-cli", ["org/metadatacenter/build.py"])
+        self.development = self.repository("cedar-development", self.inputs + ["ops/audit.py"])
+        versions = patch.object(reactor_results, "_version", side_effect=lambda command: command[0] + " 1")
+        versions.start()
+        self.addCleanup(versions.stop)
+
+    def repository(self, name, files):
+        root = self.home / name
+        for relative in files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(relative)
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "-c", "user.email=t@example.org", "-c", "user.name=Test", "commit", "-q", "-m", "initial")
+        return root
+
+    @staticmethod
+    def git(root, *arguments):
+        import subprocess
+        subprocess.run(["git", "-C", str(root), *arguments], check=True, capture_output=True)
+
+    def tooling(self):
+        return reactor_results.tooling(self.home)
+
+    def test_an_edit_to_cedar_cli_changes_it(self):
+        baseline = self.tooling()
+        (self.cli / "org/metadatacenter/build.py").write_text("edited")
+        self.assertNotEqual(baseline["cli"], self.tooling()["cli"])
+
+    def test_a_new_file_in_cedar_cli_changes_it(self):
+        baseline = self.tooling()
+        (self.cli / "org/metadatacenter/new_rule.py").write_text("new")
+        self.assertNotEqual(baseline["cli"], self.tooling()["cli"])
+
+    def test_an_edit_to_every_frontend_input_changes_it(self):
+        for relative in self.inputs:
+            with self.subTest(relative):
+                baseline = self.tooling()["development"]
+                (self.development / relative).write_text("edited " + relative)
+                self.assertNotEqual(baseline, self.tooling()["development"])
+
+    def test_a_backend_edit_in_cedar_development_leaves_it(self):
+        baseline = self.tooling()
+        (self.development / "ops/audit.py").write_text("edited")
+        self.assertEqual(baseline, self.tooling())
+
+
 class RecordTest(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
