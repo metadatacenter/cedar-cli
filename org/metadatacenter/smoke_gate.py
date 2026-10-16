@@ -345,10 +345,11 @@ def run_smoke(
     reports = reports_dir(home)
     reports.mkdir(parents=True, exist_ok=True)
     rest_report = reports / f"rest-smoke-{digest}.json"
+    split_report = reports / f"split-smoke-{digest}.json"
     commands = {
         "rest": ["npm", "run", "smoke:rest", "--", f"--report={rest_report}"],
         "browser": ["npm", "run", "smoke"],
-        "split": ["npm", "run", "smoke:workspace:modern:full"],
+        "split": ["npm", "run", "smoke:workspace:modern:full", "--", f"--report={split_report}"],
     }
     if rest_workers is not None:
         commands["rest"].append(f"--workers={rest_workers}")
@@ -375,6 +376,8 @@ def run_smoke(
             record.update(_rest_details(rest_report))
             if record["verdict"] == "PASS" and record.get("inventoryMatched") is False:
                 record["verdict"] = "FAIL"
+        if tier == "split":
+            record.update(_split_details(split_report))
         tiers[tier] = record
         colour = "green" if record["verdict"] == "PASS" else "red"
         console.print(f"[{colour}]{tier} smoke: {record['verdict']}[/{colour}]")
@@ -413,6 +416,29 @@ def _rest_details(rest_report: Path) -> dict:
         "runnerVerdict": payload.get("verdict"),
         "counts": payload.get("counts"),
         "inventoryMatched": payload.get("inventoryMatched"),
+    }
+
+
+def _split_details(split_report: Path) -> dict:
+    """Which script and step of the split tier failed, how long each script took, and the machine's
+    load at start and end, from the tier runner's own report. Its full step timeline stays in that
+    file; the record keeps the five slowest steps."""
+    try:
+        payload = json.loads(split_report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return {"report": str(split_report), "reportError": str(error)}
+    steps = [step for step in payload.get("steps") or [] if isinstance(step.get("seconds"), (int, float))]
+    return {
+        "report": str(split_report),
+        "runnerVerdict": payload.get("verdict"),
+        "failingScript": payload.get("failingScript"),
+        "failingStep": payload.get("failingStep"),
+        "failure": (payload.get("failure") or "")[:500] or None,
+        "scripts": [{key: script.get(key) for key in ("name", "seconds", "exitCode")}
+                    for script in payload.get("scripts") or []],
+        "notRun": payload.get("notRun"),
+        "machine": payload.get("machine"),
+        "slowestSteps": sorted(steps, key=lambda step: -step["seconds"])[:5],
     }
 
 
