@@ -513,10 +513,11 @@ def _split_details(split_report: Path, exit_code: int | None = None) -> dict:
 
 
 def _sweep_summary(sweep) -> dict | None:
-    """What a sweep after a kill removed, counted rather than listed; the runner's report lists it."""
+    """What a sweep after a kill removed and put back, counted rather than listed; the runner's report lists it."""
     if not isinstance(sweep, dict):
         return None
-    counted = {key: len(sweep.get(key) or []) for key in ("removed", "alreadyGone", "failed", "secondUser")}
+    counted = {key: len(sweep.get(key) or []) for key in
+               ("removed", "alreadyGone", "failed", "secondUser", "restored", "alreadyRestored")}
     root = sweep.get("root") if isinstance(sweep.get("root"), dict) else None
     return {
         "lane": sweep.get("lane"),
@@ -525,6 +526,8 @@ def _sweep_summary(sweep) -> dict | None:
         **counted,
         "notRemoved": [{key: item.get(key) for key in ("collection", "id", "status")}
                        for item in sweep.get("failed") or [] if isinstance(item, dict)],
+        "notRestored": [{key: item.get(key) for key in ("restore", "label", "as", "status")}
+                        for item in sweep.get("notRestored") or [] if isinstance(item, dict)],
         **({"error": sweep["error"]} if sweep.get("error") else {}),
     }
 

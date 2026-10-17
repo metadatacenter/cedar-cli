@@ -167,7 +167,13 @@ def queue_runner(exit_code=124):
                           "deleted": {"folder": 2, "template": 1}},
                  "removed": [], "alreadyGone": [{"collection": "templates", "id": "t"}],
                  "failed": [{"collection": "folders", "id": "f", "status": 400, "text": "nonEmptyFolder"}],
-                 "secondUser": [], "seconds": 0.9}
+                 "secondUser": [],
+                 "restored": [{"restore": "api-key", "key": "k1", "label": "API key \"smoke 1\"", "as": "user1",
+                               "changed": 1}],
+                 "alreadyRestored": [],
+                 "notRestored": [{"restore": "api-key", "key": "k2", "label": "API key \"smoke 2\"", "as": "user1",
+                                  "status": 503, "text": "unavailable"}],
+                 "seconds": 0.9}
         lane = {"root": None, "plannedSeconds": 110.0, "startedAfterSeconds": 0.0, "failure": None, "notRun": [],
                 "overheadSeconds": 2.0, "timeout": None, "sweep": None, "sweeps": [], "worker": None}
         Path(report).write_text(json.dumps({
@@ -377,6 +383,9 @@ class RunSmokeTest(unittest.TestCase):
             self.assertEqual(("recursive", {"folder": 2, "template": 1}), (sweep["root"]["how"], sweep["root"]["deleted"]))
             self.assertEqual((0, 1, 1), (sweep["removed"], sweep["alreadyGone"], sweep["failed"]))
             self.assertEqual([{"collection": "folders", "id": "f", "status": 400}], sweep["notRemoved"])
+            self.assertEqual((1, 0), (sweep["restored"], sweep["alreadyRestored"]))
+            self.assertEqual([{"restore": "api-key", "label": "API key \"smoke 2\"", "as": "user1", "status": 503}],
+                             sweep["notRestored"])
             self.assertEqual([sweep], split["sweeps"])
             self.assertEqual((4242, 17), (split["lock"]["holder"]["pid"], split["lock"]["replaced"]["pid"]))
             self.assertEqual(1200, split["unitTimeout"]["capSeconds"])
