@@ -53,6 +53,10 @@ CONTROLLER = Path("cedar-development") / "ops" / "cedar-services.sh"
 
 HEALTHY = {"healthy"}
 SUMMARY_LIMIT = 5
+# split-tier.mjs exits with this status when another split run holds its lock, and writes no report.
+SPLIT_LOCK_REFUSED = 75
+# The bounds of the split tier's cap on any one unit's deadline, in seconds, as split-tier.mjs takes it.
+SPLIT_TIMEOUT_CAP_RANGE = (60, 7200)
 
 
 class SmokeGateError(ValueError):
@@ -291,6 +295,7 @@ def run_smoke(
     *,
     rest_workers: int | None = None,
     split_lanes: int | None = None,
+    split_timeout_cap: int | None = None,
     runner=subprocess.run,
     clock: Callable[[], dt.datetime] = _now,
     environment: Mapping[str, str] | None = None,
@@ -306,6 +311,11 @@ def run_smoke(
         raise ValueError("REST workers must be an integer from 1 to 4")
     if split_lanes is not None and (type(split_lanes) is not int or not 1 <= split_lanes <= 4):
         raise ValueError("split lanes must be an integer from 1 to 4")
+    if split_timeout_cap is not None and (
+            type(split_timeout_cap) is not int
+            or not SPLIT_TIMEOUT_CAP_RANGE[0] <= split_timeout_cap <= SPLIT_TIMEOUT_CAP_RANGE[1]):
+        raise ValueError("the split tier's timeout cap must be an integer number of seconds from "
+                         f"{SPLIT_TIMEOUT_CAP_RANGE[0]} to {SPLIT_TIMEOUT_CAP_RANGE[1]}")
     home = _home(cedar_home or invocation_environment().get("CEDAR_HOME"))
     environment = dict(environment if environment is not None else invocation_environment())
     e2e = home / E2E
@@ -358,6 +368,8 @@ def run_smoke(
         commands["rest"].append(f"--workers={rest_workers}")
     if split_lanes is not None:
         commands["split"].append(f"--lanes={split_lanes}")
+    if split_timeout_cap is not None:
+        commands["split"].append(f"--timeout-cap={split_timeout_cap}")
 
     started = clock()
     tiers = {}
@@ -382,7 +394,7 @@ def run_smoke(
             if record["verdict"] == "PASS" and record.get("inventoryMatched") is False:
                 record["verdict"] = "FAIL"
         if tier == "split":
-            record.update(_split_details(split_report))
+            record.update(_split_details(split_report, code))
         tiers[tier] = record
         colour = "green" if record["verdict"] == "PASS" else "red"
         console.print(f"[{colour}]{tier} smoke: {record['verdict']}[/{colour}]")
@@ -424,15 +436,24 @@ def _rest_details(rest_report: Path) -> dict:
     }
 
 
-def _split_details(split_report: Path) -> dict:
+def _split_details(split_report: Path, exit_code: int | None = None) -> dict:
     """Which scripts and steps of the split tier failed, how long each lane and script took, and the
     machine's load at start and end, from the tier runner's own report. Its full step timeline stays in
     that file; the record keeps the five slowest steps.
 
     A report of schema 1 comes from a sequential run and names one failing script at most. Schema 2
     adds the lanes, each with its journeys and scripts, its time, its exit code and the step it failed
-    in, and every failure rather than the first alone. The fields schema 1 has keep their meaning, and
-    in schema 2 they describe the first failure."""
+    in, and every failure rather than the first alone. Schema 3 has the lanes take their units from one
+    queue, so each lane lists the units it ran, with their timings, its busy and idle time, any unit
+    that overran its deadline and what the sweep after that kill removed; the report also names the
+    lock's holder and the deadline settings. The fields of the earlier schemas keep their meaning, and
+    from schema 2 on they describe the first failure.
+
+    A run that found another run holding the lock exits with SPLIT_LOCK_REFUSED and writes no report,
+    so whatever file is at the report's path belongs to some other run and is not read."""
+    if exit_code == SPLIT_LOCK_REFUSED:
+        return {"report": str(split_report), "lockRefused": True,
+                "reportError": "another split tier run held the lock, so this one ran nothing and wrote no report"}
     try:
         payload = json.loads(split_report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -451,21 +472,61 @@ def _split_details(split_report: Path) -> dict:
         "machine": payload.get("machine"),
         "slowestSteps": sorted(steps, key=lambda step: -step["seconds"])[:5],
     }
+    queued = isinstance(payload.get("schemaVersion"), int) and payload["schemaVersion"] >= 3
     if isinstance(payload.get("lanes"), list):
+        lane_keys = ("name", "keys", "scripts", "seconds", "exitCode", "failingScript", "failingStep", "notRun")
+        if queued:
+            lane_keys += ("busySeconds", "overheadSeconds", "idleSeconds", "timeout")
         details["sequential"] = payload.get("sequential")
         details["generalLanes"] = payload.get("generalLanes")
         details["durationSeconds"] = payload.get("durationSeconds")
         details["checks"] = payload.get("checks")
-        details["lanes"] = [{key: lane.get(key) for key in (
-            "name", "keys", "scripts", "seconds", "exitCode", "failingScript", "failingStep", "notRun")}
-            for lane in payload["lanes"] if isinstance(lane, dict)]
+        details["lanes"] = []
+        for lane in payload["lanes"]:
+            if not isinstance(lane, dict):
+                continue
+            entry = {key: lane.get(key) for key in lane_keys}
+            if queued:
+                entry["units"] = [{key: unit.get(key) for key in ("name", "seconds", "outcome")}
+                                  for unit in lane.get("units") or [] if isinstance(unit, dict)]
+                entry["sweep"] = _sweep_summary(lane.get("sweep"))
+            details["lanes"].append(entry)
         details["failures"] = [{
             "lane": failure.get("lane"),
             "script": failure.get("script"),
             "step": failure.get("step"),
             "failure": (failure.get("message") or "")[:500] or None,
+            **({"timeout": failure["timeout"]} if queued and failure.get("timeout") else {}),
         } for failure in payload.get("failures") or [] if isinstance(failure, dict)]
+    if queued:
+        lock = payload.get("lock") if isinstance(payload.get("lock"), dict) else None
+        details["lock"] = None if lock is None else {
+            "path": lock.get("path"),
+            "holder": lock.get("holder"),
+            "replaced": lock.get("replaced"),
+        }
+        details["unitTimeout"] = payload.get("unitTimeout")
+        details["timeouts"] = [timeout for timeout in payload.get("timeouts") or [] if isinstance(timeout, dict)]
+        details["sweeps"] = [_sweep_summary(sweep) for sweep in payload.get("sweeps") or [] if isinstance(sweep, dict)]
+        details["evidenceDirectory"] = payload.get("evidenceDirectory")
     return details
+
+
+def _sweep_summary(sweep) -> dict | None:
+    """What a sweep after a kill removed, counted rather than listed; the runner's report lists it."""
+    if not isinstance(sweep, dict):
+        return None
+    counted = {key: len(sweep.get(key) or []) for key in ("removed", "alreadyGone", "failed", "secondUser")}
+    root = sweep.get("root") if isinstance(sweep.get("root"), dict) else None
+    return {
+        "lane": sweep.get("lane"),
+        "unit": sweep.get("unit"),
+        "root": None if root is None else {key: root.get(key) for key in ("name", "how", "deleted") if key in root},
+        **counted,
+        "notRemoved": [{key: item.get(key) for key in ("collection", "id", "status")}
+                       for item in sweep.get("failed") or [] if isinstance(item, dict)],
+        **({"error": sweep["error"]} if sweep.get("error") else {}),
+    }
 
 
 def read_report(cedar_home, expected: Mapping[str, str]) -> dict:

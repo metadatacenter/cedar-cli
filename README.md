@@ -172,9 +172,18 @@ concurrently, followed by the browser and split smoke tiers. The REST default is
 all check-inventory and cleanup gates remain required, and the REST report includes
 per-suite and phase timings.
 
-The split tier runs in lanes: a core lane for the Workspace smoke's inline chain, an identity
-lane for everything that signs the second user in or logs out, and general lanes for the
-remaining journeys and scripts. `--split-lanes N`, from two to four, sets the number of general
-lanes, and the default is two. `--split-lanes 1` runs the tier sequentially, one script after
-another. The gate record names every lane with its journeys, scripts, time and exit code, and
-every step a lane failed in.
+The split tier runs three kinds of lane at the same time. The core lane first runs the Workspace
+smoke's inline chain, the identity lane alone runs the journeys and scripts that sign the second
+user in or log out, one at a time, and the general lanes run the rest. The lanes take their work
+from one queue, longest first, so the core and identity lanes take a share of the general work
+once their own is done. `--split-lanes N`, from two to four, sets the number of general lanes, and
+the default is two. `--split-lanes 1` runs the tier sequentially, one script after another.
+
+Every journey and script in the split tier has a deadline: three times its newest measured
+duration plus 30 seconds, at least 60 seconds and at most a cap. One that overruns is killed with
+its browsers, what it created is removed, and the other lanes run what remains.
+`--split-timeout-cap SECONDS`, from 60 to 7,200, sets the cap, which defaults to 1,200 seconds and
+is also the deadline of anything no earlier run has measured. Only one split tier runs on a
+machine at a time, and a second is refused at once with the first one's PID, start time and
+command. The gate record names every lane with the units it ran and their times, its busy and idle
+time, any timeout and what its sweep removed, and every step a lane failed in.

@@ -33,9 +33,13 @@ def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
         help="Concurrent independent REST suites; 1 preserves serial order (default: 2)."),
         split_lanes: int = typer.Option(None, min=1, max=4,
         help="General lanes of split-tier journeys beside its core and identity lanes; "
-             "1 runs the tier sequentially (default: 2).")):
+             "1 runs the tier sequentially (default: 2)."),
+        split_timeout_cap: int = typer.Option(None, min=60, max=7200,
+        help="Seconds no split-tier unit may run past, whatever its measured duration; "
+             "also the deadline of a unit no report has measured (default: 1200).")):
     """Run every whole-stack smoke tier and record the evidence the train and release gates require."""
-    raise typer.Exit(run_smoke(rest_workers=rest_workers, split_lanes=split_lanes))
+    raise typer.Exit(run_smoke(rest_workers=rest_workers, split_lanes=split_lanes,
+                               split_timeout_cap=split_timeout_cap))
 
 
 @app.command("status")

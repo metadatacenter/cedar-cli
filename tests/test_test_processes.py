@@ -33,7 +33,7 @@ class TestProcessCommandsTest(unittest.TestCase):
     def test_e2e_forwards_only_valid_rest_worker_counts(self, smoke):
         result = self.runner.invoke(test_processes.app, ["e2e", "--rest-workers", "4"])
         self.assertEqual(0, result.exit_code, result.output)
-        smoke.assert_called_once_with(rest_workers=4, split_lanes=None)
+        smoke.assert_called_once_with(rest_workers=4, split_lanes=None, split_timeout_cap=None)
         smoke.reset_mock()
         for value in ("0", "5", "invalid"):
             result = self.runner.invoke(test_processes.app, ["e2e", "--rest-workers", value])
@@ -44,14 +44,25 @@ class TestProcessCommandsTest(unittest.TestCase):
     def test_e2e_forwards_only_valid_split_lane_counts(self, smoke):
         result = self.runner.invoke(test_processes.app, ["e2e", "--split-lanes", "1", "--rest-workers", "4"])
         self.assertEqual(0, result.exit_code, result.output)
-        smoke.assert_called_once_with(rest_workers=4, split_lanes=1)
+        smoke.assert_called_once_with(rest_workers=4, split_lanes=1, split_timeout_cap=None)
         smoke.reset_mock()
         result = self.runner.invoke(test_processes.app, ["e2e"])
         self.assertEqual(0, result.exit_code, result.output)
-        smoke.assert_called_once_with(rest_workers=None, split_lanes=None)
+        smoke.assert_called_once_with(rest_workers=None, split_lanes=None, split_timeout_cap=None)
         smoke.reset_mock()
         for value in ("0", "5", "invalid"):
             result = self.runner.invoke(test_processes.app, ["e2e", "--split-lanes", value])
+            self.assertEqual(2, result.exit_code, result.output)
+        smoke.assert_not_called()
+
+    @patch.object(test_processes, "run_smoke", return_value=0)
+    def test_e2e_forwards_only_valid_split_timeout_caps(self, smoke):
+        result = self.runner.invoke(test_processes.app, ["e2e", "--split-timeout-cap", "600"])
+        self.assertEqual(0, result.exit_code, result.output)
+        smoke.assert_called_once_with(rest_workers=None, split_lanes=None, split_timeout_cap=600)
+        smoke.reset_mock()
+        for value in ("59", "7201", "1.5", "invalid"):
+            result = self.runner.invoke(test_processes.app, ["e2e", "--split-timeout-cap", value])
             self.assertEqual(2, result.exit_code, result.output)
         smoke.assert_not_called()
 
