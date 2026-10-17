@@ -167,7 +167,14 @@ demo inputs change (or no passing evidence exists). Explicit checks and CEE rele
 checks always run. Trains keep all three demos in their verification inventory.
 
 `cedarcli test e2e --rest-workers 4` runs up to four independent REST smoke suites
-concurrently, followed by the browser smoke. The REST default is two workers;
+concurrently, followed by the browser and split smoke tiers. The REST default is two workers;
 `--rest-workers 1` restores serial suite execution. Global-state suites stay exclusive,
 all check-inventory and cleanup gates remain required, and the REST report includes
 per-suite and phase timings.
+
+The split tier runs in lanes: a core lane for the Workspace smoke's inline chain, an identity
+lane for everything that signs the second user in or logs out, and general lanes for the
+remaining journeys and scripts. `--split-lanes N`, from two to four, sets the number of general
+lanes, and the default is two. `--split-lanes 1` runs the tier sequentially, one script after
+another. The gate record names every lane with its journeys, scripts, time and exit code, and
+every step a lane failed in.

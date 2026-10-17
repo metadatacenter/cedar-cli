@@ -30,9 +30,12 @@ def cee_demos(cee_package: Optional[Path] = typer.Option(
 
 @app.command("e2e")
 def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
-        help="Concurrent independent REST suites; 1 preserves serial order (default: 2).")):
-    """Run both whole-stack smoke tiers and record the evidence the train and release gates require."""
-    raise typer.Exit(run_smoke(rest_workers=rest_workers))
+        help="Concurrent independent REST suites; 1 preserves serial order (default: 2)."),
+        split_lanes: int = typer.Option(None, min=1, max=4,
+        help="General lanes of split-tier journeys beside its core and identity lanes; "
+             "1 runs the tier sequentially (default: 2).")):
+    """Run every whole-stack smoke tier and record the evidence the train and release gates require."""
+    raise typer.Exit(run_smoke(rest_workers=rest_workers, split_lanes=split_lanes))
 
 
 @app.command("status")

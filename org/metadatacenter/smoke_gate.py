@@ -290,6 +290,7 @@ def run_smoke(
     cedar_home=None,
     *,
     rest_workers: int | None = None,
+    split_lanes: int | None = None,
     runner=subprocess.run,
     clock: Callable[[], dt.datetime] = _now,
     environment: Mapping[str, str] | None = None,
@@ -303,6 +304,8 @@ def run_smoke(
     """
     if rest_workers is not None and (type(rest_workers) is not int or not 1 <= rest_workers <= 4):
         raise ValueError("REST workers must be an integer from 1 to 4")
+    if split_lanes is not None and (type(split_lanes) is not int or not 1 <= split_lanes <= 4):
+        raise ValueError("split lanes must be an integer from 1 to 4")
     home = _home(cedar_home or invocation_environment().get("CEDAR_HOME"))
     environment = dict(environment if environment is not None else invocation_environment())
     e2e = home / E2E
@@ -353,6 +356,8 @@ def run_smoke(
     }
     if rest_workers is not None:
         commands["rest"].append(f"--workers={rest_workers}")
+    if split_lanes is not None:
+        commands["split"].append(f"--lanes={split_lanes}")
 
     started = clock()
     tiers = {}
@@ -420,26 +425,47 @@ def _rest_details(rest_report: Path) -> dict:
 
 
 def _split_details(split_report: Path) -> dict:
-    """Which script and step of the split tier failed, how long each script took, and the machine's
-    load at start and end, from the tier runner's own report. Its full step timeline stays in that
-    file; the record keeps the five slowest steps."""
+    """Which scripts and steps of the split tier failed, how long each lane and script took, and the
+    machine's load at start and end, from the tier runner's own report. Its full step timeline stays in
+    that file; the record keeps the five slowest steps.
+
+    A report of schema 1 comes from a sequential run and names one failing script at most. Schema 2
+    adds the lanes, each with its journeys and scripts, its time, its exit code and the step it failed
+    in, and every failure rather than the first alone. The fields schema 1 has keep their meaning, and
+    in schema 2 they describe the first failure."""
     try:
         payload = json.loads(split_report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         return {"report": str(split_report), "reportError": str(error)}
     steps = [step for step in payload.get("steps") or [] if isinstance(step.get("seconds"), (int, float))]
-    return {
+    details = {
         "report": str(split_report),
+        "schemaVersion": payload.get("schemaVersion"),
         "runnerVerdict": payload.get("verdict"),
         "failingScript": payload.get("failingScript"),
         "failingStep": payload.get("failingStep"),
         "failure": (payload.get("failure") or "")[:500] or None,
-        "scripts": [{key: script.get(key) for key in ("name", "seconds", "exitCode")}
+        "scripts": [{key: script.get(key) for key in ("name", "lane", "seconds", "exitCode") if key in script}
                     for script in payload.get("scripts") or []],
         "notRun": payload.get("notRun"),
         "machine": payload.get("machine"),
         "slowestSteps": sorted(steps, key=lambda step: -step["seconds"])[:5],
     }
+    if isinstance(payload.get("lanes"), list):
+        details["sequential"] = payload.get("sequential")
+        details["generalLanes"] = payload.get("generalLanes")
+        details["durationSeconds"] = payload.get("durationSeconds")
+        details["checks"] = payload.get("checks")
+        details["lanes"] = [{key: lane.get(key) for key in (
+            "name", "keys", "scripts", "seconds", "exitCode", "failingScript", "failingStep", "notRun")}
+            for lane in payload["lanes"] if isinstance(lane, dict)]
+        details["failures"] = [{
+            "lane": failure.get("lane"),
+            "script": failure.get("script"),
+            "step": failure.get("step"),
+            "failure": (failure.get("message") or "")[:500] or None,
+        } for failure in payload.get("failures") or [] if isinstance(failure, dict)]
+    return details
 
 
 def read_report(cedar_home, expected: Mapping[str, str]) -> dict:
