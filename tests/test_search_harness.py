@@ -12,6 +12,7 @@ class SearchHarnessTest(unittest.TestCase):
         result = CliRunner().invoke(test_processes.app, ["search"])
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertFalse(run.call_args.kwargs["live"])
+        self.assertEqual(run.call_args.kwargs["workers"], 4)
         result = CliRunner().invoke(test_processes.app, ["search", "--check"])
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertTrue(run.call_args.kwargs["check"])
@@ -29,7 +30,8 @@ class SearchHarnessTest(unittest.TestCase):
     @patch.object(search_harness.subprocess, "run")
     def test_invalid_or_ambiguous_modes_spawn_nothing(self, run):
         for kwargs in ({"live": True, "check": True}, {"live": True, "validate": True},
-                       {"live": True, "plan": True}, {"check": True, "validate": True}, {"tier": "invalid"}):
+                       {"live": True, "plan": True}, {"check": True, "validate": True}, {"tier": "invalid"},
+                       *({"workers": value} for value in (0, 5, 1.5, True, "2"))):
             with self.assertRaises(ValueError):
                 search_harness.run_search(**kwargs)
         run.assert_not_called()
@@ -38,10 +40,11 @@ class SearchHarnessTest(unittest.TestCase):
     @patch.object(search_harness, "invocation_environment", return_value={"CEDAR_CLI_CALLER_DIR": "/tmp/caller"})
     def test_live_requires_explicit_mode_and_keeps_failure_exit_and_report_location(self, environment, run):
         with patch.object(search_harness.Util, "cedar_home", "/tmp/cedar"):
-            self.assertEqual(search_harness.run_search(live=True, tier="all", report="evidence.json"), 7)
+            self.assertEqual(search_harness.run_search(live=True, tier="all", report="evidence.json", workers=1), 7)
         args = run.call_args.args[0]
         self.assertIn("--live", args)
         self.assertIn("--tier=all", args)
+        self.assertIn("--workers=1", args)
         self.assertIn(f"--report={Path('/tmp/caller/evidence.json').resolve()}", args)
 
 

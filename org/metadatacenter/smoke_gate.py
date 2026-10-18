@@ -33,6 +33,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
@@ -43,7 +44,7 @@ from org.metadatacenter.worker.ServerWorker import ServerWorker
 console = Console()
 
 SCHEMA_VERSION = 1
-TIERS = ("rest", "browser", "split")
+TIERS = ("rest", "browser", "split", "search")
 REMEDY = "run cedarcli test e2e against the stack built from this source"
 
 E2E = Path("cedar-development") / "ops" / "e2e"
@@ -359,13 +360,17 @@ def run_smoke(
     reports.mkdir(parents=True, exist_ok=True)
     rest_report = reports / f"rest-smoke-{digest}.json"
     split_report = reports / f"split-smoke-{digest}.json"
+    # A refused or killed run must never inherit an earlier search verdict at the same source heads.
+    search_report = reports / f"search-smoke-{digest}-{uuid.uuid4().hex}.json"
     commands = {
         "rest": ["npm", "run", "smoke:rest", "--", f"--report={rest_report}"],
         "browser": ["npm", "run", "smoke"],
         "split": ["npm", "run", "smoke:workspace:modern:full", "--", f"--report={split_report}"],
+        "search": ["npm", "run", "smoke:search", "--", f"--report={search_report}"],
     }
     if rest_workers is not None:
         commands["rest"].append(f"--workers={rest_workers}")
+        commands["search"].append(f"--workers={rest_workers}")
     if split_lanes is not None:
         commands["split"].append(f"--lanes={split_lanes}")
     if split_timeout_cap is not None:
@@ -395,6 +400,10 @@ def run_smoke(
                 record["verdict"] = "FAIL"
         if tier == "split":
             record.update(_split_details(split_report, code))
+        if tier == "search":
+            record.update(_search_details(search_report))
+            if not record["evidenceValid"]:
+                record["verdict"] = "FAIL"
         tiers[tier] = record
         colour = "green" if record["verdict"] == "PASS" else "red"
         console.print(f"[{colour}]{tier} smoke: {record['verdict']}[/{colour}]")
@@ -434,6 +443,53 @@ def _rest_details(rest_report: Path) -> dict:
         "counts": payload.get("counts"),
         "inventoryMatched": payload.get("inventoryMatched"),
     }
+
+
+def _search_details(path: Path) -> dict:
+    """Require all five matrix families and successful cleanup, independently of the exit code."""
+    details = {"report": str(path), "evidenceValid": False}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("search evidence is not an object")
+        expected = []
+        cells, counts = payload["cells"], payload["matrixCells"]
+        for family in ("content", "access", "paging", "lifecycle", "journey"):
+            rows = cells[family]
+            if (not isinstance(rows, list) or type(counts[family]) is not int
+                    or counts[family] <= 0 or counts[family] != len(rows)):
+                raise ValueError(f"invalid {family} inventory")
+            expected.extend(rows if family == "lifecycle" else
+                            [("journey/" if family == "journey" else "") + row["id"] for row in rows])
+        if any(not isinstance(key, str) or not key for key in expected) or len(set(expected)) != len(expected):
+            raise ValueError("search inventory contains invalid or duplicate identities")
+        checks = payload["checks"]
+        actual = [check["id"] for check in checks]
+        matched = len(actual) == len(expected) and set(actual) == set(expected)
+        failed = [check["id"] for check in checks if check.get("status") != "pass"]
+        completion = payload["completion"]
+        valid = (payload.get("tier") == "all"
+                 and payload.get("status") == "IMPLEMENTED_CASES_PASS_WITH_DECLARED_GAPS"
+                 and bool(payload.get("finishedAt")) and bool(payload.get("runToken"))
+                 and bool(payload.get("harnessDigest")) and bool(payload.get("corpusDigest"))
+                 and payload.get("cleanupErrors") == [] and payload.get("browserErrors") == []
+                 and not payload.get("fatal") and matched and not failed
+                 and completion.get("complete") is True
+                 and all(completion.get(key) == [] for key in ("missing", "unexpected", "failed")))
+        details.update({"evidenceValid": valid, "runToken": payload.get("runToken"),
+                        "runnerVerdict": payload.get("status"), "inventoryMatched": matched,
+                        "counts": {"total": len(checks), "pass": len(checks) - len(failed), "fail": len(failed),
+                                   "families": counts},
+                        "failed": failed, "completion": completion,
+                        "fatal": payload.get("fatal"), "cleanupErrors": payload.get("cleanupErrors"),
+                        "browserErrors": payload.get("browserErrors"),
+                        "harnessDigest": payload.get("harnessDigest"), "corpusDigest": payload.get("corpusDigest"),
+                        "performance": payload.get("performance"), "declaredGaps": payload.get("exclusions")})
+        if not valid:
+            details["reportError"] = "search evidence is incomplete, failed, or does not cover the full REST and browser matrix"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        details["reportError"] = str(error)
+    return details
 
 
 def _split_details(split_report: Path, exit_code: int | None = None) -> dict:
@@ -590,6 +646,8 @@ def evaluate(report: Mapping, expected: Mapping[str, str]) -> list[str]:
                             f"{record.get('finishedAt', when)}")
         elif tier == "rest" and record.get("inventoryMatched") is False:
             findings.append("the REST smoke ran a different check inventory than the committed one")
+        elif tier == "search" and record.get("evidenceValid") is not True:
+            findings.append("the search smoke has no complete matrix and cleanup evidence")
     return findings
 
 

@@ -167,16 +167,19 @@ demo inputs change (or no passing evidence exists). Explicit checks and CEE rele
 checks always run. Trains keep all three demos in their verification inventory.
 
 `cedarcli test e2e --rest-workers 4` runs up to four independent REST smoke suites
-concurrently, followed by the browser and split smoke tiers. The REST default is two workers;
-`--rest-workers 1` restores serial suite execution. Global-state suites stay exclusive,
+concurrently, followed by the browser, split and full artifact-search smoke tiers. The same option
+bounds independent search reads; defaults are two REST suites and four search reads.
+`--rest-workers 1` runs both pools serially. Global-state suites and permission transitions stay exclusive,
 all check-inventory and cleanup gates remain required, and the REST report includes
 per-suite and phase timings.
 
-`cedarcli test search` prints an offline plan for the opt-in artifact search matrix. `--check`
+`cedarcli test search` prints an offline plan for the artifact search matrix. `--check`
 runs its offline harness tests with networking blocked; `--validate` checks its artifact corpus
 with the existing local Java validator/reader. Only `--live --tier rest|journey|all` contacts the
 running stack, creates temporary fixtures and checks actual results. It never builds or redeploys.
-The matrix remains outside the default e2e gate while its live validation is pending. See
+The complete matrix is required by `cedarcli test e2e`; REST and browser checks share one corpus.
+`--workers 1..4` bounds reads in a standalone search run. Failed or missing cells, browser errors
+and incomplete cleanup fail the gate. See
 `cedar-development/ops/BACKEND-RUNBOOK.md`, under the default test environment, for its coverage,
 scope, cleanup ledger and declared gaps.
 

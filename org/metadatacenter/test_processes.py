@@ -30,7 +30,7 @@ def cee_demos(cee_package: Optional[Path] = typer.Option(
 
 @app.command("e2e")
 def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
-        help="Concurrent independent REST suites; 1 preserves serial order (default: 2)."),
+        help="Concurrent REST suites and search reads; 1 runs each serially (defaults: REST 2, search 4)."),
         split_lanes: int = typer.Option(None, min=1, max=4,
         help="General lanes of split-tier journeys beside its core and identity lanes; "
              "1 runs the tier sequentially (default: 2)."),
@@ -49,12 +49,13 @@ def search(plan: bool = typer.Option(False, help="Print the offline corpus and e
            live: bool = typer.Option(False, help="Explicitly create temporary corpus artifacts and exercise the running stack."),
            isolated: bool = typer.Option(False, help="Use unwrapped queries; requires an otherwise isolated test deployment."),
            tier: str = typer.Option("rest", help="rest, journey or all"),
+           workers: int = typer.Option(4, min=1, max=4, help="Concurrent independent search reads; permission transitions stay ordered."),
            report: Optional[Path] = typer.Option(None, help="Live evidence/cleanup ledger; defaults under .cedar/reports/search.")):
-    """Prepare or explicitly run the opt-in search corpus; never builds or restarts the stack."""
+    """Prepare or explicitly run the standalone search corpus; never builds or restarts the stack."""
     from org.metadatacenter.search_harness import run_search
     try:
         raise typer.Exit(run_search(plan=plan, check=check, validate=validate, live=live,
-                                    isolated=isolated, tier=tier, report=report))
+                                    isolated=isolated, tier=tier, report=report, workers=workers))
     except ValueError as error:
         console.print(str(error), markup=False)
         raise typer.Exit(2) from error

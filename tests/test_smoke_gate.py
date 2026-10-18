@@ -213,8 +213,28 @@ def queue_runner(exit_code=124):
     return answer
 
 
+def search_payload():
+    families = ("content", "access", "paging", "lifecycle", "journey")
+    return {"tier": "all", "status": "IMPLEMENTED_CASES_PASS_WITH_DECLARED_GAPS",
+            "finishedAt": "2026-10-17T10:03:00Z", "runToken": "unique", "harnessDigest": "h", "corpusDigest": "c",
+            "cleanupErrors": [], "browserErrors": [],
+            "matrixCells": dict.fromkeys(families, 1),
+            "cells": {family: ["lifecycle/cell"] if family == "lifecycle" else
+                      [{"id": "cell" if family == "journey" else f"{family}/cell"}] for family in families},
+            "checks": [{"id": f"{family}/cell", "status": "pass"} for family in families],
+            "completion": {"complete": True, "missing": [], "unexpected": [], "failed": []}}
+
+
+def search_runner(payload=None, exit_code=0):
+    def answer(args, _kwargs):
+        path = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("--report=")))
+        path.write_text(json.dumps(search_payload() if payload is None else payload), encoding="utf-8")
+        return FakeResult(exit_code)
+    return answer
+
+
 def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, browser=FakeResult(0),
-               split=None):
+               split=None, search=None):
     controller = str(home / "cedar-development" / "ops" / "cedar-services.sh")
 
     def status(_args, kwargs):
@@ -228,6 +248,7 @@ def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, brows
         (("npm", "run", "smoke:rest"), rest or rest_runner()),
         (("npm", "run", "smoke:workspace:modern:full"), split or split_runner()),
         (("npm", "run", "smoke"), browser),
+        (("npm", "run", "smoke:search"), search or search_runner()),
     ])
 
 
@@ -253,6 +274,7 @@ def report_for(heads=HEADS, **overrides):
                      "finishedAt": "2026-09-07T10:01:30+00:00"},
             "browser": {"verdict": "PASS", "finishedAt": "2026-09-07T10:02:30+00:00"},
             "split": {"verdict": "PASS", "finishedAt": "2026-09-07T10:03:30+00:00"},
+            "search": {"verdict": "PASS", "evidenceValid": True},
         },
     }
     report.update(overrides)
@@ -277,6 +299,61 @@ class RunSmokeTest(unittest.TestCase):
         which.start()
         self.addCleanup(which.stop)
 
+    def test_search_evidence_fails_closed_even_when_the_process_exits_zero(self):
+        mutations = {
+            "rest only": lambda r: r.update(tier="rest"),
+            "unfinished": lambda r: r.pop("finishedAt"),
+            "running": lambda r: r.update(status="RUNNING"),
+            "cleanup failure": lambda r: r.update(cleanupErrors=[{"message": "failed delete"}]),
+            "browser error": lambda r: r.update(browserErrors=["page error"]),
+            "fatal": lambda r: r.update(fatal={"message": "timeout"}),
+            "missing cell": lambda r: r["checks"].pop(),
+            "duplicate cell": lambda r: r["checks"].__setitem__(0, r["checks"][1]),
+            "unexpected cell": lambda r: r["checks"][0].update(id="unplanned"),
+            "failed cell": lambda r: r["checks"][0].update(status="fail"),
+            "skipped cell": lambda r: r["checks"][0].update(status="skip"),
+            "incomplete": lambda r: r["completion"].update(complete=False),
+            "missing completion": lambda r: r.pop("completion"),
+            "no journeys": lambda r: r["cells"].pop("journey"),
+            "wrong inventory count": lambda r: r["matrixCells"].update(content=2),
+            "empty family": lambda r: (r["cells"].update(content=[]), r["matrixCells"].update(content=0)),
+            "duplicate inventory": lambda r: r["cells"]["content"][0].update(id="access/cell"),
+            "malformed": lambda r: r.update(checks=None),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                payload = search_payload()
+                mutate(payload)
+                runner = runner_for(home, search=search_runner(payload))
+                self.assertEqual(1, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+                report = read_report(home, HEADS)
+                self.assertEqual("FAIL", report["tiers"]["search"]["verdict"])
+                self.assertFalse(report["tiers"]["search"]["evidenceValid"])
+                self.assertEqual(4, len(runner.commands("npm", "run")))
+
+    def test_search_rerun_cannot_reuse_an_older_passing_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            self.assertEqual(0, run_smoke(home, runner=runner_for(home), clock=clock(), environment={"PATH": "/usr/bin"}))
+            previous = read_report(home, HEADS)["tiers"]["search"]["report"]
+            for code in (0, 75):
+                self.assertEqual(1, run_smoke(home, runner=runner_for(home, search=FakeResult(code)),
+                                             clock=clock(), environment={"PATH": "/usr/bin"}))
+                search = read_report(home, HEADS)["tiers"]["search"]
+                self.assertNotEqual(previous, search["report"])
+                self.assertFalse(search["evidenceValid"])
+                self.assertIn("reportError", search)
+            self.assertTrue(Path(previous).exists())
+
+    def test_old_three_tier_runs_and_unverified_search_verdicts_do_not_certify_a_train(self):
+        report = report_for()
+        del report["tiers"]["search"]
+        self.assertEqual(1, len(evaluate(report, HEADS)))
+        self.assertIn("no search tier", evaluate(report, HEADS)[0])
+        report["tiers"]["search"] = {"verdict": "PASS"}
+        self.assertIn("no complete matrix", evaluate(report, HEADS)[0])
+
     def test_a_passing_run_is_recorded_under_the_digest_of_its_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)
@@ -298,7 +375,8 @@ class RunSmokeTest(unittest.TestCase):
             self.assertEqual(810, report["tiers"]["rest"]["counts"]["total"])
             self.assertEqual("PASS", report["tiers"]["browser"]["verdict"])
             self.assertEqual("PASS", report["tiers"]["split"]["verdict"])
-            self.assertEqual(210.0, report["durationSeconds"])
+            self.assertEqual(270.0, report["durationSeconds"])
+            self.assertTrue(report["tiers"]["search"]["evidenceValid"])
 
     def test_the_split_record_names_the_failing_script_and_step(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -433,9 +511,9 @@ class RunSmokeTest(unittest.TestCase):
 
             e2e = str(home / "cedar-development" / "ops" / "e2e")
             npm_calls = [(args, kwargs) for args, kwargs in runner.calls if args[0] == "npm"]
-            self.assertEqual(3, len(npm_calls))
+            self.assertEqual(4, len(npm_calls))
             self.assertTrue(all(kwargs["cwd"] == e2e for _, kwargs in npm_calls))
-            rest, browser, split = (args for args, _ in npm_calls)
+            rest, browser, split, search = (args for args, _ in npm_calls)
             self.assertEqual(["npm", "run", "smoke:rest", "--"], rest[:4])
             self.assertTrue(rest[4].startswith("--report="))
             self.assertEqual(["npm", "run", "smoke"], browser)
@@ -443,13 +521,17 @@ class RunSmokeTest(unittest.TestCase):
             self.assertTrue(split[4].startswith("--report="))
             self.assertTrue(split[4].endswith(f"split-smoke-{sources_digest(HEADS)}.json"))
 
-    def test_rest_worker_budget_only_changes_the_rest_command(self):
+            self.assertEqual(["npm", "run", "smoke:search", "--"], search[:4])
+            self.assertTrue(search[4].startswith("--report="))
+
+    def test_rest_worker_budget_applies_to_rest_suites_and_search_reads(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)
             runner = runner_for(home)
             self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(),
                 environment={"PATH": "/usr/bin"}, rest_workers=4))
             self.assertIn("--workers=4", runner.commands("npm", "run", "smoke:rest")[0])
+            self.assertIn("--workers=4", runner.commands("npm", "run", "smoke:search")[0])
             self.assertEqual(["npm", "run", "smoke"], runner.commands("npm", "run", "smoke")[0])
         for value in (0, 5, 1.5, True):
             with self.assertRaises(ValueError):
