@@ -42,6 +42,24 @@ def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
                                split_timeout_cap=split_timeout_cap))
 
 
+@app.command("search")
+def search(plan: bool = typer.Option(False, help="Print the offline corpus and expanded matrix inventory (the default)."),
+           check: bool = typer.Option(False, help="Run offline harness tests with networking disabled."),
+           validate: bool = typer.Option(False, help="Validate artifacts offline using the prebuilt local Java 17 validator/reader."),
+           live: bool = typer.Option(False, help="Explicitly create temporary corpus artifacts and exercise the running stack."),
+           isolated: bool = typer.Option(False, help="Use unwrapped queries; requires an otherwise isolated test deployment."),
+           tier: str = typer.Option("rest", help="rest, journey or all"),
+           report: Optional[Path] = typer.Option(None, help="Live evidence/cleanup ledger; defaults under .cedar/reports/search.")):
+    """Prepare or explicitly run the opt-in search corpus; never builds or restarts the stack."""
+    from org.metadatacenter.search_harness import run_search
+    try:
+        raise typer.Exit(run_search(plan=plan, check=check, validate=validate, live=live,
+                                    isolated=isolated, tier=tier, report=report))
+    except ValueError as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("status")
 def status():
     """List embedded MongoDB processes that can interfere with backend tests."""

@@ -172,6 +172,14 @@ concurrently, followed by the browser and split smoke tiers. The REST default is
 all check-inventory and cleanup gates remain required, and the REST report includes
 per-suite and phase timings.
 
+`cedarcli test search` prints an offline plan for the opt-in artifact search matrix. `--check`
+runs its offline harness tests with networking blocked; `--validate` checks its artifact corpus
+with the existing local Java validator/reader. Only `--live --tier rest|journey|all` contacts the
+running stack, creates temporary fixtures and checks actual results. It never builds or redeploys.
+The matrix remains outside the default e2e gate while its live validation is pending. See
+`cedar-development/ops/BACKEND-RUNBOOK.md`, under the default test environment, for its coverage,
+scope, cleanup ledger and declared gaps.
+
 The split tier runs three kinds of lane at the same time. The core lane first runs the Workspace
 smoke's inline chain, the identity lane alone runs the journeys and scripts that sign the second
 user in or log out, one at a time, and the general lanes run the rest. The lanes take their work
