@@ -13,8 +13,11 @@ with it. Four unrelated regressions accumulated behind that one unpublished arti
 looked, because nothing compared what Nexus served against what develop held.
 
 The comparison is the whole check: the timestamp Nexus records for a snapshot against the time of the
-head commit on develop. This module is the decision, kept apart from the fetching so it can be tested
-without a network.
+newest commit on develop that can change what the repository publishes. A commit that changes only
+the repository's CI configuration or its documentation cannot, and a repository whose CI does not
+publish, such as the cedar-project aggregator, which the release train publishes, would otherwise
+report as behind after every such commit. This module is the decision, kept apart from the fetching
+so it can be tested without a network.
 """
 
 from __future__ import annotations
@@ -62,6 +65,20 @@ class SnapshotFinding:
         return self.state in (SnapshotState.BEHIND, SnapshotState.ABSENT)
 
 
+def changes_artifact(paths) -> bool:
+    """Whether a commit that changed these files can change what its repository publishes.
+
+    Only CI configuration under .github/ and Markdown outside the source tree are left out. Anything
+    else counts, including a commit whose files are not known, so the check stays conservative.
+    """
+    paths = list(paths)
+    return not paths or any(not _outside_artifact(path) for path in paths)
+
+
+def _outside_artifact(path: str) -> bool:
+    return path.startswith(".github/") or (path.lower().endswith(".md") and "/src/" not in "/" + path)
+
+
 def parse_last_updated(metadata: str) -> datetime | None:
     """The UTC instant Nexus records for a snapshot, or None when the document does not carry one."""
     match = LAST_UPDATED.search(metadata or "")
@@ -90,13 +107,19 @@ def evaluate(repository: str,
              version: str,
              published_at: datetime | None,
              committed_at: datetime | None,
-             grace: timedelta = DEFAULT_GRACE) -> SnapshotFinding:
+             grace: timedelta = DEFAULT_GRACE,
+             later_commits: int = 0) -> SnapshotFinding:
     """The verdict for one repository, given what Nexus serves and what develop holds.
+
+    committed_at is the time of the newest commit on develop that can change the artifact, and
+    later_commits counts the newer ones that change only CI configuration or documentation.
 
     An absent snapshot is a failure rather than an unknown: the repository is one the estate expects
     to publish, so nothing at that coordinate means nothing was ever published there, and a consumer
     asking for it gets whatever older version it can find.
     """
+    source = "the head commit on develop" if later_commits == 0 else (
+        "the newest commit on develop that changes it")
     if committed_at is None:
         return SnapshotFinding(repository, SnapshotState.UNREADABLE,
                                "the head commit on develop could not be read", published_at, None)
@@ -107,10 +130,15 @@ def evaluate(repository: str,
         behind = committed_at - published_at
         return SnapshotFinding(
             repository, SnapshotState.BEHIND,
-            f"published {_describe(behind)} before the head commit on develop",
+            f"published {_describe(behind)} before {source}",
             published_at, committed_at)
-    return SnapshotFinding(repository, SnapshotState.CURRENT, "published after the head commit",
-                           published_at, committed_at)
+    if later_commits == 0:
+        detail = "published after the head commit"
+    else:
+        later = "later commit changes" if later_commits == 1 else "later commits change"
+        detail = (f"published after the newest commit that changes it; the {later_commits} {later} "
+                  "only CI or documentation")
+    return SnapshotFinding(repository, SnapshotState.CURRENT, detail, published_at, committed_at)
 
 
 def _describe(gap: timedelta) -> str:

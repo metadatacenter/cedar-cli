@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from org.metadatacenter.util.SnapshotFreshness import (
     SnapshotState,
+    changes_artifact,
     evaluate,
     parse_commit_time,
     parse_last_updated,
@@ -93,6 +94,30 @@ class SnapshotFreshnessTest(unittest.TestCase):
                                           timedelta(0)).detail)
         self.assertIn("4 days", evaluate("r", "v", base, base + timedelta(days=4),
                                          timedelta(0)).detail)
+
+    def test_only_ci_configuration_and_documentation_leave_the_artifact_unchanged(self):
+        self.assertFalse(changes_artifact([".github/workflows/ci.yml"]))
+        self.assertFalse(changes_artifact(["README.md", ".github/dependabot.yml", "docs/notes.md"]))
+        self.assertTrue(changes_artifact(["pom.xml"]))
+        self.assertTrue(changes_artifact([".github/workflows/ci.yml", "pom.xml"]))
+        self.assertTrue(changes_artifact(["app/src/main/resources/assets/help.md"]))
+
+    def test_a_commit_whose_files_are_unknown_counts_as_changing_the_artifact(self):
+        self.assertTrue(changes_artifact([]))
+
+    def test_a_snapshot_later_commits_cannot_have_changed_is_current(self):
+        """cedar-project, 2026-10-17: its CI does not publish, and its head commit changed only CI,
+        so the head commit made a current snapshot read as six days behind."""
+        finding = evaluate("cedar-project", "2.9.25-SNAPSHOT", at("2026-10-09T05:40:00Z"),
+                           at("2026-10-09T05:33:30Z"), later_commits=1)
+        self.assertEqual(SnapshotState.CURRENT, finding.state)
+        self.assertIn("the 1 later commit changes only CI or documentation", finding.detail)
+
+    def test_a_snapshot_behind_the_newest_commit_that_changes_it_is_still_a_failure(self):
+        finding = evaluate("r", "v", at("2026-10-01T00:00:00Z"), at("2026-10-05T00:00:00Z"),
+                           later_commits=2)
+        self.assertEqual(SnapshotState.BEHIND, finding.state)
+        self.assertIn("before the newest commit on develop that changes it", finding.detail)
 
 
 if __name__ == "__main__":

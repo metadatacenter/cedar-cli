@@ -2,6 +2,7 @@
 from org.metadatacenter.util.InvocationContext import invocation_environment
 
 import base64
+import json
 import shutil
 import subprocess
 from datetime import timedelta
@@ -16,6 +17,7 @@ from org.metadatacenter.util.SnapshotFreshness import (
     DEFAULT_GRACE,
     SnapshotFinding,
     SnapshotState,
+    changes_artifact,
     evaluate,
     parse_commit_time,
     parse_last_updated,
@@ -102,8 +104,8 @@ class SnapshotWorker:
         published_at, unreadable = SnapshotWorker._published_at(repository, version, nexus)
         if unreadable:
             return SnapshotFinding(repository, SnapshotState.UNREADABLE, unreadable)
-        return evaluate(repository, version, published_at,
-                        SnapshotWorker._committed_at(repository), grace)
+        committed_at, later_commits = SnapshotWorker._committed_at(repository)
+        return evaluate(repository, version, published_at, committed_at, grace, later_commits)
 
     @staticmethod
     def _published_at(repository, version, nexus):
@@ -123,16 +125,45 @@ class SnapshotWorker:
             return None, f"Nexus answered {response.status_code} for {version}"
         return parse_last_updated(response.text), None
 
+    # How far back to look for a commit that changes the artifact. Past this, the head commit is
+    # compared, which can only report a snapshot as behind, never hide one that is.
+    ARTIFACT_COMMIT_SEARCH = 20
+
     @staticmethod
     def _committed_at(repository):
-        """The time of the head commit on develop, as GitHub reports it."""
-        completed = subprocess.run(
-            ["gh", "api", f"repos/{ORGANIZATION}/{repository}/commits/develop",
-             "--jq", ".commit.committer.date"],
-            capture_output=True, text=True, check=False, env=invocation_environment())
+        """The time of the newest commit on develop that can change what the repository publishes,
+        and how many newer commits change only its CI configuration or documentation.
+
+        The head commit usually changes the artifact, and then it is the only one read.
+        """
+        head = SnapshotWorker._gh_json(f"repos/{ORGANIZATION}/{repository}/commits/develop")
+        if head is None:
+            return None, 0
+        head_time = parse_commit_time(head.get("commit", {}).get("committer", {}).get("date", ""))
+        if changes_artifact(entry.get("filename", "") for entry in head.get("files") or []):
+            return head_time, 0
+        listing = SnapshotWorker._gh_json(
+            f"repos/{ORGANIZATION}/{repository}/commits?sha=develop"
+            f"&per_page={SnapshotWorker.ARTIFACT_COMMIT_SEARCH}")
+        for later, entry in enumerate((listing or [])[1:], start=1):
+            commit = SnapshotWorker._gh_json(f"repos/{ORGANIZATION}/{repository}/commits/{entry.get('sha')}")
+            if commit is None:
+                break
+            if changes_artifact(item.get("filename", "") for item in commit.get("files") or []):
+                return parse_commit_time(commit.get("commit", {}).get("committer", {}).get("date", "")), later
+        return head_time, 0
+
+    @staticmethod
+    def _gh_json(path):
+        """GitHub's answer for an API path, or None when it could not be read."""
+        completed = subprocess.run(["gh", "api", path], capture_output=True, text=True, check=False,
+                                   env=invocation_environment())
         if completed.returncode != 0:
             return None
-        return parse_commit_time(completed.stdout)
+        try:
+            return json.loads(completed.stdout)
+        except ValueError:
+            return None
 
     @staticmethod
     def _estate_version():
