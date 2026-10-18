@@ -41,6 +41,7 @@ from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.GitWorker import GitWorker
+from tests.test_smoke_gate import search_payload
 
 SUBJECT = "cedar-subject"
 OTHER = "cedar-other"
@@ -210,10 +211,11 @@ class StackStandIn:
         if args and str(args[0]).endswith("cedar-services.sh"):
             return SimpleNamespace(returncode=0, stdout=HEALTHY, stderr="")
         if args and args[0] == "npm":
+            payload = search_payload() if "smoke:search" in args else {
+                "runId": "r", "verdict": "PASS", "inventoryMatched": True}
             for argument in args:
                 if argument.startswith("--report="):
-                    Path(argument.split("=", 1)[1]).write_text(json.dumps(
-                        {"runId": "r", "verdict": "PASS", "inventoryMatched": True}), encoding="utf-8")
+                    Path(argument.split("=", 1)[1]).write_text(json.dumps(payload), encoding="utf-8")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return subprocess.run(args, **kwargs)
 
