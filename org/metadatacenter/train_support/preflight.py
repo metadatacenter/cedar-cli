@@ -472,9 +472,32 @@ def _preflight(selected, resume):
         settle(_source_ci_preflight, source)
     settle(_publication_targets_preflight)
     _ci_env_preflight()
+    _test_tag_preflight()
     if findings:
         raise ValueError(_preflight_failure(findings))
     return summary, source
+
+
+def _test_tag_preflight():
+    """Report untagged integration classes without refusing the train.
+
+    The tag selects and counts tests. It changes nothing a default build runs, so a missing one
+    is no evidence that this train would fail. `cedarcli build java` refuses on it. Saying it
+    here as well means the operator hears of it while already reading this report.
+    """
+    from org.metadatacenter.worker.IntegrationTagWorker import IntegrationTagWorker
+    try:
+        findings = IntegrationTagWorker.findings()
+    except Exception as error:  # An advisory must not be what stops a train.
+        _output_component.console.print(f'  [yellow]Integration tags not checked: {error}[/yellow]')
+        return
+    if not findings:
+        return
+    _output_component.console.print(
+        f'  [yellow]Integration tag advisory: {len(findings)} test classes start a server or '
+        'store without @Tag("integration"): ' + '; '.join(findings) + '[/yellow]')
+    _output_component.console.print(
+        '  [yellow]  List them with cedarcli check test-tags, and tag them outside a train.[/yellow]')
 
 
 def _ci_env_preflight():

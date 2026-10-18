@@ -7,6 +7,7 @@ from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.OpenApiWorker import OpenApiWorker
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.SnapshotWorker import DEFAULT_NEXUS, SnapshotWorker
+from org.metadatacenter.worker.IntegrationTagWorker import IntegrationTagWorker
 from org.metadatacenter.worker.VersionWorker import VersionWorker
 
 app = typer.Typer(no_args_is_help=True)
@@ -78,6 +79,15 @@ def openapi(
             help="List every document in the detail section, not only those with findings.")):
     """Check that every committed OpenAPI document describes what a generated client needs."""
     exit_on_failure(OpenApiWorker.check_openapi(show_all=show_all))
+
+
+@app.command("test-tags")
+def test_tags(
+        show_all: bool = typer.Option(
+            False, "--all",
+            help="List every Java repository, not only those with integration classes.")):
+    """Check that every Java test class that starts a server or store carries the integration tag."""
+    exit_on_failure(IntegrationTagWorker.check_test_tags(show_all=show_all))
 
 
 @app.command("main")

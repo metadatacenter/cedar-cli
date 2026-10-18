@@ -50,6 +50,26 @@ def configure_java_tests(tests: bool):
     GlobalContext.mark_skip_tests(not tests)
 
 
+def require_integration_tags(tests: bool, dry_run: bool, dump_plan: bool):
+    """Refuse a Java build that would run an untagged integration class.
+
+    The tag changes no default run, so Maven cannot notice it missing. Reading the test sources
+    takes about a second, so the check runs before any Maven work rather than after it.
+    """
+    if not tests or dry_run or dump_plan:
+        return
+    from org.metadatacenter.worker.IntegrationTagWorker import REMEDY, IntegrationTagWorker
+    findings = IntegrationTagWorker.findings()
+    if not findings:
+        return
+    console.print(f"[red]{len(findings)} Java test classes start a server or store without the "
+                  "integration tag:[/red]")
+    for finding in findings:
+        console.print(f"  {finding}", markup=False, highlight=False)
+    console.print(REMEDY)
+    raise typer.Exit(1)
+
+
 def build_input_roots(plan):
     """The repositories a build reads: those its plan builds, and the build tooling.
 
@@ -194,6 +214,7 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
          tests: bool = typer.Option(
              True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
     configure_java_tests(tests)
+    require_integration_tags(tests, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build java")
     BuildPlanner.parent(plan)
@@ -270,6 +291,7 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
               tests: bool = typer.Option(
                   True, "--tests/--skip-tests", help="Run Java and frontend verification suites. Default: run.")):
     configure_java_tests(tests)
+    require_integration_tags(tests, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
     BuildPlanner.parent(plan)
