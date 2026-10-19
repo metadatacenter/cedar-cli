@@ -21,6 +21,7 @@ class DemoCommandsTest(unittest.TestCase):
         stack.enter_context(use_context(InvocationContext(environment=dict(os.environ))))
         recipes = inventory()
         stack.enter_context(patch('org.metadatacenter.frontend_inventory.inventory', return_value=recipes))
+        stack.enter_context(patch.object(build, 'check_design_tokens', return_value=0))
         GlobalContext.init_task_operators()
         self.runner = CliRunner()
 

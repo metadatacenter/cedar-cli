@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from org.metadatacenter import maven, reactor, reactor_evidence
+from org.metadatacenter.design_tokens import check_design_tokens
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
@@ -68,6 +69,23 @@ def require_integration_tags(tests: bool, dry_run: bool, dump_plan: bool):
         console.print(f"  {finding}", markup=False, highlight=False)
     console.print(REMEDY)
     raise typer.Exit(1)
+
+
+def require_design_token_adoption(verify: bool, dry_run: bool, dump_plan: bool):
+    """Refuse a frontend build whose sources the CI design-token gate would refuse.
+
+    Each consumer's "Design token adoption" workflow runs the tokens repository's checker in strict
+    mode, and no consumer's own test gate does, so a tree the reactor accepted could still fail that
+    workflow on push. The checker reads the source checkouts the reactor is about to build and takes
+    seconds, so it runs before any build work rather than after it.
+    """
+    if not verify or dry_run or dump_plan:
+        return
+    code = check_design_tokens(strict=True)
+    if code:
+        console.print("[red]The design-token adoption check failed, as CI would.[/red] "
+                      "Fix the findings above, then build again.")
+        raise typer.Exit(code)
 
 
 def build_input_roots(plan):
@@ -231,6 +249,7 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
                   True, "--reuse/--no-reuse",
                   help="Take a repository's earlier passing result when everything it reads is "
                        "unchanged. --no-reuse runs every repository's checks again.")):
+    require_design_token_adoption(True, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
     BuildPlanner.frontends(plan, reuse=reuse)
@@ -292,6 +311,7 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
                   True, "--tests/--skip-tests", help="Run Java and frontend verification suites. Default: run.")):
     configure_java_tests(tests)
     require_integration_tags(tests, dry_run, dump_plan)
+    require_design_token_adoption(tests, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
     BuildPlanner.parent(plan)
