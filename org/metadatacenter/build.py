@@ -1,8 +1,10 @@
 from pathlib import Path
 from typing import Optional
 import json
+import os
 import subprocess
 import sys
+import time
 
 import typer
 from rich.console import Console
@@ -12,6 +14,7 @@ from org.metadatacenter import maven, reactor, reactor_evidence
 from org.metadatacenter.design_tokens import check_design_tokens
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
+from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
 from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories, tracked_path_state
@@ -49,6 +52,43 @@ JAVA_TESTS_OPTION_HELP = "Run Java test suites. Default: run."
 
 def configure_java_tests(tests: bool):
     GlobalContext.mark_skip_tests(not tests)
+
+
+def java_checkouts():
+    home = Path(Util.cedar_home)
+    return {home / repo.get_fqn() for repo in GlobalContext.repos.get_list_all()
+            if repo.repo_type in (RepoType.JAVA, RepoType.JAVA_WRAPPER)}
+
+
+def coverage_reports(checkouts, started: float):
+    """The JaCoCo reports written under these checkouts since a build started.
+
+    An aggregator such as cedar-project builds sibling checkouts through `../` modules, and Maven
+    writes their reports there, so the plan's own repositories cannot say where to look.
+    """
+    reports = set()
+    for checkout in checkouts:
+        for directory, children, _ in os.walk(checkout):
+            if Path(directory).name == 'target':
+                reports.update(report for report in Path(directory, 'site').glob('jacoco*/index.html')
+                               if report.stat().st_mtime >= started)
+                children[:] = []
+            else:
+                children[:] = [child for child in children if child not in ('.git', 'node_modules', 'src')]
+    return reports
+
+
+def report_coverage(started: float):
+    """Say how many coverage reports a build that ran Java tests wrote.
+
+    cedar-parent attaches JaCoCo to every test run.
+    """
+    reports = coverage_reports(java_checkouts(), started)
+    if reports:
+        noun = "report" if len(reports) == 1 else "reports"
+        # Unwrapped, so a log shows the sentence whole at any terminal width.
+        console.print(f"JaCoCo wrote {len(reports)} coverage {noun} under the tested modules' "
+                      "target/site directories.", soft_wrap=True)
 
 
 def require_integration_tags(tests: bool, dry_run: bool, dump_plan: bool):
@@ -127,6 +167,14 @@ def capture_build_state(home: Path, frontend_only: bool):
     return state
 
 
+def execute_java_build(plan: Plan, dry_run: bool, dump_plan: bool):
+    started = time.time()
+    selection = execute_build(plan, dry_run, dump_plan)
+    if not GlobalContext.should_skip_tests() and not dry_run and not dump_plan:
+        report_coverage(started)
+    return selection
+
+
 def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
     """Run a build while proving it did not add or alter tracked workspace changes."""
     from org.metadatacenter.util.InvocationContext import current_context
@@ -175,7 +223,7 @@ def this(wd: str = typer.Option(None, help="Working directory"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build this")
     BuildPlanner.this(plan, wd)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("parent")
@@ -187,7 +235,7 @@ def parent(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build parent")
     BuildPlanner.parent(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("libraries")
@@ -199,7 +247,7 @@ def libraries(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build libraries")
     BuildPlanner.libraries(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("project")
@@ -211,7 +259,7 @@ def project(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build project")
     BuildPlanner.project(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("clients")
@@ -223,7 +271,7 @@ def clients(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build clients")
     BuildPlanner.clients(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("java")
@@ -239,7 +287,7 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.libraries(plan)
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("frontends")
@@ -319,7 +367,7 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
-    selection = execute_build(plan, dry_run, dump_plan)
+    selection = execute_java_build(plan, dry_run, dump_plan)
     if tests and not dry_run and not dump_plan:
         from org.metadatacenter.cee_demos import check_selection
         check_selection(selection)
