@@ -502,19 +502,19 @@ class ReleasePlanner:
                 if consumer['repository'] in consumer_repositories:
                     component_wiring.append({**consumer, 'package': package})
 
-        # The train builds a shared component that follows the model library against the model it
-        # published itself, so that model belongs to the component's graph too. Left alone, the
-        # component's lockfile keeps the development model its checkout pinned, which Nexus deletes.
-        # CEE also follows the model, but the release pins the public CEE in its place.
+        # The train builds every repository that follows the model library, shared components and
+        # applications alike, against the model it published itself, so that model belongs to each
+        # one's graph too. Left alone, a lockfile keeps the development model its checkout pinned,
+        # which Nexus deletes. CEE also follows the model, but the release pins the public CEE in
+        # its place.
         model = npm_plan.get('model') or {}
-        component_repositories = {component['repository']
-                                  for component in npm_plan.get('components', [])}
+        cee_repository = frontend_config.get('cee', {}).get('repository', 'cedar-embeddable-editor')
         model_consumers = [
             consumer
             for followed in frontend_config.get('components', [])
             if model and followed.get('repository') == model.get('repository')
             for consumer in followed.get('consumers', [])
-            if consumer['repository'] in component_repositories
+            if consumer['repository'] != cee_repository
             and consumer['repository'] in consumer_repositories
         ]
         if model_consumers:
