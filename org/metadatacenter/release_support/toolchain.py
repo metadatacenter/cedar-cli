@@ -36,7 +36,7 @@ class ToolchainResolver:
     """Put the release's Java and Node first on PATH when the shell offers other versions.
 
     A developer shell pins whatever the day's work needs, and a release needs Java 17 and Node
-    24.19.0 exactly. The runbook tells the operator to export both before starting; the CLI can
+    24.22.0 exactly. The runbook tells the operator to export both before starting; the CLI can
     follow those two instructions itself. It changes only the environment it is given, which for
     a command is its invocation and children, says what it substituted, and leaves the toolchain
     check to refuse whatever it could not find.

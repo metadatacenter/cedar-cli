@@ -28,16 +28,16 @@ class NodeBuildCheckTest(unittest.TestCase):
     def test_staging_node_fails_with_required_actual_and_executable(self):
         with tempfile.TemporaryDirectory() as root:
             project, env = self.fixture(root, 'v16.20.2')
-            (project / '.nvmrc').write_text('24.19.0\n')
+            (project / '.nvmrc').write_text('24.22.0\n')
             with self.assertRaises(BuildSafetyError) as error:
                 require_build_node(project, env)
             message = str(error.exception)
-            for expected in ('24.19.0', 'v16.20.2', str(Path(root) / 'node'), '.nvmrc'):
+            for expected in ('24.22.0', 'v16.20.2', str(Path(root) / 'node'), '.nvmrc'):
                 self.assertIn(expected, message)
 
     def test_project_pin_and_shared_release_pin(self):
         with tempfile.TemporaryDirectory() as root:
-            project, env = self.fixture(root, 'v24.19.0')
+            project, env = self.fixture(root, 'v24.22.0')
             require_build_node(project, env)
             (project / '.nvmrc').write_text('v22.22.3\n')
             with self.assertRaisesRegex(BuildSafetyError, 'pins Node 22.22.3'):
