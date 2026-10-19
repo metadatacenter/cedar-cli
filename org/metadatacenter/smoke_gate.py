@@ -446,7 +446,7 @@ def _rest_details(rest_report: Path) -> dict:
 
 
 def _search_details(path: Path) -> dict:
-    """Require all five matrix families and successful cleanup, independently of the exit code."""
+    """Require every matrix family and successful cleanup, independently of the exit code."""
     details = {"report": str(path), "evidenceValid": False}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -454,7 +454,7 @@ def _search_details(path: Path) -> dict:
             raise ValueError("search evidence is not an object")
         expected = []
         cells, counts = payload["cells"], payload["matrixCells"]
-        for family in ("content", "access", "paging", "lifecycle", "journey"):
+        for family in ("content", "access", "paging", "protocol", "lifecycle", "journey"):
             rows = cells[family]
             if (not isinstance(rows, list) or type(counts[family]) is not int
                     or counts[family] <= 0 or counts[family] != len(rows)):
