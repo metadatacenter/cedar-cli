@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from xml.etree import ElementTree
 
 import typer
 from rich.console import Console
@@ -128,13 +129,53 @@ def require_design_token_adoption(verify: bool, dry_run: bool, dump_plan: bool):
         raise typer.Exit(code)
 
 
+def _local_name(element):
+    return element.tag.rsplit('}', 1)[-1]
+
+
+def maven_modules(checkout: Path):
+    """The modules a checkout's POM builds by default, as directories.
+
+    Only the project's own <modules> count: a profile's modules are built only when it is active,
+    and a commented-out module is not built at all, which is why the POM is parsed rather than
+    searched.
+    """
+    try:
+        project = ElementTree.parse(checkout / 'pom.xml').getroot()
+    except (OSError, ElementTree.ParseError):
+        return []
+    return [(checkout / module.text.strip()).resolve()
+            for modules in project if _local_name(modules) == 'modules'
+            for module in modules if _local_name(module) == 'module' and (module.text or '').strip()]
+
+
+def aggregated_checkouts(checkout: Path, home: Path):
+    """The other checkouts an aggregator builds through `../` modules, followed transitively.
+
+    cedar-project, for one, compiles cedar-artifact-server and every other server from their own
+    checkouts, and cedar-microservice-libraries among them aggregates further.
+    """
+    found, pending = set(), [checkout]
+    while pending:
+        for module in maven_modules(pending.pop()):
+            try:
+                member = home / module.relative_to(home).parts[0]
+            except (ValueError, IndexError):
+                continue  # A module outside CEDAR_HOME, or CEDAR_HOME itself, is no checkout.
+            if member != checkout and member not in found:
+                found.add(member)
+                pending.append(member)
+    return found
+
+
 def build_input_roots(plan):
     """The repositories a build reads: those its plan builds, and the build tooling.
 
     Work elsewhere in the estate is not an input, for a Java build as for a frontend one, so an edit
-    to an unrelated repository does not fail a build that never read it. The roots are resolved,
-    because the captured state is keyed by resolved paths and a symlinked CEDAR_HOME otherwise
-    matches nothing, which silently disables the invariant.
+    to an unrelated repository does not fail a build that never read it. A checkout an aggregator
+    builds through a `../` module is an input, although the plan names only the aggregator. The
+    roots are resolved, because the captured state is keyed by resolved paths and a symlinked
+    CEDAR_HOME otherwise matches nothing, which silently disables the invariant.
     """
     home = Path(Util.cedar_home).resolve()
     roots = {home / 'cedar-cli', home / 'cedar-development'}
@@ -147,7 +188,10 @@ def build_input_roots(plan):
         for child in task.tasks:
             visit(child)
     visit(plan)
-    return {root.resolve() for root in roots}
+    roots = {root.resolve() for root in roots}
+    for root in list(roots):
+        roots |= aggregated_checkouts(root, home)
+    return roots
 
 
 # Profiles and frontend configuration live in this mixed-purpose repository.

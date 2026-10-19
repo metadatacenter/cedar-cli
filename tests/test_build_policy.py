@@ -297,6 +297,56 @@ class BuildPolicyTest(unittest.TestCase):
                 patch.object(Util, "cedar_home", "/tmp"):
             build.execute_build(Plan("guarded"), dry_run=False, dump_plan=False)
 
+    @staticmethod
+    def aggregator_estate(home: Path):
+        """cedar-project builds two sibling checkouts, one of which aggregates a third."""
+        def pom(checkout, *modules, commented=()):
+            listed = "".join(f"<module>{module}</module>" for module in modules)
+            hidden = "".join(f"<!-- <module>{module}</module> -->" for module in commented)
+            (home / checkout).mkdir(parents=True, exist_ok=True)
+            (home / checkout / "pom.xml").write_text(
+                '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+                f"<modules>{listed}{hidden}</modules>"
+                "<profiles><profile><modules><module>../cedar-profile-only</module></modules>"
+                "</profile></profiles></project>")
+        pom("cedar-project", "../cedar-artifact-server", "../cedar-microservice-libraries",
+            "cedar-project-internal", commented=("../cedar-retired-server",))
+        pom("cedar-microservice-libraries", "cedar-search-operations-library",
+            "../cedar-model-library/cedar-model-library-core")
+        pom("cedar-artifact-server", "cedar-artifact-server-application")
+        plan = Plan("Build project")
+        plan.tasks.append(SimpleNamespace(repo=SimpleNamespace(name="cedar-project", parent_repo=None),
+                                          tasks=[]))
+        return plan
+
+    def test_an_aggregator_build_reads_the_checkouts_its_modules_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            plan = self.aggregator_estate(home)
+            with patch.object(Util, "cedar_home", directory):
+                roots = build.build_input_roots(plan)
+
+        # Commented-out and profile-only modules are not built by default, so they are not inputs.
+        self.assertEqual({home / name for name in (
+            "cedar-cli", "cedar-development", "cedar-project", "cedar-artifact-server",
+            "cedar-microservice-libraries", "cedar-model-library")}, roots)
+
+    def test_a_java_build_fails_when_a_checkout_an_aggregator_builds_changes(self):
+        # cedar-project compiles cedar-artifact-server through a ../ module, so an edit there
+        # during the build changes what the build read.
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            plan = self.aggregator_estate(home)
+            baseline = {home / "cedar-artifact-server": b"before"}
+            changed = {home / "cedar-artifact-server": b"edited elsewhere"}
+            with patch.object(build, "capture_estate_state", side_effect=[baseline, changed]), \
+                    patch.object(build.plan_executor, "execute"), \
+                    patch.object(Util, "cedar_home", directory):
+                with self.assertRaises(SystemExit) as raised:
+                    build.execute_build(plan, dry_run=False, dump_plan=False)
+
+        self.assertEqual(1, raised.exception.code)
+
     @patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
     @patch.object(Util, "cedar_home", "/tmp/CEDAR")
     @patch.object(publish.plan_executor, "execute")
