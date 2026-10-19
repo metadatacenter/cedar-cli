@@ -816,6 +816,9 @@ class ReleasePlannerTest(unittest.TestCase):
                     {"repository": "cedar-embeddable-designer",
                      "dependency": "cedar-model-typescript-library",
                      "manifest": "package.json", "lock": "package-lock.json"},
+                    {"repository": "frontend-bridging",
+                     "dependency": "cedar-model-typescript-library",
+                     "manifest": "src/package.json", "lock": "src/package-lock.json"},
                 ],
             }]
         build_config = {
@@ -1015,7 +1018,7 @@ class ReleasePlannerTest(unittest.TestCase):
         self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY,
                          manifest["publicationPlan"]["npm"]["retainedRegistry"])
 
-    def test_release_pins_the_train_s_retained_model_into_the_components_built_against_it(self):
+    def test_release_pins_the_train_s_retained_model_into_everything_built_against_it(self):
         manifest = self.build_release(self.make_planner(components=True, model=True))
 
         wired = {(item["repository"], item["dependency"]): item["package"]
@@ -1026,6 +1029,14 @@ class ReleasePlannerTest(unittest.TestCase):
         self.assertEqual(self.MODEL_RETAINED_URL, model["tarball"])
         self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY, model["registry"])
         self.assertEqual(integrity(self.MODEL_BYTES), model["integrity"])
+        # An application that follows the model is built against the train's model as well, so
+        # the release pins the same retained copy there, at the manifest the configuration names.
+        application = next(item for item in manifest["componentWiring"]
+                           if item["repository"] == "frontend-bridging"
+                           and item["dependency"] == "cedar-model-typescript-library")
+        self.assertEqual(model, application["package"])
+        self.assertEqual(("src/package.json", "src/package-lock.json"),
+                         (application["manifest"], application["lock"]))
         # The public CEE carries its own public model; the train's model is never wired into it.
         self.assertNotIn("cedar-embeddable-editor", {repository for repository, _ in wired})
 
