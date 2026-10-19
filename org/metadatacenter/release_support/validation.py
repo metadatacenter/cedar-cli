@@ -32,6 +32,11 @@ from org.metadatacenter.release_support.transport import (
 )
 
 
+def _setup_beyond_install(surface: dict) -> list[list[str]]:
+    """A surface's setup commands other than the root `npm ci` its install task already runs."""
+    return [command for command in surface.get("setup", []) if command[:2] != ["npm", "ci"]]
+
+
 class ReleaseBuildValidator:
     """Build prepared source variants without publishing or changing Git history."""
 
@@ -110,6 +115,20 @@ class ReleaseBuildValidator:
                     "command": install,
                     "tests": False,
                 })
+                # The train and the reactor run a surface's whole setup before verifying it. The
+                # install above is that setup's `npm ci`. Anything further it does, such as a test
+                # package's own install or the browsers that package drives, runs here too, or a
+                # verify command that depends on it fails in the release alone.
+                for index, command in enumerate(_setup_beyond_install(surface)):
+                    tasks.append({
+                        "id": self._task_id(variant, "npm", surface["id"], f"setup-{index}"),
+                        "variant": variant,
+                        "kind": "npm-install",
+                        "repository": surface["repository"],
+                        "cwd": str(root),
+                        "command": command,
+                        "tests": False,
+                    })
                 for index, command in enumerate(surface.get("verify", [])):
                     tasks.append({
                         "id": self._task_id(variant, "npm", surface["id"], f"verify-{index}"),

@@ -26,7 +26,9 @@ EDGES = {
         "cedar-bridging", "cedar-template-designer",
     ),
     "cedar-model-typescript-library": (
-        "cedar-embeddable-editor", "cedar-embeddable-designer",
+        "cedar-template-editor",
+        "cedar-embeddable-editor", "cedar-embeddable-term-picker", "cedar-embeddable-designer",
+        "cedar-workspace", "cedar-openview", "cedar-bridging", "cedar-template-designer",
     ),
     "cedar-embeddable-editor": (
         "cedar-template-editor", "cedar-workspace", "cedar-template-designer",

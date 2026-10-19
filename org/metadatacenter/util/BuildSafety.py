@@ -353,9 +353,29 @@ def frontend_runtime_collisions(source: Path) -> list[tuple[int, str]]:
     return collisions
 
 
+def frontend_npm_cache(environment, workspace: Path) -> Path:
+    """The npm download cache that isolated frontend builds share, kept under CEDAR_HOME.
+
+    A private cache per build downloaded every package on every run. The Ember demo's 1,426
+    packages took 297 seconds to install that way and 5 from a warm cache. npm checks each package
+    against the integrity hash in the lock as it leaves the cache, so sharing the cache cannot change
+    what a build installs, and the cache is built for concurrent use. It stays apart from the user's
+    own `~/.npm`. Without CEDAR_HOME a build keeps a private cache in its workspace.
+    """
+    home = environment.get("CEDAR_HOME")
+    if not home:
+        return workspace / "npm-cache"
+    cache = Path(home) / ".cedar" / "frontend-npm-cache"
+    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return cache
+
+
 @contextlib.contextmanager
 def isolated_frontend_workspace(source: Path):
-    """Build a checkout copy with private dependencies, npm cache, and Angular cache."""
+    """Build a checkout copy with private dependencies, Angular cache and npm logs.
+
+    npm's download cache is shared between builds; see `frontend_npm_cache`.
+    """
     source = source.resolve()
     before_root = repository_root(source)
     before = tracked_state(before_root) if before_root is not None else None
@@ -373,7 +393,10 @@ def isolated_frontend_workspace(source: Path):
             environment.update({
                 "CI": "true",
                 "NG_CLI_ANALYTICS": "false",
-                "npm_config_cache": str(temporary_root / "npm-cache"),
+                "npm_config_cache": str(frontend_npm_cache(environment, temporary_root)),
+                # The cache is shared, but each build keeps its own debug logs, which are how the
+                # executor tells this build's installs apart from a concurrent one's.
+                "npm_config_logs_dir": str(temporary_root / "npm-logs"),
                 # npm ci creates this directory during the first command. Resolve the following
                 # bare ng/gulp/vite command from the isolated dependency graph, even on a clean
                 # runner that has no globally installed frontend CLI.

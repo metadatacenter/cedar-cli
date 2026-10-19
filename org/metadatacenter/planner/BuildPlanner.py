@@ -43,11 +43,12 @@ class BuildPlanner(Planner):
         )
 
     @staticmethod
-    def frontends(plan: Plan, *, verification: bool = True):
+    def frontends(plan: Plan, *, verification: bool = True, reuse: bool = False):
         plan.add_task(
             "Build frontends",
             TaskType.BUILD,
-            GlobalContext.repos.get_frontends(),
+            [repo for repo in GlobalContext.repos.get_frontends()
+             if repo.name != 'cedar-component-demo'],
             parameters={"force_frontend_build": True},
         )
         if not verification:
@@ -59,7 +60,15 @@ class BuildPlanner(Planner):
             if getattr(task, 'parameters', {}).get('isolated_frontend_build'):
                 if task.repo.name not in checks:
                     raise ValueError(f"Frontend {task.repo.name} has no verification inventory entry")
-                task.command_list = checks[task.repo.name]
+                check = checks[task.repo.name]
+                task.command_list = check.commands
+                if check.package_ready_after is not None:
+                    if not task.repo.published_package_path:
+                        raise ValueError(f"Frontend {task.repo.name} declares a package phase but publishes no package")
+                    # Its consumers may start once these commands pass, while its checks run on.
+                    task.parameters["package_ready_after"] = check.package_ready_after
+                # A passing result recorded for exactly these inputs stands for running them again.
+                task.parameters["reuse_passing_result"] = reuse
             for child in task.tasks:
                 verify(child)
         verify(plan)

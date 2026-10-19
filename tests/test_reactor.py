@@ -167,6 +167,83 @@ class PublishTest(unittest.TestCase):
             self.assertEqual(1, len(reactor.resolve(consumer, self.home)))
 
 
+@unittest.skipUnless(shutil.which("npm"), "requires npm")
+class ProvisionalPublishTest(unittest.TestCase):
+    """A package offered before its checks reaches this build's consumers and nothing else."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.home = root / "CEDAR"
+        self.producer = Repo("cedar-embeddable-editor", RepoType.ANGULAR, [],
+                             published_package_path="dist-npm/cedar-embeddable-editor")
+        self.consumer = Repo("cedar-embeddable-designer", RepoType.ANGULAR, [],
+                             published_package_path="dist-npm/cedar-embeddable-designer")
+        self.producer_root = root / "build" / "cedar-embeddable-editor"
+        self.consumer_root = root / "build" / "cedar-embeddable-designer"
+        self.bundle = self._stage(self.producer_root, "cedar-embeddable-editor")
+        self._stage(self.consumer_root, "cedar-embeddable-designer")
+        (self.consumer_root / "package.json").write_text(json.dumps(
+            {"name": "cedar-embeddable-designer", "dependencies": {"cedar-embeddable-editor": "2.0.24"}}))
+
+    @staticmethod
+    def _stage(root, name):
+        staged = root / "dist-npm" / name
+        staged.mkdir(parents=True)
+        (staged / "package.json").write_text(json.dumps({"name": f"@org.metadatacenter/{name}", "version": "0.1.0"}))
+        bundle = staged / f"{name}.js"
+        bundle.write_text("// bundle")
+        return bundle
+
+    def ref(self, name):
+        return self.home / reactor.STORE / "refs" / f"{name}.json"
+
+    def test_consumers_resolve_it_but_it_is_advertised_only_after_its_checks(self):
+        with reactor.session(self.home, [self.producer.name]):
+            self.assertEqual(self.producer.name, reactor.publish(
+                self.producer, self.producer_root, self.home, provisional=True))
+            self.assertEqual(1, len(reactor.resolve(self.consumer_root, self.home)))
+            self.assertFalse(self.ref(self.producer.name).exists())
+            with self.assertRaisesRegex(reactor.ReactorError, "unfinished"):
+                reactor.runtime_selection(self.home)
+            reactor.publish(self.producer, self.producer_root, self.home)
+            self.assertTrue(self.ref(self.producer.name).exists())
+            self.assertIn(self.producer.name, reactor.runtime_selection(self.home))
+
+    def test_a_package_that_changes_while_its_checks_run_fails(self):
+        with reactor.session(self.home, [self.producer.name]):
+            reactor.publish(self.producer, self.producer_root, self.home, provisional=True)
+            self.bundle.write_text("// rebuilt during the checks")
+            with self.assertRaisesRegex(reactor.ReactorError, "changed while its checks ran"):
+                reactor.publish(self.producer, self.producer_root, self.home)
+            self.assertFalse(self.ref(self.producer.name).exists())
+
+    def test_a_consumer_of_a_provisional_package_waits_to_be_advertised(self):
+        with reactor.session(self.home, [self.producer.name, self.consumer.name]):
+            reactor.publish(self.producer, self.producer_root, self.home, provisional=True)
+            reactor.resolve(self.consumer_root, self.home)
+            reactor.publish(self.consumer, self.consumer_root, self.home)
+            self.assertFalse(self.ref(self.consumer.name).exists(), "its producer has not been checked")
+            reactor.publish(self.producer, self.producer_root, self.home)
+            self.assertTrue(self.ref(self.producer.name).exists())
+            self.assertTrue(self.ref(self.consumer.name).exists())
+
+    def test_nothing_built_on_a_producer_whose_checks_fail_is_advertised(self):
+        with reactor.session(self.home, [self.producer.name, self.consumer.name]):
+            reactor.publish(self.producer, self.producer_root, self.home, provisional=True)
+            reactor.resolve(self.consumer_root, self.home)
+            reactor.publish(self.consumer, self.consumer_root, self.home)
+            with self.assertRaisesRegex(reactor.ReactorError, "unfinished"):
+                reactor.runtime_selection(self.home)
+        self.assertFalse(self.ref(self.producer.name).exists())
+        self.assertFalse(self.ref(self.consumer.name).exists())
+
+    def test_outside_a_reactor_build_a_provisional_publication_does_nothing(self):
+        self.assertIsNone(reactor.publish(self.producer, self.producer_root, self.home, provisional=True))
+        self.assertFalse((self.home / reactor.STORE).exists())
+
+
 class PlanSessionTest(unittest.TestCase):
     def test_only_scheduled_isolated_producers_must_be_built(self):
         producer = Repo("cedar-producer", RepoType.TYPESCRIPT, [], published_package_path="dist")

@@ -14,8 +14,8 @@ DROPPED = "21 verbose reify failed optional dependency {}/node_modules/@esbuild/
 CLEAN = "19 http fetch GET 200 https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz 99ms\n"
 
 
-def write_log(cache, name, text):
-    logs = Path(cache) / "_logs"
+def write_log(logs, name, text):
+    logs = Path(logs)
     logs.mkdir(parents=True, exist_ok=True)
     (logs / f"2026-10-05T03_22_{name}Z-debug-0.log").write_text(text)
 
@@ -33,28 +33,42 @@ class InstallCommandTest(unittest.TestCase):
             self.assertFalse(npm_install.is_install(command), command)
 
 
+class LogDirectoryTest(unittest.TestCase):
+    def test_a_logs_directory_wins_over_the_cache(self):
+        self.assertEqual(Path("/w/npm-logs"), npm_install.log_directory(
+            {"npm_config_cache": "/shared/cache", "npm_config_logs_dir": "/w/npm-logs"}))
+
+    def test_without_one_npm_logs_into_its_cache(self):
+        self.assertEqual(Path("/c/_logs"), npm_install.log_directory({"npm_config_cache": "/c"}))
+
+    def test_an_environment_that_sets_neither_has_no_log_directory(self):
+        self.assertIsNone(npm_install.log_directory(None))
+        self.assertIsNone(npm_install.log_directory({}))
+
+
 class DroppedOptionalDependencyTest(unittest.TestCase):
     def test_reads_only_logs_written_since_the_snapshot(self):
-        with tempfile.TemporaryDirectory() as cache:
-            write_log(cache, "00_000", DROPPED.format("/old"))
-            before = npm_install.debug_logs(cache)
-            write_log(cache, "22_039", CLEAN + DROPPED.format("/build/repo"))
+        with tempfile.TemporaryDirectory() as logs:
+            write_log(logs, "00_000", DROPPED.format("/old"))
+            before = npm_install.debug_logs(Path(logs))
+            write_log(logs, "22_039", CLEAN + DROPPED.format("/build/repo"))
             self.assertEqual(["@esbuild/darwin-arm64"],
-                             npm_install.dropped_optional_dependencies(cache, before))
+                             npm_install.dropped_optional_dependencies(Path(logs), before))
 
     def test_a_nested_package_is_reported_by_its_name(self):
-        with tempfile.TemporaryDirectory() as cache:
-            write_log(cache, "22_039",
+        with tempfile.TemporaryDirectory() as logs:
+            write_log(logs, "22_039",
                       "21 verbose reify failed optional dependency "
                       "/b/node_modules/vite/node_modules/@rollup/rollup-darwin-arm64\n")
             self.assertEqual(["@rollup/rollup-darwin-arm64"],
-                             npm_install.dropped_optional_dependencies(cache, set()))
+                             npm_install.dropped_optional_dependencies(Path(logs), set()))
 
     def test_a_missing_log_directory_reports_nothing(self):
-        with tempfile.TemporaryDirectory() as cache:
-            self.assertEqual(set(), npm_install.debug_logs(cache))
-            self.assertEqual([], npm_install.dropped_optional_dependencies(cache, set()))
-        self.assertIsNone(npm_install.log_directory(None))
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "npm-logs"
+            self.assertEqual(set(), npm_install.debug_logs(missing))
+            self.assertEqual([], npm_install.dropped_optional_dependencies(missing, set()))
+        self.assertEqual(set(), npm_install.debug_logs(None))
 
 
 class ExecutorReinstallTest(unittest.TestCase):
@@ -76,7 +90,9 @@ class ExecutorReinstallTest(unittest.TestCase):
 
         def execute(task, repo, command, cwd, job_progress, environment=None):
             code, dropped = next(attempts)
-            write_log(self.cache, f"{execute.calls:02d}_000",
+            # Where the executor's npm would log. A build that sets no location logs nowhere it reads.
+            logs = npm_install.log_directory(environment) or self.cache / "_logs"
+            write_log(logs, f"{execute.calls:02d}_000",
                       CLEAN + (DROPPED.format("/build") if dropped else ""))
             execute.calls += 1
             build_scheduler.record_timing(repo.name, command, time.monotonic(), code)
@@ -121,6 +137,19 @@ class ExecutorReinstallTest(unittest.TestCase):
 
     def test_a_build_without_its_own_npm_cache_runs_an_install_once(self):
         self.assertEqual((0, 1), self.run_commands(["npm install"], [(0, True)], environment={}))
+
+    def with_own_logs(self):
+        """A build sharing the cache, with the log directory an isolated build gives each one."""
+        return {**self.environment, "npm_config_logs_dir": str(self.cache.parent / "npm-logs")}
+
+    def test_a_concurrent_builds_drop_in_the_shared_cache_is_not_this_builds(self):
+        write_log(self.cache / "_logs", "99_000", DROPPED.format("/another-build"))
+        self.assertEqual((0, 1), self.run_commands(["npm ci"], [(0, False)], self.with_own_logs()))
+
+    def test_a_drop_in_a_builds_own_log_directory_installs_again(self):
+        self.assertEqual((0, 2), self.run_commands(["npm ci"], [(0, True), (0, False)],
+                                                   self.with_own_logs()))
+        self.assertFalse((self.cache / "_logs").exists(), "nothing was logged into the shared cache")
 
 
 

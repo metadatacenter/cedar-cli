@@ -50,6 +50,26 @@ def configure_java_tests(tests: bool):
     GlobalContext.mark_skip_tests(not tests)
 
 
+def require_integration_tags(tests: bool, dry_run: bool, dump_plan: bool):
+    """Refuse a Java build that would run an untagged integration class.
+
+    The tag changes no default run, so Maven cannot notice it missing. Reading the test sources
+    takes about a second, so the check runs before any Maven work rather than after it.
+    """
+    if not tests or dry_run or dump_plan:
+        return
+    from org.metadatacenter.worker.IntegrationTagWorker import REMEDY, IntegrationTagWorker
+    findings = IntegrationTagWorker.findings()
+    if not findings:
+        return
+    console.print(f"[red]{len(findings)} Java test classes start a server or store without the "
+                  "integration tag:[/red]")
+    for finding in findings:
+        console.print(f"  {finding}", markup=False, highlight=False)
+    console.print(REMEDY)
+    raise typer.Exit(1)
+
+
 def build_input_roots(plan):
     """The repositories a build reads: those its plan builds, and the build tooling.
 
@@ -194,6 +214,7 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
          tests: bool = typer.Option(
              True, "--tests/--skip-tests", help=JAVA_TESTS_OPTION_HELP)):
     configure_java_tests(tests)
+    require_integration_tags(tests, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build java")
     BuildPlanner.parent(plan)
@@ -205,12 +226,18 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("frontends")
 def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
-              dump_plan: bool = typer.Option(False, help="Dump plan")):
+              dump_plan: bool = typer.Option(False, help="Dump plan"),
+              reuse: bool = typer.Option(
+                  True, "--reuse/--no-reuse",
+                  help="Take a repository's earlier passing result when everything it reads is "
+                       "unchanged. --no-reuse runs every repository's checks again.")):
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
-    BuildPlanner.frontends(plan)
+    BuildPlanner.frontends(plan, reuse=reuse)
     selection = execute_build(plan, dry_run, dump_plan, frontend_only=True)
     if not dry_run and not dump_plan:
+        from org.metadatacenter.cee_demos import check_selection
+        check_selection(selection)
         reactor.activate_runtime(Util.cedar_home, selection)
         console.print(f"Reactor build evidence: {reactor.store_root(Util.cedar_home) / 'builds' / (selection.evidence + '.json')}")
         console.print("Restarting local frontends with this reactor's exact component selection.")
@@ -264,6 +291,7 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
               tests: bool = typer.Option(
                   True, "--tests/--skip-tests", help="Run Java and frontend verification suites. Default: run.")):
     configure_java_tests(tests)
+    require_integration_tags(tests, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
     BuildPlanner.parent(plan)
@@ -271,7 +299,10 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
-    execute_build(plan, dry_run, dump_plan)
+    selection = execute_build(plan, dry_run, dump_plan)
+    if tests and not dry_run and not dump_plan:
+        from org.metadatacenter.cee_demos import check_selection
+        check_selection(selection)
 
 
 @app.command("diagnostics")

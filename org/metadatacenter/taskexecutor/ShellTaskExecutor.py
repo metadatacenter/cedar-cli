@@ -8,9 +8,13 @@ from rich.panel import Panel
 from rich.progress import Progress
 from rich.style import Style
 
-from org.metadatacenter import npm_install, reactor, reactor_evidence
+from org.metadatacenter import npm_install, reactor, reactor_evidence, reactor_results
 from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
-from org.metadatacenter.build_scheduler import record_dropped_optional_dependencies, record_timing
+from org.metadatacenter.build_scheduler import (
+    package_ready,
+    record_dropped_optional_dependencies,
+    record_timing,
+)
 from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
@@ -65,7 +69,7 @@ class ShellTaskExecutor(TaskExecutor):
                     with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions), \
                             failure_diagnostics(
                                 isolated_cwd, Util.cedar_home, job_progress.print,
-                                npm_logs=npm_install.log_directory(environment.get('npm_config_cache')),
+                                npm_logs=npm_install.log_directory(environment),
                             ) as outcome:
                         environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(isolated_cwd / COMMAND_LOG)
                         if collisions:
@@ -90,15 +94,35 @@ class ShellTaskExecutor(TaskExecutor):
                                             'VITEST_MAX_WORKERS': str(workers)})
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
-                        code = self._execute_commands(
-                            task, repo, commands_to_execute, str(isolated_cwd),
-                            job_progress, environment,
+                        ready_after = parameter("package_ready_after")
+                        result = None
+                        if parameter("reuse_passing_result") is True and identity is not None:
+                            result = self._reusable(repo, isolated_cwd, identity, commands_to_execute,
+                                                    ready_after, checks, cedar_home, job_progress)
+                        if result is not None and result[2] is not None:
+                            key, _inputs, reused = result
+                            started = time.monotonic()
+                            reactor.reuse(repo, isolated_cwd, cedar_home, reused['package'])
+                            reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute,
+                                                    checks, reused=reused)
+                            record_timing(repo.name, f"reuse {key[:12]}", started, 0)
+                            job_progress.print(
+                                f"Reactor: inputs unchanged since the result that passed at "
+                                f"{reused['passedAt']} ({key[:12]}); reusing it", markup=False)
+                            outcome['exitCode'] = 0
+                            return 0
+                        code = self._execute_packaged_commands(
+                            task, repo, commands_to_execute, isolated_cwd, job_progress,
+                            environment, ready_after, cedar_home,
                         )
                         if code == 0:
                             reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
                             stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)
+                            if result is not None:
+                                reactor_results.save(cedar_home, result[0], result[1],
+                                                     reactor.selected_digest(repo, cedar_home))
                         outcome['exitCode'] = code
                         return code
                 if parameter("in_place_frontend_build") is True:
@@ -119,10 +143,50 @@ class ShellTaskExecutor(TaskExecutor):
             time.sleep(0.1)
         return 0
 
+    @staticmethod
+    def _reusable(repo, build_root, identity, commands, ready_after, checks, cedar_home, job_progress):
+        """This task's fingerprint, its inputs, and the passing result recorded for them, if any.
+
+        A fingerprint that cannot be computed reuses nothing and records nothing, so the task
+        runs as it would without reuse.
+        """
+        try:
+            key, inputs = reactor_results.fingerprint(
+                repo, build_root, identity, commands, ready_after, checks, cedar_home)
+        except reactor_results.ResultError as error:
+            job_progress.print(f"Reactor: {error}; running the checks", markup=False)
+            return None
+        return key, inputs, reactor_results.lookup(cedar_home, key, repo)
+
+    def _execute_packaged_commands(self, task, repo, commands, build_root, job_progress, environment,
+                                   ready_after, cedar_home):
+        """Run a reactor build's commands, offering its package once the first `ready_after` pass.
+
+        A surface with a package phase stores its package provisionally at that point and tells the
+        scheduler, so consumers can start while this build's own checks run on. Without one, the
+        commands run as a single list.
+        """
+        if not ready_after:
+            return self._execute_commands(task, repo, commands, str(build_root), job_progress, environment)
+        code = self._execute_commands(
+            task, repo, commands[:ready_after], str(build_root), job_progress, environment)
+        if code == 0:
+            stored = reactor.publish(repo, build_root, cedar_home, environment, provisional=True)
+            if stored:
+                job_progress.print(
+                    f"Reactor: packaged {stored} for this build's consumers; its checks continue",
+                    markup=False)
+                package_ready()
+        elif GlobalContext.fail_on_error():
+            return code
+        rest = self._execute_commands(
+            task, repo, commands[ready_after:], str(build_root), job_progress, environment)
+        return code or rest
+
     def _execute_commands(self, task, repo, commands, cwd, job_progress, environment):
         first_failure = 0
-        # Only an isolated build sets npm's cache, which is where npm writes its debug logs.
-        npm_cache = (environment or {}).get('npm_config_cache')
+        # Only an isolated build tells npm where to write its debug logs.
+        npm_logs = npm_install.log_directory(environment)
         for command in commands:
             guarded_maven = is_test_bearing_maven_command(command)
             if guarded_maven:
@@ -131,9 +195,9 @@ class ShellTaskExecutor(TaskExecutor):
             workspace = (executable_build_workspace(environment, java=True)
                          if is_maven_command(command) else nullcontext((None, environment)))
             with workspace as (_, child_environment):
-                if npm_cache and npm_install.is_install(command):
+                if npm_logs and npm_install.is_install(command):
                     return_code = self._execute_npm_install(
-                        task, repo, command, cwd, job_progress, child_environment, npm_cache)
+                        task, repo, command, cwd, job_progress, child_environment, npm_logs)
                 else:
                     _, return_code = self.execute_shell_command(
                         task, repo, command, cwd, job_progress, environment=child_environment,
@@ -148,7 +212,7 @@ class ShellTaskExecutor(TaskExecutor):
                     return return_code
         return first_failure
 
-    def _execute_npm_install(self, task, repo, command, cwd, job_progress, environment, npm_cache):
+    def _execute_npm_install(self, task, repo, command, cwd, job_progress, environment, npm_logs):
         """Install once more if npm dropped an optional dependency, and fail if it does so again.
 
         npm_install explains why such an install cannot be trusted whatever its exit code. A second
@@ -156,10 +220,10 @@ class ShellTaskExecutor(TaskExecutor):
         removes what it added, and running a successful one again adds just the package it dropped.
         """
         for attempt in (1, 2):
-            before = npm_install.debug_logs(npm_cache)
+            before = npm_install.debug_logs(npm_logs)
             _, return_code = self.execute_shell_command(
                 task, repo, command, cwd, job_progress, environment=environment)
-            dropped = npm_install.dropped_optional_dependencies(npm_cache, before)
+            dropped = npm_install.dropped_optional_dependencies(npm_logs, before)
             if not dropped:
                 return return_code
             record_dropped_optional_dependencies(repo.name, command, dropped)

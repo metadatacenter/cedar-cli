@@ -20,6 +20,13 @@ A build snapshots the available packages once and then uses its own producers' o
 concurrent builds cannot change that selection. Producers scheduled in this build must
 succeed before their consumers may resolve them. Other dependencies retain their pins
 when no local artifact is available.
+
+A producer whose surface declares a package phase is stored as soon as that phase succeeds, so
+its consumers need not wait for its checks. Such a package is provisional. It is offered only to
+this build's consumers, never advertised in `refs/`, and when its checks pass it is packed again
+and must come out byte for byte the same. A consumer built on a provisional package is advertised
+only once every producer it resolved from this build has been, so `refs/` keeps holding only
+packages whose whole chain of checks passed.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ import os
 import re
 import tempfile
 import tarfile
+import threading
 from pathlib import Path
 
 from org.metadatacenter.npm_package import NpmPackageError, pack_and_inspect
@@ -81,6 +89,27 @@ class ReactorError(RuntimeError):
 _session = ContextVar("cedar_frontend_reactor", default=None)
 
 
+class _Build:
+    """One reactor build's view of the store, shared by the tasks it runs concurrently."""
+
+    def __init__(self, home, available, scheduled):
+        self.home = home
+        # Packages this build's consumers resolve, by name: the snapshot and this build's own.
+        self.available = available
+        # Producers scheduled in this build that have not yet stored a package.
+        self.pending = set(scheduled)
+        self.scheduled = set(scheduled)
+        # Provisional packages, by name and digest, whose checks have not yet passed.
+        self.unverified = {}
+        # The names each build copy resolved from this build's own producers.
+        self.producers = {}
+        # Producers in this build whose package is advertised in refs/.
+        self.advertised = set()
+        # References waiting for their producers: (name, digest, producers).
+        self.deferred = []
+        self.lock = threading.Lock()
+
+
 def _available(cedar_home):
     refs = store_root(cedar_home) / "refs"
     available = {}
@@ -102,27 +131,34 @@ def _available(cedar_home):
 def session(cedar_home, producers=()):
     """Freeze external selections and require this walk's producers to finish first."""
     available = _available(cedar_home)
-    pending = set(producers)
-    for name in pending:
+    for name in producers:
         available.pop(name, None)
-    token = _session.set((Path(cedar_home).resolve(), available, pending))
+    token = _session.set(_Build(Path(cedar_home).resolve(), available, producers))
     try:
         yield
     finally:
         _session.reset(token)
 
 
+def _build(cedar_home):
+    build = _session.get()
+    if build is not None and build.home == Path(cedar_home).resolve():
+        return build
+    return None
+
+
 def _state(cedar_home):
-    state = _session.get()
-    if state is not None and state[0] == Path(cedar_home).resolve():
-        return state[1], state[2]
+    build = _build(cedar_home)
+    if build is not None:
+        return build.available, build.pending
     return _available(cedar_home), set()
 
 
 def runtime_selection(cedar_home):
     """Snapshot this build's exact packages, never another concurrent build's refs."""
+    build = _build(cedar_home)
     available, pending = _state(cedar_home)
-    if pending:
+    if pending or (build is not None and (build.unverified or build.deferred)):
         raise ReactorError("Cannot activate an unfinished reactor build")
     return {name: path.stem for name, path in available.items()}
 
@@ -161,13 +197,21 @@ def session_for_plan(cedar_home, plan):
     return session(cedar_home, {repo.name for repo in repos if repo.published_package_path})
 
 
-def publish(repo, build_root, cedar_home, environment=None) -> str | None:
+def publish(repo, build_root, cedar_home, environment=None, *, provisional=False) -> str | None:
     """Pack verified output and atomically advertise its immutable artifact.
 
     Declaring a package makes storage part of build success. Never accept absent output,
     keep a partially written artifact, or report a failed store operation as success.
+
+    `provisional` stores the package for this build's consumers before its checks have run and
+    advertises nothing; outside a reactor build it does nothing. The call after the checks must
+    then pack the same bytes. Either way a package is advertised only once every producer it
+    resolved from this build has been.
     """
     if not repo.published_package_path:
+        return None
+    build = _build(cedar_home)
+    if provisional and build is None:
         return None
     source = (Path(build_root) / repo.published_package_path).resolve()
     try:
@@ -177,9 +221,8 @@ def publish(repo, build_root, cedar_home, environment=None) -> str | None:
             raise ValueError(f"expected named, versioned package for {repo.name}")
         store = store_root(cedar_home).resolve()
         artifacts = store / "artifacts"
-        refs = store / "refs"
         artifacts.mkdir(parents=True, exist_ok=True)
-        refs.mkdir(parents=True, exist_ok=True)
+        (store / "refs").mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="pack-", dir=store) as temporary:
             scratch = Path(temporary)
             packed, inspection = pack_and_inspect(
@@ -193,16 +236,90 @@ def publish(repo, build_root, cedar_home, environment=None) -> str | None:
             except FileExistsError:
                 if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
                     raise ValueError(f"corrupt existing artifact {destination}")
-            ref = scratch / "reference.json"
-            ref.write_text(json.dumps({"sha256": digest}) + "\n")
-            os.replace(ref, refs / f"{name}.json")
-        state = _session.get()
-        if state is not None and state[0] == Path(cedar_home).resolve():
-            state[1][name] = destination
-            state[2].discard(name)
+        if build is None:
+            _advertise(store, name, digest)
+            return name
+        with build.lock:
+            if provisional:
+                build.available[name] = destination
+                build.pending.discard(name)
+                build.unverified[name] = digest
+                return name
+            expected = build.unverified.get(name)
+            if expected is not None and expected != digest:
+                raise ValueError(f"its package changed while its checks ran, from {expected} to {digest}")
+            build.unverified.pop(name, None)
+            build.available[name] = destination
+            build.pending.discard(name)
+            build.deferred.append((name, digest, build.producers.get(str(Path(build_root).resolve()), set())))
+            _advertise_settled(build, store)
     except (OSError, ValueError, TypeError, AttributeError, KeyError, NpmPackageError) as error:
         raise ReactorError(f"Cannot store {repo.name}: {error}") from error
     return name
+
+
+def reuse(repo, build_root, cedar_home, digest) -> str | None:
+    """Accept the package an earlier build stored and verified for exactly these inputs.
+
+    The package joins this build as if the repository had just published it, so it is advertised
+    under the same rule: only once every producer it resolved from this build has been.
+    """
+    if not repo.published_package_path:
+        return None
+    store = store_root(cedar_home).resolve()
+    artifact = store / "artifacts" / f"{digest}.tgz"
+    try:
+        if hashlib.sha256(artifact.read_bytes()).hexdigest() != digest:
+            raise ValueError(f"artifact {artifact} no longer has its digest")
+        (store / "refs").mkdir(parents=True, exist_ok=True)
+        build = _build(cedar_home)
+        if build is None:
+            _advertise(store, repo.name, digest)
+            return repo.name
+        with build.lock:
+            build.available[repo.name] = artifact
+            build.pending.discard(repo.name)
+            build.deferred.append(
+                (repo.name, digest, build.producers.get(str(Path(build_root).resolve()), set())))
+            _advertise_settled(build, store)
+    except (OSError, ValueError) as error:
+        raise ReactorError(f"Cannot reuse {repo.name}: {error}") from error
+    return repo.name
+
+
+def selected_digest(repo, cedar_home) -> str | None:
+    """The digest of the package this build selected for `repo`, if it publishes one."""
+    if not repo.published_package_path:
+        return None
+    available, _pending = _state(cedar_home)
+    artifact = available.get(repo.name)
+    return artifact.stem if artifact is not None else None
+
+
+def _advertise(store, name, digest):
+    with tempfile.TemporaryDirectory(prefix="ref-", dir=store) as temporary:
+        ref = Path(temporary) / "reference.json"
+        ref.write_text(json.dumps({"sha256": digest}) + "\n")
+        os.replace(ref, store / "refs" / f"{name}.json")
+
+
+def _advertise_settled(build, store):
+    """Advertise each waiting package whose producers in this build are all advertised.
+
+    One advertisement can settle another's last producer, so this repeats until nothing changes.
+    A producer whose checks fail is never advertised, and nor is anything built on it.
+    """
+    settled = True
+    while settled:
+        settled = False
+        for entry in list(build.deferred):
+            name, digest, producers = entry
+            if (producers & build.scheduled) - build.advertised:
+                continue
+            _advertise(store, name, digest)
+            build.advertised.add(name)
+            build.deferred.remove(entry)
+            settled = True
 
 
 def resolve(build_root, cedar_home) -> list[str]:
@@ -215,6 +332,7 @@ def resolve(build_root, cedar_home) -> list[str]:
     if not available and not pending:
         return []
     notes = []
+    resolved = set()
     for manifest in sorted(Path(build_root).rglob("package.json")):
         if SKIPPED_DIRECTORIES & set(manifest.parts):
             continue
@@ -243,9 +361,15 @@ def resolve(build_root, cedar_home) -> list[str]:
                     continue
                 declared[key] = f"file:{target}"
                 rewritten = True
+                resolved.add(unscoped(name))
                 notes.append(f"{manifest.parent.name}/{key} -> {target.name}")
         if rewritten:
             manifest.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+    build = _build(cedar_home)
+    if build is not None:
+        # What this copy's package, if it publishes one, waits on before it is advertised.
+        with build.lock:
+            build.producers[str(Path(build_root).resolve())] = resolved
     return notes
 
 

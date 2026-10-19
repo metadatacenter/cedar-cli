@@ -41,6 +41,7 @@ from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.GitWorker import GitWorker
+from tests.test_smoke_gate import search_payload
 
 SUBJECT = "cedar-subject"
 OTHER = "cedar-other"
@@ -175,6 +176,13 @@ STATES = {
     "no upstream": no_upstream,
 }
 
+# What the gates must decide for each state, beyond agreeing with one another. Agreement alone
+# passes a recorder that refuses everything: every gate would refuse every state and still agree.
+# A state passes exactly when the subject's checkout holds the commit a train would capture and
+# nothing besides, so its record certifies what the stack ran.
+PASSES = {"clean", "detached at develop", "no upstream"}
+
+
 # What `git status` must ask of the operator for each state, or None where git cannot tell.
 # A stale fetch is invisible until a fetch; a checkout on another branch is a legitimate place for
 # a repository git status knows nothing about; a repository with no upstream has nothing to compare.
@@ -203,10 +211,11 @@ class StackStandIn:
         if args and str(args[0]).endswith("cedar-services.sh"):
             return SimpleNamespace(returncode=0, stdout=HEALTHY, stderr="")
         if args and args[0] == "npm":
+            payload = search_payload() if "smoke:search" in args else {
+                "runId": "r", "verdict": "PASS", "inventoryMatched": True}
             for argument in args:
                 if argument.startswith("--report="):
-                    Path(argument.split("=", 1)[1]).write_text(json.dumps(
-                        {"runId": "r", "verdict": "PASS", "inventoryMatched": True}), encoding="utf-8")
+                    Path(argument.split("=", 1)[1]).write_text(json.dumps(payload), encoding="utf-8")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return subprocess.run(args, **kwargs)
 
@@ -279,6 +288,10 @@ class RepositoryStateMatrix(unittest.TestCase):
         passes = {gate for gate, refusal in verdicts.items() if refusal is None}
         self.assertIn(passes, (set(), set(verdicts)),
                       f"the gates disagree about one record: {json.dumps(verdicts, indent=2)}")
+        expected = set(verdicts) if state in PASSES else set()
+        self.assertEqual(expected, passes,
+                         f"{state}: the gates should {'pass' if expected else 'refuse'} it: "
+                         f"{json.dumps(verdicts, indent=2)}")
         if state in STATUS_SUGGESTIONS:
             self.check_status(estate, state)
 

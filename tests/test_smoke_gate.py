@@ -95,8 +95,146 @@ def rest_runner(verdict="PASS", inventory_matched=True, exit_code=0):
     return answer
 
 
+def split_runner(verdict="PASS", exit_code=0, failing_script=None, failing_step=None):
+    def answer(args, _kwargs):
+        report = next(a for a in args if a.startswith("--report=")).split("=", 1)[1]
+        Path(report).parent.mkdir(parents=True, exist_ok=True)
+        Path(report).write_text(json.dumps({
+            "schemaVersion": 1, "verdict": verdict,
+            "failingScript": failing_script, "failingStep": failing_step,
+            "failure": "locator.click: Timeout 25000ms exceeded." if failing_step else None,
+            "scripts": [{"name": "modern-workspace", "command": ["node", "modern-workspace-smoke.mjs"],
+                         "exitCode": exit_code, "seconds": 371.4}],
+            "notRun": ["ced-host"] if exit_code else [],
+            "machine": {"start": {"load": [3.1, 2.9, 2.5], "swap": None},
+                        "end": {"load": [4.0, 3.2, 2.6], "swap": None}},
+            "steps": [{"script": "modern-workspace", "step": name, "seconds": seconds}
+                      for name, seconds in (("login", 1.2), ("metadata", 41.0), ("sharing", 30.5),
+                                            ("ownership", 12.0), ("save-status", 15.1), ("delete", 9.9))],
+        }), encoding="utf-8")
+        return FakeResult(exit_code)
+    return answer
+
+
+def lane_runner(exit_code=1):
+    """A lane run of the split tier in which two lanes fail and the others pass."""
+    def answer(args, _kwargs):
+        report = next(a for a in args if a.startswith("--report=")).split("=", 1)[1]
+        Path(report).parent.mkdir(parents=True, exist_ok=True)
+        lane = {"root": None, "plannedSeconds": None, "startedAfterSeconds": 0.0, "failure": None, "notRun": []}
+        Path(report).write_text(json.dumps({
+            "schemaVersion": 2, "verdict": "FAIL", "sequential": False, "generalLanes": 2,
+            "durationSeconds": 212.4, "checks": 190,
+            "failingScript": "general-2", "failingStep": "uncertain-create",
+            "failure": "locator.click: Timeout 25000ms exceeded.",
+            "failures": [
+                {"lane": "general-2", "script": "general-2", "step": "uncertain-create", "exitCode": 1,
+                 "message": "locator.click: Timeout 25000ms exceeded.", "finishedAt": "2026-09-07T10:03:00Z"},
+                {"lane": "identity", "script": "account-groups", "step": None, "exitCode": 1,
+                 "message": None, "finishedAt": "2026-09-07T10:03:10Z"},
+            ],
+            "lanes": [
+                {**lane, "name": "core", "keys": [], "scripts": ["modern-workspace"], "seconds": 61.0,
+                 "exitCode": 0, "failingScript": None, "failingStep": None},
+                {**lane, "name": "identity", "keys": ["account-switch"], "scripts": ["account-groups", "folder-delete"],
+                 "seconds": 120.5, "exitCode": 1, "failingScript": "account-groups", "failingStep": None,
+                 "notRun": ["folder-delete"]},
+                {**lane, "name": "general-1", "keys": ["save-status"], "scripts": ["ced-host"], "seconds": 205.1,
+                 "exitCode": 0, "failingScript": None, "failingStep": None},
+                {**lane, "name": "general-2", "keys": ["uncertain-create", "duplication"], "scripts": [],
+                 "seconds": 150.2, "exitCode": 1, "failingScript": "general-2", "failingStep": "uncertain-create"},
+            ],
+            "scripts": [{"name": "modern-workspace", "lane": "core", "command": ["node", "modern-workspace-smoke.mjs", "--chain-only"],
+                         "exitCode": 0, "seconds": 61.0}],
+            "notRun": ["folder-delete"],
+            "machine": {"start": {"load": [9.1, 8.0, 7.5], "swap": None}, "peak": {"load": 14.2, "swapUsedMB": None},
+                        "end": {"load": [12.0, 9.2, 8.1], "swap": None}},
+            "steps": [{"script": "general-2", "step": "uncertain-create", "seconds": 30.2}],
+        }), encoding="utf-8")
+        return FakeResult(exit_code)
+    return answer
+
+
+def queue_runner(exit_code=124):
+    """A queued run of the split tier, schema 3, in which one journey overran its deadline."""
+    def answer(args, _kwargs):
+        report = next(a for a in args if a.startswith("--report=")).split("=", 1)[1]
+        Path(report).parent.mkdir(parents=True, exist_ok=True)
+        timeout = {"lane": "general-1", "unit": "save-status", "process": "general-1",
+                   "elapsedSeconds": 86.4, "deadlineSeconds": 86}
+        sweep = {"lane": "general-1", "process": "general-1", "unit": "save-status", "recorded": 3,
+                 "root": {"id": "https://repo/folders/r", "name": "Focused journey 1 general-1", "how": "recursive",
+                          "deleted": {"folder": 2, "template": 1}},
+                 "removed": [], "alreadyGone": [{"collection": "templates", "id": "t"}],
+                 "failed": [{"collection": "folders", "id": "f", "status": 400, "text": "nonEmptyFolder"}],
+                 "secondUser": [],
+                 "restored": [{"restore": "api-key", "key": "k1", "label": "API key \"smoke 1\"", "as": "user1",
+                               "changed": 1}],
+                 "alreadyRestored": [],
+                 "notRestored": [{"restore": "api-key", "key": "k2", "label": "API key \"smoke 2\"", "as": "user1",
+                                  "status": 503, "text": "unavailable"}],
+                 "seconds": 0.9}
+        lane = {"root": None, "plannedSeconds": 110.0, "startedAfterSeconds": 0.0, "failure": None, "notRun": [],
+                "overheadSeconds": 2.0, "timeout": None, "sweep": None, "sweeps": [], "worker": None}
+        Path(report).write_text(json.dumps({
+            "schemaVersion": 3, "verdict": "FAIL", "sequential": False, "generalLanes": 2,
+            "durationSeconds": 131.2, "checks": 180,
+            "failingScript": "general-1", "failingStep": "save-status",
+            "failure": "save-status timed out on general-1 after 86.4 s, past its deadline of 86 s",
+            "failures": [{"lane": "general-1", "script": "general-1", "step": "save-status", "exitCode": 124,
+                          "message": "save-status timed out on general-1 after 86.4 s, past its deadline of 86 s",
+                          "finishedAt": "2026-10-17T10:03:00Z", "unit": "save-status", "timeout": timeout}],
+            "lanes": [
+                {**lane, "name": "core", "keys": ["duplication"], "scripts": ["modern-workspace-chain"], "seconds": 128.0,
+                 "exitCode": 0, "failingScript": None, "failingStep": None, "busySeconds": 120.5, "idleSeconds": 8.7,
+                 "units": [{"name": "modern-workspace-chain", "kind": "chain", "seconds": 45.0, "outcome": "pass"},
+                           {"name": "duplication", "kind": "journey", "seconds": 13.9, "outcome": "pass"}]},
+                {**lane, "name": "general-1", "keys": ["save-status"], "scripts": [], "seconds": 90.0,
+                 "exitCode": 124, "failingScript": "general-1", "failingStep": "save-status", "busySeconds": 86.4,
+                 "idleSeconds": 42.8, "timeout": timeout, "sweep": sweep, "sweeps": [sweep],
+                 "units": [{"name": "save-status", "kind": "journey", "seconds": 86.4, "outcome": "timeout"}]},
+            ],
+            "scripts": [{"name": "general-1", "lane": "general-1", "command": ["node", "focused-journey-smoke.mjs"],
+                         "exitCode": 1, "signal": "SIGKILL", "seconds": 90.0, "timedOut": True}],
+            "notRun": [],
+            "machine": {"start": {"load": [6.1, 6.0, 6.5], "swap": None}, "peak": {"load": 13.0, "swapUsedMB": None},
+                        "end": {"load": [10.0, 8.2, 7.1], "swap": None}},
+            "steps": [{"script": "general-1", "step": "save-status", "seconds": 86.4}],
+            "lock": {"path": "/home/.cedar/locks/split-tier.lock",
+                     "holder": {"pid": 4242, "startedAt": "2026-10-17T10:00:00Z", "command": "node split-tier.mjs",
+                                "cwd": "/e2e", "host": "workstation"},
+                     "replaced": {"pid": 17, "startedAt": "2026-10-16T09:00:00Z", "command": "node split-tier.mjs"}},
+            "unitTimeout": {"factor": 3, "marginSeconds": 30, "floorSeconds": 60, "capSeconds": 1200,
+                            "workerLimitSeconds": 120},
+            "units": [], "timeouts": [timeout], "sweeps": [sweep],
+            "evidenceDirectory": "/tmp/cedar-split-tier-x/evidence",
+        }), encoding="utf-8")
+        return FakeResult(exit_code)
+    return answer
+
+
+def search_payload():
+    families = ("content", "access", "paging", "lifecycle", "journey")
+    return {"tier": "all", "status": "IMPLEMENTED_CASES_PASS_WITH_DECLARED_GAPS",
+            "finishedAt": "2026-10-17T10:03:00Z", "runToken": "unique", "harnessDigest": "h", "corpusDigest": "c",
+            "cleanupErrors": [], "browserErrors": [],
+            "matrixCells": dict.fromkeys(families, 1),
+            "cells": {family: ["lifecycle/cell"] if family == "lifecycle" else
+                      [{"id": "cell" if family == "journey" else f"{family}/cell"}] for family in families},
+            "checks": [{"id": f"{family}/cell", "status": "pass"} for family in families],
+            "completion": {"complete": True, "missing": [], "unexpected": [], "failed": []}}
+
+
+def search_runner(payload=None, exit_code=0):
+    def answer(args, _kwargs):
+        path = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("--report=")))
+        path.write_text(json.dumps(search_payload() if payload is None else payload), encoding="utf-8")
+        return FakeResult(exit_code)
+    return answer
+
+
 def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, browser=FakeResult(0),
-               split=FakeResult(0)):
+               split=None, search=None):
     controller = str(home / "cedar-development" / "ops" / "cedar-services.sh")
 
     def status(_args, kwargs):
@@ -108,8 +246,9 @@ def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, brows
         (("git", "rev-parse"), rev_parse(heads)),
         (("git", "status"), status),
         (("npm", "run", "smoke:rest"), rest or rest_runner()),
-        (("npm", "run", "smoke:workspace:modern:full"), split),
+        (("npm", "run", "smoke:workspace:modern:full"), split or split_runner()),
         (("npm", "run", "smoke"), browser),
+        (("npm", "run", "smoke:search"), search or search_runner()),
     ])
 
 
@@ -135,6 +274,7 @@ def report_for(heads=HEADS, **overrides):
                      "finishedAt": "2026-09-07T10:01:30+00:00"},
             "browser": {"verdict": "PASS", "finishedAt": "2026-09-07T10:02:30+00:00"},
             "split": {"verdict": "PASS", "finishedAt": "2026-09-07T10:03:30+00:00"},
+            "search": {"verdict": "PASS", "evidenceValid": True},
         },
     }
     report.update(overrides)
@@ -159,6 +299,61 @@ class RunSmokeTest(unittest.TestCase):
         which.start()
         self.addCleanup(which.stop)
 
+    def test_search_evidence_fails_closed_even_when_the_process_exits_zero(self):
+        mutations = {
+            "rest only": lambda r: r.update(tier="rest"),
+            "unfinished": lambda r: r.pop("finishedAt"),
+            "running": lambda r: r.update(status="RUNNING"),
+            "cleanup failure": lambda r: r.update(cleanupErrors=[{"message": "failed delete"}]),
+            "browser error": lambda r: r.update(browserErrors=["page error"]),
+            "fatal": lambda r: r.update(fatal={"message": "timeout"}),
+            "missing cell": lambda r: r["checks"].pop(),
+            "duplicate cell": lambda r: r["checks"].__setitem__(0, r["checks"][1]),
+            "unexpected cell": lambda r: r["checks"][0].update(id="unplanned"),
+            "failed cell": lambda r: r["checks"][0].update(status="fail"),
+            "skipped cell": lambda r: r["checks"][0].update(status="skip"),
+            "incomplete": lambda r: r["completion"].update(complete=False),
+            "missing completion": lambda r: r.pop("completion"),
+            "no journeys": lambda r: r["cells"].pop("journey"),
+            "wrong inventory count": lambda r: r["matrixCells"].update(content=2),
+            "empty family": lambda r: (r["cells"].update(content=[]), r["matrixCells"].update(content=0)),
+            "duplicate inventory": lambda r: r["cells"]["content"][0].update(id="access/cell"),
+            "malformed": lambda r: r.update(checks=None),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                payload = search_payload()
+                mutate(payload)
+                runner = runner_for(home, search=search_runner(payload))
+                self.assertEqual(1, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+                report = read_report(home, HEADS)
+                self.assertEqual("FAIL", report["tiers"]["search"]["verdict"])
+                self.assertFalse(report["tiers"]["search"]["evidenceValid"])
+                self.assertEqual(4, len(runner.commands("npm", "run")))
+
+    def test_search_rerun_cannot_reuse_an_older_passing_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            self.assertEqual(0, run_smoke(home, runner=runner_for(home), clock=clock(), environment={"PATH": "/usr/bin"}))
+            previous = read_report(home, HEADS)["tiers"]["search"]["report"]
+            for code in (0, 75):
+                self.assertEqual(1, run_smoke(home, runner=runner_for(home, search=FakeResult(code)),
+                                             clock=clock(), environment={"PATH": "/usr/bin"}))
+                search = read_report(home, HEADS)["tiers"]["search"]
+                self.assertNotEqual(previous, search["report"])
+                self.assertFalse(search["evidenceValid"])
+                self.assertIn("reportError", search)
+            self.assertTrue(Path(previous).exists())
+
+    def test_old_three_tier_runs_and_unverified_search_verdicts_do_not_certify_a_train(self):
+        report = report_for()
+        del report["tiers"]["search"]
+        self.assertEqual(1, len(evaluate(report, HEADS)))
+        self.assertIn("no search tier", evaluate(report, HEADS)[0])
+        report["tiers"]["search"] = {"verdict": "PASS"}
+        self.assertIn("no complete matrix", evaluate(report, HEADS)[0])
+
     def test_a_passing_run_is_recorded_under_the_digest_of_its_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)
@@ -180,7 +375,132 @@ class RunSmokeTest(unittest.TestCase):
             self.assertEqual(810, report["tiers"]["rest"]["counts"]["total"])
             self.assertEqual("PASS", report["tiers"]["browser"]["verdict"])
             self.assertEqual("PASS", report["tiers"]["split"]["verdict"])
-            self.assertEqual(210.0, report["durationSeconds"])
+            self.assertEqual(270.0, report["durationSeconds"])
+            self.assertTrue(report["tiers"]["search"]["evidenceValid"])
+
+    def test_the_split_record_names_the_failing_script_and_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home, split=split_runner(
+                "FAIL", exit_code=1, failing_script="modern-workspace", failing_step="metadata"))
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(1, code)
+            reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
+            split = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["split"]
+            self.assertEqual("FAIL", split["verdict"])
+            self.assertEqual("modern-workspace", split["failingScript"])
+            self.assertEqual("metadata", split["failingStep"])
+            self.assertIn("Timeout", split["failure"])
+            self.assertEqual(["ced-host"], split["notRun"])
+            self.assertEqual([3.1, 2.9, 2.5], split["machine"]["start"]["load"])
+            self.assertEqual(["metadata", "sharing", "save-status", "ownership", "delete"],
+                             [step["step"] for step in split["slowestSteps"]])
+
+    def test_a_split_run_without_a_report_keeps_its_exit_code_as_the_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home, split=FakeResult(0))
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(0, code)
+            reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
+            split = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["split"]
+            self.assertEqual("PASS", split["verdict"])
+            self.assertIn("reportError", split)
+
+    def test_the_split_record_names_every_failing_lane_and_its_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home, split=lane_runner())
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(1, code)
+            reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
+            split = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["split"]
+            self.assertEqual("FAIL", split["verdict"])
+            self.assertEqual(2, split["schemaVersion"])
+            self.assertEqual(("general-2", "uncertain-create"), (split["failingScript"], split["failingStep"]))
+            self.assertEqual([("general-2", "general-2", "uncertain-create"), ("identity", "account-groups", None)],
+                             [(f["lane"], f["script"], f["step"]) for f in split["failures"]])
+            self.assertEqual(["core", "identity", "general-1", "general-2"], [lane["name"] for lane in split["lanes"]])
+            identity = split["lanes"][1]
+            self.assertEqual((["account-switch"], ["account-groups", "folder-delete"], 120.5, 1, ["folder-delete"]),
+                             (identity["keys"], identity["scripts"], identity["seconds"], identity["exitCode"],
+                              identity["notRun"]))
+            self.assertEqual("uncertain-create", split["lanes"][3]["failingStep"])
+            self.assertEqual((False, 2, 190), (split["sequential"], split["generalLanes"], split["checks"]))
+            self.assertEqual("core", split["scripts"][0]["lane"])
+            self.assertEqual(14.2, split["machine"]["peak"]["load"])
+
+    def test_the_split_record_names_a_timeout_its_sweep_and_the_lock_holder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home, split=queue_runner())
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(1, code)
+            reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
+            split = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["split"]
+            self.assertEqual(("FAIL", 124, 3), (split["verdict"], split["exitCode"], split["schemaVersion"]))
+            self.assertEqual(("general-1", "save-status"), (split["failingScript"], split["failingStep"]))
+            self.assertEqual([{"lane": "general-1", "unit": "save-status", "process": "general-1",
+                               "elapsedSeconds": 86.4, "deadlineSeconds": 86}], split["timeouts"])
+            self.assertEqual(86, split["failures"][0]["timeout"]["deadlineSeconds"])
+            core, general = split["lanes"]
+            self.assertEqual((120.5, 8.7, 2.0), (core["busySeconds"], core["idleSeconds"], core["overheadSeconds"]))
+            self.assertEqual([{"name": "modern-workspace-chain", "seconds": 45.0, "outcome": "pass"},
+                              {"name": "duplication", "seconds": 13.9, "outcome": "pass"}], core["units"])
+            self.assertIsNone(core["sweep"])
+            self.assertEqual("save-status", general["timeout"]["unit"])
+            sweep = general["sweep"]
+            self.assertEqual(("recursive", {"folder": 2, "template": 1}), (sweep["root"]["how"], sweep["root"]["deleted"]))
+            self.assertEqual((0, 1, 1), (sweep["removed"], sweep["alreadyGone"], sweep["failed"]))
+            self.assertEqual([{"collection": "folders", "id": "f", "status": 400}], sweep["notRemoved"])
+            self.assertEqual((1, 0), (sweep["restored"], sweep["alreadyRestored"]))
+            self.assertEqual([{"restore": "api-key", "label": "API key \"smoke 2\"", "as": "user1", "status": 503}],
+                             sweep["notRestored"])
+            self.assertEqual([sweep], split["sweeps"])
+            self.assertEqual((4242, 17), (split["lock"]["holder"]["pid"], split["lock"]["replaced"]["pid"]))
+            self.assertEqual(1200, split["unitTimeout"]["capSeconds"])
+            self.assertEqual("/tmp/cedar-split-tier-x/evidence", split["evidenceDirectory"])
+
+    def test_a_refused_split_run_is_recorded_without_reading_another_runs_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            refused = lambda _args, _kwargs: FakeResult(75)
+            runner = runner_for(home, split=refused)
+            reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
+            reports.mkdir(parents=True, exist_ok=True)
+            # A report an earlier run left at this path says nothing about this run.
+            (reports / f"split-smoke-{sources_digest(HEADS)}.json").write_text(
+                json.dumps({"schemaVersion": 3, "verdict": "PASS"}), encoding="utf-8")
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(1, code)
+            split = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["split"]
+            self.assertEqual(("FAIL", 75, True), (split["verdict"], split["exitCode"], split["lockRefused"]))
+            self.assertNotIn("runnerVerdict", split)
+            self.assertIn("held the lock", split["reportError"])
+
+    def test_a_sequential_report_keeps_its_fields_and_has_no_lanes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+
+            run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
+            split = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["split"]
+            self.assertEqual(1, split["schemaVersion"])
+            self.assertNotIn("lanes", split)
+            self.assertNotIn("failures", split)
+            self.assertEqual([{"name": "modern-workspace", "seconds": 371.4, "exitCode": 0}], split["scripts"])
 
     def test_every_tier_runs_from_the_e2e_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -191,25 +511,73 @@ class RunSmokeTest(unittest.TestCase):
 
             e2e = str(home / "cedar-development" / "ops" / "e2e")
             npm_calls = [(args, kwargs) for args, kwargs in runner.calls if args[0] == "npm"]
-            self.assertEqual(3, len(npm_calls))
+            self.assertEqual(4, len(npm_calls))
             self.assertTrue(all(kwargs["cwd"] == e2e for _, kwargs in npm_calls))
-            rest, browser, split = (args for args, _ in npm_calls)
+            rest, browser, split, search = (args for args, _ in npm_calls)
             self.assertEqual(["npm", "run", "smoke:rest", "--"], rest[:4])
             self.assertTrue(rest[4].startswith("--report="))
             self.assertEqual(["npm", "run", "smoke"], browser)
-            self.assertEqual(["npm", "run", "smoke:workspace:modern:full"], split)
+            self.assertEqual(["npm", "run", "smoke:workspace:modern:full", "--"], split[:4])
+            self.assertTrue(split[4].startswith("--report="))
+            self.assertTrue(split[4].endswith(f"split-smoke-{sources_digest(HEADS)}.json"))
 
-    def test_rest_worker_budget_only_changes_the_rest_command(self):
+            self.assertEqual(["npm", "run", "smoke:search", "--"], search[:4])
+            self.assertTrue(search[4].startswith("--report="))
+
+    def test_rest_worker_budget_applies_to_rest_suites_and_search_reads(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)
             runner = runner_for(home)
             self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(),
                 environment={"PATH": "/usr/bin"}, rest_workers=4))
             self.assertIn("--workers=4", runner.commands("npm", "run", "smoke:rest")[0])
+            self.assertIn("--workers=4", runner.commands("npm", "run", "smoke:search")[0])
             self.assertEqual(["npm", "run", "smoke"], runner.commands("npm", "run", "smoke")[0])
         for value in (0, 5, 1.5, True):
             with self.assertRaises(ValueError):
                 run_smoke(rest_workers=value)
+
+    def test_split_lanes_only_change_the_split_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(),
+                environment={"PATH": "/usr/bin"}, split_lanes=3))
+            split = runner.commands("npm", "run", "smoke:workspace:modern:full")[0]
+            self.assertEqual("--lanes=3", split[-1])
+            self.assertTrue(split[4].startswith("--report="))
+            self.assertFalse(any(arg.startswith("--lanes") for arg in runner.commands("npm", "run", "smoke:rest")[0]))
+            self.assertEqual(["npm", "run", "smoke"], runner.commands("npm", "run", "smoke")[0])
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+            split = runner.commands("npm", "run", "smoke:workspace:modern:full")[0]
+            self.assertFalse(any(arg.startswith("--lanes") for arg in split),
+                             "without the option the runner's own default applies")
+        for value in (0, 5, 1.5, True):
+            with self.assertRaises(ValueError):
+                run_smoke(split_lanes=value)
+
+    def test_a_split_timeout_cap_only_changes_the_split_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(),
+                environment={"PATH": "/usr/bin"}, split_lanes=2, split_timeout_cap=600))
+            split = runner.commands("npm", "run", "smoke:workspace:modern:full")[0]
+            self.assertEqual(["--lanes=2", "--timeout-cap=600"], split[-2:])
+            self.assertFalse(any(arg.startswith("--timeout-cap") for arg in runner.commands("npm", "run", "smoke:rest")[0]))
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+            split = runner.commands("npm", "run", "smoke:workspace:modern:full")[0]
+            self.assertFalse(any(arg.startswith("--timeout-cap") for arg in split),
+                             "without the option the runner's own cap applies")
+        for value in (59, 7201, 600.0, True, "600"):
+            with self.assertRaises(ValueError):
+                run_smoke(split_timeout_cap=value)
 
     def test_an_unhealthy_or_stale_stack_refuses_before_anything_runs(self):
         tsv = (
