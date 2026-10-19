@@ -37,9 +37,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 # cedarcli stamps a development snapshot as 2.0.16-dev.20260915.5652527d: the version it carries,
-# the day it was built and the source commit it was built from. The commit is the only part a host
-# can check against the component's own history.
-DEV_VERSION = re.compile(r"^\d+\.\d+\.\d+-dev\.\d{8}\.(?P<commit>[0-9a-f]{7,40})$")
+# the day it was built and the source commit it was built from. A build train stamps
+# 0.1.0-dev.20261019.g0403cbd43aae.t0059 instead, with a `g` before the commit and the train's time
+# of day after it. An earlier train form joined the day and the time into one identifier. The
+# commit is the only part a host can check against the component's own history.
+# The accepted forms are those `cedar-design-tokens/tools/check_adoption.py` accepts, so the two
+# checks read every pin alike.
+DEV_VERSION = re.compile(r"^\d+\.\d+\.\d+-dev\.\d{8,14}\.g?(?P<commit>[0-9a-f]{7,40})(?:\.t\d+)?$")
 
 # A dependency may reach a scoped package through npm's alias form, which carries its own version:
 #   "cedar-model-typescript-library": "npm:@org.metadatacenter/cedar-model-typescript-library@1.0.13"

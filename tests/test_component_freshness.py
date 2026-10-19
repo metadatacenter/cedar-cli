@@ -62,6 +62,21 @@ class VersionIdentityTest(unittest.TestCase):
     def test_development_version_names_the_commit_it_was_built_from(self):
         self.assertEqual("5652527d", pinned_commit("2.0.16-dev.20260915.5652527d"))
 
+    def test_a_train_version_names_the_commit_behind_its_g_prefix(self):
+        self.assertEqual("0403cbd43aae", pinned_commit("0.1.0-dev.20261019.g0403cbd43aae.t0059"))
+        self.assertEqual("57e20c2f3cb6", pinned_commit("1.0.21-dev.20261019.g57e20c2f3cb6.t0059"))
+
+    def test_the_earlier_train_form_joining_day_and_time_names_its_commit(self):
+        self.assertEqual("f1fbbbc", pinned_commit("1.0.8-dev.202609090251.gf1fbbbc"))
+
+    def test_a_malformed_train_version_names_no_commit(self):
+        for version in ("0.1.0-dev.20261019.g0403cbd43aae.t",
+                        "0.1.0-dev.20261019.gg0403cbd43aae.t0059",
+                        "0.1.0-dev.2026101.g0403cbd43aae.t0059",
+                        "0.1.0-dev.20261019.g0403cbd43aae.t0059.extra"):
+            with self.subTest(version=version):
+                self.assertIsNone(pinned_commit(version))
+
     def test_a_release_version_names_no_commit_but_does_name_a_tag(self):
         self.assertIsNone(pinned_commit("2.0.15"))
         self.assertEqual("release-2.0.15", release_tag("2.0.15"))
@@ -116,6 +131,15 @@ class EvaluatePinTest(unittest.TestCase):
 
         self.assertEqual(ComponentState.UNRESOLVED, finding.state)
         self.assertFalse(finding.is_failure)
+
+    def test_a_malformed_train_version_stays_unresolved(self):
+        version = "0.1.0-dev.20261019.gg0403cbd43aae.t0059"
+
+        finding = evaluate_pin("host", "component", version, pinned_commit(version),
+                               "0403cbd43aae", (), True)
+
+        self.assertEqual(ComponentState.UNRESOLVED, finding.state)
+        self.assertIn("names no source commit", finding.detail)
 
 
 class EvaluateBundleTest(unittest.TestCase):
@@ -312,8 +336,30 @@ class ComponentWorkerTest(unittest.TestCase):
 
         self.assertEqual([], [f for f in findings if f.surface == Surface.ELEMENT])
 
-    def _git_head(self, directory):
-        completed = subprocess.run(["git", "-C", str(directory), "rev-parse", "--short=8", "develop"],
+    def test_a_train_stamped_pin_is_measured_against_the_component_history(self):
+        """A train writes the commit as `g` and twelve hex digits and appends its time of day."""
+        component = self._repo("cedar-design-tokens",
+                               {"name": "@org.metadatacenter/cedar-design-tokens",
+                                "version": "0.1.0-dev.20261019.aaaaaaa"})
+        published = self._git_head(component, 12)
+        self._git(component, "commit", "--allow-empty", "-m", "Add the spacing tokens")
+        host = self._repo("cedar-workspace", {
+            "name": "cedar-workspace",
+            "devDependencies": {"@org.metadatacenter/cedar-design-tokens":
+                                f"0.1.0-dev.20261019.g{published}.t0059"},
+        })
+
+        with patch.object(Util, "cedar_home", str(self.root)):
+            with patch("org.metadatacenter.worker.ComponentWorker.console"):
+                findings = ComponentWorker._evaluate_host(
+                    "cedar-workspace", host, ComponentWorker._component_index())
+
+        pins = [f for f in findings if f.surface == Surface.PIN]
+        self.assertEqual([ComponentState.BEHIND], [f.state for f in pins])
+        self.assertEqual(("Add the spacing tokens",), pins[0].unseen)
+
+    def _git_head(self, directory, length=8):
+        completed = subprocess.run(["git", "-C", str(directory), "rev-parse", f"--short={length}", "develop"],
                                    capture_output=True, text=True, check=True)
         return completed.stdout.strip()
 
