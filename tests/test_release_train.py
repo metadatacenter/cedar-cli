@@ -24,6 +24,7 @@ from org.metadatacenter import release_train
 from org.metadatacenter.release_support import integration, lifecycle, preflight, validation
 from org.metadatacenter.release_support import publication
 from org.metadatacenter.release_support.publication import _extract_source_archive
+from org.metadatacenter.release_support.scheduling import build_edges
 from org.metadatacenter.release_support.policy import (
     NEXUS_NPM_REGISTRY,
     NEXUS_NPM_RETAINED_REGISTRY,
@@ -2294,6 +2295,39 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             checks = [task for task in tasks if task['kind']=='frontend-verification']
             self.assertEqual(2, len(checks))
             self.assertTrue(all(task['command']==['npm','run','recorded-check'] for task in checks))
+
+    def test_setup_beyond_the_root_install_runs_before_verification(self):
+        # The Designer host's browser contracts need their own package and Chromium. The train
+        # and the reactor install both from the surface's setup, and so must the release.
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory, include_frontend=True)
+            browser_install = ['npm', '--prefix', 'browser', 'ci']
+            browsers = ['./browser/node_modules/.bin/playwright', 'install', '--with-deps', 'chromium']
+            manifest['frontendSurfaces'] = [
+                dict(id='host', repository='cedar-template-editor', directory='.', install=[],
+                     build=[], setup=[['npm', 'ci'], browser_install, browsers],
+                     verify=[['npm', 'run', 'test:browser']]),
+                dict(id='legacy', repository='cedar-template-editor', directory='.',
+                     install=['--legacy-peer-deps'], build=[],
+                     setup=[['npm', 'ci', '--legacy-peer-deps']], verify=[]),
+            ]
+            tasks = ReleaseBuildValidator(ReleaseState(root=Path(directory) / 'state')).tasks(manifest)
+            for variant in ('release', 'nextDevelopment'):
+                host = [task for task in tasks
+                        if task['variant'] == variant and ':host:' in task['id']]
+                self.assertEqual(
+                    [['npm', 'ci'], browser_install, browsers, ['npm', 'run', 'test:browser']],
+                    [task['command'] for task in host])
+                self.assertEqual(['install', 'setup-0', 'setup-1', 'verify-0'],
+                                 [task['id'].rsplit(':', 1)[-1] for task in host])
+                legacy = [task['command'] for task in tasks
+                          if task['variant'] == variant and ':legacy:' in task['id']]
+                self.assertEqual([['npm', 'ci', '--legacy-peer-deps']], legacy)
+            edges = build_edges(tasks)
+            positions = {task['id']: index for index, task in enumerate(tasks)}
+            verify = positions['release:npm:host:verify-0']
+            self.assertIn(positions['release:npm:host:setup-1'], edges[verify])
+            self.assertIn(positions['release:npm:host:setup-0'], edges[verify])
 
     def test_angular_builds_do_not_forward_options_past_chained_package_scripts(self):
         angular_surfaces = {"openview", "bridging", "monitoring", "cee-demo-angular"}
