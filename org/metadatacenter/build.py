@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Optional
 import json
-import os
 import subprocess
 import sys
 import time
@@ -12,10 +11,10 @@ from rich.console import Console
 from rich.panel import Panel
 
 from org.metadatacenter import maven, reactor, reactor_evidence
+from org.metadatacenter.coverage import report_coverage
 from org.metadatacenter.design_tokens import check_design_tokens
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
-from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
 from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories, tracked_path_state
@@ -53,43 +52,6 @@ JAVA_TESTS_OPTION_HELP = "Run Java test suites. Default: run."
 
 def configure_java_tests(tests: bool):
     GlobalContext.mark_skip_tests(not tests)
-
-
-def java_checkouts():
-    home = Path(Util.cedar_home)
-    return {home / repo.get_fqn() for repo in GlobalContext.repos.get_list_all()
-            if repo.repo_type in (RepoType.JAVA, RepoType.JAVA_WRAPPER)}
-
-
-def coverage_reports(checkouts, started: float):
-    """The JaCoCo reports written under these checkouts since a build started.
-
-    An aggregator such as cedar-project builds sibling checkouts through `../` modules, and Maven
-    writes their reports there, so the plan's own repositories cannot say where to look.
-    """
-    reports = set()
-    for checkout in checkouts:
-        for directory, children, _ in os.walk(checkout):
-            if Path(directory).name == 'target':
-                reports.update(report for report in Path(directory, 'site').glob('jacoco*/index.html')
-                               if report.stat().st_mtime >= started)
-                children[:] = []
-            else:
-                children[:] = [child for child in children if child not in ('.git', 'node_modules', 'src')]
-    return reports
-
-
-def report_coverage(started: float):
-    """Say how many coverage reports a build that ran Java tests wrote.
-
-    cedar-parent attaches JaCoCo to every test run.
-    """
-    reports = coverage_reports(java_checkouts(), started)
-    if reports:
-        noun = "report" if len(reports) == 1 else "reports"
-        # Unwrapped, so a log shows the sentence whole at any terminal width.
-        console.print(f"JaCoCo wrote {len(reports)} coverage {noun} under the tested modules' "
-                      "target/site directories.", soft_wrap=True)
 
 
 def require_integration_tags(tests: bool, dry_run: bool, dump_plan: bool):

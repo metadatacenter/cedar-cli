@@ -2,7 +2,6 @@ from contextlib import ExitStack, nullcontext
 import re
 import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -146,44 +145,6 @@ class BuildPolicyTest(unittest.TestCase):
             self.assertEqual(0, result.exit_code, result.output)
             execute.assert_called_once()
             self.assertEqual(reported, report.called, args)
-
-    def test_coverage_reports_are_those_written_since_the_build_started(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
-            reports = {name: home / path for name, path in {
-                "unit": "cedar-artifact-server/application/target/site/jacoco/index.html",
-                "integration": "cedar-artifact-server/application/target/site/jacoco-it/index.html",
-                "nested": "cedar-libraries-member/a/b/target/site/jacoco/index.html",
-                "stale": "cedar-user-server/application/target/site/jacoco/index.html",
-                "dependency": "cedar-artifact-server/node_modules/x/target/site/jacoco/index.html",
-            }.items()}
-            for report in reports.values():
-                report.parent.mkdir(parents=True)
-                report.write_text("")
-            started = time.time() - 10
-            os.utime(reports["stale"], (started - 60, started - 60))
-            found = build.coverage_reports(
-                {home / "cedar-artifact-server", home / "cedar-libraries-member",
-                 home / "cedar-user-server"}, started)
-
-        self.assertEqual({reports["unit"], reports["integration"], reports["nested"]}, found)
-
-    def test_coverage_report_counts_in_one_unwrapped_line(self):
-        from io import StringIO
-        from rich.console import Console
-        lines = []
-        for count in (2, 1):
-            output = StringIO()
-            with patch.object(build, "coverage_reports", return_value=set(range(count))), \
-                    patch.object(build, "java_checkouts", return_value=set()), \
-                    patch.object(build, "console", Console(file=output, width=40)):
-                build.report_coverage(0)
-            lines.append(output.getvalue())
-
-        self.assertEqual([
-            "JaCoCo wrote 2 coverage reports under the tested modules' target/site directories.\n",
-            "JaCoCo wrote 1 coverage report under the tested modules' target/site directories.\n",
-        ], lines)
 
     @patch.object(clean_maven.CleanMavenWorker, "all")
     @patch.object(clean_maven.CleanMavenWorker, "cedar")
