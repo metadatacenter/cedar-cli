@@ -63,7 +63,7 @@ def _workflow_summary(payload):
     return (
         f'Workflow {workflow_state} | Maven {one(maven)} | '
         f'npm {_group_summary(npm, 3)} | Docker plan {one(docker_plan)} | '
-        f'images {_group_summary(docker, 31)} | verify {one(verify)}'
+        f'images {_group_summary(docker, 28)} | verify {one(verify)}'
     )
 
 
@@ -135,7 +135,7 @@ def _render_recovery(version, records, workflow):
     active = workflow and workflow.get('status') in {'queued', 'in_progress', 'waiting', 'pending'}
     if state.get('Docker') == 'recorded':
         _output_component.console.print('[green]Decision: complete; do not resume or abandon this train.[/green]')
-        _output_component.console.print('Publication: Maven, npm, and all 31 Docker images are verified.')
+        _output_component.console.print('Publication: Maven, npm, and all 28 Docker images are verified.')
         return True
     if active:
         _output_component.console.print('[yellow]Decision: still running; do not dispatch another train.[/yellow]')

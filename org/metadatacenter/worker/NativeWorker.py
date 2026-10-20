@@ -19,9 +19,8 @@ class NativeWorker(Worker):
     """Run the native application tier without owning a terminal application."""
 
     MICROSERVICES = (
-        "group", "messaging", "repo", "resource", "schema", "artifact",
-        "terminology", "user", "valuerecommender", "submission", "worker",
-        "openview", "monitor", "impex", "bridge",
+        "group", "messaging", "repo", "resource", "artifact", "terminology",
+        "user", "worker", "openview", "monitor", "impex", "bridge",
     )
     FRONTENDS = (
         "ui-main", "ui-workspace", "ui-designer", "ui-openview", "ui-content",

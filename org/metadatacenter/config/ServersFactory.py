@@ -19,11 +19,8 @@ class ServersFactory:
         servers.add_microservice('open', 13)
         servers.add_microservice('repo', 2)
         servers.add_microservice('resource', 7)
-        servers.add_microservice('schema', 3)
-        servers.add_microservice('submission', 10)
         servers.add_microservice('terminology', 4)
         servers.add_microservice('user', 5)
-        servers.add_microservice('valuerecommender', 6)
         servers.add_microservice('worker', 11)
 
         servers.add_infra('MongoDB', 27017, check_running=CheckRunning.OPEN_PORT)

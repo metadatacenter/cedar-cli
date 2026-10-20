@@ -7,7 +7,7 @@ import subprocess
 from org.metadatacenter.util.Util import Util
 
 # Every image carries a short name, because typing cedar-server-artifact in a development loop is
-# noise. For the fifteen servers and the admin tool the short name is exactly the source repository
+# noise. For the twelve servers and the admin tool the short name is exactly the source repository
 # minus its cedar- prefix, so the name you build the jar in is the name you build the image with.
 #
 # The suffix matters: cedar-server-openview and cedar-frontend-openview would otherwise collide, and

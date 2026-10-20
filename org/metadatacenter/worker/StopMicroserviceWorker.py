@@ -45,24 +45,12 @@ class StopMicroserviceWorker(Worker):
         return StopMicroserviceWorker._stop("resource")
 
     @staticmethod
-    def schema():
-        return StopMicroserviceWorker._stop("schema")
-
-    @staticmethod
-    def submission():
-        return StopMicroserviceWorker._stop("submission")
-
-    @staticmethod
     def terminology():
         return StopMicroserviceWorker._stop("terminology")
 
     @staticmethod
     def user():
         return StopMicroserviceWorker._stop("user")
-
-    @staticmethod
-    def valuerecommender():
-        return StopMicroserviceWorker._stop("valuerecommender")
 
     @staticmethod
     def worker():

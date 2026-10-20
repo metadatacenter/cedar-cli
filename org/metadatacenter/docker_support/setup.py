@@ -218,8 +218,7 @@ for volume in \
     log_nginx redis_data log_redis \
     terminology_data resource_state \
     log_group log_impex log_monitor log_messaging log_openview log_repo log_resource \
-    log_schema log_submission log_artifact log_terminology log_user \
-    log_valuerecommender log_worker log_bridge \
+    log_artifact log_terminology log_user log_worker log_bridge \
     log_frontend_main log_frontend_openview log_frontend_content \
     log_frontend_monitoring log_frontend_bridging log_frontend_workspace \
     log_frontend_template_designer

@@ -96,13 +96,13 @@ public abstract class AbstractServerTest {
         self.assertEqual([], self.names())
 
     def test_a_mention_in_a_comment_starts_nothing(self):
-        write(self.root, 'ContractTest', '''/** The routes {@link SubmissionAnswerMatrixTest} boots with DropwizardAppExtension. */
+        write(self.root, 'ContractTest', '''/** The routes {@link RouteMatrixTest} boots with DropwizardAppExtension. */
 public class ContractTest {
   // A RedisServer is not needed here.
   @Test void reads() {}
 }''')
-        write(self.root, 'SubmissionAnswerMatrixTest',
-              SERVER_SUITE.format(tag='@Tag("integration")\n', name='SubmissionAnswerMatrixTest'))
+        write(self.root, 'RouteMatrixTest',
+              SERVER_SUITE.format(tag='@Tag("integration")\n', name='RouteMatrixTest'))
         report = scan(self.root)
         self.assertEqual((1, []), (report.integration, report.findings))
 

@@ -30,12 +30,8 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-messaging-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-repo-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-resource-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-schema-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-submission-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-terminology-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-user-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-valuerecommender-server", RepoType.JAVA,
-                            [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-worker-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-monitor-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-openview-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))

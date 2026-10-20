@@ -915,7 +915,7 @@ class ReleasePlannerTest(unittest.TestCase):
                 "image": f"cedar-image-{index:02d}",
                 "reference": f"nexus.example/cedar-image-{index:02d}:{TRAIN}",
             }
-            for index in range(31)
+            for index in range(28)
         ]
         docker_plan = {
             "version": TRAIN,
@@ -1140,7 +1140,7 @@ class ReleasePlannerTest(unittest.TestCase):
     def test_plan_refuses_a_train_without_complete_docker_evidence(self):
         planner = self.make_planner()
         planner.state.values[f"docker/completed/{TRAIN}.json"][0]["images"].pop()
-        with self.assertRaisesRegex(ReleaseError, "31 planned images"):
+        with self.assertRaisesRegex(ReleaseError, "28 planned images"):
             planner.build(
                 release_version="2.9.3",
                 next_version="2.9.4-SNAPSHOT",
@@ -1938,19 +1938,6 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     "assets/swagger-api/swagger.yaml"
                 ): "info:\n  version: 2.9.3-SNAPSHOT\n",
             },
-            "cedar-valuerecommender-server": {
-                "pom.xml": (
-                    "<project><version>2.9.3-SNAPSHOT</version></project>\n"
-                ),
-                (
-                    "cedar-valuerecommender-server-application/src/main/resources/"
-                    "assets/swagger-api/swagger.json"
-                ): '{"info":{"version" : "2.9.3-SNAPSHOT"}}\n',
-                (
-                    "cedar-valuerecommender-server-application/src/main/resources/"
-                    "assets/swagger-api/swagger.yaml"
-                ): "info:\n  version: 2.9.3-SNAPSHOT\n",
-            },
             "cedar-template-editor": {},
             "cedar-development": {
                 "bin/util/set-env-generic.sh": f"export CEDAR_VERSION={source_version}\n",
@@ -2026,7 +2013,6 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     "maven-repo",
                     "cedar-resource-server",
                     "cedar-terminology-server",
-                    "cedar-valuerecommender-server",
                 ],
                 "frontendPreparation": {
                     "workspace": str(release_workspace),
@@ -2129,31 +2115,6 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                     release_workspace / "cedar-resource-server"
                 ).as_posix(),
                 result["release"]["repositories"]["cedar-resource-server"][
-                    "changedFiles"
-                ],
-            )
-            release_valuerecommender_swagger = (
-                release_workspace / "cedar-valuerecommender-server"
-                / "cedar-valuerecommender-server-application/src/main/resources/assets/"
-                "swagger-api/swagger.yaml"
-            )
-            next_valuerecommender_swagger = (
-                next_workspace / "cedar-valuerecommender-server"
-                / "cedar-valuerecommender-server-application/src/main/resources/assets/"
-                "swagger-api/swagger.json"
-            )
-            self.assertIn(
-                "version: 2.9.3", release_valuerecommender_swagger.read_text()
-            )
-            self.assertIn(
-                '"version" : "2.9.4-SNAPSHOT"',
-                next_valuerecommender_swagger.read_text(),
-            )
-            self.assertIn(
-                release_valuerecommender_swagger.relative_to(
-                    release_workspace / "cedar-valuerecommender-server"
-                ).as_posix(),
-                result["release"]["repositories"]["cedar-valuerecommender-server"][
                     "changedFiles"
                 ],
             )
@@ -4766,7 +4727,7 @@ class ReleasePreflightTest(unittest.TestCase):
             [], self._preflight(commands=commands, manifest=manifest).check_develop_is_green())
 
     def test_an_undeclared_generated_swagger_file_is_found_before_the_build(self):
-        """This is the valuerecommender failure, reached without spending a build."""
+        """An undeclared generated file once failed a release after its build. This finds it first."""
         with tempfile.TemporaryDirectory() as directory:
             self._checked_out(directory, "cedar-undeclared-server", files={
                 "cedar-undeclared-server-application/src/main/resources/assets/"
