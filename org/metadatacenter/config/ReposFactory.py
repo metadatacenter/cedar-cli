@@ -220,7 +220,6 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-docker-deploy", RepoType.DOCKER_DEPLOY, [], for_docker=True))
 
         repos.add_repo(Repo("cedar-development", RepoType.DEVELOPMENT, [], for_docker=True))
-        repos.add_repo(Repo("cedar-util", RepoType.MISC, []))
 
         repos.add_repo(Repo("cedar-cli", RepoType.PYTHON, []))
 
