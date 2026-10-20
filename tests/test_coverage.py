@@ -171,5 +171,62 @@ class CoverageTest(unittest.TestCase):
         self.assertFalse((self.home / ".cedar" / "coverage").exists())
 
 
+    def test_the_ci_entry_measures_every_checkout_in_its_workspace_with_the_given_java(self):
+        for name, pom in (("cedar-project", True), ("cedar-artifact-server", True), ("cedar-cli", False)):
+            write(self.home / name / ("pom.xml" if pom else "README.md"))
+        with patch.object(coverage, "report") as report:
+            coverage.main([str(self.home), "--java", "/jdk/bin/java", "--repository", "/m2"])
+
+        checkouts, started, home, repository, java = report.call_args.args
+        self.assertEqual({self.home / "cedar-project", self.home / "cedar-artifact-server"}, checkouts)
+        self.assertEqual((0, self.home, Path("/m2"), Path("/jdk/bin/java")), (started, home, repository, java()))
+
+    def coverage_records(self, now):
+        """Two records the module wrote, one 20 days old, beside entries it must leave alone."""
+        from datetime import timedelta
+        root = self.home / ".cedar" / "coverage"
+        def record(age):
+            measured = (now - timedelta(days=age)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            name = measured.replace("-", "").replace(":", "") + ".json"
+            return write(root / name, json.dumps({"schemaVersion": 1, "measuredAt": measured}))
+        old, recent = record(20), record(1)
+        write(root / "notes.json", old.read_text())
+        write(root / "20261002T120000Z.json", "not json")
+        (root / "20261003T120000Z.json").symlink_to(old)
+        return old, recent
+
+    def test_coverage_records_are_previewed_then_removed_by_age_alone(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 10, 20, tzinfo=timezone.utc)
+        old, recent = self.coverage_records(now)
+
+        preview = coverage.prune_coverage(self.home, days=14, now=now)
+        self.assertEqual([(str(recent), "keep"), (str(old), "would remove")],
+                         [(row["path"], row["action"]) for row in preview])
+        self.assertTrue(old.exists())
+
+        applied = coverage.prune_coverage(self.home, days=14, apply=True, now=now)
+        self.assertEqual(["keep", "removed"], [row["action"] for row in applied])
+        self.assertFalse(old.exists())
+        self.assertEqual({recent.name, "notes.json", "20261002T120000Z.json", "20261003T120000Z.json"},
+                         {path.name for path in (self.home / ".cedar" / "coverage").iterdir()})
+
+    def test_build_diagnostics_lists_coverage_records_beside_failure_bundles(self):
+        from typer.testing import CliRunner
+        from org.metadatacenter import build
+        from org.metadatacenter.util.Util import Util
+        from datetime import datetime, timezone
+        old, recent = self.coverage_records(datetime.now(timezone.utc))
+        with patch.object(Util, "cedar_home", str(self.home)):
+            result = CliRunner().invoke(build.app, ["diagnostics", "--days", "14"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        # Each row is one line, so a path can be copied from the output whole.
+        self.assertIn(f"would remove: {old} (", result.output)
+        self.assertIn(f"keep: {recent} (", result.output)
+        self.assertIn("2 recognized coverage records", " ".join(result.output.split()))
+        self.assertTrue(old.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

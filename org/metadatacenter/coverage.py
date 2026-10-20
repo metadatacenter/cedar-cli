@@ -5,6 +5,7 @@ classes it compiles. That report credits the classes only with the module's own 
 library's code that a server's suites run counts in neither report. After a build, cedarcli therefore
 also merges every test JVM's execution data and credits each module's classes with any test that ran
 them. The two figures go to the console as one line, and per module and per repository to a JSON file.
+cedar-project's CI runs the same report over its workspace through `python -m org.metadatacenter.coverage`.
 
 The figures are a report, never a gate: a build that passed stays passed when they cannot be computed.
 """
@@ -204,31 +205,114 @@ def summary_line(summary, path: Path):
             f"module's own tests ({lines['total']:,} lines in {count} {noun}). Per module: {path}")
 
 
-def report_coverage(started: float):
-    """Say what coverage a build that ran Java tests measured."""
-    home = Path(Util.cedar_home).resolve()
-    checkouts = java_checkouts()
+def prune_coverage(cedar_home, *, days=14, apply=False, now=None):
+    """Age retention for the coverage records builds write; dry-run unless explicitly applied.
+
+    Only a record this module wrote is considered: a regular file named for its UTC timestamp whose
+    JSON carries the schema version and measurement time. Anything else in the directory is left
+    alone, as `cedarcli build diagnostics` leaves alone what it does not recognize.
+    """
+    import re
+    now = now or datetime.now(timezone.utc)
+    if days < 0:
+        raise ValueError('Retention age must be nonnegative')
+    root = Path(cedar_home) / '.cedar' / 'coverage'
+    if root.is_symlink():
+        raise ValueError('Refusing a symlinked coverage directory')
+    if not root.exists():
+        return []
+    records = []
+    for path in root.iterdir():
+        if path.is_symlink() or not path.is_file() or not re.fullmatch(r'\d{8}T\d{6}Z\.json', path.name):
+            continue
+        try:
+            content = path.read_bytes()
+            record = json.loads(content)
+            if record.get('schemaVersion') != 1:
+                continue
+            measured = datetime.strptime(record['measuredAt'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if measured <= now:
+            records.append((measured, path, content))
+    result = []
+    for measured, path, content in sorted(records, reverse=True):
+        expired = (now - measured).total_seconds() >= days * 86400
+        item = {'path': str(path), 'bytes': len(content), 'action': 'keep',
+                'reason': 'age' if expired else 'within retention'}
+        if expired:
+            item['action'] = 'would remove'
+            if apply:
+                # Recheck after inventory; never follow a replaced directory or record.
+                if root.is_symlink() or path.is_symlink() or path.read_bytes() != content:
+                    raise ValueError('Coverage record changed during cleanup')
+                path.unlink()
+                item['action'] = 'removed'
+        result.append(item)
+    return result
+
+
+def report(checkouts, started: float, home: Path, repository: Path, java):
+    """Print what coverage the reports under these checkouts show, and record it.
+
+    `java` is called for the Java executable only once there is something to measure, so a missing
+    JDK is reported like any other reason the merged figure cannot be computed. Returns the record's
+    path, or None when nothing was recorded.
+    """
     reports = coverage_reports(checkouts, started)
     if not reports:
-        return
+        return None
     noun = "report" if len(reports) == 1 else "reports"
     # Unwrapped, so a log shows each sentence whole at any terminal width.
     console.print(f"JaCoCo wrote {len(reports)} coverage {noun} under the tested modules' "
                   "target/site directories.", soft_wrap=True)
-    environment = invocation_environment()
-    repository = Path(environment.get('HOME') or Path.home()).expanduser() / '.m2' / 'repository'
     try:
-        java = Path(ModeManager.java_17_home(environment)) / 'bin' / 'java'
-        summary = summarize(measure(reports, execution_data(checkouts, started), home, repository, java),
-                            home)
+        measured = measure(reports, execution_data(checkouts, started), home, repository, java())
     except (ModeError, CoverageUnavailable) as reason:
         console.print(f"No merged coverage figure, because {reason}.", style="yellow", soft_wrap=True,
                       markup=False, highlight=False)
-        return
+        return None
+    summary = summarize(measured, home)
     if not summary['lines']['total']:
-        return
+        return None
     directory = home / '.cedar' / 'coverage'
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{summary['measuredAt'].replace('-', '').replace(':', '')}.json"
     path.write_text(json.dumps(summary, indent=2) + '\n')
     console.print(summary_line(summary, path), soft_wrap=True, markup=False, highlight=False)
+    return path
+
+
+def report_coverage(started: float):
+    """Say what coverage a build that ran Java tests measured."""
+    environment = invocation_environment()
+    home = Path(Util.cedar_home).resolve()
+    repository = Path(environment.get('HOME') or Path.home()).expanduser() / '.m2' / 'repository'
+    report(java_checkouts(), started, home, repository,
+           lambda: Path(ModeManager.java_17_home(environment)) / 'bin' / 'java')
+
+
+def main(argv=None):
+    """Report a directory of checkouts outside a cedarcli build, as cedar-project's CI does.
+
+    Every directory in it that holds a pom.xml counts as a checkout, and every report under one
+    counts, because a CI workspace holds nothing older than its own run. The record lands in the
+    directory's .cedar/coverage. A figure that cannot be computed is reported and never fails the
+    caller.
+    """
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog='python -m org.metadatacenter.coverage',
+        description="Report each module's own-test coverage and the coverage any test gave it.")
+    parser.add_argument('workspace', type=Path, help='The directory holding the checkouts, cedar-parent among them')
+    parser.add_argument('--java', type=Path, required=True, help='The Java 17 executable')
+    parser.add_argument('--repository', type=Path, default=Path.home() / '.m2' / 'repository',
+                        help='The local Maven repository; default ~/.m2/repository')
+    arguments = parser.parse_args(argv)
+    home = arguments.workspace.resolve()
+    checkouts = {child for child in home.iterdir() if (child / 'pom.xml').is_file()}
+    report(checkouts, 0, home, arguments.repository, lambda: arguments.java)
+
+
+if __name__ == '__main__':
+    main()
