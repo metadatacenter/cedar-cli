@@ -4,6 +4,7 @@ Only isolated frontend tasks overlap. Other commands remain exclusive barriers i
 plan order. Context copies retain this invocation's artifact selection and evidence.
 """
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from contextvars import copy_context, ContextVar
 import queue
 from datetime import datetime, timezone
@@ -18,12 +19,20 @@ from rich.console import Console
 
 from org.metadatacenter import reactor
 from org.metadatacenter.model.TaskType import TaskType
+from org.metadatacenter.util.BuildSafety import build_temporary_root
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.util.worker_pool import WorkerPool
 
-from org.metadatacenter.util.InvocationContext import process_cancellation as _cancel
+from org.metadatacenter.util.InvocationContext import invocation_environment, process_cancellation as _cancel
 _timings = ContextVar('build_timings', default=None)
 _package_ready = ContextVar('build_package_ready', default=None)
+_worker_pool = ContextVar('build_worker_pool', default=None)
+
+
+def worker_pool():
+    """The pool of test workers the running build's repositories share, or None outside a build."""
+    return _worker_pool.get()
 
 
 def package_ready():
@@ -210,9 +219,14 @@ def execute(plan, jobs):
     report = directory / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8] + '.json')
     # Resolve lazy shared state before workers start.
     executors = current_context().task_executors
+    workers = current_context().settings.build_workers
+    # Each frontend may use up to its own budget, and those running at once share one the size of
+    # the host, so --jobs fills idle cores without oversubscribing busy ones.
+    pool_size = max(workers, os.cpu_count() or 1)
+    frontends = any(task.parameters.get('isolated_frontend_build') for task in tasks)
     console.print(f'Build concurrency: {jobs} repositories; '
                   f'{current_context().settings.maven_threads} Maven threads; '
-                  f'{current_context().settings.build_workers} workers per frontend.')
+                  f'{workers} workers per frontend' + (f', {pool_size} shared.' if frontends else '.'))
     def run(task):
         return executors[TaskType.SHELL].execute(task, BuildProgress(console, task.repo.name), False)
     # Seconds from the start of the build at which each task reached each state, so a report shows
@@ -221,15 +235,22 @@ def execute(plan, jobs):
     def status(i, state):
         timeline.setdefault(i, {})[state] = round(time.monotonic() - start, 3)
         console.print(f'{state}: {tasks[i].repo.get_fqn()}', markup=False)
+    pool = (WorkerPool.created(build_temporary_root(dict(invocation_environment())), pool_size)
+            if frontends else nullcontext())
     try:
-        results = run_graph(tasks, edges, run, jobs, fail_fast=GlobalContext.fail_on_error(),
-                            on_status=status)
+        with pool as shared:
+            pool_token = _worker_pool.set(shared)
+            try:
+                results = run_graph(tasks, edges, run, jobs, fail_fast=GlobalContext.fail_on_error(),
+                                    on_status=status)
+            finally:
+                _worker_pool.reset(pool_token)
         if any(results.values()):
             raise SystemExit(1)
     finally:
         report.write_text(json.dumps({'schemaVersion': 1, 'plan': plan.name, 'jobs': jobs,
             'mavenThreads': current_context().settings.maven_threads,
-            'workers': current_context().settings.build_workers,
+            'workers': workers, 'workerPool': pool_size if frontends else None,
             'seconds': round(time.monotonic() - start, 3), 'commands': records,
             'tasks': [{'repository': t.repo.get_fqn(), 'exitCode': results.get(i),
                        'dependencies': [tasks[d].repo.get_fqn() for d in sorted(edges[i])],
