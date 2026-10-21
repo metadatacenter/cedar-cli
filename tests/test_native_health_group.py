@@ -16,9 +16,9 @@ class HealthGroupTest(unittest.TestCase):
         self.assertEqual((), NativeWorker.health_group("all"))
         self.assertEqual((), NativeWorker.health_group(None))
 
-    def test_microservices_names_the_fifteen_backends(self):
+    def test_microservices_names_the_twelve_backends(self):
         services = NativeWorker.health_group("microservices")
-        self.assertEqual(15, len(services))
+        self.assertEqual(12, len(services))
         self.assertIn("resource", services)
         self.assertNotIn("ui-main", services)
 

@@ -14,7 +14,9 @@ from org.metadatacenter.build_scheduler import (
     package_ready,
     record_dropped_optional_dependencies,
     record_timing,
+    worker_pool,
 )
+from org.metadatacenter.util.worker_pool import POOL_VARIABLE, runs_gate, wanted
 from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
@@ -35,6 +37,9 @@ from org.metadatacenter.util.ProcessRunner import run_shell
 from org.metadatacenter.util.NodeBuildCheck import is_frontend_build, require_build_node
 
 console = Console()
+
+# The variables through which a frontend's tools learn how many workers they may start.
+_WORKER_VARIABLES = ('CEDAR_TEST_WORKERS', 'NG_BUILD_MAX_WORKERS', 'VITEST_MAX_WORKERS')
 
 
 class ShellTaskExecutor(TaskExecutor):
@@ -89,9 +94,10 @@ class ShellTaskExecutor(TaskExecutor):
                                 "Reactor: " + ", ".join(resolved), markup=False)
                             commands_to_execute = reactor.install_commands(commands_to_execute)
                         workers = current_context().settings.build_workers
-                        environment.update({'CEDAR_TEST_WORKERS': str(workers),
-                                            'NG_BUILD_MAX_WORKERS': str(workers),
-                                            'VITEST_MAX_WORKERS': str(workers)})
+                        environment.update({name: str(workers) for name in _WORKER_VARIABLES})
+                        pool = worker_pool()
+                        if pool is not None:
+                            environment[POOL_VARIABLE] = str(pool.directory)
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
                         ready_after = parameter("package_ready_after")
@@ -192,25 +198,48 @@ class ShellTaskExecutor(TaskExecutor):
             if guarded_maven:
                 require_no_embedded_mongo_processes(
                     f"test-bearing Maven task for {repo.name}")
-            workspace = (executable_build_workspace(environment, java=True)
-                         if is_maven_command(command) else nullcontext((None, environment)))
-            with workspace as (_, child_environment):
-                if npm_logs and npm_install.is_install(command):
-                    return_code = self._execute_npm_install(
-                        task, repo, command, cwd, job_progress, child_environment, npm_logs)
-                else:
-                    _, return_code = self.execute_shell_command(
-                        task, repo, command, cwd, job_progress, environment=child_environment,
-                    )
-                if guarded_maven:
-                    wait_for_no_embedded_mongo_processes(
-                        f"completion of test-bearing Maven task for {repo.name}")
+            with self._worker_lease(command, cwd, environment) as granted:
+                command_environment = environment
+                if granted is not None:
+                    command_environment = {**environment,
+                                           **{name: str(granted) for name in _WORKER_VARIABLES}}
+                    want = wanted(command, int(environment['CEDAR_TEST_WORKERS']))
+                    if granted < want:
+                        job_progress.print(
+                            f"Workers: {granted} of {want}, the rest being in use elsewhere in the build",
+                            markup=False)
+                workspace = (executable_build_workspace(command_environment, java=True)
+                             if is_maven_command(command) else nullcontext((None, command_environment)))
+                with workspace as (_, child_environment):
+                    if npm_logs and npm_install.is_install(command):
+                        return_code = self._execute_npm_install(
+                            task, repo, command, cwd, job_progress, child_environment, npm_logs)
+                    else:
+                        _, return_code = self.execute_shell_command(
+                            task, repo, command, cwd, job_progress, environment=child_environment,
+                        )
+                    if guarded_maven:
+                        wait_for_no_embedded_mongo_processes(
+                            f"completion of test-bearing Maven task for {repo.name}")
             if return_code != 0:
                 if first_failure == 0:
                     first_failure = return_code
                 if GlobalContext.fail_on_error():
                     return return_code
         return first_failure
+
+    @staticmethod
+    def _worker_lease(command, cwd, environment):
+        """Hold the workers a command takes from the build's shared pool, if it takes any.
+
+        Only an isolated frontend build has a pool. A gate script takes each of its stages' workers
+        itself, so the command that starts it holds none. Any other npm script asks for the
+        repository's whole budget and runs with what it is granted; an install or a download holds one.
+        """
+        pool = worker_pool()
+        if pool is None or not environment or POOL_VARIABLE not in environment or runs_gate(command, cwd):
+            return nullcontext(None)
+        return pool.lease(wanted(command, int(environment['CEDAR_TEST_WORKERS'])))
 
     def _execute_npm_install(self, task, repo, command, cwd, job_progress, environment, npm_logs):
         """Install once more if npm dropped an optional dependency, and fail if it does so again.

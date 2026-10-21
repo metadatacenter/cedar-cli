@@ -289,7 +289,7 @@ class BuildTrainTest(unittest.TestCase):
                     'javaBase': ['java'],
                     'microserviceBase': ['microservice'],
                     'infrastructure': [f'infra-{index}' for index in range(7)],
-                    'microservices': [f'server-{index}' for index in range(21)],
+                    'microservices': [f'server-{index}' for index in range(18)],
                     'frontends': ['frontend-main'],
                 },
             }), encoding='utf-8')
@@ -497,7 +497,7 @@ class BuildTrainTest(unittest.TestCase):
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn('npm 1/3 done', result.output)
-        self.assertIn('images 1/31 done', result.output)
+        self.assertIn('images 1/28 done', result.output)
         self.assertIn('Decision: complete; do not resume or abandon', result.output)
         sleep.assert_called_once_with(10)
 

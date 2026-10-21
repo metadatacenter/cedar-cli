@@ -1,10 +1,15 @@
+from contextlib import ExitStack
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from typer.testing import CliRunner
-from org.metadatacenter import check, design_tokens
+from org.metadatacenter import build, cee_demos, check, design_tokens
+from org.metadatacenter.frontend_inventory import inventory
+from org.metadatacenter.util.GlobalContext import GlobalContext
+from org.metadatacenter.util.InvocationContext import InvocationContext, use_context
 
 
 class DesignTokensCommandTest(unittest.TestCase):
@@ -51,6 +56,52 @@ class DesignTokensCommandTest(unittest.TestCase):
             self.assertEqual(['--surface-inventory', '/work/here/ui-surfaces.md'], run.call_args.args[0][-2:])
             design_tokens.check_design_tokens(surface_inventory='/elsewhere/ui-surfaces.md')
             self.assertEqual(['--surface-inventory', '/elsewhere/ui-surfaces.md'], run.call_args.args[0][-2:])
+
+
+class ReactorTokenGateTest(unittest.TestCase):
+    """A frontend build refuses what the consumers' "Design token adoption" workflow refuses."""
+
+    def setUp(self):
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(use_context(InvocationContext(environment=dict(os.environ))))
+        recipes = inventory()
+        stack.enter_context(patch('org.metadatacenter.frontend_inventory.inventory', return_value=recipes))
+        GlobalContext.init_task_operators()
+        self.runner = CliRunner()
+
+    def test_a_failing_check_stops_the_reactor_before_any_build_work(self):
+        with patch.object(build, 'check_design_tokens', return_value=1) as gate, \
+                patch.object(build, 'execute_build') as execute:
+            result = self.runner.invoke(build.app, ['frontends'])
+        self.assertEqual(1, result.exit_code)
+        gate.assert_called_once_with(strict=True)
+        execute.assert_not_called()
+
+    def test_a_passing_check_lets_the_reactor_build(self):
+        with patch.object(build, 'check_design_tokens', return_value=0), \
+                patch.object(build, 'execute_build', side_effect=SystemExit(9)) as execute:
+            result = self.runner.invoke(build.app, ['frontends'])
+        self.assertEqual(9, result.exit_code)
+        execute.assert_called_once()
+
+    def test_build_all_checks_only_when_it_verifies(self):
+        with patch.object(build, 'check_design_tokens', return_value=0) as gate, \
+                patch.object(build, 'execute_build', return_value={}), \
+                patch.object(cee_demos, 'check_selection'):
+            self.assertEqual(0, self.runner.invoke(build.app, ['all']).exit_code)
+            gate.assert_called_once_with(strict=True)
+            gate.reset_mock()
+            self.assertEqual(0, self.runner.invoke(build.app, ['all', '--skip-tests']).exit_code)
+            gate.assert_not_called()
+
+    def test_a_dry_run_does_not_check(self):
+        with patch.object(build, 'check_design_tokens') as gate, \
+                patch.object(build.plan_executor, 'execute'):
+            result = self.runner.invoke(build.app, ['frontends', '--dry-run'])
+        self.assertEqual(0, result.exit_code, result.output)
+        gate.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

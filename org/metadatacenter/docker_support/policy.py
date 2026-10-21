@@ -48,11 +48,8 @@ MICROSERVICE_COMPOSE_SERVICES = {
     'open': 'server-openview',
     'repo': 'server-repo',
     'resource': 'server-resource',
-    'schema': 'server-schema',
-    'submission': 'server-submission',
     'terminology': 'server-terminology',
     'user': 'server-user',
-    'valuerecommender': 'server-valuerecommender',
     'worker': 'server-worker',
 }
 
@@ -88,11 +85,8 @@ MICROSERVICE_WRITABLE_VOLUMES = (
     'log_openview',
     'log_repo',
     'log_resource',
-    'log_schema',
-    'log_submission',
     'log_terminology',
     'log_user',
-    'log_valuerecommender',
     'log_worker',
     'resource_state',
     'terminology_data',

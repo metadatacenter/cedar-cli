@@ -110,7 +110,7 @@ def start_keycloak(detach: bool = DETACH, pull: PullPolicy = PULL,
         detach, pull.value, resolve_train(train, local, prefer_active=True)))
 
 
-@app.command("microservices", help="Start the fifteen Java microservices.")
+@app.command("microservices", help="Start the twelve Java microservices.")
 def start_microservices(detach: bool = DETACH, pull: PullPolicy = PULL,
                         train: str = TRAIN, local: bool = LOCAL):
     exit_on_failure(DockerWorker.start_microservices(

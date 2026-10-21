@@ -155,14 +155,6 @@ MAVEN_GENERATED_VERSION_FILES = {
             "version: {}"
         ),
     },
-    "cedar-submission-server": {
-        "cedar-submission-server-application/src/main/resources/assets/swagger-api/swagger.json": (
-            '"version" : "{}"'
-        ),
-        "cedar-submission-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
-            "version: {}"
-        ),
-    },
     "cedar-user-server": {
         "cedar-user-server-application/src/main/resources/assets/swagger-api/swagger.json": (
             '"version" : "{}"'
@@ -192,14 +184,6 @@ MAVEN_GENERATED_VERSION_FILES = {
             '"version" : "{}"'
         ),
         "cedar-terminology-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
-            "version: {}"
-        ),
-    },
-    "cedar-valuerecommender-server": {
-        "cedar-valuerecommender-server-application/src/main/resources/assets/swagger-api/swagger.json": (
-            '"version" : "{}"'
-        ),
-        "cedar-valuerecommender-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
             "version: {}"
         ),
     },

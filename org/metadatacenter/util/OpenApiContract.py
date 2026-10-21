@@ -42,13 +42,11 @@ STRUCTURED_MEDIA_SUFFIXES = ('json', 'yaml')
 # A 204 says there is no payload, so it is the one 2xx that describes itself by staying empty.
 NO_CONTENT_STATUS = '204'
 
-# Services excluded from the OpenAPI audit, and left out of this check for the same reason. These
-# three are legacy. They still answer requests, and their documents receive no further work, so
-# failing on them would report a gap nobody intends to close.
+# Services excluded from the OpenAPI audit, and left out of this check for the same reason. The
+# impex server is legacy. It still answers requests, and its document receives no further work, so
+# failing on it would report a gap nobody intends to close.
 SKIPPED_REPOSITORIES = {
     'cedar-impex-server': 'legacy service excluded from the audit',
-    'cedar-submission-server': 'legacy service excluded from the audit',
-    'cedar-valuerecommender-server': 'legacy service excluded from the audit',
 }
 
 # Write operations whose handler reads no request body, so a document that declares none for them is
@@ -64,12 +62,8 @@ BODILESS_WRITES = {
         'rotates the secret of the key named in the path and returns the user',
     ('cedar-worker-server', 'POST', '/command/regenerate-inclusion-subgraph'):
         'starts the one regeneration job the service runs and returns that job',
-    ('cedar-resource-server', 'POST', '/command/generate-empty-rules-index'):
-        'starts an index job whose only input is the index it claims',
     ('cedar-resource-server', 'POST', '/command/generate-empty-search-index'):
         'starts an index job whose only input is the index it claims',
-    ('cedar-resource-server', 'POST', '/command/reset-rules-index-job'):
-        'releases the rules index claim and returns the resulting status',
     ('cedar-resource-server', 'POST', '/command/reset-search-index-job'):
         'releases the search index claim and returns the resulting status',
     ('cedar-resource-server', 'POST', '/command/reset-valuesets-import'):

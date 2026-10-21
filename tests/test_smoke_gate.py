@@ -214,7 +214,7 @@ def queue_runner(exit_code=124):
 
 
 def search_payload():
-    families = ("content", "access", "paging", "lifecycle", "journey")
+    families = ("content", "access", "paging", "protocol", "lifecycle", "journey")
     return {"tier": "all", "status": "IMPLEMENTED_CASES_PASS_WITH_DECLARED_GAPS",
             "finishedAt": "2026-10-17T10:03:00Z", "runToken": "unique", "harnessDigest": "h", "corpusDigest": "c",
             "cleanupErrors": [], "browserErrors": [],
@@ -315,6 +315,9 @@ class RunSmokeTest(unittest.TestCase):
             "incomplete": lambda r: r["completion"].update(complete=False),
             "missing completion": lambda r: r.pop("completion"),
             "no journeys": lambda r: r["cells"].pop("journey"),
+            "no protocol inventory": lambda r: r["cells"].pop("protocol"),
+            "missing protocol check": lambda r: r.update(checks=[c for c in r["checks"]
+                                                                 if not c["id"].startswith("protocol/")]),
             "wrong inventory count": lambda r: r["matrixCells"].update(content=2),
             "empty family": lambda r: (r["cells"].update(content=[]), r["matrixCells"].update(content=0)),
             "duplicate inventory": lambda r: r["cells"]["content"][0].update(id="access/cell"),

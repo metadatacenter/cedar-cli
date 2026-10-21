@@ -314,10 +314,10 @@ class ReleasePlanner:
         planned_names = [item.get("image") for item in planned if isinstance(item, dict)]
         verified_names = [item.get("image") for item in verified if isinstance(item, dict)]
         if (
-            len(planned_names) != 31 or len(set(planned_names)) != 31
+            len(planned_names) != 28 or len(set(planned_names)) != 28
             or verified_names != planned_names
         ):
-            raise ReleaseError("Docker train is not complete for all 31 planned images")
+            raise ReleaseError("Docker train is not complete for all 28 planned images")
         for item in verified:
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", item.get("digest", "")):
                 raise ReleaseError(

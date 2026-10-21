@@ -38,9 +38,8 @@ class DevWorker(Worker):
             'log/frontend-workspace', 'log/frontend-designer',
             'log/server-artifact', 'log/server-auth', 'log/server-bridge', 'log/server-group',
             'log/server-impex', 'log/server-messaging', 'log/server-monitor', 'log/server-open',
-            'log/server-repo', 'log/server-resource', 'log/server-schema',
-            'log/server-submission', 'log/server-terminology', 'log/server-user',
-            'log/server-valuerecommender', 'log/server-worker', 'log/cadsr-tools', 'log/nginx',
+            'log/server-repo', 'log/server-resource', 'log/server-terminology', 'log/server-user',
+            'log/server-worker', 'log/cadsr-tools', 'log/nginx',
         ]
         for relative_path in relative_paths:
             (cedar_home / relative_path).mkdir(parents=True, exist_ok=True)

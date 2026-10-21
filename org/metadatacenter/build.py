@@ -3,12 +3,16 @@ from typing import Optional
 import json
 import subprocess
 import sys
+import time
+from xml.etree import ElementTree
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
 from org.metadatacenter import maven, reactor, reactor_evidence
+from org.metadatacenter.coverage import report_coverage
+from org.metadatacenter.design_tokens import check_design_tokens
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
@@ -70,13 +74,70 @@ def require_integration_tags(tests: bool, dry_run: bool, dump_plan: bool):
     raise typer.Exit(1)
 
 
+def require_design_token_adoption(verify: bool, dry_run: bool, dump_plan: bool):
+    """Refuse a frontend build whose sources the CI design-token gate would refuse.
+
+    Each consumer's "Design token adoption" workflow runs the tokens repository's checker in strict
+    mode, and no consumer's own test gate does, so a tree the reactor accepted could still fail that
+    workflow on push. The checker reads the source checkouts the reactor is about to build and takes
+    seconds, so it runs before any build work rather than after it.
+    """
+    if not verify or dry_run or dump_plan:
+        return
+    code = check_design_tokens(strict=True)
+    if code:
+        console.print("[red]The design-token adoption check failed, as CI would.[/red] "
+                      "Fix the findings above, then build again.")
+        raise typer.Exit(code)
+
+
+def _local_name(element):
+    return element.tag.rsplit('}', 1)[-1]
+
+
+def maven_modules(checkout: Path):
+    """The modules a checkout's POM builds by default, as directories.
+
+    Only the project's own <modules> count: a profile's modules are built only when it is active,
+    and a commented-out module is not built at all, which is why the POM is parsed rather than
+    searched.
+    """
+    try:
+        project = ElementTree.parse(checkout / 'pom.xml').getroot()
+    except (OSError, ElementTree.ParseError):
+        return []
+    return [(checkout / module.text.strip()).resolve()
+            for modules in project if _local_name(modules) == 'modules'
+            for module in modules if _local_name(module) == 'module' and (module.text or '').strip()]
+
+
+def aggregated_checkouts(checkout: Path, home: Path):
+    """The other checkouts an aggregator builds through `../` modules, followed transitively.
+
+    cedar-project, for one, compiles cedar-artifact-server and every other server from their own
+    checkouts, and cedar-microservice-libraries among them aggregates further.
+    """
+    found, pending = set(), [checkout]
+    while pending:
+        for module in maven_modules(pending.pop()):
+            try:
+                member = home / module.relative_to(home).parts[0]
+            except (ValueError, IndexError):
+                continue  # A module outside CEDAR_HOME, or CEDAR_HOME itself, is no checkout.
+            if member != checkout and member not in found:
+                found.add(member)
+                pending.append(member)
+    return found
+
+
 def build_input_roots(plan):
     """The repositories a build reads: those its plan builds, and the build tooling.
 
     Work elsewhere in the estate is not an input, for a Java build as for a frontend one, so an edit
-    to an unrelated repository does not fail a build that never read it. The roots are resolved,
-    because the captured state is keyed by resolved paths and a symlinked CEDAR_HOME otherwise
-    matches nothing, which silently disables the invariant.
+    to an unrelated repository does not fail a build that never read it. A checkout an aggregator
+    builds through a `../` module is an input, although the plan names only the aggregator. The
+    roots are resolved, because the captured state is keyed by resolved paths and a symlinked
+    CEDAR_HOME otherwise matches nothing, which silently disables the invariant.
     """
     home = Path(Util.cedar_home).resolve()
     roots = {home / 'cedar-cli', home / 'cedar-development'}
@@ -89,7 +150,10 @@ def build_input_roots(plan):
         for child in task.tasks:
             visit(child)
     visit(plan)
-    return {root.resolve() for root in roots}
+    roots = {root.resolve() for root in roots}
+    for root in list(roots):
+        roots |= aggregated_checkouts(root, home)
+    return roots
 
 
 # Profiles and frontend configuration live in this mixed-purpose repository.
@@ -107,6 +171,14 @@ def capture_build_state(home: Path, frontend_only: bool):
     if development in state:
         state[development] = tracked_path_state(development, FRONTEND_DEVELOPMENT_INPUTS)
     return state
+
+
+def execute_java_build(plan: Plan, dry_run: bool, dump_plan: bool):
+    started = time.time()
+    selection = execute_build(plan, dry_run, dump_plan)
+    if not GlobalContext.should_skip_tests() and not dry_run and not dump_plan:
+        report_coverage(started)
+    return selection
 
 
 def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
@@ -157,7 +229,7 @@ def this(wd: str = typer.Option(None, help="Working directory"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build this")
     BuildPlanner.this(plan, wd)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("parent")
@@ -169,7 +241,7 @@ def parent(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build parent")
     BuildPlanner.parent(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("libraries")
@@ -181,7 +253,7 @@ def libraries(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build libraries")
     BuildPlanner.libraries(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("project")
@@ -193,7 +265,7 @@ def project(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build project")
     BuildPlanner.project(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("clients")
@@ -205,7 +277,7 @@ def clients(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build clients")
     BuildPlanner.clients(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("java")
@@ -221,7 +293,7 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.libraries(plan)
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
-    execute_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan)
 
 
 @app.command("frontends")
@@ -231,6 +303,7 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
                   True, "--reuse/--no-reuse",
                   help="Take a repository's earlier passing result when everything it reads is "
                        "unchanged. --no-reuse runs every repository's checks again.")):
+    require_design_token_adoption(True, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build frontends")
     BuildPlanner.frontends(plan, reuse=reuse)
@@ -292,6 +365,7 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
                   True, "--tests/--skip-tests", help="Run Java and frontend verification suites. Default: run.")):
     configure_java_tests(tests)
     require_integration_tags(tests, dry_run, dump_plan)
+    require_design_token_adoption(tests, dry_run, dump_plan)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
     BuildPlanner.parent(plan)
@@ -299,7 +373,7 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
-    selection = execute_build(plan, dry_run, dump_plan)
+    selection = execute_java_build(plan, dry_run, dump_plan)
     if tests and not dry_run and not dump_plan:
         from org.metadatacenter.cee_demos import check_selection
         check_selection(selection)
@@ -307,12 +381,14 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
 
 @app.command("diagnostics")
 def diagnostics(
-    days: int = typer.Option(14, min=0, help="Retain completed failure bundles younger than this many days"),
+    days: int = typer.Option(
+        14, min=0, help="Retain completed failure bundles and coverage records younger than this many days"),
     max_mib: int = typer.Option(1024, min=0, help="Total retained diagnostic bundle budget in MiB"),
-    apply: bool = typer.Option(False, "--apply", help="Delete selected bundles; default only previews"),
+    apply: bool = typer.Option(False, "--apply", help="Delete selected entries; default only previews"),
 ):
-    """Preview or apply age/size retention to managed failed-build diagnostics."""
+    """Preview or apply retention to failed-build diagnostics and to coverage records."""
     from org.metadatacenter.build_diagnostics import prune_failures
+    from org.metadatacenter.coverage import prune_coverage
     from org.metadatacenter.util.InvocationContext import invocation_environment
     home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not home:
@@ -321,10 +397,16 @@ def diagnostics(
     try:
         rows = prune_failures(home, days=days, max_bytes=max_mib * 1024 * 1024, apply=apply)
         for row in rows:
-            console.print(f"{row['action']}: {row['path']} ({row['bytes']} bytes; {row['reason']})", markup=False)
+            console.print(f"{row['action']}: {row['path']} ({row['bytes']} bytes; {row['reason']})",
+                          markup=False, soft_wrap=True)
         console.print(f"{len(rows)} recognized completed bundles. Unrecognized, incomplete and symlinked entries are left alone.")
+        records = prune_coverage(home, days=days, apply=apply)
+        for row in records:
+            console.print(f"{row['action']}: {row['path']} ({row['bytes']} bytes; {row['reason']})",
+                          markup=False, soft_wrap=True)
+        console.print(f"{len(records)} recognized coverage records. Unrecognized and symlinked entries are left alone.")
         if not apply:
-            console.print('Preview only; add --apply to remove the selected diagnostic bundles.')
+            console.print('Preview only; add --apply to remove the selected bundles and records.')
     except (OSError, ValueError) as error:
         console.print(str(error), markup=False)
         raise typer.Exit(1) from error

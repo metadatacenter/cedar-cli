@@ -45,24 +45,12 @@ class StartMicroserviceWorker(Worker):
         return StartMicroserviceWorker._start("resource")
 
     @staticmethod
-    def schema():
-        return StartMicroserviceWorker._start("schema")
-
-    @staticmethod
-    def submission():
-        return StartMicroserviceWorker._start("submission")
-
-    @staticmethod
     def terminology():
         return StartMicroserviceWorker._start("terminology")
 
     @staticmethod
     def user():
         return StartMicroserviceWorker._start("user")
-
-    @staticmethod
-    def valuerecommender():
-        return StartMicroserviceWorker._start("valuerecommender")
 
     @staticmethod
     def worker():

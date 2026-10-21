@@ -64,16 +64,6 @@ def microservice_resource():
     exit_on_failure(StopMicroserviceWorker.resource())
 
 
-@app.command("schema")
-def microservice_schema():
-    exit_on_failure(StopMicroserviceWorker.schema())
-
-
-@app.command("submission")
-def microservice_submission():
-    exit_on_failure(StopMicroserviceWorker.submission())
-
-
 @app.command("terminology")
 def microservice_terminology():
     exit_on_failure(StopMicroserviceWorker.terminology())
@@ -82,11 +72,6 @@ def microservice_terminology():
 @app.command("user")
 def microservice_user():
     exit_on_failure(StopMicroserviceWorker.user())
-
-
-@app.command("valuerecommender")
-def microservice_valuerecommender():
-    exit_on_failure(StopMicroserviceWorker.valuerecommender())
 
 
 @app.command("worker")

@@ -23,11 +23,8 @@ class SubdomainsFactory:
         subdomains.add_microservice('open')
         subdomains.add_microservice('repo')
         subdomains.add_microservice('resource')
-        subdomains.add_microservice('schema')
-        subdomains.add_microservice('submission')
         subdomains.add_microservice('terminology')
         subdomains.add_microservice('user')
-        subdomains.add_microservice('valuerecommender')
         subdomains.add_microservice('worker')
 
         subdomains.add_frontend('cedar')
