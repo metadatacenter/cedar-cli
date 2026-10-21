@@ -100,39 +100,53 @@ class CoverageTest(unittest.TestCase):
 
     def test_the_helper_rows_become_figures_and_a_failure_says_why(self):
         module = self.home / "cedar-x" / "app"
-        ran = SimpleNamespace(returncode=0, stdout=f"{module}\t7\t10\t2\t4\n", stderr="")
-        with patch.object(coverage.subprocess, "run", return_value=ran):
-            self.assertEqual({module: (7, 10, 2, 4)},
-                             coverage.merged_figures({module: []}, [], Path("java"), []))
+        execution = self.home / "cedar-x" / "app" / "target" / "jacoco.exec"
+        written = {}
+
+        def run(command, **_):
+            written.update({Path(argument).name: Path(argument).read_text() for argument in command[-2:]})
+            return SimpleNamespace(returncode=0, stdout=f"{module}\t7\t10\t2\t4\t5\t1\n", stderr="")
+        with patch.object(coverage.subprocess, "run", side_effect=run):
+            self.assertEqual({module: (7, 10, 2, 4, 5, 1)},
+                             coverage.merged_figures({module: ("cedar-x", [])}, [("cedar-x", execution)],
+                                                     Path("java"), []))
+        # Each execution-data file and each module goes to the helper under its repository.
+        self.assertEqual(f"cedar-x\t{execution}\n", written["executions.txt"])
+        self.assertEqual(f"cedar-x\t{module}\n", written["modules.txt"])
 
         failed = SimpleNamespace(returncode=1, stdout="", stderr="trace\nInvalid execution data file\n")
         with patch.object(coverage.subprocess, "run", return_value=failed):
             with self.assertRaisesRegex(coverage.CoverageUnavailable, "exited 1: Invalid execution data"):
-                coverage.merged_figures({module: []}, [], Path("java"), [])
+                coverage.merged_figures({module: ("cedar-x", [])}, [], Path("java"), [])
 
-    def test_each_module_is_credited_by_its_own_report_and_by_any_test(self):
+    def test_each_module_is_credited_by_its_own_report_by_its_repository_and_by_any_test(self):
         unit = self.module_report("cedar-x/app")
         integration = self.module_report("cedar-x/app", "jacoco-it",
                                          REPORT.replace('type="LINE" missed="6" covered="4"',
                                                         'type="LINE" missed="0" covered="10"'))
         other = self.module_report("cedar-y")
-        any_test = {self.home / "cedar-x" / "app": (9, 10, 3, 4), self.home / "cedar-y": (4, 10, 1, 4)}
-        with patch.object(coverage, "merged_figures", return_value=any_test), \
+        executions = [self.home / "cedar-x/app/target/jacoco.exec", self.home / "cedar-y/target/jacoco.exec"]
+        any_test = {self.home / "cedar-x" / "app": (9, 10, 3, 4, 7, 2), self.home / "cedar-y": (4, 10, 1, 4, 4, 1)}
+        with patch.object(coverage, "merged_figures", return_value=any_test) as merged, \
                 patch.object(coverage, "jacoco_classpath", return_value=[]):
-            measured = coverage.measure({integration, unit, other}, [], self.home, self.home, Path("java"))
+            measured = coverage.measure({integration, unit, other}, executions, self.home, self.home, Path("java"))
             summary = coverage.summarize(measured, self.home)
 
+        modules, grouped = merged.call_args.args[:2]
+        self.assertEqual({self.home / "cedar-x" / "app": "cedar-x", self.home / "cedar-y": "cedar-y"},
+                         {module: repository for module, (repository, _) in modules.items()})
+        self.assertEqual([("cedar-x", executions[0]), ("cedar-y", executions[1])], grouped)
         # The Surefire report supplies the own-test figure when Failsafe wrote a second one.
-        self.assertEqual({"lines": (4, 10, 9), "branches": (1, 4, 3)},
+        self.assertEqual({"lines": (4, 10, 9, 7), "branches": (1, 4, 3, 2)},
                          measured[self.home / "cedar-x" / "app"])
-        self.assertEqual({"total": 20, "ownCovered": 8, "anyCovered": 13,
-                          "ownPercent": 40.0, "anyPercent": 65.0}, summary["lines"])
+        self.assertEqual({"total": 20, "ownCovered": 8, "repositoryCovered": 11, "anyCovered": 13,
+                          "ownPercent": 40.0, "repositoryPercent": 55.0, "anyPercent": 65.0}, summary["lines"])
         self.assertEqual(["cedar-x", "cedar-y"], [entry["repository"] for entry in summary["repositories"]])
         self.assertEqual(["cedar-x/app", "cedar-y"], [entry["module"] for entry in summary["modules"]])
 
     def test_a_module_whose_classes_changed_after_its_report_is_not_misreported(self):
         report = self.module_report("cedar-x/app")
-        with patch.object(coverage, "merged_figures", return_value={self.home / "cedar-x/app": (9, 12, 3, 4)}), \
+        with patch.object(coverage, "merged_figures", return_value={self.home / "cedar-x/app": (9, 12, 3, 4, 9, 3)}), \
                 patch.object(coverage, "jacoco_classpath", return_value=[]):
             with self.assertRaisesRegex(coverage.CoverageUnavailable, "changed after its report"):
                 coverage.measure({report}, [], self.home, self.home, Path("java"))
@@ -150,16 +164,16 @@ class CoverageTest(unittest.TestCase):
             coverage.report_coverage(0)
         return output.getvalue().splitlines()
 
-    def test_a_build_reports_both_figures_in_one_unwrapped_line_and_a_file(self):
-        lines = self.run_report(measured={self.home / "cedar-x": {"lines": (534, 1000, 687),
-                                                                   "branches": (1, 4, 3)}})
+    def test_a_build_reports_the_three_figures_in_one_unwrapped_line_and_a_file(self):
+        lines = self.run_report(measured={self.home / "cedar-x": {"lines": (534, 1000, 687, 601),
+                                                                   "branches": (1, 4, 3, 2)}})
 
         written = sorted((self.home / ".cedar" / "coverage").glob("*.json"))
         self.assertEqual(1, len(written))
         self.assertEqual([
             "JaCoCo wrote 1 coverage report under the tested modules' target/site directories.",
-            f"Line coverage: 68.7% by any test, 53.4% by each module's own tests (1,000 lines in 1 "
-            f"module). Per module: {written[0]}",
+            f"Line coverage: 68.7% by any test, 60.1% by each repository's own tests, 53.4% by each "
+            f"module's own tests (1,000 lines in 1 module). Per module: {written[0]}",
         ], lines)
         self.assertEqual(68.7, json.loads(written[0].read_text())["repositories"][0]["lines"]["anyPercent"])
 
