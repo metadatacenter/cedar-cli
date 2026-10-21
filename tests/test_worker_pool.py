@@ -12,11 +12,19 @@ from unittest.mock import patch
 from org.metadatacenter import build_scheduler
 from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
 from org.metadatacenter.util.InvocationContext import process_cancellation
-from org.metadatacenter.util.worker_pool import POOL_VARIABLE, WorkerPool, runs_gate, wanted
+from org.metadatacenter.util.worker_pool import POOL_VARIABLE, STALE_SECONDS, WorkerPool, boot_time, runs_gate, wanted
 
 
 def held(pool):
     return sorted(path.name for path in pool.directory.glob('slot-*'))
+
+
+def own(slot, owner, age=0):
+    slot.mkdir()
+    (slot / 'owner').write_text(f'{owner}\n')
+    if age:
+        then = time.time() - age
+        os.utime(slot, (then, then))
 
 
 def exited_pid():
@@ -31,16 +39,25 @@ class WorkerPoolTest(unittest.TestCase):
         self.addCleanup(self.root.cleanup)
 
     def pool(self, size):
-        context = WorkerPool.created(self.root.name, size)
-        pool = context.__enter__()
-        self.addCleanup(context.__exit__, None, None, None)
-        return pool
+        return WorkerPool.shared(self.root.name, size)
 
-    def test_a_created_pool_records_its_size_and_is_removed_afterwards(self):
-        with WorkerPool.created(self.root.name, 6) as pool:
-            directory = pool.directory
-            self.assertEqual('6', (directory / 'size').read_text().strip())
-        self.assertFalse(directory.exists())
+    def test_every_build_opens_the_same_pool_and_it_outlives_them(self):
+        first = self.pool(6)
+        self.assertEqual(Path(self.root.name, '.cedar', 'worker-pool'), first.directory)
+        self.assertEqual('6', (first.directory / 'size').read_text().strip())
+        slots = first.take(4, 4)
+        second = self.pool(6)
+        self.assertEqual(2, len(second.take(6, 1)), 'a second build saw slots the first one holds')
+        first.give(slots)
+        self.assertTrue(second.directory.exists())
+
+    def test_the_size_follows_the_host_only_while_the_pool_is_idle(self):
+        busy = self.pool(4)
+        slots = busy.take(1, 1)
+        self.assertEqual(4, self.pool(8).size)
+        busy.give(slots)
+        self.assertEqual(8, self.pool(8).size)
+        self.assertEqual('8', (busy.directory / 'size').read_text().strip())
 
     def test_takes_what_is_free_and_nothing_below_the_minimum(self):
         pool = self.pool(4)
@@ -56,21 +73,32 @@ class WorkerPoolTest(unittest.TestCase):
     def test_each_slot_names_its_holder(self):
         pool = self.pool(2)
         slots = pool.take(1, 1)
-        self.assertEqual(str(os.getpid()), (slots[0] / 'owner').read_text().strip())
+        self.assertEqual(f'{os.getpid()} {boot_time()}', (slots[0] / 'owner').read_text().strip())
 
     def test_a_slot_whose_holder_exited_is_taken_back(self):
         pool = self.pool(2)
-        for index, owner in enumerate((exited_pid(), os.getpid())):
-            slot = pool.directory / f'slot-{index}'
-            slot.mkdir()
-            (slot / 'owner').write_text(f'{owner}\n')
-        taken = pool.take(2, 1)
-        self.assertEqual(['slot-0'], [slot.name for slot in taken])
+        own(pool.directory / 'slot-0', f'{exited_pid()} {boot_time()}')
+        own(pool.directory / 'slot-1', f'{os.getpid()} {boot_time()}')
+        self.assertEqual(['slot-0'], [slot.name for slot in pool.take(2, 1)])
 
-    def test_a_slot_still_being_written_stays_with_its_holder(self):
+    def test_a_slot_from_an_earlier_boot_is_taken_back_though_its_number_is_in_use(self):
         pool = self.pool(1)
+        own(pool.directory / 'slot-0', f'{os.getpid()} {boot_time() - 86400}')
+        self.assertEqual(1, len(pool.take(1, 1)))
+
+    def test_a_slot_held_longer_than_any_command_is_taken_back(self):
+        pool = self.pool(2)
+        own(pool.directory / 'slot-0', f'{os.getpid()} {boot_time()}', age=STALE_SECONDS + 60)
+        own(pool.directory / 'slot-1', f'{os.getpid()} {boot_time()}', age=60)
+        self.assertEqual(['slot-0'], [slot.name for slot in pool.take(2, 1)])
+
+    def test_a_slot_still_being_written_stays_with_its_holder_for_a_minute(self):
+        pool = self.pool(2)
         (pool.directory / 'slot-0').mkdir()
-        self.assertEqual([], pool.take(1, 1))
+        (pool.directory / 'slot-1').mkdir()
+        then = time.time() - 120
+        os.utime(pool.directory / 'slot-1', (then, then))
+        self.assertEqual(['slot-1'], [slot.name for slot in pool.take(2, 1)])
 
     def test_a_lease_waits_for_half_its_want_and_returns_what_it_held(self):
         pool = self.pool(4)
@@ -108,12 +136,36 @@ class WorkerPoolTest(unittest.TestCase):
             thread.join(timeout=5)
         self.assertEqual(['large', 'small'], order)
 
-    def test_a_request_left_by_an_exited_process_is_dropped(self):
+    def test_a_request_whose_holder_is_gone_is_dropped(self):
         pool = self.pool(1)
-        (pool.directory / 'queue' / f'{0:020d}-{exited_pid()}-gone').touch()
+        queue = pool.directory / 'queue'
+        (queue / f'{0:020d}-{exited_pid()}-{boot_time()}-exited').touch()
+        (queue / f'{1:020d}-{os.getpid()}-{boot_time() - 86400}-reboot').touch()
+        (queue / f'{2:020d}-{os.getpid()}-unreadable').touch()
         with pool.lease(1, poll=0.01) as count:
             self.assertEqual(1, count)
-        self.assertEqual([], list((pool.directory / 'queue').iterdir()))
+        self.assertEqual([], list(queue.iterdir()))
+
+    def test_two_builds_together_stay_within_the_pool(self):
+        peak, active, lock = 0, 0, threading.Lock()
+        def build():
+            nonlocal peak, active
+            pool = self.pool(4)
+            for _ in range(5):
+                with pool.lease(3, poll=0.005) as count:
+                    with lock:
+                        active += count
+                        peak = max(peak, active)
+                    time.sleep(0.01)
+                    with lock:
+                        active -= count
+        threads = [threading.Thread(target=build) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        self.assertLessEqual(peak, 4)
+        self.assertEqual([], held(self.pool(4)))
 
     def test_a_lease_never_asks_for_more_than_the_pool(self):
         pool = self.pool(2)
@@ -167,9 +219,7 @@ class CommandLeaseTest(unittest.TestCase):
         self.addCleanup(self.root.cleanup)
         Path(self.root.name, 'package.json').write_text(
             json.dumps({'scripts': {'test:ci': 'node scripts/test-gate.mjs', 'test': 'jest'}}))
-        context = WorkerPool.created(self.root.name, 16)
-        self.pool = context.__enter__()
-        self.addCleanup(context.__exit__, None, None, None)
+        self.pool = WorkerPool.shared(self.root.name, 16)
         self.environment = {'CEDAR_TEST_WORKERS': '12', POOL_VARIABLE: str(self.pool.directory)}
 
     def lease(self, command, environment=None):

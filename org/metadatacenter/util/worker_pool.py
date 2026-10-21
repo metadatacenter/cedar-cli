@@ -1,32 +1,46 @@
-"""One worker budget for every repository a frontend build runs at once.
+"""One worker budget for every frontend build on this machine.
 
 `--workers` caps what one repository's checks use, and `--jobs` lets several repositories run at
-once, so three repositories at twelve workers each can ask a 16-core host for 36. Their browser
-suites then slow one another and time out under the load. The pool holds one slot for each worker
-the host runs. A command takes its workers from the pool before it starts and returns them when it
-ends, so suites in different repositories share the host rather than oversubscribe it.
+once, so three repositories at twelve workers each can ask a 16-core host for 36. Two builds started
+by different sessions ask for twice that. Their browser suites then slow one another and time out
+under the load. The pool holds one slot for each core the host has. A command takes its workers from
+the pool before it starts and returns them when it ends, so every suite on the machine shares the
+cores rather than oversubscribing them.
 
-The pool is a directory holding one subdirectory per slot in use. Creating a directory is atomic,
-so the reactor and the gate scripts each frontend runs take slots with nothing more than `mkdir`.
-Each slot records the process holding it, so the slots of a holder that died can be taken back.
+The pool is a directory at `$CEDAR_HOME/.cedar/worker-pool`, holding one subdirectory per slot in
+use, and every build on the machine opens the same one. Creating a directory is atomic, so the
+reactor and the gate scripts each frontend runs take slots with nothing more than `mkdir`.
 
 Requests are served in the order they were made. Each waits in `queue`, under a name that sorts by
 when it arrived, and only the oldest may take slots. A request for several workers would otherwise
 lose every free slot to smaller ones and wait as long as they kept arriving.
+
+A holder can die without returning its slots, and the pool outlives every build, so each slot and
+each request records its process and the boot that process started in. Either is stale once that
+process has exited, once the machine has restarted since, or after twelve hours, longer than any
+command holds a slot. A boot is part of the record because process numbers repeat after a restart.
 """
 from contextlib import contextmanager
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
 import re
 import shutil
-import tempfile
+import subprocess
 import time
 import uuid
 
 from org.metadatacenter.util.InvocationContext import cancellation_requested
 
 POOL_VARIABLE = 'CEDAR_WORKER_POOL'
+
+# Longer than any command holds a slot, so an older slot or request has lost its holder.
+STALE_SECONDS = 12 * 3600
+# Two readings of one boot's start time can differ by a little clock adjustment.
+_BOOT_TOLERANCE = 60
+# A holder writes its slot's owner within moments of taking it.
+_UNWRITTEN_SECONDS = 60
 
 _NPM_RUN = re.compile(r'npm run ([\w:.-]+)')
 _NPM_SCRIPT = re.compile(r'npm (?:--prefix \S+ )?(?:run(?:-script)? \S|test\b)')
@@ -38,18 +52,24 @@ class WorkerPool:
         self.size = size
 
     @classmethod
-    @contextmanager
-    def created(cls, root, size):
-        """A pool of `size` slots in a new directory under `root`, removed when the build ends."""
-        root = Path(root)
-        root.mkdir(parents=True, exist_ok=True)
-        directory = Path(tempfile.mkdtemp(prefix='workers-', dir=root))
-        (directory / 'queue').mkdir()
-        (directory / 'size').write_text(f'{size}\n')
-        try:
-            yield cls(directory, size)
-        finally:
-            shutil.rmtree(directory, ignore_errors=True)
+    def shared(cls, cedar_home, size=None):
+        """The machine's pool under `cedar_home`, created on first use.
+
+        Its size is the host's core count. A pool found idle with another size, as when an estate
+        moves to a new machine, takes this host's.
+        """
+        size = size or os.cpu_count() or 1
+        directory = Path(cedar_home) / '.cedar' / 'worker-pool'
+        (directory / 'queue').mkdir(parents=True, exist_ok=True)
+        pool = cls(directory, size)
+        recorded = pool._recorded_size()
+        if recorded is not None and recorded != size and pool._busy():
+            pool.size = recorded
+        elif recorded != size:
+            staged = directory / f'size.{os.getpid()}.{uuid.uuid4().hex[:8]}'
+            staged.write_text(f'{size}\n')
+            staged.replace(directory / 'size')
+        return pool
 
     def take(self, want, minimum):
         """Take up to `want` free slots, or none while fewer than `minimum` of them are free."""
@@ -77,10 +97,11 @@ class WorkerPool:
         Yields the number held. A cancelled build stops waiting.
         """
         want = max(1, min(want, self.size))
-        ticket = self.directory / 'queue' / f'{time.time_ns():020d}-{os.getpid()}-{uuid.uuid4().hex[:8]}'
+        name = f'{time.time_ns():020d}-{os.getpid()}-{boot_time()}-{uuid.uuid4().hex[:8]}'
+        ticket = self.directory / 'queue' / name
         ticket.touch()
         try:
-            while not (self.first() == ticket.name and (slots := self.take(want, (want + 1) // 2))):
+            while not (self.first() == name and (slots := self.take(want, (want + 1) // 2))):
                 if cancellation_requested():
                     raise InterruptedError('Build cancelled')
                 time.sleep(poll)
@@ -92,13 +113,27 @@ class WorkerPool:
             self.give(slots)
 
     def first(self):
-        """The oldest request still waiting, dropping those whose process has exited."""
+        """The oldest request still waiting, dropping those whose holder is gone."""
         queue = self.directory / 'queue'
         for name in sorted(path.name for path in queue.iterdir()):
-            if _alive(int(name.split('-')[1])):
+            parts = name.split('-')
+            try:
+                arrived, pid, boot = int(parts[0]) / 1e9, int(parts[1]), int(parts[2])
+            except (IndexError, ValueError):
+                arrived, pid, boot = 0, 0, 0
+            if _holds(pid, boot, arrived):
                 return name
             (queue / name).unlink(missing_ok=True)
         return None
+
+    def _recorded_size(self):
+        try:
+            return int((self.directory / 'size').read_text())
+        except (OSError, ValueError):
+            return None
+
+    def _busy(self):
+        return any(self.directory.glob('slot-*')) or any((self.directory / 'queue').iterdir())
 
 
 def runs_gate(command, cwd):
@@ -126,6 +161,21 @@ def wanted(command, budget):
     return budget if _NPM_SCRIPT.match(command.strip()) else 1
 
 
+@lru_cache(maxsize=1)
+def boot_time():
+    """When this machine last started, in whole seconds since the epoch."""
+    try:
+        reading = subprocess.run(['sysctl', '-n', 'kern.boottime'], capture_output=True, text=True,
+                                 check=True).stdout
+        return int(re.search(r'sec = (\d+)', reading).group(1))
+    except (OSError, subprocess.CalledProcessError, AttributeError):
+        pass
+    try:
+        return round(time.time() - float(Path('/proc/uptime').read_text().split()[0]))
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
 def _claim(slot):
     for _ in range(2):
         try:
@@ -135,18 +185,34 @@ def _claim(slot):
                 return False
             shutil.rmtree(slot, ignore_errors=True)
             continue
-        (slot / 'owner').write_text(f'{os.getpid()}\n')
+        (slot / 'owner').write_text(f'{os.getpid()} {boot_time()}\n')
         return True
     return False
 
 
 def _abandoned(slot):
-    """Whether the process that took `slot` has exited. A slot still being written is in use."""
+    """Whether the holder of `slot` is gone.
+
+    A slot whose owner is still being written is in use for a minute, long enough for any holder
+    to write it. One still without an owner after that lost its holder in between.
+    """
     try:
-        owner = int((slot / 'owner').read_text())
-    except (OSError, ValueError):
+        taken = slot.stat().st_mtime
+    except OSError:
         return False
-    return not _alive(owner)
+    try:
+        fields = (slot / 'owner').read_text().split()
+        pid, boot = int(fields[0]), int(fields[1]) if len(fields) > 1 else boot_time()
+    except (OSError, ValueError, IndexError):
+        return time.time() - taken > _UNWRITTEN_SECONDS
+    return not _holds(pid, boot, taken)
+
+
+def _holds(pid, boot, since):
+    """Whether process `pid`, started in boot `boot`, can still hold what it took at `since`."""
+    if abs(boot - boot_time()) > _BOOT_TOLERANCE or time.time() - since > STALE_SECONDS:
+        return False
+    return _alive(pid)
 
 
 def _alive(pid):
