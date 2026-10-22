@@ -6,7 +6,8 @@ result record under `.reactor/results/`, named by a fingerprint of everything th
 fingerprint covers the content of the repository's source tree, its exact commands, the package
 each of its CEDAR dependencies resolved to in this build, the integration bundles its checks
 loaded, the Node.js and npm versions, the platform, and the reactor's own tooling: cedar-cli's
-source and the frontend inputs in cedar-development. A later task with the same fingerprint takes
+source and the frontend inputs in cedar-development. Authoring surfaces additionally fingerprint
+the Java runtime and every JAR their conformance oracle resolves. A later task with the same fingerprint takes
 the recorded package, if it publishes one, and passes without running its commands.
 
 A consumer's fingerprint holds the digest of every package it resolved, so a producer that changed
@@ -23,6 +24,7 @@ import os
 import platform
 import re
 import subprocess
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -102,6 +104,48 @@ def resolved_packages(build_root) -> dict:
     return found
 
 
+def java_conformance_inputs(build_root) -> dict | None:
+    """The actual oracle dependencies, only for surfaces declaring a Java conformance gate.
+
+    Read the oracle POM from the selected model tarball before npm installs it. Hash every resolved
+    classpath entry, in classpath order: snapshots or transitive changes must invalidate a previous
+    green frontend result even when the frontend sources and meta-schemas did not change.
+    """
+    manifest = Path(build_root) / "package.json"
+    if not manifest.is_file():
+        return None
+    package = json.loads(manifest.read_text(encoding="utf-8"))
+    if package.get("cedarJavaConformance") is not True:
+        return None
+    spec = package.get("dependencies", {}).get("cedar-model-typescript-library", "")
+    if not spec.startswith("file:") or not spec.endswith(".tgz"):
+        raise ResultError("Java conformance requires the reactor's selected model package")
+    with tarfile.open(spec[len("file:"):], "r:gz") as archive:
+        member = archive.getmember("package/conformance/pom.xml")
+        if not member.isfile():
+            raise ResultError("Java conformance POM is not a regular file")
+        pom = archive.extractfile(member).read()
+    environment = invocation_environment()
+    java = str(Path(environment["JAVA_HOME"]) / "bin" / "java") if environment.get("JAVA_HOME") else "java"
+    version = subprocess.run([java, "-version"], env=environment, check=True,
+                             capture_output=True, text=True, timeout=30)
+    with tempfile.TemporaryDirectory(prefix="cedar-java-inputs-") as directory:
+        root = Path(directory)
+        (root / "pom.xml").write_bytes(pom)
+        classpath = root / "classpath"
+        subprocess.run(["mvn", "-q", "-f", str(root / "pom.xml"),
+                        "org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath",
+                        f"-Dmdep.outputFile={classpath}"], env=environment, check=True,
+                       capture_output=True, text=True, timeout=300)
+        paths = [Path(value) for value in classpath.read_text().strip().split(os.pathsep) if value]
+        if not paths:
+            raise ResultError("Java conformance resolved an empty classpath")
+        return {"java": (version.stdout + version.stderr).strip(),
+                "pom": hashlib.sha256(pom).hexdigest(),
+                "classpath": [{"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                              for path in paths]}
+
+
 def fingerprint(repo, build_root, identity, commands, ready_after, checks, cedar_home):
     """The key a passing result is recorded under, and the inputs it was computed from."""
     try:
@@ -116,8 +160,9 @@ def fingerprint(repo, build_root, identity, commands, ready_after, checks, cedar
             "integration": [{key: item[key] for key in ("variable", "package", "sha256", "bundleSha256")}
                             for item in checks],
             "tooling": tooling(cedar_home),
+            "javaConformance": java_conformance_inputs(build_root),
         }
-    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, subprocess.TimeoutExpired, tarfile.TarError) as error:
         raise ResultError(f"cannot fingerprint {repo.name}: {error}") from error
     key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     return key, inputs

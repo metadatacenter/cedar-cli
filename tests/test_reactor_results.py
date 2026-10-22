@@ -1,6 +1,10 @@
 """A passing reactor result is reused only for exactly the inputs it passed with."""
 import contextlib
 import hashlib
+import io
+import os
+import subprocess
+import tarfile
 import json
 import tempfile
 import unittest
@@ -72,9 +76,63 @@ class FingerprintTest(unittest.TestCase):
                    "visual")
         self.assertNotEqual(baseline, self.key())
 
+    def test_java_dependencies_change_the_key_without_a_frontend_change(self):
+        with patch.object(reactor_results, "java_conformance_inputs", return_value={"classpath": ["old"]}):
+            baseline = self.key()
+        with patch.object(reactor_results, "java_conformance_inputs", return_value={"classpath": ["new"]}):
+            self.assertNotEqual(baseline, self.key())
+
     def test_an_incomplete_identity_reuses_nothing(self):
         with self.assertRaises(reactor_results.ResultError):
             reactor_results.fingerprint(application(), self.root, {}, [], None, [], "/h")
+
+
+class JavaConformanceInputsTest(unittest.TestCase):
+    def test_exact_classpath_bytes_and_java_runtime_are_fingerprinted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "model.tgz"
+            pom = b"<project>oracle dependencies</project>"
+            with tarfile.open(package, "w:gz") as archive:
+                member = tarfile.TarInfo("package/conformance/pom.xml")
+                member.size = len(pom)
+                archive.addfile(member, io.BytesIO(pom))
+            (root / "package.json").write_text(json.dumps({"cedarJavaConformance": True,
+                "dependencies": {"cedar-model-typescript-library": "file:" + str(package)}}))
+            jars = [root / "validator.jar", root / "reader.jar", root / "transitive.jar"]
+            for jar in jars:
+                jar.write_bytes(jar.name.encode())
+            java = 'openjdk version "17.0.1"'
+
+            def run(command, **_kwargs):
+                if command[-1] == "-version":
+                    return subprocess.CompletedProcess(command, 0, "", java)
+                self.assertIn("maven-dependency-plugin:3.8.1:build-classpath", " ".join(command))
+                Path(command[-1].split("=", 1)[1]).write_text(os.pathsep.join(map(str, jars)))
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.object(reactor_results.subprocess, "run", side_effect=run):
+                baseline = reactor_results.java_conformance_inputs(root)
+                self.assertEqual(baseline["pom"], hashlib.sha256(pom).hexdigest())
+                for jar in jars:
+                    previous = reactor_results.java_conformance_inputs(root)
+                    jar.write_bytes(b"updated " + jar.read_bytes())
+                    self.assertNotEqual(previous, reactor_results.java_conformance_inputs(root))
+                previous = reactor_results.java_conformance_inputs(root)
+                java = 'openjdk version "17.0.2"'
+                self.assertNotEqual(previous, reactor_results.java_conformance_inputs(root))
+                jars[0].unlink()
+                with self.assertRaises(OSError):
+                    reactor_results.java_conformance_inputs(root)
+
+    def test_undeclared_surfaces_need_no_java_and_unresolved_authoring_inputs_cannot_reuse(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "package.json").write_text("{}")
+            self.assertIsNone(reactor_results.java_conformance_inputs(root))
+            (root / "package.json").write_text('{"cedarJavaConformance":true}')
+            with self.assertRaises(reactor_results.ResultError):
+                reactor_results.java_conformance_inputs(root)
 
 
 class ToolingTest(unittest.TestCase):
