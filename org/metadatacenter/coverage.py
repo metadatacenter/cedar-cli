@@ -4,7 +4,9 @@ cedar-parent attaches JaCoCo to every test run, and each module that runs tests 
 classes it compiles. That report credits the classes only with the module's own tests, so a shared
 library's code that a server's suites run counts in neither report. After a build, cedarcli therefore
 also merges every test JVM's execution data and credits each module's classes with any test that ran
-them. The two figures go to the console as one line, and per module and per repository to a JSON file.
+them. Between the two lies what the module's repository tests on its own, which is what its CI runs
+before any consumer sees a change: a module tested from a sibling module counts there. The three
+figures go to the console as one line, and per module and per repository to a JSON file.
 cedar-project's CI runs the same report over its workspace through `python -m org.metadatacenter.coverage`.
 
 The figures are a report, never a gate: a build that passed stays passed when they cannot be computed.
@@ -117,14 +119,26 @@ def jacoco_classpath(home: Path, repository: Path):
     return jars
 
 
+def repository_of(path: Path, home: Path):
+    """The checkout a module or an execution-data file belongs to: its first directory under home."""
+    try:
+        return path.relative_to(home).parts[0]
+    except (ValueError, IndexError) as error:
+        raise CoverageUnavailable(f"{path} is not inside a checkout under {home}") from error
+
+
 def merged_figures(modules, executions, java: Path, classpath):
-    """Run the helper: module directory -> (covered lines, lines, covered branches, branches)."""
+    """Run the helper over {module directory: (repository, class files)} and [(repository, execution)].
+
+    Returns module directory -> (covered lines, lines, covered branches, branches, lines covered by
+    the repository's tests, branches covered by the repository's tests).
+    """
     with tempfile.TemporaryDirectory() as directory:
         execution_list = Path(directory, 'executions.txt')
-        execution_list.write_text(''.join(f'{execution}\n' for execution in executions))
+        execution_list.write_text(''.join(f'{repository}\t{execution}\n' for repository, execution in executions))
         module_list = Path(directory, 'modules.txt')
-        module_list.write_text(''.join('\t'.join([str(module)] + [str(c) for c in classes]) + '\n'
-                                       for module, classes in modules.items()))
+        module_list.write_text(''.join('\t'.join([repository, str(module)] + [str(c) for c in classes]) + '\n'
+                                       for module, (repository, classes) in modules.items()))
         try:
             result = subprocess.run(
                 [str(java), '-cp', os.pathsep.join(str(jar) for jar in classpath), str(HELPER),
@@ -145,7 +159,7 @@ def merged_figures(modules, executions, java: Path, classpath):
 
 
 def measure(reports, executions, home: Path, repository: Path, java: Path):
-    """Own-test and any-test figures for every module that wrote a report.
+    """Own-test, repository-test and any-test figures for every module that wrote a report.
 
     A module that ran Failsafe suites has two reports on the same classes; the Surefire one supplies
     its own-test figure.
@@ -155,37 +169,41 @@ def measure(reports, executions, home: Path, repository: Path, java: Path):
         module = report.parents[3]
         if module not in modules:
             modules[module] = read_report(report.parent / 'jacoco.xml')
-    any_test = merged_figures({module: classes for module, (classes, _, _) in modules.items()},
-                              executions, java, jacoco_classpath(home, repository))
+    any_test = merged_figures({module: (repository_of(module, home), classes)
+                               for module, (classes, _, _) in modules.items()},
+                              [(repository_of(execution, home), execution) for execution in executions],
+                              java, jacoco_classpath(home, repository))
     measured = {}
     for module, (_, own_lines, own_branches) in modules.items():
-        covered_lines, lines, covered_branches, branches = any_test[module]
+        covered_lines, lines, covered_branches, branches, repository_lines, repository_branches = any_test[module]
         if (lines, branches) != (own_lines[1], own_branches[1]):
             raise CoverageUnavailable(f"{module} changed after its report was written")
-        measured[module] = {'lines': own_lines + (covered_lines,),
-                            'branches': own_branches + (covered_branches,)}
+        measured[module] = {'lines': own_lines + (covered_lines, repository_lines),
+                            'branches': own_branches + (covered_branches, repository_branches)}
     return measured
 
 
-def figure(covered_own, total, covered_any):
-    return {'total': total, 'ownCovered': covered_own, 'anyCovered': covered_any,
-            'ownPercent': round(100 * covered_own / total, 1) if total else None,
-            'anyPercent': round(100 * covered_any / total, 1) if total else None}
+def figure(covered_own, total, covered_any, covered_repository):
+    def percent(covered):
+        return round(100 * covered / total, 1) if total else None
+    return {'total': total, 'ownCovered': covered_own, 'repositoryCovered': covered_repository,
+            'anyCovered': covered_any, 'ownPercent': percent(covered_own),
+            'repositoryPercent': percent(covered_repository), 'anyPercent': percent(covered_any)}
 
 
 def summarize(measured, home: Path):
     """Per module, per repository and estate-wide figures, keyed by path relative to CEDAR_HOME.
 
-    Each counter is (own covered, total, any covered).
+    Each counter is (own covered, total, any covered, repository covered).
     """
     def add(into, counters):
         for kind in ('lines', 'branches'):
             into[kind] = [a + b for a, b in zip(into[kind], counters[kind])]
-    modules, repositories, estate = [], {}, {'lines': [0, 0, 0], 'branches': [0, 0, 0]}
+    modules, repositories, estate = [], {}, {'lines': [0, 0, 0, 0], 'branches': [0, 0, 0, 0]}
     for module, counters in sorted(measured.items()):
         name = module.relative_to(home).as_posix()
         modules.append({'module': name, **{kind: figure(*counters[kind]) for kind in counters}})
-        add(repositories.setdefault(name.split('/')[0], {'lines': [0, 0, 0], 'branches': [0, 0, 0]}),
+        add(repositories.setdefault(name.split('/')[0], {'lines': [0, 0, 0, 0], 'branches': [0, 0, 0, 0]}),
             counters)
         add(estate, counters)
     return {
@@ -201,8 +219,9 @@ def summarize(measured, home: Path):
 def summary_line(summary, path: Path):
     lines, count = summary['lines'], len(summary['modules'])
     noun = 'module' if count == 1 else 'modules'
-    return (f"Line coverage: {lines['anyPercent']}% by any test, {lines['ownPercent']}% by each "
-            f"module's own tests ({lines['total']:,} lines in {count} {noun}). Per module: {path}")
+    return (f"Line coverage: {lines['anyPercent']}% by any test, {lines['repositoryPercent']}% by each "
+            f"repository's own tests, {lines['ownPercent']}% by each module's own tests "
+            f"({lines['total']:,} lines in {count} {noun}). Per module: {path}")
 
 
 def prune_coverage(cedar_home, *, days=14, apply=False, now=None):
@@ -303,7 +322,7 @@ def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(
         prog='python -m org.metadatacenter.coverage',
-        description="Report each module's own-test coverage and the coverage any test gave it.")
+        description="Report each module's coverage by its own tests, by its repository's tests and by any test.")
     parser.add_argument('workspace', type=Path, help='The directory holding the checkouts, cedar-parent among them')
     parser.add_argument('--java', type=Path, required=True, help='The Java 17 executable')
     parser.add_argument('--repository', type=Path, default=Path.home() / '.m2' / 'repository',
