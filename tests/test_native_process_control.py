@@ -437,14 +437,24 @@ await_ready {name}
         self.assertNotIn("removed", result.stdout)
 
     def test_a_frontend_is_ready_once_its_optimized_dependencies_load(self):
+        # The dependency is held for 1.5 s from the first request for it, as the optimizer holds it from
+        # the first page load, so the wait is measured from a moment the readiness check has reached.
         optimized = threading.Event()
-        timer = threading.Timer(1.5, optimized.set)
-        timer.start()
-        self.addCleanup(timer.cancel)
+        asked = threading.Lock()
+        timers = []
+        self.addCleanup(lambda: [timer.cancel() for timer in timers])
+
+        def held():
+            with asked:
+                if not timers:
+                    timers.append(threading.Timer(1.5, optimized.set))
+                    timers[0].start()
+            return optimized.wait(30) and _script("export const core = () => 0;")
+
         server = self.serve({
             "/": _page('<script type="module" src="/main.js"></script>'),
             "/main.js": _script('import { core } from "/deps/core.js";\ncore();\n'),
-            "/deps/core.js": lambda: optimized.wait(30) and _script("export const core = () => 0;"),
+            "/deps/core.js": held,
         })
 
         result, elapsed = self.await_ready(server.server_port, budget=10)
