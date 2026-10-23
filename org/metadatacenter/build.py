@@ -160,7 +160,7 @@ def build_input_roots(plan):
 # Backend audits, repairs and documentation are not build inputs, for Java either.
 FRONTEND_DEVELOPMENT_INPUTS = (
     'bin', 'ops/frontend-train.json', 'ops/frontend_inventory.py',
-    'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py',
+    'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py', 'ops/frontend_ready.py',
     'ops/build-native-split-frontend.sh', 'ops/write-native-frontend-build-info.mjs',
 )
 
@@ -314,7 +314,9 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
         reactor.activate_runtime(Util.cedar_home, selection)
         console.print(f"Reactor build evidence: {reactor.store_root(Util.cedar_home) / 'builds' / (selection.evidence + '.json')}")
         console.print("Restarting local frontends with this reactor's exact component selection.")
-        result = NativeWorker.restart(NativeWorker.FRONTENDS)
+        # The smoke that follows loads every page through nginx, so the restart waits until each
+        # page and everything it loads arrive the same way.
+        result = NativeWorker.restart(NativeWorker.FRONTENDS, ready_through_nginx=True)
         if result.returncode:
             raise typer.Exit(result.returncode)
         home = Path(Util.cedar_home)

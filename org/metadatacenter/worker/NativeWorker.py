@@ -40,13 +40,16 @@ class NativeWorker(Worker):
     @classmethod
     def execute(cls, action: str, services: Iterable[str] = (), title: str = None,
                 show_command: bool = True, echo_streams: bool = True,
-                show_title: bool = True, refresh_dependencies: bool = False):
+                show_title: bool = True, refresh_dependencies: bool = False,
+                ready_through_nginx: bool = False):
         arguments = [cls.controller_path(), action, *services]
         command = " ".join(shlex.quote(argument) for argument in arguments)
+        # Both decisions are carried in the script text rather than the environment. A subprocess
+        # inherits the invocation's resolved profile, which is a snapshot taken before any command
+        # runs, so setting os.environ in a callback would never reach the controller.
+        if ready_through_nginx:
+            command = f"CEDAR_FRONTEND_READY_ORIGIN=public {command}"
         if refresh_dependencies or cls.refresh_stale_dependencies:
-            # Carried in the script text rather than the environment. A subprocess inherits the
-            # invocation's resolved profile, which is a snapshot taken before any command runs,
-            # so setting os.environ in a callback would never reach the controller.
             command = f"CEDAR_REFRESH_STALE_DEPENDENCIES=1 {command}"
         return Worker.execute_generic_shell_commands(
             [command], title=title or f"Native CEDAR: {action}",
@@ -106,9 +109,17 @@ class NativeWorker(Worker):
         return cls.execute("stop", services, "Stopping native CEDAR services")
 
     @classmethod
-    def restart(cls, services: Iterable[str] = (), refresh_dependencies: bool = False):
+    def restart(cls, services: Iterable[str] = (), refresh_dependencies: bool = False,
+                ready_through_nginx: bool = False):
+        """Stops and starts the services, then waits until each serves.
+
+        A frontend serves once its page and everything the page loads arrive. The controller asks
+        each development server on its own port unless `ready_through_nginx` asks it to go through
+        the origin a browser uses, which needs nginx up and its certificates current.
+        """
         return cls.execute("restart", services, "Restarting native CEDAR services",
-                           refresh_dependencies=refresh_dependencies)
+                           refresh_dependencies=refresh_dependencies,
+                           ready_through_nginx=ready_through_nginx)
 
     @classmethod
     def status(cls):

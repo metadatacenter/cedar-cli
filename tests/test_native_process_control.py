@@ -1,4 +1,12 @@
+import http.server
+import importlib.util
+import os
+import socket
+import ssl
 import subprocess
+import tempfile
+import threading
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -24,6 +32,7 @@ NATIVE_CONTROLLER = (
     Path(__file__).resolve().parents[2]
     / "cedar-development" / "ops" / "cedar-services.sh"
 )
+FRONTEND_READY = NATIVE_CONTROLLER.with_name("frontend_ready.py")
 
 
 @patch.dict("os.environ", {"CEDAR_HOME": "/tmp/CEDAR"})
@@ -295,6 +304,285 @@ running
         self.assertEqual("group\n", result.stdout)
 
 
+class _Routes(http.server.BaseHTTPRequestHandler):
+    """Answers each path from its server's table with a status, a content type and a body.
+
+    A route may be a callable, which runs on the request's own thread and may block it, as a
+    development server blocks a request while it compiles or optimizes.
+    """
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        self.server.requested.append(path)
+        route = self.server.routes.get(path)
+        status, content_type, body = (route() if callable(route) else route) or (
+            404, "text/plain", b"not found")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _page(*tags):
+    return 200, "text/html; charset=UTF-8", (
+        "<!doctype html><html><head>" + "".join(tags) + "</head><body></body></html>").encode()
+
+
+def _script(text="void 0;"):
+    return 200, "text/javascript", text.encode()
+
+
+@unittest.skipUnless(
+    FRONTEND_READY.is_file(),
+    "requires a sibling cedar-development checkout whose controller checks frontend pages",
+)
+class FrontendReadinessTest(unittest.TestCase):
+    """What `start` and `restart` wait for before they call a frontend ready.
+
+    A development server opens its port before it serves the page behind it, so an answer from the
+    root says too little: the reactor's smoke once timed out loading a page the controller had just
+    reported ready. Readiness is the page and everything a browser loads with it. These run the
+    controller's own wait against servers on loopback, which stand in for the frontends.
+    """
+
+    # A request still waiting when its pass ends. Which bound ended it depends on where in the
+    # budget the last pass fell, so either wording is the same finding.
+    STILL_LOADING = r"(did not finish within 1s|was still loading when the readiness budget ran out)"
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
+        self.log = self.home / "frontend.log"
+        self.log.write_text("Application bundle generation complete.\n")
+
+    def serve(self, routes):
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Routes)
+        server.routes, server.requested = routes, []
+        # A request the check gave up on is answered into a closed socket, which is expected here,
+        # and closing the server must not wait for a request still being held.
+        server.handle_error = lambda request, address: None
+        server.block_on_close = False
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server
+
+    def run_controller(self, body, budget):
+        script = f'''\
+export CEDAR_SERVICES_LIBRARY_ONLY=true
+export CEDAR_SERVICES_INSPECT_ONLY=true
+source "{NATIVE_CONTROLLER}"
+logfile() {{ echo "{self.log}"; }}
+remove_launchd_job() {{ echo "removed $1"; }}
+{body}
+'''
+        environment = dict(os.environ, CEDAR_HOME=str(self.home),
+                           CEDAR_START_READY_TIMEOUT=str(budget),
+                           CEDAR_FRONTEND_READY_REQUEST_TIMEOUT="1",
+                           CEDAR_HEALTH_PROBE_TIMEOUT="1")
+        for name in ("CEDAR_HOST", "CEDAR_CA_HOME", "CEDAR_WORKSPACE_FRONTEND_URL",
+                     "CEDAR_TEMPLATE_DESIGNER_FRONTEND_URL", "CEDAR_FRONTEND_READY_ORIGIN"):
+            environment.pop(name, None)
+        started = time.monotonic()
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                env=environment, timeout=budget + 60, check=False)
+        return result, time.monotonic() - started
+
+    def await_ready(self, port, name="ui-openview", budget=2):
+        """Runs the wait for one frontend served on `port`, after the root probe status uses."""
+        return self.run_controller(f'''\
+app_port() {{ echo {port}; }}
+fe_origin() {{ echo "http://127.0.0.1:{port}"; }}
+echo "root: $(health_of {name})"
+await_ready {name}
+''', budget)
+
+    def test_a_port_that_accepts_connections_and_answers_nothing_is_not_ready(self):
+        listener = socket.socket()
+        self.addCleanup(listener.close)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(16)  # The kernel completes each connection; nothing ever answers one.
+        port = listener.getsockname()[1]
+
+        result, _ = self.await_ready(port)
+
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("ready ui-openview", result.stdout)
+        self.assertRegex(result.stderr, rf"http://127\.0\.0\.1:{port}/ {self.STILL_LOADING}")
+        self.assertIn("removed ui-openview", result.stdout)
+
+    def test_a_page_served_before_its_dependencies_are_optimized_is_not_ready(self):
+        held = threading.Event()
+        self.addCleanup(held.set)
+        server = self.serve({
+            "/": _page('<script type="module" src="/main.js"></script>'),
+            "/main.js": _script('import { core } from "/deps/core.js";\ncore();\n'),
+            "/deps/core.js": lambda: held.wait(30) and _script("export const core = () => 0;"),
+        })
+
+        result, _ = self.await_ready(server.server_port)
+
+        # The root answers at once, which is all the old wait asked for.
+        self.assertIn("root: healthy", result.stdout)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("ready ui-openview", result.stdout)
+        self.assertRegex(result.stderr, rf"/deps/core\.js {self.STILL_LOADING}")
+        # It answers its port, so it is left running for inspection rather than removed.
+        self.assertIn("left running", result.stderr)
+        self.assertNotIn("removed", result.stdout)
+
+    def test_a_frontend_is_ready_once_its_optimized_dependencies_load(self):
+        optimized = threading.Event()
+        timer = threading.Timer(1.5, optimized.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        server = self.serve({
+            "/": _page('<script type="module" src="/main.js"></script>'),
+            "/main.js": _script('import { core } from "/deps/core.js";\ncore();\n'),
+            "/deps/core.js": lambda: optimized.wait(30) and _script("export const core = () => 0;"),
+        })
+
+        result, elapsed = self.await_ready(server.server_port, budget=10)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("ready ui-openview", result.stdout)
+        self.assertGreaterEqual(elapsed, 1.5)
+        self.assertIn("/deps/core.js", server.requested)
+
+    def test_an_index_whose_main_script_fails_is_not_ready(self):
+        failures = {
+            "answered 404": (404, "text/plain", b"not found"),
+            "answered 500": (500, "text/plain", b"compilation failed"),
+            # Gulp answers a missing file with the index, so a page in place of a script is missing.
+            "answered with a page in place of a script": _page(),
+        }
+        for reason, answer in failures.items():
+            with self.subTest(reason):
+                server = self.serve({
+                    "/": _page('<script src="/main.js"></script>'),
+                    "/main.js": answer,
+                })
+
+                result, _ = self.await_ready(server.server_port, budget=1)
+
+                self.assertIn("root: healthy", result.stdout)
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertNotIn("ready ui-openview", result.stdout)
+                self.assertIn(f"/main.js {reason}", result.stderr)
+                self.assertIn("left running", result.stderr)
+
+    def test_a_frontend_that_never_serves_fails_clearly_within_the_budget(self):
+        closed = socket.socket()
+        closed.bind(("127.0.0.1", 0))
+        port = closed.getsockname()[1]
+        closed.close()
+
+        result, elapsed = self.await_ready(port, budget=3)
+
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(
+            f"ui-openview: never served its page within 3s (down): "
+            f"http://127.0.0.1:{port}/ refused the connection", result.stderr)
+        self.assertIn("Application bundle generation complete.", result.stderr)
+        self.assertIn("removed ui-openview", result.stdout)
+        # The budget, then one bounded probe of the root for the report and a second of polling.
+        self.assertLess(elapsed, 3 + 1 + 3)
+
+    def test_a_frontend_serving_its_page_and_what_the_page_loads_is_ready(self):
+        server = self.serve({
+            "/": _page(
+                '<base href="/build/">',
+                '<link rel="icon" href="favicon.ico">',
+                '<link rel="stylesheet" href="styles.css">',
+                '<script src="http://127.0.0.1:1/elsewhere.js"></script>',
+                '<script src="polyfills.js"></script>',
+                '<link rel="modulepreload" href="chunk.js">',
+                '<script type="module" src="main.js"></script>',
+            ),
+            "/build/styles.css": (200, "text/css", b"body {}"),
+            "/build/polyfills.js": _script(),
+            "/build/chunk.js": _script("export const a = 1;"),
+            "/build/main.js": _script('import{a as b}from"./chunk.js";import "./side.js";b();'),
+            "/build/side.js": _script(),
+        })
+
+        result, _ = self.await_ready(server.server_port)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("ready ui-openview", result.stdout)
+        self.assertEqual(
+            {"/", "/build/styles.css", "/build/polyfills.js", "/build/chunk.js", "/build/main.js",
+             "/build/side.js"},
+            set(server.requested))
+
+    def test_the_workspace_is_ready_only_when_the_build_its_bootstrap_loads_is(self):
+        bootstrap = _page("<script>fetch('/workspace-build/index.html')</script>")
+        build = _page('<script src="/workspace-build/main.js" type="module"></script>')
+        cases = {
+            "missing build": ({"/": bootstrap}, 1),
+            "served build": ({"/": bootstrap, "/workspace-build/index.html": build,
+                              "/workspace-build/main.js": _script()}, 0),
+        }
+        for case, (routes, expected) in cases.items():
+            with self.subTest(case):
+                server = self.serve(routes)
+
+                result, _ = self.await_ready(server.server_port, name="ui-workspace")
+
+                self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+                if expected:
+                    self.assertIn("/workspace-build/index.html answered 404", result.stderr)
+                else:
+                    self.assertIn("ready ui-workspace", result.stdout)
+
+    def test_a_frontend_is_asked_on_its_own_port_unless_nginx_is_asked_for(self):
+        names = ["ui-main", "ui-workspace", "ui-designer", "ui-openview", "ui-content",
+                 "ui-monitoring", "ui-bridging"]
+        listing = "; ".join(f'echo "{name} $(fe_origin {name})"' for name in names)
+
+        # The hybrid topology starts the frontends before the Docker nginx in front of them.
+        result, _ = self.run_controller(f'CEDAR_HOST=example.test; {listing}', budget=1)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            ["ui-main http://127.0.0.1:4200", "ui-workspace http://127.0.0.1:4201",
+             "ui-designer http://127.0.0.1:4202", "ui-openview http://127.0.0.1:4220",
+             "ui-content http://127.0.0.1:4240", "ui-monitoring http://127.0.0.1:4300",
+             "ui-bridging http://127.0.0.1:4340"],
+            result.stdout.splitlines())
+
+        result, _ = self.run_controller(
+            f'CEDAR_HOST=example.test; CEDAR_FRONTEND_READY_ORIGIN=public; {listing}', budget=1)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([
+            "ui-main https://cedar.example.test",
+            "ui-workspace https://workspace.example.test",
+            "ui-designer https://designer.example.test",
+            "ui-openview https://openview.example.test",
+            # Native nginx serves content.<host> from the checkout, so only the port reaches it.
+            "ui-content http://127.0.0.1:4240",
+            "ui-monitoring https://monitoring.example.test",
+            "ui-bridging https://bridging.example.test",
+        ], result.stdout.splitlines())
+
+    def test_the_local_ca_is_trusted_without_the_strict_rfc_5280_profile(self):
+        # Python 3.13 turned the strict profile on by default, and it refuses the CEDAR CA for
+        # lacking a key usage extension that browsers, curl and Node do not require.
+        spec = importlib.util.spec_from_file_location("frontend_ready", FRONTEND_READY)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        context = module.tls_context(None)
+
+        self.assertFalse(context.verify_flags & ssl.VERIFY_X509_STRICT)
+        self.assertEqual(ssl.CERT_REQUIRED, context.verify_mode)
+        self.assertTrue(context.check_hostname)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -474,3 +762,50 @@ class RefreshStaleDependenciesTest(unittest.TestCase):
 
     def test_the_controller_offers_the_option_in_its_refusal(self):
         self.assertIn("--refresh-dependencies", NATIVE_CONTROLLER.read_text(encoding="utf-8"))
+
+
+class ReactorReadinessOriginTest(unittest.TestCase):
+    """The reactor's restart waits for each page through nginx; any other start asks the port.
+
+    The reactor's smoke follows the restart and loads every page through nginx, which is already
+    up. A plain start cannot assume that: the hybrid topology starts the frontends before the
+    Docker nginx in front of them.
+    """
+
+    def _command(self, invoke):
+        with patch.object(NativeWorker, "controller_path", return_value="/controller.sh"), \
+             patch("org.metadatacenter.worker.Worker.Worker.execute_generic_shell_commands",
+                   return_value=subprocess.CompletedProcess([], 0)) as execute:
+            invoke()
+        return execute.call_args[0][0][0]
+
+    def test_only_a_restart_that_asks_waits_through_nginx(self):
+        self.assertNotIn("CEDAR_FRONTEND_READY_ORIGIN",
+                         self._command(lambda: NativeWorker.restart(("ui-main",))))
+        self.assertNotIn("CEDAR_FRONTEND_READY_ORIGIN",
+                         self._command(lambda: NativeWorker.start(("ui-main",))))
+        self.assertTrue(
+            self._command(lambda: NativeWorker.restart(("ui-main",), ready_through_nginx=True))
+            .startswith("CEDAR_FRONTEND_READY_ORIGIN=public /controller.sh restart ui-main"))
+
+    def test_the_reactor_restarts_its_frontends_through_nginx(self):
+        from org.metadatacenter import build, cee_demos
+        from org.metadatacenter.frontend_inventory import inventory
+        from org.metadatacenter.util.GlobalContext import GlobalContext
+        from org.metadatacenter.util.InvocationContext import InvocationContext, use_context
+
+        selection = unittest.mock.Mock(evidence="evidence")
+        with use_context(InvocationContext(environment=dict(os.environ))), \
+             patch("org.metadatacenter.frontend_inventory.inventory", return_value=inventory()), \
+             patch.object(build, "check_design_tokens", return_value=0), \
+             patch.object(build, "execute_build", return_value=selection), \
+             patch.object(cee_demos, "check_selection"), \
+             patch.object(build.reactor, "activate_runtime"), \
+             patch.object(build.reactor, "store_root", return_value=Path("/reactor")), \
+             patch.object(NativeWorker, "restart",
+                          return_value=subprocess.CompletedProcess([], 3)) as restart:
+            GlobalContext.init_task_operators()
+            result = CliRunner().invoke(build.app, ["frontends"])
+
+        self.assertEqual(3, result.exit_code, result.output)
+        restart.assert_called_once_with(NativeWorker.FRONTENDS, ready_through_nginx=True)
