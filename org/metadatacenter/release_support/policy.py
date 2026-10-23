@@ -64,6 +64,32 @@ INDEPENDENT_RELEASE_REPOSITORIES = {
 }
 
 
+# Files in an independent repository that name CEDAR's Maven development version, with the
+# artifacts each one names. The repository takes no release commit, tag or main, but these
+# versions have to follow develop. The TypeScript model library ships its conformance POM in its
+# package, and CED's conformance gate resolves the two libraries it names from Nexus, so a POM
+# left at the superseded snapshot names a version develop no longer builds. The next-development
+# variant therefore stamps each one, and the release commits the result onto that repository's
+# develop as it stands at integration. The repository is not frozen. The release refuses only
+# when develop has changed one of these files since the train captured it.
+NEXT_DEVELOPMENT_VERSION_FILES = {
+    "cedar-model-typescript-library": {
+        "tools/conformance/pom.xml": (
+            "cedar-model-validation-library",
+            "cedar-artifact-library",
+        ),
+    },
+}
+
+
+def maven_dependency_version(artifact: str, version: str) -> re.Pattern:
+    """The version element of one dependency in a POM, found by the artifact it follows."""
+    return re.compile(
+        rb"(<artifactId>" + re.escape(artifact.encode()) + rb"</artifactId>\s*<version>)"
+        + re.escape(version.encode()) + rb"(</version>)"
+    )
+
+
 REQUIRED_NODE_VERSION = "v24.22.0"
 
 
@@ -251,13 +277,41 @@ NPM_RELEASE_SURFACES = [
 
 
 def _integration_repositories(manifest: dict) -> list[str]:
-    """Repositories whose remote refs the release actually changes."""
+    """Repositories whose release commit the release integrates into main and develop.
+
+    `_development_only_repositories` names the others whose remote refs it changes.
+    """
     repositories = list(manifest.get("releaseRepositories", []))
     for consumer in manifest.get("cee", {}).get("consumers", []):
         repository = consumer.get("repository") if isinstance(consumer, dict) else None
         if isinstance(repository, str) and repository not in repositories:
             repositories.append(repository)
     return repositories
+
+
+def _development_only_repositories(manifest: dict) -> list[str]:
+    """Captured repositories outside the release whose develop alone the release advances.
+
+    Once versions are prepared, the prepared record decides, so a release prepared before a
+    repository joined NEXT_DEVELOPMENT_VERSION_FILES resumes exactly as it was prepared. Before
+    then, the policy and the captured source decide.
+    """
+    release = set(manifest.get("releaseRepositories", []))
+    prepared = manifest.get("versionPreparation", {}).get(
+        "nextDevelopment", {}).get("repositories")
+    if isinstance(prepared, dict):
+        return [repository for repository in prepared if repository not in release]
+    return _development_only_candidates(manifest)
+
+
+def _development_only_candidates(manifest: dict) -> list[str]:
+    """The repositories NEXT_DEVELOPMENT_VERSION_FILES names that this release captured."""
+    release = set(manifest.get("releaseRepositories", []))
+    sources = manifest.get("sourceRepositories") or {}
+    return [
+        repository for repository in NEXT_DEVELOPMENT_VERSION_FILES
+        if repository in sources and repository not in release
+    ]
 
 
 RETRYABLE_TRANSPORT_TEXT = (

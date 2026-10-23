@@ -116,6 +116,8 @@ class ReleaseAcceptance:
         for record in records.values():
             self.remote_integrator.verify_record(manifest, record)
         tag = f"release-{manifest['releaseVersion']}"
+        # A repository whose develop alone the release advanced carries no release tag.
+        tagged = sum(1 for record in records.values() if "tag" in record)
         return [
             self._check(
                 "remote-integration",
@@ -123,7 +125,7 @@ class ReleaseAcceptance:
             ),
             self._check(
                 "release-tag",
-                f"{tag} present at the recorded commit in all {len(records)} repositories",
+                f"{tag} present at the recorded commit in all {tagged} repositories",
             ),
         ]
 

@@ -10,6 +10,9 @@ from org.metadatacenter.release_support.errors import (
 from org.metadatacenter.release_support.hashes import (
     _file_sha256,
 )
+from org.metadatacenter.release_support.policy import (
+    _development_only_repositories,
+)
 from org.metadatacenter.release_support.state import (
     ReleaseState,
 )
@@ -77,7 +80,7 @@ class ReleaseRefCreator:
             ),
             (
                 "nextDevelopment",
-                manifest["releaseRepositories"],
+                [*manifest["releaseRepositories"], *_development_only_repositories(manifest)],
                 f"release/post-{manifest['nextDevelopmentVersion']}",
                 None,
             ),

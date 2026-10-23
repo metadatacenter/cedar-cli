@@ -12,6 +12,7 @@ from org.metadatacenter.github_ci import (
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.release_support.acceptance import ReleaseAcceptance
 from org.metadatacenter.release_support.output import console
+from org.metadatacenter.release_support.policy import _development_only_repositories
 from org.metadatacenter.util.InvocationContext import invocation_environment
 
 AGGREGATORS = {'cedar-libraries': 'ci.yml', 'cedar-project': 'ci.yml'}
@@ -52,6 +53,14 @@ class DevelopmentVerifier:
         if not records:
             raise ReleaseError('No integrated commits to verify')
         workspace = Path(manifest['versionPreparation']['nextDevelopment']['workspace'])
+        # The release commits onto such a repository's develop as it finds it, so the CI there
+        # answers for the repository's own work as much as for the release's, and is not gated.
+        development_only = set(_development_only_repositories(manifest))
+        for record in records.values():
+            if record['repository'] in development_only:
+                evidence['repositories'][record['repository']] = {
+                    'revision': record['develop']['commit'], 'status': 'not-gated',
+                    'reason': 'Its develop moves independently of the release'}
         # The intent is durable before dispatch: an ambiguous response is reconciled
         # with exact-SHA dispatch runs, never blindly dispatched a second time.
         for record in records.values():
@@ -78,6 +87,7 @@ class DevelopmentVerifier:
             candidates = [(record['repository'], record['develop']['commit'])
                           for record in records.values()
                           if record['repository'] not in complete
+                          and record['repository'] not in development_only
                           and any((workspace / record['repository'] / '.github' / 'workflows').glob('*.y*ml'))]
             def probe_one(item):
                 repo, revision = item
@@ -92,7 +102,7 @@ class DevelopmentVerifier:
                 probes = dict(zip(candidates, pool.map(probe_one, candidates)))
             for record in records.values():
                 repo, revision = record['repository'], record['develop']['commit']
-                if repo in complete:
+                if repo in complete or repo in development_only:
                     continue
                 if self.clock() >= deadline:
                     self.save(evidence)

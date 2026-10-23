@@ -15,8 +15,11 @@ from org.metadatacenter.release_support.policy import (
     LICENSE_COPYRIGHT_RE,
     LICENSE_FILE_NAME,
     MAVEN_GENERATED_VERSION_FILES,
+    NEXT_DEVELOPMENT_VERSION_FILES,
     NEXT_VERSION_RE,
     NPM_VERSION_SURFACES,
+    _development_only_candidates,
+    maven_dependency_version,
 )
 from org.metadatacenter.release_support.state import (
     ReleaseState,
@@ -95,6 +98,36 @@ class ReleaseVersionPreparer:
                     f"{path} does not contain exactly one generated API version {old}"
                 )
             path.write_bytes(content.replace(old_marker, new_marker))
+            changed.add(relative)
+        return changed
+
+    @staticmethod
+    def _stamp_next_development_files(
+        repository: str, root: Path, old: str, new: str,
+    ) -> set[str]:
+        """Point each dependency NEXT_DEVELOPMENT_VERSION_FILES names at the next version.
+
+        Only the named dependencies move, and each must name the train source version exactly
+        once. Any other version in the file is the repository's own.
+        """
+        changed = set()
+        for relative, artifacts in NEXT_DEVELOPMENT_VERSION_FILES[repository].items():
+            path = root / relative
+            try:
+                content = path.read_bytes()
+            except OSError as error:
+                raise ReleaseError(
+                    f"cannot read next-development version file {path}: {error}") from error
+            for artifact in artifacts:
+                pattern = maven_dependency_version(artifact, old)
+                if len(pattern.findall(content)) != 1:
+                    raise ReleaseError(
+                        f"{path} does not name {artifact} at train source version {old} "
+                        "exactly once"
+                    )
+                content = pattern.sub(
+                    lambda match: match.group(1) + new.encode() + match.group(2), content)
+            path.write_bytes(content)
             changed.add(relative)
         return changed
 
@@ -341,6 +374,8 @@ class ReleaseVersionPreparer:
                 shutil.copy2(source, destination)
 
         docker_frontend_defaults = manifest.get("dockerFrontendDefaults") or {}
+        # Captured repositories outside the release, whose next-development files alone move.
+        development_only = _development_only_candidates(manifest)
         variants = {}
         for variant, workspace, target in (
             ("release", release_workspace, release_version),
@@ -354,10 +389,17 @@ class ReleaseVersionPreparer:
                     repository, root, old, target, maven_repositories, copyright_year,
                     docker_frontend_defaults.get(variant),
                 )
+            variant_repositories = list(release_repositories)
+            if variant == "nextDevelopment":
+                for repository in development_only:
+                    stamped_by_repository[repository] = self._stamp_next_development_files(
+                        repository, workspace / repository, old, target,
+                    )
+                    variant_repositories.append(repository)
             if self._refresh_train_audit_baselines(workspace):
                 stamped_by_repository.setdefault("cedar-development", set()).add(
                     "ops/frontend-train.json")
-            for repository in release_repositories:
+            for repository in variant_repositories:
                 root = workspace / repository
                 stamped = stamped_by_repository[repository]
                 allowed = set(stamped)

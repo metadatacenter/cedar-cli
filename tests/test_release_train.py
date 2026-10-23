@@ -187,6 +187,33 @@ def manifest_fixture():
     }
 
 
+MODEL_LIBRARY = "cedar-model-typescript-library"
+
+
+CONFORMANCE_POM = "tools/conformance/pom.xml"
+
+
+def conformance_pom(version, *, artifact_version=None):
+    """The model library's oracle POM as it names CEDAR's two Java libraries.
+
+    The project's own version sits in the same file, so a stamp that rewrote every version
+    element, rather than the two dependencies', would show here.
+    """
+    return (
+        "<project><artifactId>cedar-authoring-conformance</artifactId>"
+        "<version>1.0.0</version>\n"
+        "  <dependencies>\n"
+        "    <dependency><groupId>org.metadatacenter</groupId>"
+        "<artifactId>cedar-model-validation-library</artifactId>"
+        f"<version>{version}</version></dependency>\n"
+        "    <dependency><groupId>org.metadatacenter</groupId>"
+        "<artifactId>cedar-artifact-library</artifactId>"
+        f"<version>{artifact_version or version}</version></dependency>\n"
+        "  </dependencies>\n"
+        "</project>\n"
+    )
+
+
 class FakeState:
     def __init__(self, values):
         self.values = values
@@ -2153,6 +2180,70 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             )
             self.assertEqual("2.9.3-SNAPSHOT", original_package["version"])
 
+    @staticmethod
+    def prepare_with_model_library(directory, pom):
+        """Prepare one release repository beside the model library, which the release omits."""
+        cedar_home = Path(directory) / "CEDAR"
+        sources = {
+            "maven-repo": {"pom.xml": "<project><version>2.9.3-SNAPSHOT</version></project>\n"},
+            MODEL_LIBRARY: {CONFORMANCE_POM: pom, "package.json": '{"version": "1.0.24"}\n'},
+        }
+        revisions = {}
+        for repository, repository_files in sources.items():
+            root = cedar_home / repository
+            for relative, content in repository_files.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            revisions[repository] = ReleaseWorkspaceTest._commit_repository(root)
+        state = ReleaseState(root=Path(directory) / "state")
+        workspace_preparer = ReleaseWorkspacePreparer(
+            state, environment={"CEDAR_HOME": str(cedar_home)},
+        )
+        release_workspace = Path(directory) / "attempt" / "workspace"
+        workspace_preparer._clone(
+            "maven-repo", revisions["maven-repo"], release_workspace / "maven-repo")
+        manifest = manifest_fixture()
+        manifest.update({
+            "sourceRepositories": revisions,
+            "releaseRepositories": ["maven-repo"],
+            "mavenRepositories": ["maven-repo"],
+            "frontendPreparation": {"workspace": str(release_workspace), "consumers": []},
+        })
+        result = ReleaseVersionPreparer(
+            state, workspace_preparer=workspace_preparer,
+        ).prepare(manifest)
+        return result, release_workspace, Path(result["nextDevelopment"]["workspace"])
+
+    def test_next_development_advances_the_model_library_conformance_pom(self):
+        """CED's conformance gate resolves the POM's two libraries from Nexus at develop's version."""
+        with tempfile.TemporaryDirectory() as directory:
+            result, release_workspace, next_workspace = self.prepare_with_model_library(
+                directory, conformance_pom("2.9.3-SNAPSHOT"))
+
+            stamped = (next_workspace / MODEL_LIBRARY / CONFORMANCE_POM).read_text(
+                encoding="utf-8")
+            self.assertEqual(conformance_pom("2.9.4-SNAPSHOT"), stamped)
+            record = result["nextDevelopment"]["repositories"][MODEL_LIBRARY]
+            self.assertEqual([CONFORMANCE_POM], record["changedFiles"])
+            self.assertEqual(
+                release_train._file_sha256(next_workspace / MODEL_LIBRARY / CONFORMANCE_POM),
+                record["fileSha256"][CONFORMANCE_POM])
+            # The library releases itself: no release variant, so no release commit or tag.
+            self.assertNotIn(MODEL_LIBRARY, result["release"]["repositories"])
+            self.assertFalse((release_workspace / MODEL_LIBRARY).exists())
+
+    def test_a_conformance_pom_off_the_train_source_version_is_refused(self):
+        """A POM naming another version is drift to report, not a value to overwrite."""
+        stale = conformance_pom("2.9.3-SNAPSHOT", artifact_version="2.9.2-SNAPSHOT")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                ReleaseError,
+                "pom.xml does not name cedar-artifact-library at train source version "
+                "2.9.3-SNAPSHOT exactly once",
+            ):
+                self.prepare_with_model_library(directory, stale)
+
     def test_partial_version_failure_is_recorded_for_a_fresh_resume_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
             state = ReleaseState(root=Path(directory))
@@ -2577,7 +2668,11 @@ class ReleaseLocalRefsTest(unittest.TestCase):
             capture_output=True,
         ).stdout.strip()
 
-    def make_release(self, directory):
+    def make_release(self, directory, *, model_library=False):
+        """Prepare a release whose versions are stamped; with the model library, if asked.
+
+        The model library takes the release's next-development stamp and nothing else.
+        """
         base = Path(directory)
         cedar_home = base / "CEDAR"
         main_source = cedar_home / "repo-main"
@@ -2602,6 +2697,13 @@ class ReleaseLocalRefsTest(unittest.TestCase):
         for repository, revision in revisions.items():
             cloner._clone(repository, revision, release_workspace / repository)
         cloner._clone("repo-main", revisions["repo-main"], next_workspace / "repo-main")
+        if model_library:
+            # Captured by the train, and cloned only into the next-development workspace.
+            model_source = cedar_home / MODEL_LIBRARY
+            (model_source / CONFORMANCE_POM).parent.mkdir(parents=True)
+            (model_source / CONFORMANCE_POM).write_text(
+                conformance_pom("2.9.3-SNAPSHOT"), encoding="utf-8")
+            revisions[MODEL_LIBRARY] = ReleaseWorkspaceTest._commit_repository(model_source)
 
         release_main = release_workspace / "repo-main" / "version.txt"
         next_main = next_workspace / "repo-main" / "version.txt"
@@ -2659,6 +2761,16 @@ class ReleaseLocalRefsTest(unittest.TestCase):
             },
         })
         manifest["cee"]["consumers"] = [consumer]
+        if model_library:
+            cloner._clone(
+                MODEL_LIBRARY, revisions[MODEL_LIBRARY], next_workspace / MODEL_LIBRARY)
+            next_pom = next_workspace / MODEL_LIBRARY / CONFORMANCE_POM
+            next_pom.write_text(conformance_pom("2.9.4-SNAPSHOT"), encoding="utf-8")
+            manifest["versionPreparation"]["nextDevelopment"]["repositories"][MODEL_LIBRARY] = {
+                "revision": revisions[MODEL_LIBRARY],
+                "changedFiles": [CONFORMANCE_POM],
+                "fileSha256": {CONFORMANCE_POM: release_train._file_sha256(next_pom)},
+            }
         state.start(manifest)
         state.update_current_manifest({"phase": "builds-validated"})
         creator = ReleaseRefCreator(state, environment={
@@ -2713,6 +2825,33 @@ class ReleaseLocalRefsTest(unittest.TestCase):
                      "refs/tags/release-2.9.3"],
                     check=False,
                 ).returncode)
+
+    def test_the_model_library_takes_a_next_development_commit_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, creator, _cedar_home, release_workspace, next_workspace = self.make_release(
+                directory, model_library=True,
+            )
+            completed = create_active_release_refs(state, creator)
+
+            records = completed["localRefs"]["completedTasks"]
+            self.assertNotIn(f"release:{MODEL_LIBRARY}", records)
+            record = records[f"nextDevelopment:{MODEL_LIBRARY}"]
+            self.assertEqual([CONFORMANCE_POM], record["changedFiles"])
+            self.assertEqual("release/post-2.9.4-SNAPSHOT", record["branch"])
+            self.assertIsNone(record["tag"])
+            root = next_workspace / MODEL_LIBRARY
+            self.assertEqual(
+                record["commit"], self._git(root, "rev-parse", "release/post-2.9.4-SNAPSHOT"))
+            self.assertEqual(
+                completed["sourceRepositories"][MODEL_LIBRARY],
+                self._git(root, "rev-parse", f"{record['commit']}^"),
+            )
+            self.assertEqual(
+                "Prepare CEDAR 2.9.4-SNAPSHOT after 2.9.3",
+                self._git(root, "log", "-1", "--format=%s", record["commit"]),
+            )
+            self.assertEqual("", self._git(root, "tag", "--list"))
+            self.assertFalse((release_workspace / MODEL_LIBRARY).exists())
 
     def test_resume_verifies_completed_refs_and_does_not_recommit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3131,9 +3270,9 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
                 ).split()
                 self.assertNotIn("license.txt", listing)
 
-    def _surveyor(self, directory):
+    def _surveyor(self, directory, *, model_library=False):
         state, _creator, cedar_home, _rw, _nw = (
-            ReleaseLocalRefsTest().make_release(directory)
+            ReleaseLocalRefsTest().make_release(directory, model_library=model_library)
         )
         manifest, _ = state.read_current_manifest()
         remotes = {
@@ -3236,6 +3375,214 @@ class ReleaseRemoteIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "remote refs changed"):
             integrate_active_release(state, integrator)
 
+    def _model_library_release(self, directory):
+        """A release with the model library, its local refs made and its snapshots published."""
+        state, creator, cedar_home, _release_workspace, _next_workspace = (
+            ReleaseLocalRefsTest().make_release(directory, model_library=True)
+        )
+        create_active_release_refs(state, creator)
+        state.update_current_manifest({"phase": "snapshots-published"})
+        manifest, _ = state.read_current_manifest()
+        remotes = {
+            repository: self._bare_remote(
+                Path(directory), repository, cedar_home / repository, revision,
+            )
+            for repository, revision in manifest["sourceRepositories"].items()
+        }
+        return state, self._integrator(state, cedar_home, remotes), remotes, manifest
+
+    def test_the_model_library_develop_alone_advances_to_the_next_version(self):
+        """The library publishes itself from main, so the release leaves main and tags alone."""
+        git = ReleaseLocalRefsTest._git
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, remotes, manifest = self._model_library_release(directory)
+            completed = integrate_active_release(state, integrator)
+
+            records = completed["remoteIntegration"]["completedTasks"]
+            self.assertEqual({"repo-main", "cedar-workspace", MODEL_LIBRARY}, set(records))
+            remote = remotes[MODEL_LIBRARY]
+            source = manifest["sourceRepositories"][MODEL_LIBRARY]
+            prepared = completed["localRefs"]["completedTasks"][
+                f"nextDevelopment:{MODEL_LIBRARY}"]
+            self.assertEqual(source, git(remote, "rev-parse", "refs/heads/main"))
+            self.assertEqual("", git(remote, "tag", "--list"))
+            self.assertEqual(
+                ["refs/heads/develop", "refs/heads/main",
+                 "refs/heads/release/post-2.9.4-SNAPSHOT"],
+                git(remote, "for-each-ref", "--format=%(refname)").split(),
+            )
+            self.assertEqual(
+                prepared["commit"],
+                git(remote, "rev-parse", "refs/heads/release/post-2.9.4-SNAPSHOT"))
+            develop = git(remote, "rev-parse", "refs/heads/develop")
+            record = records[MODEL_LIBRARY]
+            self.assertEqual(record["develop"]["commit"], develop)
+            self.assertEqual(
+                [develop, source, prepared["commit"]],
+                git(remote, "rev-list", "--parents", "-n", "1", develop).split(),
+            )
+            self.assertEqual(
+                "Advance after CEDAR 2.9.3 to 2.9.4-SNAPSHOT",
+                git(remote, "log", "-1", "--format=%s", develop),
+            )
+            self.assertEqual(
+                conformance_pom("2.9.4-SNAPSHOT").strip(),
+                git(remote, "show", f"{develop}:{CONFORMANCE_POM}"),
+            )
+            self.assertEqual(
+                "", git(remote, "diff", "--name-only", prepared["commit"], develop))
+            self.assertNotIn("main", record)
+            self.assertNotIn("tag", record)
+
+            # The library moves on after the release, and acceptance does not hold it back.
+            self._commit_on_remote_main(
+                remote, "src/index.ts", "export {}\n", "Work after the release",
+                branch="develop",
+            )
+            integrator.verify_record(completed, record)
+            checks = ReleaseAcceptance(
+                state, remote_integrator=integrator, publisher=SimpleNamespace(),
+            )._remote_state_still_holds(completed)
+            self.assertIn("in all 2 repositories", checks[1]["detail"])
+            subprocess.run([
+                "git", "--git-dir", str(remote), "update-ref", "refs/heads/develop", source,
+            ], check=True)
+            with self.assertRaisesRegex(
+                ReleaseError,
+                f"remote develop no longer contains the integrated commit for {MODEL_LIBRARY}",
+            ):
+                integrator.verify_record(completed, record)
+
+    def test_a_moved_model_library_develop_takes_the_bump_on_its_new_tip(self):
+        """Work that landed on the library after the train stays, and the bump joins it."""
+        git = ReleaseLocalRefsTest._git
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, remotes, manifest = self._model_library_release(directory)
+            remote = remotes[MODEL_LIBRARY]
+            self._commit_on_remote_main(
+                remote, "src/index.ts", "export {}\n", "Work after the train",
+                branch="develop",
+            )
+            moved = git(remote, "rev-parse", "refs/heads/develop")
+
+            completed = integrate_active_release(state, integrator)
+
+            self.assertEqual("remote-integrated", completed["phase"])
+            record = completed["remoteIntegration"]["completedTasks"][MODEL_LIBRARY]
+            prepared = completed["localRefs"]["completedTasks"][
+                f"nextDevelopment:{MODEL_LIBRARY}"]
+            develop = git(remote, "rev-parse", "refs/heads/develop")
+            self.assertEqual(record["develop"]["commit"], develop)
+            self.assertEqual(moved, record["develop"]["base"])
+            self.assertEqual(
+                [develop, moved, prepared["commit"]],
+                git(remote, "rev-list", "--parents", "-n", "1", develop).split(),
+            )
+            self.assertEqual(
+                [CONFORMANCE_POM], git(remote, "diff", "--name-only", moved, develop).split())
+            self.assertEqual("export {}", git(remote, "show", f"{develop}:src/index.ts"))
+            self.assertEqual(
+                conformance_pom("2.9.4-SNAPSHOT").strip(),
+                git(remote, "show", f"{develop}:{CONFORMANCE_POM}"),
+            )
+            self.assertEqual(
+                manifest["sourceRepositories"][MODEL_LIBRARY],
+                git(remote, "rev-parse", "refs/heads/main"),
+            )
+
+    def test_a_model_library_develop_that_changed_the_pom_is_refused(self):
+        """The release advances the file the train captured, never one it has not seen."""
+        git = ReleaseLocalRefsTest._git
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, remotes, _manifest = self._model_library_release(directory)
+            remote = remotes[MODEL_LIBRARY]
+            self._commit_on_remote_main(
+                remote, CONFORMANCE_POM,
+                conformance_pom("2.9.3-SNAPSHOT", artifact_version="2.9.2-SNAPSHOT"),
+                "Pin the artifact library back", branch="develop",
+            )
+            moved = git(remote, "rev-parse", "refs/heads/develop")
+
+            with self.assertRaises(ReleaseError) as raised:
+                integrate_active_release(state, integrator)
+
+            self.assertEqual(
+                f"{MODEL_LIBRARY} develop changed {CONFORMANCE_POM} after the train captured "
+                "it, and it no longer names cedar-artifact-library at train source version "
+                "2.9.3-SNAPSHOT; restore the captured file on develop, then resume the release",
+                str(raised.exception),
+            )
+            self.assertEqual(moved, git(remote, "rev-parse", "refs/heads/develop"))
+            self.assertEqual(
+                ["refs/heads/develop", "refs/heads/main"],
+                git(remote, "for-each-ref", "--format=%(refname)").split(),
+            )
+
+            # The remedy the refusal names is enough for resume to finish the work.
+            self._commit_on_remote_main(
+                remote, CONFORMANCE_POM, conformance_pom("2.9.3-SNAPSHOT"),
+                "Restore the captured POM", branch="develop",
+            )
+            restored = git(remote, "rev-parse", "refs/heads/develop")
+            completed = integrate_active_release(state, integrator)
+            develop = git(remote, "rev-parse", "refs/heads/develop")
+            self.assertEqual(
+                restored, git(remote, "rev-parse", f"{develop}^1"))
+            self.assertEqual(
+                conformance_pom("2.9.4-SNAPSHOT").strip(),
+                git(remote, "show", f"{develop}:{CONFORMANCE_POM}"),
+            )
+            self.assertEqual("remote-integrated", completed["phase"])
+
+    def test_a_model_library_develop_that_moves_during_the_push_is_followed(self):
+        git = ReleaseLocalRefsTest._git
+        with tempfile.TemporaryDirectory() as directory:
+            state, integrator, remotes, _manifest = self._model_library_release(directory)
+            remote = remotes[MODEL_LIBRARY]
+            raced = []
+
+            def push(root, target, commit, reference):
+                if target == str(remote) and reference == "refs/heads/develop" and not raced:
+                    self._commit_on_remote_main(
+                        remote, "src/race.ts", "export {}\n", "Pushed in the meantime",
+                        branch="develop",
+                    )
+                    raced.append(git(remote, "rev-parse", "refs/heads/develop"))
+                ReleaseRemoteIntegrator._push(integrator, root, target, commit, reference)
+
+            with patch.object(integrator, "_push", side_effect=push):
+                completed = integrate_active_release(state, integrator)
+
+            record = completed["remoteIntegration"]["completedTasks"][MODEL_LIBRARY]
+            develop = git(remote, "rev-parse", "refs/heads/develop")
+            self.assertEqual(record["develop"]["commit"], develop)
+            self.assertEqual(raced, [record["develop"]["base"]])
+            self.assertEqual(raced[0], git(remote, "rev-parse", f"{develop}^1"))
+
+    def test_survey_lets_the_model_library_develop_move_while_its_conformance_pom_holds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, remotes, integrator = self._surveyor(directory, model_library=True)
+            self.assertEqual({}, integrator.survey(manifest))
+            # The library releases from main itself, so content main carries alone is its own.
+            self._commit_on_remote_main(
+                remotes[MODEL_LIBRARY], "CHANGELOG.md", "1.0.24\n", "Release 1.0.24")
+            self._commit_on_remote_main(
+                remotes[MODEL_LIBRARY], "src/index.ts", "export {}\n",
+                "Advance develop past the train source", branch="develop",
+            )
+            self.assertEqual({}, integrator.survey(manifest))
+            self._commit_on_remote_main(
+                remotes[MODEL_LIBRARY], CONFORMANCE_POM,
+                conformance_pom("2.9.3-SNAPSHOT").replace("<dependencies>", "<dependencies> "),
+                "Reformat the POM", branch="develop",
+            )
+            with self.assertRaises(ReleaseError) as raised:
+                integrator.survey(manifest)
+            self.assertEqual(
+                f"{MODEL_LIBRARY} develop changed {CONFORMANCE_POM} after the train captured "
+                "it; build a new train, which captures the file as develop now holds it",
+                str(raised.exception),
+            )
 
 def tearDownModule():
     ReleaseRemoteIntegrationTest.remove_integrated_release()
@@ -4379,6 +4726,70 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertIn("a" * 40 + ":refs/heads/release/post-2.9.4-SNAPSHOT", pushed)
         self.assertIn("a" * 40 + ":refs/tags/release-2.9.3", pushed)
 
+    def test_the_model_library_is_asked_only_about_the_refs_its_next_development_writes(self):
+        """The release advances the library's develop and leaves its main and tags alone."""
+        with tempfile.TemporaryDirectory() as directory:
+            self._checked_out(directory, "repo-one")
+            model_root = self._checked_out(directory, MODEL_LIBRARY)
+            manifest = self._release_of("repo-one")
+            manifest["sourceRepositories"][MODEL_LIBRARY] = "b" * 40
+            commands = FakeCommands()
+            preflight_check = self._preflight(
+                commands=commands, manifest=manifest, root=directory)
+            preflight_check.check_push_permission()
+            preflight_check.check_target_version_unused()
+
+        model_calls = [call for call in commands.calls if call[:3] == ["git", "-C", str(model_root)]]
+        self.assertEqual([
+            ["git", "-C", str(model_root), "push", "--dry-run", "--force", "origin",
+             "b" * 40 + ":refs/heads/develop",
+             "b" * 40 + ":refs/heads/release/post-2.9.4-SNAPSHOT"],
+            ["git", "-C", str(model_root), "ls-remote", "--refs", "origin",
+             "refs/heads/release/post-2.9.4-SNAPSHOT"],
+        ], model_calls)
+
+    def test_the_model_library_ci_is_not_asked_about(self):
+        """The release commits onto the library's develop as it finds it, so its CI is the library's."""
+        commands = FakeCommands({
+            ("git", "-C"): FakeCompletedProcess(stdout=".github/workflows/test.yml"),
+            ("gh", "api"): FakeCompletedProcess(stdout='{"workflow_runs": []}'),
+        })
+        manifest = self._release_of("repo-one")
+        manifest["sourceRepositories"][MODEL_LIBRARY] = "b" * 40
+
+        findings = self._preflight(
+            commands=commands, manifest=manifest).check_develop_is_green()
+
+        queries = [call[2] for call in commands.calls if call[:2] == ["gh", "api"]]
+        self.assertTrue(any(f"head_sha={'a' * 40}" in query for query in queries))
+        self.assertFalse(any(f"head_sha={'b' * 40}" in query for query in queries))
+        self.assertFalse(any(MODEL_LIBRARY in finding.message for finding in findings))
+
+    def test_source_contract_requires_the_conformance_pom_at_the_train_source_version(self):
+        """Found here, a stale POM costs a minute; found while stamping, it costs the build."""
+        for pom, refused in (
+            (conformance_pom("2.9.3-SNAPSHOT"), False),
+            (conformance_pom("2.9.3-SNAPSHOT", artifact_version="2.9.2-SNAPSHOT"), True),
+        ):
+            with self.subTest(refused=refused), tempfile.TemporaryDirectory() as directory:
+                model_root = self._checked_out(directory, MODEL_LIBRARY)
+                manifest = self._release_of("repo-one")
+                manifest["sourceRepositories"][MODEL_LIBRARY] = "b" * 40
+                commands = FakeCommands({
+                    ("git", "-C", str(model_root), "show"): FakeCompletedProcess(stdout=pom),
+                })
+                findings = self._preflight(
+                    manifest=manifest, root=directory, commands=commands,
+                ).check_source_contract()
+
+                messages = [finding.message for finding in findings]
+                expected = (
+                    f"train source {MODEL_LIBRARY}:{CONFORMANCE_POM} does not name "
+                    "cedar-artifact-library at train source version 2.9.3-SNAPSHOT exactly once"
+                )
+                self.assertEqual(refused, expected in messages, messages)
+                self.assertFalse(any("cedar-model-validation-library" in m for m in messages))
+
     def test_an_already_used_release_tag_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             self._checked_out(directory, "repo-one")
@@ -5304,6 +5715,23 @@ class TransientRetryTest(unittest.TestCase):
             ["mvn", "deploy"], "server returned HTTP 500"))
         self.assertFalse(release_train._command_failure_is_retryable(
             ["git", "push"], "protected branch update failed"))
+
+
+class ReleaseProgressTotalsTest(unittest.TestCase):
+    def test_the_model_library_counts_one_local_ref_and_one_remote(self):
+        manifest = manifest_fixture()
+        manifest.update({
+            "phase": "started",
+            "releaseRepositories": ["repo-one"],
+            "sourceRepositories": {"repo-one": "a" * 40, MODEL_LIBRARY: "b" * 40},
+            "mavenPhases": [],
+        })
+
+        totals = {row["phase"]: row["total"] for row in release_train._release_progress(manifest)}
+
+        # repo-one takes a release and a next-development ref; the library the second alone.
+        self.assertEqual(3, totals["local-refs"])
+        self.assertEqual(2, totals["remotes"])
 
 
 class ReleaseStageOrderTest(unittest.TestCase):

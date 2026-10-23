@@ -166,6 +166,7 @@ from org.metadatacenter.release_support.policy import (
     MINIFIED_NAME_RE,
     MINIFIED_TOKEN_SPLIT,
     MINIMUM_SPACE_HEADROOM_BYTES,
+    NEXT_DEVELOPMENT_VERSION_FILES,
     NEXT_VERSION_RE,
     NEXUS_AUTHENTICATED_ENDPOINT,
     NEXUS_HOST,
@@ -189,9 +190,12 @@ from org.metadatacenter.release_support.policy import (
     SHA256_RE,
     SPACE_HEADROOM_PERCENT,
     STABLE_VERSION_RE,
+    _development_only_candidates,
+    _development_only_repositories,
     _integration_repositories,
     _stable_version_key,
     _validate_stable_version,
+    maven_dependency_version,
 )
 
 from org.metadatacenter.release_support.preflight import (

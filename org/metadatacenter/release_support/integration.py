@@ -5,12 +5,16 @@ from pathlib import Path, PurePosixPath
 import datetime as dt
 import os
 import re
+import tempfile
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
 )
 from org.metadatacenter.release_support.policy import (
     GIT_SHA_RE,
+    NEXT_DEVELOPMENT_VERSION_FILES,
+    _development_only_repositories,
     _integration_repositories,
+    maven_dependency_version,
 )
 from org.metadatacenter.release_support.refs import (
     ReleaseRefCreator,
@@ -146,15 +150,35 @@ class ReleaseRemoteIntegrator:
                 f"source, so this train can no longer back a release: "
                 + ", ".join(repository for repository, _ in drifted)
             )
+        # A repository the release only advances is free to move, since the release commits
+        # onto its develop as it finds it. Only the files it advances must be as captured.
+        for repository in _development_only_repositories(manifest):
+            source = manifest.get("sourceRepositories", {}).get(repository)
+            if not source:
+                raise ReleaseError(f"{repository} has no recorded train source")
+            root = Path(cedar_home) / repository
+            remote = self.remote_resolver(repository)
+            self.git._run([
+                "git", "-C", str(root), "fetch", "--quiet", "--no-tags", remote,
+                "+refs/heads/develop:refs/remotes/cedar-release/survey-develop",
+            ])
+            self._require_captured_files(
+                manifest, repository, root, source, "refs/remotes/cedar-release/survey-develop",
+                list(NEXT_DEVELOPMENT_VERSION_FILES.get(repository, {})),
+                "build a new train, which captures the file as develop now holds it",
+            )
         return findings
 
     def tasks(self, manifest: dict) -> list[dict]:
         by_repository = self._by_repository(manifest)
+        development_only = _development_only_repositories(manifest)
         tasks = []
         for repository, records in by_repository.items():
             release = records.get("release")
             if not isinstance(release, dict):
-                raise ReleaseError(f"release has no stable local ref for {repository}")
+                if repository not in development_only:
+                    raise ReleaseError(f"release has no stable local ref for {repository}")
+                release = None
             tasks.append({
                 "id": repository,
                 "repository": repository,
@@ -222,7 +246,203 @@ class ReleaseRemoteIntegrator:
         self.git._run(["git", "-C", str(root), "push", "--porcelain", remote,
                        f"{commit}:{reference}"])
 
+    # How many times a develop that moves between fetch and push is followed before the
+    # integration stops and leaves the rest to resume.
+    DEVELOPMENT_PUSH_ATTEMPTS = 3
+
+    def _blob(self, root: Path, revision: str, path: str) -> str | None:
+        entry = self.git._run(["git", "-C", str(root), "ls-tree", revision, "--", path])
+        return entry.split()[2] if entry else None
+
+    def _contains(self, root: Path, ancestor: str, descendant: str) -> bool:
+        return self.git._run([
+            "git", "-C", str(root), "rev-list", "--count", f"{descendant}..{ancestor}",
+        ]) == "0"
+
+    def _fetch_develop(self, root: Path, remote: str) -> str:
+        self.git._run([
+            "git", "-C", str(root), "fetch", "--quiet", "--no-tags", remote,
+            "+refs/heads/develop:refs/remotes/cedar-release/develop",
+        ])
+        return self.git._run([
+            "git", "-C", str(root), "rev-parse", "refs/remotes/cedar-release/develop",
+        ])
+
+    def _require_captured_files(
+        self, manifest: dict, repository: str, root: Path, source: str, develop: str,
+        paths: list[str], remedy: str,
+    ) -> None:
+        """Refuse unless develop carries each file the release advances as the train captured it.
+
+        The release stamped the captured file, so a develop that has since changed it holds
+        something the release has neither seen nor validated.
+        """
+        old = manifest.get("sourceVersion") or ""
+        artifacts = NEXT_DEVELOPMENT_VERSION_FILES.get(repository, {})
+        for path in paths:
+            current = self._blob(root, develop, path)
+            if current is not None and current == self._blob(root, source, path):
+                continue
+            if current is None:
+                raise ReleaseError(
+                    f"{repository} develop no longer has {path}, which the release advances; "
+                    f"{remedy}")
+            content = self.git._run(["git", "-C", str(root), "cat-file", "blob", current])
+            stale = [
+                artifact for artifact in artifacts.get(path, ())
+                if len(maven_dependency_version(artifact, old).findall(content.encode())) != 1
+            ]
+            detail = (
+                f", and it no longer names {' and '.join(stale)} at train source version {old}"
+                if stale else ""
+            )
+            raise ReleaseError(
+                f"{repository} develop changed {path} after the train captured it{detail}; "
+                f"{remedy}")
+
+    def _development_commit(
+        self, root: Path, branch: str, base: str, prepared: dict, message: str,
+    ) -> str:
+        """Merge the prepared commit into develop as it stands, taking its files alone.
+
+        The tree is the base's, with each prepared file in place of the captured one. The files
+        are unchanged on the base since the train, so this tree is what a merge would produce.
+        Writing it directly leaves nothing for a merge strategy to decide.
+        """
+        reference = f"refs/heads/{branch}"
+        commit = self.ref_creator._ref(root, reference)
+        if commit is not None and self.git._run([
+            "git", "-C", str(root), "rev-parse", f"{commit}^1",
+        ]) != base:
+            # Written on a develop that moved before the push landed; it is rebuilt on the tip.
+            commit = None
+        if commit is None:
+            with tempfile.TemporaryDirectory(prefix="cedar-release-index-") as directory:
+                environment = {
+                    **self.environment, "GIT_INDEX_FILE": str(Path(directory) / "index"),
+                }
+                self.git._run(
+                    ["git", "-C", str(root), "read-tree", base], environment=environment)
+                for path in prepared["changedFiles"]:
+                    entry = self.git._run([
+                        "git", "-C", str(root), "ls-tree", prepared["commit"], "--", path,
+                    ])
+                    if not entry:
+                        raise ReleaseError(
+                            f"prepared commit for {prepared['repository']} has no {path}")
+                    mode, _kind, blob = entry.split()[:3]
+                    self.git._run([
+                        "git", "-C", str(root), "update-index", "--add", "--cacheinfo",
+                        f"{mode},{blob},{path}",
+                    ], environment=environment)
+                tree = self.git._run(
+                    ["git", "-C", str(root), "write-tree"], environment=environment)
+            name, email = self.ref_creator._identity(root)
+            commit = self.git._run([
+                "git", "-c", f"user.name={name}", "-c", f"user.email={email}",
+                "-c", "commit.gpgSign=false", "-C", str(root), "commit-tree",
+                tree, "-p", base, "-p", prepared["commit"], "-m", message,
+            ])
+            # The branch may be checked out from an earlier attempt, which `branch --force`
+            # refuses to move; switching resets it and the checkout together.
+            self.git._run([
+                "git", "-C", str(root), "switch", "--quiet", "--force", "-C", branch, commit,
+            ])
+        parents = self.git._run([
+            "git", "-C", str(root), "rev-list", "--parents", "-n", "1", commit,
+        ]).split()
+        if parents != [commit, base, prepared["commit"]]:
+            raise ReleaseError(
+                f"integration commit for {prepared['repository']} has unexpected parents")
+        changed = set(filter(None, self.git._run([
+            "git", "-C", str(root), "diff", "--no-renames", "--name-only", base, commit, "--",
+        ]).splitlines()))
+        if changed != set(prepared["changedFiles"]) or any(
+            self._blob(root, commit, path) != self._blob(root, prepared["commit"], path)
+            for path in prepared["changedFiles"]
+        ):
+            raise ReleaseError(
+                f"integration commit for {prepared['repository']} changes more than the "
+                "prepared files")
+        self.git._run(["git", "-C", str(root), "switch", "--quiet", "--force", branch])
+        return commit
+
+    def _integrate_development(self, manifest: dict, task: dict) -> dict:
+        """Advance develop alone, in a repository that takes no release commit.
+
+        Such a repository moves on its own, so the release commits onto its develop as it finds
+        it: a merge of the prepared commit, whose tree is develop's with the prepared files in
+        place. It refuses only when develop has changed one of those files since the train, or
+        no longer contains the train source. The prepared commit is published as the
+        release/post branch. Main and the tags are the repository's own.
+        """
+        prepared = task["nextDevelopment"]
+        self.ref_creator.verify_record(manifest, prepared)
+        repository = task["repository"]
+        root = Path(prepared["workspace"]) / repository
+        remote = self.remote_resolver(repository)
+        source = task["sourceRevision"]
+        post_branch_ref = f"refs/heads/{prepared['branch']}"
+        local_develop_ref = f"cedar-release/integrate-develop-{manifest['releaseVersion']}"
+        message = (
+            f"Advance after CEDAR {manifest['releaseVersion']} to "
+            f"{manifest['nextDevelopmentVersion']}"
+        )
+        for _attempt in range(self.DEVELOPMENT_PUSH_ATTEMPTS):
+            tip = self._fetch_develop(root, remote)
+            existing = self.ref_creator._ref(root, f"refs/heads/{local_develop_ref}")
+            landed = existing is not None and self._contains(root, existing, tip)
+            if landed:
+                base = self.git._run(["git", "-C", str(root), "rev-parse", f"{existing}^1"])
+            else:
+                base = tip
+                if not self._contains(root, source, base):
+                    raise ReleaseError(
+                        f"{repository} develop no longer contains train source {source}, so "
+                        "merging the prepared commit would restore history develop dropped")
+                self._require_captured_files(
+                    manifest, repository, root, source, base, prepared["changedFiles"],
+                    "restore the captured file on develop, then resume the release",
+                )
+            commit = self._development_commit(root, local_develop_ref, base, prepared, message)
+            existing_post = self._remote_refs(
+                root, remote, [post_branch_ref]).get(post_branch_ref)
+            if existing_post is not None and existing_post != prepared["commit"]:
+                raise ReleaseError(f"{repository} remote {post_branch_ref} already differs")
+            if existing_post is None:
+                self._push(root, remote, prepared["commit"], post_branch_ref)
+            if landed:
+                break
+            try:
+                self._push(root, remote, commit, "refs/heads/develop")
+                break
+            except ReleaseError:
+                # The remote refuses the push when develop has moved since the fetch, and the
+                # next attempt follows it. Any other refusal stops the integration.
+                moved = self._remote_refs(root, remote, ["refs/heads/develop"]).get(
+                    "refs/heads/develop")
+                if moved == base:
+                    raise
+        else:
+            raise ReleaseError(
+                f"{repository} develop moved during each of {self.DEVELOPMENT_PUSH_ATTEMPTS} "
+                "integration attempts; resume the release to follow it again")
+        tree = self.git._run(["git", "-C", str(root), "rev-parse", f"{commit}^{{tree}}"])
+        record = {
+            "id": task["id"],
+            "repository": repository,
+            "remote": remote,
+            "sourceRevision": source,
+            "develop": {"base": base, "commit": commit, "tree": tree},
+            "postBranch": {"ref": post_branch_ref, "commit": prepared["commit"]},
+            "completedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        self.verify_record(manifest, record)
+        return record
+
     def integrate(self, manifest: dict, task: dict) -> dict:
+        if task["release"] is None:
+            return self._integrate_development(manifest, task)
         release = task["release"]
         next_development = task.get("nextDevelopment")
         self.ref_creator.verify_record(manifest, release)
@@ -332,6 +552,9 @@ class ReleaseRemoteIntegrator:
         task = next((item for item in self.tasks(manifest) if item["id"] == record.get("id")), None)
         if task is None:
             raise ReleaseError(f"recorded remote task no longer exists: {record.get('id')}")
+        if task["release"] is None:
+            self._verify_development_record(task, record)
+            return
         root = Path(task["release"]["workspace"]) / task["repository"]
         references = [
             record["releaseBranch"]["ref"], record["tag"]["ref"],
@@ -350,6 +573,26 @@ class ReleaseRemoteIntegrator:
             expected[record["postBranch"]["ref"]] = record["postBranch"]["commit"]
         if actual != expected:
             raise ReleaseError(f"remote refs changed after integration for {task['repository']}")
+
+    def _verify_development_record(self, task: dict, record: dict) -> None:
+        """The post branch still names the prepared commit, and develop still contains its merge.
+
+        Develop is free to move on after the release, as it was before it.
+        """
+        repository = task["repository"]
+        root = Path(task["nextDevelopment"]["workspace"]) / repository
+        post = record["postBranch"]
+        actual = self._remote_refs(root, record["remote"], ["refs/heads/develop", post["ref"]])
+        if actual.get(post["ref"]) != post["commit"]:
+            raise ReleaseError(f"remote refs changed after integration for {repository}")
+        commit = record["develop"]["commit"]
+        if actual.get("refs/heads/develop") == commit:
+            return
+        if actual.get("refs/heads/develop") is None or not self._contains(
+            root, commit, self._fetch_develop(root, record["remote"]),
+        ):
+            raise ReleaseError(
+                f"remote develop no longer contains the integrated commit for {repository}")
 
     def retire_superseded_release_branches(self, manifest: dict) -> dict:
         """Delete the release branches earlier releases left behind.
