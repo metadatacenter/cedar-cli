@@ -16,10 +16,10 @@ builds a `dist/` whose package.json is `package-dist.json`, the two Web Componen
 
 Each successful producer is packed without lifecycle scripts and stored as an immutable,
 content-addressed npm tarball. Consumers install the tarball, never a shared directory link.
-A build snapshots the available packages once and then uses its own producers' outputs;
-concurrent builds cannot change that selection. Producers scheduled in this build must
-succeed before their consumers may resolve them. Other dependencies retain their pins
-when no local artifact is available.
+Every CLI development build starts with an empty selection and includes its transitive local
+producers. Their current source, including uncommitted edits, supplies every CEDAR dependency;
+missing producers fail instead of falling back to registry pins or earlier local artifacts.
+Concurrent builds cannot change that selection. Non-CEDAR dependencies retain their pins.
 
 A producer whose surface declares a package phase is stored as soon as that phase succeeds, so
 its consumers need not wait for its checks. Such a package is provisional. It is offered only to
@@ -62,6 +62,16 @@ def unscoped(name: str) -> str:
     return name.rsplit("/", 1)[-1] if name else name
 
 
+def dependency_name(key, requested):
+    if isinstance(requested, str) and requested.startswith('npm:'):
+        key = requested[4:]
+        # npm:@scope/package is valid without a version. Its leading @ is not a separator.
+        version = key.find('@', 1)
+        if version >= 0:
+            key = key[:version]
+    return unscoped(key)
+
+
 def install_commands(commands):
     """The same commands, with every npm ci turned into npm install.
 
@@ -92,8 +102,9 @@ _session = ContextVar("cedar_frontend_reactor", default=None)
 class _Build:
     """One reactor build's view of the store, shared by the tasks it runs concurrently."""
 
-    def __init__(self, home, available, scheduled):
+    def __init__(self, home, available, scheduled, source_only=False):
         self.home = home
+        self.source_only = source_only
         # Packages this build's consumers resolve, by name: the snapshot and this build's own.
         self.available = available
         # Producers scheduled in this build that have not yet stored a package.
@@ -128,12 +139,12 @@ def _available(cedar_home):
 
 
 @contextlib.contextmanager
-def session(cedar_home, producers=()):
+def session(cedar_home, producers=(), *, source_only=False):
     """Freeze external selections and require this walk's producers to finish first."""
-    available = _available(cedar_home)
+    available = {} if source_only else _available(cedar_home)
     for name in producers:
         available.pop(name, None)
-    token = _session.set(_Build(Path(cedar_home).resolve(), available, producers))
+    token = _session.set(_Build(Path(cedar_home).resolve(), available, producers, source_only))
     try:
         yield
     finally:
@@ -194,7 +205,7 @@ def session_for_plan(cedar_home, plan):
     visit(plan)
     if not repos:
         return contextlib.nullcontext()
-    return session(cedar_home, {repo.name for repo in repos if repo.published_package_path})
+    return session(cedar_home, {repo.name for repo in repos if repo.published_package_path}, source_only=True)
 
 
 def publish(repo, build_root, cedar_home, environment=None, *, provisional=False) -> str | None:
@@ -329,7 +340,9 @@ def resolve(build_root, cedar_home) -> list[str]:
     under visual/, and each multi-repository has one per sub-project.
     """
     available, pending = _state(cedar_home)
-    if not available and not pending:
+    build = _build(cedar_home)
+    source_only = build is not None and build.source_only
+    if not available and not pending and not source_only:
         return []
     notes = []
     resolved = set()
@@ -338,19 +351,23 @@ def resolve(build_root, cedar_home) -> list[str]:
             continue
         try:
             package = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            if source_only:
+                raise ReactorError(f'Cannot read SNAPSHOT dependency manifest {manifest}: {error}') from error
             continue
         if not isinstance(package, dict):
+            if source_only:
+                raise ReactorError(f'SNAPSHOT dependency manifest must be an object: {manifest}')
             continue
         rewritten = False
         for section in DEPENDENCY_SECTIONS:
             declared = package.get(section)
             if not isinstance(declared, dict):
+                if source_only and section in package:
+                    raise ReactorError(f'{manifest}: {section} must be an object')
                 continue
             for key, requested in list(declared.items()):
-                name = key
-                if isinstance(requested, str) and requested.startswith("npm:"):
-                    name = requested[len("npm:"):].rsplit("@", 1)[0]
+                name = dependency_name(key, requested)
                 # A repository never resolves itself from the store.
                 if unscoped(name) == unscoped(package.get("name") or ""):
                     continue
@@ -358,7 +375,13 @@ def resolve(build_root, cedar_home) -> list[str]:
                     raise ReactorError(f"{manifest}: producer {unscoped(name)} has not succeeded in this build")
                 target = available.get(unscoped(name))
                 if target is None:
+                    if source_only and unscoped(name).startswith('cedar-'):
+                        raise ReactorError(
+                            f'{manifest}: no current-source SNAPSHOT for {unscoped(name)} in this build; '
+                            'registry pins and earlier local artifacts cannot substitute for its producer.')
                     continue
+                if source_only and hashlib.sha256(target.read_bytes()).hexdigest() != target.stem:
+                    raise ReactorError(f'Local SNAPSHOT artifact no longer matches its digest: {target}')
                 declared[key] = f"file:{target}"
                 rewritten = True
                 resolved.add(unscoped(name))

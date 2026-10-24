@@ -33,7 +33,11 @@ def reactor_checks():
     checks = {}
     for row in module.surfaces(config):
         produce = [*row['setup'], *row.get('package', [])]
-        commands = [*produce, *row['verify'], *([row['build']] if row['build'] else [])]
+        commands = [*produce, *row['verify']]
+        # Browser verification already builds these applications before inspecting their bytes.
+        # Publishing that same output needs no second, unverified rebuild afterwards.
+        if row['build'] and row['build'] not in commands:
+            commands.append(row['build'])
         checks[row['reactorName']] = ReactorCheck(
             [shlex.join(command) for command in commands],
             len(produce) if row.get('package') else None)

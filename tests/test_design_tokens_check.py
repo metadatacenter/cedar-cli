@@ -42,6 +42,9 @@ class DesignTokensCommandTest(unittest.TestCase):
             args = run.call_args.args[0]
             self.assertIn(str(path), args)
             self.assertEqual(['--repo', 'cedar-embeddable-designer', '--prune-baseline'], args[-3:])
+            design_tokens.check_design_tokens(strict=True, source_consumers=['cedar-workspace'])
+            self.assertIn('--strict', run.call_args.args[0])
+            self.assertEqual(['--source-consumer', 'cedar-workspace'], run.call_args.args[0][-3:-1])
 
 
     @patch('org.metadatacenter.design_tokens.subprocess.run')
@@ -59,12 +62,14 @@ class DesignTokensCommandTest(unittest.TestCase):
 
 
 class ReactorTokenGateTest(unittest.TestCase):
-    """A frontend build refuses what the consumers' "Design token adoption" workflow refuses."""
+    """The same style policy checks the dependency source each workflow actually uses."""
 
     def setUp(self):
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(use_context(InvocationContext(environment=dict(os.environ))))
+        home = stack.enter_context(tempfile.TemporaryDirectory())
+        stack.enter_context(patch.object(build.Util, 'cedar_home', home))
         recipes = inventory()
         stack.enter_context(patch('org.metadatacenter.frontend_inventory.inventory', return_value=recipes))
         GlobalContext.init_task_operators()
@@ -75,7 +80,10 @@ class ReactorTokenGateTest(unittest.TestCase):
                 patch.object(build, 'execute_build') as execute:
             result = self.runner.invoke(build.app, ['frontends'])
         self.assertEqual(1, result.exit_code)
-        gate.assert_called_once_with(strict=True)
+        self.assertEqual(True, gate.call_args.kwargs['strict'])
+        self.assertIn('cedar-workspace', gate.call_args.kwargs['source_consumers'])
+        self.assertIn('cedar-embeddable-editor', gate.call_args.kwargs['source_consumers'])
+        self.assertNotIn('mcp/cedar-cee-mcp', gate.call_args.kwargs['source_consumers'])
         execute.assert_not_called()
 
     def test_a_passing_check_lets_the_reactor_build(self):
@@ -90,13 +98,24 @@ class ReactorTokenGateTest(unittest.TestCase):
                 patch.object(build, 'execute_build', return_value={}), \
                 patch.object(cee_demos, 'check_selection'):
             self.assertEqual(0, self.runner.invoke(build.app, ['all']).exit_code)
-            gate.assert_called_once_with(strict=True)
+            self.assertEqual(True, gate.call_args.kwargs['strict'])
+            self.assertIn('cedar-workspace', gate.call_args.kwargs['source_consumers'])
             gate.reset_mock()
             self.assertEqual(0, self.runner.invoke(build.app, ['all', '--skip-tests']).exit_code)
             gate.assert_not_called()
 
+    def test_a_plan_without_the_token_producer_cannot_claim_source_resolution(self):
+        from types import SimpleNamespace
+        module = SimpleNamespace(surfaces=lambda config: [
+            {'repository': 'cedar-workspace', 'reactorName': 'cedar-workspace'}])
+        with patch('org.metadatacenter.frontend_inventory.inventory', return_value=(module, {})), \
+                patch.object(build, 'check_design_tokens', return_value=0) as gate:
+            build.require_design_token_adoption(True, False, False)
+        gate.assert_called_once_with(strict=True, source_consumers=[])
+
     def test_a_dry_run_does_not_check(self):
         with patch.object(build, 'check_design_tokens') as gate, \
+                patch('org.metadatacenter.frontend_snapshot.internal_dependencies', return_value=set()), \
                 patch.object(build.plan_executor, 'execute'):
             result = self.runner.invoke(build.app, ['frontends', '--dry-run'])
         self.assertEqual(0, result.exit_code, result.output)

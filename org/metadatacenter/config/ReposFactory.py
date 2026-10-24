@@ -45,11 +45,9 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-cadsr-tools", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
         repos.add_repo(Repo("cedar-model-library-roundtrip", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
 
-        # The frontends are registered in dependency order, because a plan is walked in the
-        # order repos are added here. Every consumer resolves its CEDAR packages from Nexus when
-        # its own build starts, so a consumer registered before the package it consumes reads the
-        # previous snapshot: it builds, and it builds against what it replaced. The producers
-        # therefore come first, and `tests/test_frontend_registration_order.py` holds that.
+        # Keep a readable producer-first inventory. The scheduler derives dependency edges, and
+        # every development build resolves current-source local packages. Narrow plans include
+        # their transitive producers; neither old local refs nor registry pins are fallbacks.
 
         # CEDAR's design values — the font stack, the type scale, the brand palettes and the
         # neutrals — as one Sass partial and the custom properties compiled from it. Nothing in

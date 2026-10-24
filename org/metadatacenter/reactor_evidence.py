@@ -21,19 +21,38 @@ class Selection(dict):
         self.evidence = evidence
 
 
-def source_identity(source):
+def source_paths(source):
+    """Tracked/untracked source plus ignored local tool configuration, from a repository root."""
+    source = Path(source)
+    paths = set(subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z',
+                '--cached', '--others', '--exclude-standard']).split(b'\0')) - {b''}
+    # Ignored local configuration is still an input to npm/build tools.
+    directories = [source, *(p for p in source.iterdir() if p.is_dir() and p.name not in
+                   {'.git', 'node_modules', '.angular', 'dist', 'dist-npm', '.venv'})]
+    for directory in directories:
+        for path in [*directory.glob('.env*'), directory / '.npmrc']:
+            if path.is_file():
+                paths.add(os.fsencode(path.relative_to(source)))
+    return sorted(paths)
+
+
+def source_identity(source, *, include=None):
     """Fingerprint the copied repository, including a nested app's sibling tests and locks."""
     source = Path(source)
     def git(*args):
         return subprocess.check_output(['git', '-C', str(source), *args])
     source = Path(git('rev-parse', '--show-toplevel').decode().strip())
-    paths = sorted(set(git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\0')) - {b''})
+    paths = source_paths(source)
     digest = hashlib.sha256()
     for raw in paths:
+        if include is not None and not include(os.fsdecode(raw)):
+            continue
         path = source / os.fsdecode(raw)
         digest.update(raw + b'\0')
         if path.is_symlink():
             digest.update(b'link\0' + os.fsencode(os.readlink(path)))
+            if path.is_file():
+                digest.update(hashlib.sha256(path.read_bytes()).digest())
         elif path.is_file():
             digest.update(str(path.stat().st_mode & 0o777).encode() + b'\0')
             digest.update(hashlib.sha256(path.read_bytes()).digest())
@@ -83,15 +102,20 @@ def record(source, copy, identity, commands, checks=(), reused=None):
         raise ReactorError(f'Frontend source changed while building {source}')
     manifests = {}
     edges = []
+    checkout = Path(subprocess.check_output(
+        ['git', '-C', str(source), 'rev-parse', '--show-toplevel'], text=True).strip())
+    copy_root = Path(copy)
+    for _part in Path(source).resolve().relative_to(checkout.resolve()).parts:
+        copy_root = copy_root.parent
     # Prune node_modules before descending; a recursive glob traverses entire installs.
-    for directory, children, files in os.walk(copy):
+    for directory, children, files in os.walk(copy_root):
         children[:] = [name for name in children if name not in
                        {'node_modules', '.git', '.angular', 'dist', 'dist-npm', 'dist-bundle'}]
         for name in ('package.json', 'package-lock.json'):
             if name not in files:
                 continue
             path = Path(directory) / name
-            relative = path.relative_to(copy).as_posix()
+            relative = path.relative_to(copy_root).as_posix()
             value = json.loads(path.read_text())
             manifests[relative] = value
             if name == 'package.json':
@@ -100,6 +124,9 @@ def record(source, copy, identity, commands, checks=(), reused=None):
                         if isinstance(spec, str) and spec.startswith('file:') and spec.endswith('.tgz'):
                             edges.append({'manifest': relative, 'section': section,
                                           'dependency': dependency, 'sha256': Path(spec[5:]).stem})
+    if reused is not None and isinstance(reused.get('evidence'), dict):
+        manifests = reused['evidence']['resolvedManifests']
+        edges = reused['evidence']['dependencies']
     entry = {
         'source': identity, 'commands': list(commands), 'dependencies': edges,
         'testDependencies': list(checks),
@@ -108,6 +135,7 @@ def record(source, copy, identity, commands, checks=(), reused=None):
     if reused is not None:
         entry['reused'] = {'fingerprint': reused['fingerprint'], 'passedAt': reused['passedAt']}
     _build.get()[str(Path(source).resolve())] = entry
+    return entry
 
 
 def finish(home, packages):

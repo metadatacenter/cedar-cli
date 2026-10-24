@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.progress import Progress
 from rich.style import Style
 
-from org.metadatacenter import npm_install, reactor, reactor_evidence, reactor_results
+from org.metadatacenter import npm_install, reactor, reactor_evidence, reactor_results, reactor_stages, reactor_tasks, task_cache
 from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
 from org.metadatacenter.build_scheduler import (
     package_ready,
@@ -23,6 +23,7 @@ from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
+    materialize_frontend_workspace,
     executable_build_workspace,
     is_maven_command,
     is_test_bearing_maven_command,
@@ -71,7 +72,7 @@ class ShellTaskExecutor(TaskExecutor):
                 parameter = getattr(task, "get_parameter", lambda _name: None)
                 if parameter("isolated_frontend_build") is True:
                     identity = reactor_evidence.begin(cwd)
-                    with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions), \
+                    with isolated_frontend_workspace(Path(cwd), manifests_only=True) as (isolated_cwd, environment, collisions), \
                             failure_diagnostics(
                                 environment.get('CEDAR_BUILD_WORKSPACE_ROOT', isolated_cwd),
                                 Util.cedar_home, job_progress.print,
@@ -119,18 +120,31 @@ class ShellTaskExecutor(TaskExecutor):
                                 f"{reused['passedAt']} ({key[:12]}); reusing it", markup=False)
                             outcome['exitCode'] = 0
                             return 0
+                        materialize_frontend_workspace(Path(cwd), Path(isolated_cwd))
+                        reactor.resolve(isolated_cwd, cedar_home)
+                        checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
+                                                        environment, commands_to_execute)
+                        reactor_stages.configure(environment, repo, result, cedar_home)
+                        task_config = reactor_tasks.configure(environment, repo, result, cedar_home, cwd, isolated_cwd)
                         code = self._execute_packaged_commands(
                             task, repo, commands_to_execute, isolated_cwd, job_progress,
                             environment, ready_after, cedar_home,
                         )
+                        # A concurrent checkout edit invalidates all newly recorded stage evidence,
+                        # including successful stages of an otherwise failed build.
+                        if task_config and reactor_evidence.source_identity(cwd) == identity:
+                            try:
+                                task_cache.publish(task_config)
+                            except OSError as error:
+                                job_progress.print(f"Task cache: could not retain completed stages: {error}", markup=False)
                         if code == 0:
-                            reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
+                            evidence = reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
                             stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)
-                            if result is not None:
+                            if result is not None and not (Path(isolated_cwd) / '.cedar-cache-unstable').exists():
                                 reactor_results.save(cedar_home, result[0], result[1],
-                                                     reactor.selected_digest(repo, cedar_home))
+                                                     reactor.selected_digest(repo, cedar_home), evidence)
                         outcome['exitCode'] = code
                         return code
                 if parameter("in_place_frontend_build") is True:
@@ -195,7 +209,15 @@ class ShellTaskExecutor(TaskExecutor):
         first_failure = 0
         # Only an isolated build tells npm where to write its debug logs.
         npm_logs = npm_install.log_directory(environment)
+        cache = reactor_tasks.load(environment)
         for command in commands:
+            cache_started = time.monotonic()
+            cached = task_cache.reuse(cache, command) if cache else None
+            if cached:
+                job_progress.print(f"Task cache: reuse {command} ({cached['key'][:12]}, passed {cached['passedAt']})", markup=False)
+                record_timing(repo.name, f"reuse task {command}", cache_started, 0)
+                continue
+            output = []
             guarded_maven = is_test_bearing_maven_command(command)
             if guarded_maven:
                 require_no_embedded_mongo_processes(
@@ -217,12 +239,17 @@ class ShellTaskExecutor(TaskExecutor):
                         return_code = self._execute_npm_install(
                             task, repo, command, cwd, job_progress, child_environment, npm_logs)
                     else:
-                        _, return_code = self.execute_shell_command(
+                        output, return_code = self.execute_shell_command(
                             task, repo, command, cwd, job_progress, environment=child_environment,
                         )
                     if guarded_maven:
                         wait_for_no_embedded_mongo_processes(
                             f"completion of test-bearing Maven task for {repo.name}")
+            if return_code == 0 and cache:
+                try:
+                    task_cache.save(cache, command, log='\n'.join(output))
+                except OSError as error:
+                    job_progress.print(f"Task cache: could not record {command}: {error}", markup=False)
             if return_code != 0:
                 if first_failure == 0:
                     first_failure = return_code
@@ -282,10 +309,22 @@ class ShellTaskExecutor(TaskExecutor):
             style=Style(color="bright_cyan"))
 
         stages = []
+        allocations = {}
         def report(line):
+            allocation = re.fullmatch(r"\[gate\] allocation ([\w-]+): (\d+) workers, ([\d.]+)s queued", line)
+            if allocation:
+                allocations[allocation[1]] = {"workers": int(allocation[2]), "queuedSeconds": float(allocation[3])}
             match = re.fullmatch(r"\[gate\] ([\w-]+): exit (-?\d+), ([\d.]+)s", line)
             if match:
-                stages.append({"stage": match[1], "exitCode": int(match[2]), "seconds": float(match[3])})
+                stages.append({"stage": match[1], "exitCode": int(match[2]), "seconds": float(match[3]),
+                               **allocations.get(match[1], {})})
+            reused = re.fullmatch(r"\[gate\] reuse ([\w-]+) \(([^,]+), passed (.+)\)", line)
+            if reused:
+                stages.append({"stage": reused[1], "exitCode": 0, "seconds": 0,
+                               "reused": reused[2], "passedAt": reused[3]})
+            if ((environment or {}).get('CEDAR_BUILD_WORKSPACE_ROOT')
+                    and re.search(r'\b[1-9]\d* flaky\b', re.sub(r'\x1b\[[0-9;]*m', '', line))):
+                (Path(cwd) / '.cedar-cache-unstable').touch()
             job_progress.print(line, markup=False)
             job_progress.update(1, advance=1)
 

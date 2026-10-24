@@ -8,8 +8,14 @@ import platform
 
 
 def default_build_workers():
-    # Two repository jobs share the host; keep a ceiling for very large runners.
+    # The shared host pool bounds the sum; 16-core workstations use the measured 3/12 recipe.
+    if (os.cpu_count() or 2) >= 16:
+        return 12
     return max(1, min(8, (os.cpu_count() or 2) // 2))
+
+
+def default_build_jobs():
+    return 3 if (os.cpu_count() or 2) >= 16 else 2
 
 
 def default_maven_threads():

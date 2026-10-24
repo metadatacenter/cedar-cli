@@ -375,13 +375,15 @@ class ComponentWorker:
         table.caption = caption
         console.print(table)
 
+        if failures or (strict_failures and strict):
+            console.print("\nThis comparison uses checked-in registry dependencies. For a local snapshot "
+                          "build, run cedarcli build frontends: it builds current sources and verifies "
+                          "the selected packages and served bytes without waiting for pin updates.")
         if failures:
             console.print(
-                "\nA host that serves bytes its lock does not name, or creates an element no "
-                "locked bundle defines, fails at the moment a person opens the surface that needs "
-                "it, and on no machine but the one that staged it. Publish the component's current "
-                "source, advance the host's pin to that snapshot, and stage the locked package.")
+                "\nFor a registry-based deployment, repair the reported package or element mismatch, "
+                "update the host's dependency if needed, and stage the locked package.")
         elif strict_failures and strict:
             console.print(
-                "\nPublish each component's current source and advance the pins onto it before "
-                "building a server payload or starting a release.")
+                "\nFor a registry-based deployment, publish the required components and update the "
+                "consumer dependencies before building the server payload.")

@@ -15,6 +15,7 @@ from org.metadatacenter.util.BuildSafety import (
     frontend_npm_cache,
     is_test_bearing_maven_command,
     isolated_frontend_workspace,
+    materialize_frontend_workspace,
     require_no_frontend_runtime_collision,
 )
 from org.metadatacenter.util.SubprocessDiagnostics import (
@@ -107,6 +108,37 @@ class BuildSafetyTest(unittest.TestCase):
 
     def test_a_build_without_cedar_home_keeps_a_private_npm_cache(self):
         self.assertEqual(Path("/w/npm-cache"), frontend_npm_cache({}, Path("/w")))
+
+    def test_cache_probe_copies_only_manifests_then_materializes_a_miss(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.repository(Path(directory))
+            (repo / 'package.json').write_text('{"name":"example"}')
+            (repo / 'browser').mkdir()
+            (repo / 'browser/package-lock.json').write_text('{}')
+            with patch('org.metadatacenter.util.BuildSafety.frontend_runtime_collisions', return_value=[]):
+                with isolated_frontend_workspace(repo, manifests_only=True) as (workspace, _, _collisions):
+                    self.assertTrue((workspace / 'package.json').is_file())
+                    self.assertTrue((workspace / 'browser/package-lock.json').is_file())
+                    self.assertFalse((workspace / 'source.txt').exists())
+                    materialize_frontend_workspace(repo, workspace)
+                    self.assertEqual('source\n', (workspace / 'source.txt').read_text())
+            with self.assertRaises(BuildSafetyError):
+                materialize_frontend_workspace(repo, repo)
+
+    def test_workspace_copy_does_not_keep_historical_staged_bundles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.repository(Path(directory))
+            workspace_repo = repo.with_name('cedar-workspace')
+            repo.rename(workspace_repo)
+            for output in ['.workspace-build', 'app/workspace-build']:
+                path = workspace_repo / output
+                path.mkdir(parents=True)
+                (path / 'stale.js').write_text('old bundle')
+            with patch('org.metadatacenter.util.BuildSafety.frontend_runtime_collisions', return_value=[]):
+                with isolated_frontend_workspace(workspace_repo) as (workspace, _, _collisions):
+                    self.assertFalse((workspace / '.workspace-build').exists())
+                    self.assertFalse((workspace / 'app/workspace-build').exists())
+            self.assertTrue((workspace_repo / 'app/workspace-build/stale.js').exists())
 
     def test_estate_snapshot_detects_only_changes_after_the_baseline(self):
         with tempfile.TemporaryDirectory() as directory:

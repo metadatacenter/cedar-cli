@@ -174,10 +174,11 @@ def components(
         component: str = typer.Option(
             None, "--component",
             help="Act on one declared component by id rather than all of them.")):
-    """Publish each declared component's current source and advance the pins that follow it.
+    """Publish registry packages and update consumers' checked-in dependencies.
 
-    A build cannot do this: `npm ci` reproduces the lock, so advancing a pin is a source change
-    across several repositories. Nothing is committed; the diffs are left for review.
+    For a local snapshot build, use cedarcli build frontends. It uses current working-tree
+    components without waiting for commits, CI publication or registry pin updates.
+    This command leaves manifest and lockfile changes for review; nothing is committed.
     """
     exit_on_failure(advance_component_pins(apply=apply, only=component))
 

@@ -100,9 +100,7 @@ def dependencies(tasks):
             package = json.loads(manifest.read_text())
             for section in reactor.DEPENDENCY_SECTIONS:
                 for name, spec in package.get(section, {}).items():
-                    if isinstance(spec, str) and spec.startswith('npm:'):
-                        name = spec[4:].rsplit('@', 1)[0]
-                    producer = producers.get(reactor.unscoped(name))
+                    producer = producers.get(reactor.dependency_name(name, spec))
                     if producer is not None and producer != i:
                         edges[i].add(producer)
         if 'npm run test:ci' in task.command_list:

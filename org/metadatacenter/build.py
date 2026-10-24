@@ -21,7 +21,7 @@ from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_re
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
 from org.metadatacenter.util.NodeBuildCheck import require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
-from org.metadatacenter.util.InvocationContext import default_build_workers, default_maven_threads
+from org.metadatacenter.util.InvocationContext import default_build_jobs, default_build_workers, default_maven_threads
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.smoke_gate import run_smoke
@@ -37,14 +37,14 @@ def concurrency(
     jobs: Optional[int] = typer.Option(
         None, min=1, max=16,
         help="Concurrent frontend repositories and Maven reactor threads; 1 is serial. "
-             "Default: two repositories, and one Maven thread per core up to 16."),
-    workers: int = typer.Option(default_build_workers(), min=1, max=16, help="Worker budget within each frontend repository."),
+             "Default: three repositories on 16+ cores, otherwise two; Maven uses up to 16 cores."),
+    workers: Optional[int] = typer.Option(None, min=1, max=16, help="Workers per frontend: 12 on 16+ cores, otherwise half the cores up to 8. The host pool bounds total concurrency."),
 ):
     from org.metadatacenter.util.InvocationContext import current_context
     # Concurrent frontend builds multiply by their worker budget, so only Maven follows the host.
-    current_context().settings.build_jobs = jobs or 2
+    current_context().settings.build_jobs = jobs or default_build_jobs()
     current_context().settings.maven_threads = jobs or default_maven_threads()
-    current_context().settings.build_workers = workers
+    current_context().settings.build_workers = workers or default_build_workers()
 
 
 JAVA_TESTS_OPTION_HELP = "Run Java test suites. Default: run."
@@ -75,18 +75,19 @@ def require_integration_tags(tests: bool, dry_run: bool, dump_plan: bool):
 
 
 def require_design_token_adoption(verify: bool, dry_run: bool, dump_plan: bool):
-    """Refuse a frontend build whose sources the CI design-token gate would refuse.
-
-    Each consumer's "Design token adoption" workflow runs the tokens repository's checker in strict
-    mode, and no consumer's own test gate does, so a tree the reactor accepted could still fail that
-    workflow on push. The checker reads the source checkouts the reactor is about to build and takes
-    seconds, so it runs before any build work rather than after it.
-    """
+    """Apply CI's style policy against the dependencies this source build will supply."""
     if not verify or dry_run or dump_plan:
         return
-    code = check_design_tokens(strict=True)
+    from org.metadatacenter.frontend_inventory import inventory
+    module, config = inventory()
+    surfaces = module.surfaces(config)
+    # Only consumers built with the local token producer may use its source vocabulary.
+    # Vendored copies (including MCP) and standalone CI retain their registry checks.
+    source_consumers = (sorted({row['repository'] for row in surfaces})
+                        if any(row['reactorName'] == 'cedar-design-tokens' for row in surfaces) else [])
+    code = check_design_tokens(strict=True, source_consumers=source_consumers)
     if code:
-        console.print("[red]The design-token adoption check failed, as CI would.[/red] "
+        console.print("[red]The design-token adoption check failed for this source build.[/red] "
                       "Fix the findings above, then build again.")
         raise typer.Exit(code)
 
@@ -184,6 +185,15 @@ def execute_java_build(plan: Plan, dry_run: bool, dump_plan: bool):
 def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=False):
     """Run a build while proving it did not add or alter tracked workspace changes."""
     from org.metadatacenter.util.InvocationContext import current_context
+    from org.metadatacenter.frontend_snapshot import prepare
+    try:
+        prepare(plan)
+    except reactor.ReactorError as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(1) from error
+    if getattr(plan, 'frontend_snapshot', False):
+        console.print('Frontend dependencies: current-source SNAPSHOTs, including uncommitted edits; '
+                      'no registry-pin fallback.')
     plan.build_jobs = current_context().settings.build_jobs
     if dry_run or dump_plan:
         return plan_executor.execute(plan, dry_run, dump_plan)
@@ -198,7 +208,8 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
     try:
         with reactor_evidence.session(plan), reactor.session_for_plan(Util.cedar_home, plan):
             plan_executor.execute(plan, dry_run, dump_plan)
-            selection = reactor.runtime_selection(Util.cedar_home)
+            selection = (reactor.runtime_selection(Util.cedar_home)
+                         if getattr(plan, 'frontend_snapshot', False) else {})
             if frontend_only:
                 selection = reactor_evidence.Selection(
                     selection, reactor_evidence.finish(Util.cedar_home, selection))
@@ -303,34 +314,51 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
                   True, "--reuse/--no-reuse",
                   help="Take a repository's earlier passing result when everything it reads is "
                        "unchanged. --no-reuse runs every repository's checks again.")):
-    require_design_token_adoption(True, dry_run, dump_plan)
+    run_frontends(dry_run=dry_run, dump_plan=dump_plan, reuse=reuse, deploy=True)
+
+
+def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False):
+    """Shared source verification; deployment is exclusively the full build command's contract."""
+    from org.metadatacenter.cee_demos import check_selection
+    from org.metadatacenter.frontend_timings import frontend_timings
+    from org.metadatacenter.util.InvocationContext import current_context
     GlobalContext.mark_global_task_type(TaskType.BUILD)
-    plan = Plan("Build frontends")
+    plan = Plan("Build frontends" if deploy else "Check frontends")
     BuildPlanner.frontends(plan, reuse=reuse)
-    selection = execute_build(plan, dry_run, dump_plan, frontend_only=True)
-    if not dry_run and not dump_plan:
-        from org.metadatacenter.cee_demos import check_selection
-        check_selection(selection)
-        reactor.activate_runtime(Util.cedar_home, selection)
+    if dry_run or dump_plan:
+        return execute_build(plan, dry_run, dump_plan, frontend_only=True)
+    with frontend_timings(Util.cedar_home, 'reactor' if deploy else 'checks') as timing:
+        with timing.phase('design-token preflight'):
+            require_design_token_adoption(True, False, False)
+        with timing.phase('build and verification'):
+            selection = execute_build(plan, False, False, frontend_only=True)
+        with timing.phase('consumer demos'):
+            check_selection(selection)
         console.print(f"Reactor build evidence: {reactor.store_root(Util.cedar_home) / 'builds' / (selection.evidence + '.json')}")
-        console.print("Restarting local frontends with this reactor's exact component selection.")
-        # The smoke that follows loads every page through nginx, so the restart waits until each
-        # page and everything it loads arrive the same way.
-        result = NativeWorker.restart(NativeWorker.FRONTENDS, ready_through_nginx=True)
-        if result.returncode:
-            raise typer.Exit(result.returncode)
-        home = Path(Util.cedar_home)
-        record = json.loads((home / '.reactor/builds' / (selection.evidence + '.json')).read_text())
-        config = json.loads((home / 'cedar-development/ops/frontend-train.json').read_text())
-        applications = {frontend['repository'] for frontend in config['frontends']}
-        for repository in record['repositories']:
-            if Path(repository).parts[0] not in applications:
-                continue  # Component and demo checkouts are not application runtimes.
-            subprocess.run([sys.executable, str(home / 'cedar-development/ops/frontend_reactor_runtime.py'),
-                            'verify', str(home), str(home / repository)], check=True)
-        code = run_smoke()
-        if code:
-            raise typer.Exit(code)
+        if not deploy:
+            console.print("Frontend checks passed. No runtime was activated or restarted; "
+                          "whole-stack acceptance requires cedarcli build frontends.")
+            return selection
+        with timing.phase('local deployment'):
+            reactor.activate_runtime(Util.cedar_home, selection)
+            console.print("Restarting local frontends with this reactor's exact component selection.")
+            result = NativeWorker.restart(NativeWorker.FRONTENDS, ready_through_nginx=True)
+            if result.returncode:
+                raise typer.Exit(result.returncode)
+        with timing.phase('served bundle verification'):
+            home = Path(Util.cedar_home)
+            record = json.loads((home / '.reactor/builds' / (selection.evidence + '.json')).read_text())
+            config = json.loads((home / 'cedar-development/ops/frontend-train.json').read_text())
+            applications = {frontend['repository'] for frontend in config['frontends']}
+            for repository in record['repositories']:
+                if Path(repository).parts[0] not in applications:
+                    continue
+                subprocess.run([sys.executable, str(home / 'cedar-development/ops/frontend_reactor_runtime.py'),
+                                'verify', str(home), str(home / repository)], check=True)
+        with timing.phase('whole-stack smoke'):
+            code = run_smoke(rest_workers=4 if current_context().settings.build_workers >= 12 else None)
+            if code:
+                raise typer.Exit(code)
         console.print("Frontend reactor completed: build, local deployment and whole-stack smoke passed.")
 
 

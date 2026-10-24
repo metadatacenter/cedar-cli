@@ -36,6 +36,9 @@ class BuildPolicyTest(unittest.TestCase):
         from org.metadatacenter.frontend_inventory import inventory
         recipes = inventory()
         contexts.enter_context(patch('org.metadatacenter.frontend_inventory.inventory', return_value=recipes))
+        # These fixtures inspect command policy, not a populated source tree. The SNAPSHOT
+        # suite separately exercises real manifests, missing producers and transitive closure.
+        contexts.enter_context(patch('org.metadatacenter.frontend_snapshot.internal_dependencies', return_value=set()))
         GlobalContext.init_task_operators()
         self.runner = CliRunner()
 
@@ -73,7 +76,7 @@ class BuildPolicyTest(unittest.TestCase):
     @patch.object(build.plan_executor, "execute")
     def test_maven_threads_follow_the_host_unless_jobs_is_given(self, execute):
         for cpus, args, threads, jobs in (
-                (16, [], 16, 2), (4, [], 4, 2), (32, [], 16, 2), (1, [], 1, 2), (None, [], 2, 2),
+                (16, [], 16, 3), (4, [], 4, 2), (32, [], 16, 3), (1, [], 1, 2), (None, [], 2, 2),
                 (16, ["--jobs", "3"], 3, 3), (16, ["--jobs", "1"], 1, 1)):
             with patch("org.metadatacenter.util.InvocationContext.os.cpu_count", return_value=cpus):
                 result = self.runner.invoke(build.app, args + ["java", "--dry-run"])
@@ -112,14 +115,14 @@ class BuildPolicyTest(unittest.TestCase):
             self.assertIn("npm run build", commands)
             self.assertIn("npm ci", commands)
             model_commands = self.commands(execute.call_args.args[0], "cedar-model-typescript-library")
-            self.assertEqual(not skipped, "npm run test:ci" in model_commands)
+            self.assertEqual(not skipped, "npm run test:ci:prebuilt" in model_commands)
             maven = [c for c in commands if c.startswith("./mvnw clean install")]
             self.assertTrue(maven)
             self.assertTrue(all(("-DskipTests" in c) == skipped for c in maven))
         # A previous compile-only command must not weaken the full reactor contract.
         result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("npm run test:ci", self.commands(execute.call_args.args[0], "cedar-model-typescript-library"))
+        self.assertIn("npm run test:ci:prebuilt", self.commands(execute.call_args.args[0], "cedar-model-typescript-library"))
 
     def test_test_option_is_only_on_commands_that_can_reach_java(self):
         for command in (
@@ -384,6 +387,7 @@ class BuildPolicyTest(unittest.TestCase):
             stack.enter_context(patch(module + ".Util.get_wd", return_value="/tmp/source"))
             stack.enter_context(patch(module + ".is_frontend_build", return_value=False))
             stack.enter_context(patch(module + ".reactor_evidence.begin"))
+            stack.enter_context(patch(module + ".materialize_frontend_workspace"))
             stack.enter_context(patch(module + ".reactor.resolve", return_value=[]))
             stack.enter_context(patch(module + ".reactor.prepare_checks", return_value=[]))
             stack.enter_context(patch(module + ".isolated_frontend_workspace", return_value=
@@ -415,6 +419,7 @@ class BuildPolicyTest(unittest.TestCase):
             stack.enter_context(patch(module + '.Util.get_wd', return_value='/tmp/source/frontend-src'))
             stack.enter_context(patch(module + '.is_frontend_build', return_value=False))
             stack.enter_context(patch(module + '.reactor_evidence.begin'))
+            stack.enter_context(patch(module + '.materialize_frontend_workspace'))
             stack.enter_context(patch(module + '.reactor.resolve', return_value=[]))
             stack.enter_context(patch(module + '.reactor.prepare_checks', return_value=[]))
             stack.enter_context(patch(module + '.isolated_frontend_workspace', return_value=
