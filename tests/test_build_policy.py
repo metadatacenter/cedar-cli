@@ -177,10 +177,10 @@ class BuildPolicyTest(unittest.TestCase):
             openview_source.build_command_list)
 
     @patch.object(build.plan_executor, "execute")
-    def test_monitoring_and_bridging_check_built_browser_surfaces(self, execute):
+    def test_split_apps_check_built_browser_surfaces(self, execute):
         result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
         self.assertEqual(0, result.exit_code, result.output)
-        for repository in ('cedar-monitoring-src', 'cedar-bridging-src'):
+        for repository in ('cedar-monitoring-src', 'cedar-bridging-src', 'cedar-openview-src'):
             with self.subTest(repository=repository):
                 commands = self.commands(execute.call_args.args[0], repository)
                 browser = commands.index('npm --prefix ../browser test')
@@ -189,6 +189,18 @@ class BuildPolicyTest(unittest.TestCase):
                 self.assertLess(commands.index('../browser/node_modules/.bin/playwright install --with-deps chromium'), browser)
                 self.assertLess(commands.index('npm test -- --watch=false'), compiled)
                 self.assertLess(compiled, browser)
+
+    @patch.object(build.plan_executor, "execute")
+    def test_reactor_includes_workspace_visuals_and_designer_webkit(self, execute):
+        result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
+        self.assertEqual(0, result.exit_code, result.output)
+        plan = execute.call_args.args[0]
+        workspace = self.commands(plan, 'cedar-workspace')
+        self.assertLess(workspace.index('npm test'), workspace.index('npm run build'))
+        self.assertLess(workspace.index('npm run build'), workspace.index('npm run test:visual'))
+        designer = self.commands(plan, 'cedar-embeddable-designer')
+        self.assertLess(designer.index('./browser/node_modules/.bin/playwright install --with-deps chromium webkit'),
+                        designer.index('npm run test:ci'))
 
     def test_retired_typescript_roundtrip_is_not_registered(self):
         repos = ReposFactory.build_repos()
