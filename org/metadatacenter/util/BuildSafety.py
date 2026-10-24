@@ -375,6 +375,8 @@ def isolated_frontend_workspace(source: Path):
     """Build a checkout copy with private dependencies, Angular cache and npm logs.
 
     npm's download cache is shared between builds; see `frontend_npm_cache`.
+    Nested applications retain their repository layout so sibling browser suites and
+    root-level surface registries are available in the isolated copy.
     """
     source = source.resolve()
     before_root = repository_root(source)
@@ -382,17 +384,21 @@ def isolated_frontend_workspace(source: Path):
     collisions = frontend_runtime_collisions(source)
     try:
         with executable_build_workspace() as (temporary_root, environment):
-            build_root = temporary_root / source.name
+            checkout = before_root or source
+            copy_root = temporary_root / checkout.name
+            build_root = copy_root / source.relative_to(checkout)
 
             def ignore(_directory, names):
                 return {name for name in names if name in {".git", "node_modules", ".angular"}}
 
-            shutil.copytree(source, build_root, symlinks=True, ignore=ignore)
+            shutil.copytree(checkout, copy_root, symlinks=True, ignore=ignore)
             existing_path = environment.get("PATH", "")
             local_binaries = str(build_root / "node_modules" / ".bin")
             environment.update({
                 "CI": "true",
                 "NG_CLI_ANALYTICS": "false",
+                # Failure reports may live beside a nested app, in its browser package.
+                "CEDAR_BUILD_WORKSPACE_ROOT": str(copy_root),
                 "npm_config_cache": str(frontend_npm_cache(environment, temporary_root)),
                 # The cache is shared, but each build keeps its own debug logs, which are how the
                 # executor tells this build's installs apart from a concurrent one's.

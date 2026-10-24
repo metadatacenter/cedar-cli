@@ -22,10 +22,11 @@ class Selection(dict):
 
 
 def source_identity(source):
-    """Include tracked edits and nonignored new files, not generated dependencies/caches."""
+    """Fingerprint the copied repository, including a nested app's sibling tests and locks."""
     source = Path(source)
     def git(*args):
         return subprocess.check_output(['git', '-C', str(source), *args])
+    source = Path(git('rev-parse', '--show-toplevel').decode().strip())
     paths = sorted(set(git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\0')) - {b''})
     digest = hashlib.sha256()
     for raw in paths:

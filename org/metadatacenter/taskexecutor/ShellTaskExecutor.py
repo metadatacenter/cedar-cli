@@ -73,10 +73,12 @@ class ShellTaskExecutor(TaskExecutor):
                     identity = reactor_evidence.begin(cwd)
                     with isolated_frontend_workspace(Path(cwd)) as (isolated_cwd, environment, collisions), \
                             failure_diagnostics(
-                                isolated_cwd, Util.cedar_home, job_progress.print,
+                                environment.get('CEDAR_BUILD_WORKSPACE_ROOT', isolated_cwd),
+                                Util.cedar_home, job_progress.print,
                                 npm_logs=npm_install.log_directory(environment),
                             ) as outcome:
-                        environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(isolated_cwd / COMMAND_LOG)
+                        diagnostic_root = Path(environment.get('CEDAR_BUILD_WORKSPACE_ROOT', isolated_cwd))
+                        environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(diagnostic_root / COMMAND_LOG)
                         if collisions:
                             processes = ", ".join(f"PID {pid}" for pid, _ in collisions)
                             job_progress.print(

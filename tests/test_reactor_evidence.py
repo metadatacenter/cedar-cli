@@ -34,6 +34,21 @@ class EvidenceTest(unittest.TestCase):
         self.assertTrue(first['dirty'])
         self.assertNotEqual(original['sourceSha256'], first['sourceSha256'])
 
+    def test_nested_app_identity_changes_with_sibling_browser_tests_and_locks(self):
+        app = self.repo / 'consumer-src'
+        app.mkdir()
+        (app / 'package.json').write_text('{"name":"consumer"}')
+        browser = self.repo / 'browser'
+        browser.mkdir()
+        for name in ('surface.spec.mjs', 'package-lock.json'):
+            with self.subTest(name=name):
+                path = browser / name
+                path.write_text('first')
+                before = evidence.source_identity(app)
+                path.write_text('second')
+                self.assertNotEqual(before['sourceSha256'], evidence.source_identity(app)['sourceSha256'])
+                self.assertEqual(evidence.source_identity(self.repo), evidence.source_identity(app))
+
     def test_records_resolved_graph_without_modifying_source_and_detects_later_edits(self):
         copy = self.home / 'copy'
         copy.mkdir()

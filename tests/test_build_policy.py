@@ -176,6 +176,20 @@ class BuildPolicyTest(unittest.TestCase):
             ['npm ci --legacy-peer-deps', 'npm run build'],
             openview_source.build_command_list)
 
+    @patch.object(build.plan_executor, "execute")
+    def test_monitoring_and_bridging_check_built_browser_surfaces(self, execute):
+        result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
+        self.assertEqual(0, result.exit_code, result.output)
+        for repository in ('cedar-monitoring-src', 'cedar-bridging-src'):
+            with self.subTest(repository=repository):
+                commands = self.commands(execute.call_args.args[0], repository)
+                browser = commands.index('npm --prefix ../browser test')
+                compiled = commands.index('npm run build')
+                self.assertLess(commands.index('npm --prefix ../browser ci'), compiled)
+                self.assertLess(commands.index('../browser/node_modules/.bin/playwright install --with-deps chromium'), browser)
+                self.assertLess(commands.index('npm test -- --watch=false'), compiled)
+                self.assertLess(compiled, browser)
+
     def test_retired_typescript_roundtrip_is_not_registered(self):
         repos = ReposFactory.build_repos()
 
@@ -367,6 +381,43 @@ class BuildPolicyTest(unittest.TestCase):
         environment = execute.call_args.args[-1]
         for variable in ("CEDAR_TEST_WORKERS", "NG_BUILD_MAX_WORKERS", "VITEST_MAX_WORKERS"):
             self.assertEqual("3", environment[variable])
+
+    def test_nested_browser_failure_retains_sibling_reports_and_command_log(self):
+        executor = ShellTaskExecutor()
+        task = SimpleNamespace(
+            node_id=3, repo=SimpleNamespace(name='frontend-src', repo_type='TYPESCRIPT'),
+            command_list=['npm --prefix ../browser test'],
+            get_parameter=lambda name: name == 'isolated_frontend_build',
+        )
+        module = 'org.metadatacenter.taskexecutor.ShellTaskExecutor'
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            home = Path(directory)
+            copy = home / 'copy'
+            app = copy / 'frontend-src'
+            app.mkdir(parents=True)
+            report = copy / 'browser/test-results/failure.txt'
+            report.parent.mkdir(parents=True)
+            report.write_text('browser failure')
+            environment = {'CEDAR_BUILD_WORKSPACE_ROOT': str(copy)}
+            stack.enter_context(use_context(InvocationContext(environment={**os.environ, 'CEDAR_HOME': directory})))
+            stack.enter_context(patch(module + '.Util.get_wd', return_value='/tmp/source/frontend-src'))
+            stack.enter_context(patch(module + '.is_frontend_build', return_value=False))
+            stack.enter_context(patch(module + '.reactor_evidence.begin'))
+            stack.enter_context(patch(module + '.reactor.resolve', return_value=[]))
+            stack.enter_context(patch(module + '.reactor.prepare_checks', return_value=[]))
+            stack.enter_context(patch(module + '.isolated_frontend_workspace', return_value=
+                nullcontext((app, environment, []))))
+
+            def fail(_task, _repo, _commands, _cwd, _progress, child_env):
+                Path(child_env['CEDAR_BUILD_DIAGNOSTIC_LOG']).write_text('failed command')
+                return 1
+
+            stack.enter_context(patch.object(executor, '_execute_commands', side_effect=fail))
+            self.assertEqual(1, executor.execute_shell_command_list(task, Mock(), dry_run=False))
+            bundles = list((home / '.cedar/build-reports/failures').iterdir())
+            self.assertEqual(1, len(bundles))
+            self.assertEqual('browser failure', (bundles[0] / 'browser/test-results/failure.txt').read_text())
+            self.assertEqual('failed command', (bundles[0] / '.cedar-build-commands.log').read_text())
 
     def test_test_bearing_maven_task_checks_for_mongods_before_and_after(self):
         executor = ShellTaskExecutor()

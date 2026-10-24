@@ -81,6 +81,30 @@ class BuildSafetyTest(unittest.TestCase):
             self.assertEqual("downloaded\n", (Path(cache_one) / "entry").read_text(),
                              "the cache outlives the builds that filled it")
 
+    def test_nested_app_keeps_sibling_browser_inputs_inside_its_isolated_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.repository(Path(directory))
+            app = repo / 'cedar-example-src'
+            app.mkdir()
+            (app / 'package.json').write_text('{"name":"cedar-example"}')
+            browser = repo / 'browser'
+            browser.mkdir()
+            (browser / 'surface.spec.mjs').write_text('original test')
+            (browser / 'node_modules').mkdir()
+            (browser / 'node_modules/stale').touch()
+            (repo / '.ui-surfaces.json').write_text('{"schema":1}')
+            with patch('org.metadatacenter.util.BuildSafety.frontend_runtime_collisions', return_value=[]):
+                with isolated_frontend_workspace(app) as (workspace, environment, _collisions):
+                    self.assertEqual(app.name, workspace.name)
+                    self.assertEqual(str(workspace.parent), environment['CEDAR_BUILD_WORKSPACE_ROOT'])
+                    self.assertEqual('original test', (workspace.parent / 'browser/surface.spec.mjs').read_text())
+                    self.assertTrue((workspace.parent / '.ui-surfaces.json').is_file())
+                    self.assertFalse((workspace.parent / 'browser/node_modules').exists())
+                    self.assertFalse((workspace.parent / '.git').exists())
+                    self.assertEqual(str(workspace / 'node_modules/.bin'), environment['PATH'].split(os.pathsep)[0])
+                    (workspace.parent / 'browser/surface.spec.mjs').write_text('isolated change')
+            self.assertEqual('original test', (browser / 'surface.spec.mjs').read_text())
+
     def test_a_build_without_cedar_home_keeps_a_private_npm_cache(self):
         self.assertEqual(Path("/w/npm-cache"), frontend_npm_cache({}, Path("/w")))
 
