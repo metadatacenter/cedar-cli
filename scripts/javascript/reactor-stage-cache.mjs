@@ -13,7 +13,7 @@ export function stageCache(environment = process.env) {
     const probe = stage => JSON.stringify([stage.name, stage.script, stage.env ?? {}]);
     function call(operation, stage) {
       const result = spawnSync(config.python,
-        [config.engine, operation, path, stage.name,
+        ['-I', config.engine, operation, path, stage.name,
           JSON.stringify({ script: stage.script, environment: stage.env ?? {} })],
         { encoding: 'utf8', input: operation === 'save' ? logs.get(stage.name) ?? '' : '',
           maxBuffer: 4 * 1024 * 1024 });

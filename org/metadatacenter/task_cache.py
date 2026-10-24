@@ -78,6 +78,29 @@ def identity(config, name, environment=None):
     return key, inputs, Path(config['directory']) / key
 
 
+def extract_outputs(bundle, stage):
+    if callable(getattr(tarfile, 'data_filter', None)):
+        bundle.extractall(stage, filter='data')
+        return
+    # Python 3.10.11 (the macOS CI baseline) predates extraction filters. Restore only
+    # regular files and directories there; links/special files safely cause a cache miss.
+    # Copy bytes ourselves so tar metadata cannot set ownership or follow an archive link.
+    members = bundle.getmembers()
+    for member in members:
+        safe_path(stage, member.name)
+        if not (member.isdir() or member.isfile()):
+            raise ValueError('Unsupported task archive member')
+    for member in members:
+        target = safe_path(stage, member.name)
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with bundle.extractfile(member) as source, target.open('xb') as output:
+                shutil.copyfileobj(source, output)
+            target.chmod(member.mode & 0o777)
+
+
 def reuse(config, name, environment=None):
     entry = identity(config, name, environment)
     if entry is None:
@@ -102,7 +125,7 @@ def reuse(config, name, environment=None):
             with tempfile.TemporaryDirectory(prefix='restore-', dir=root) as temporary:
                 stage = Path(temporary)
                 with tarfile.open(archive) as bundle:
-                    bundle.extractall(stage, filter='data')
+                    extract_outputs(bundle, stage)
                 if {p: tree(safe_path(stage, p)) for p in outputs} != record.get('outputs'):
                     return None
                 for relative in outputs:

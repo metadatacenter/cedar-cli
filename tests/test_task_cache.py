@@ -1,11 +1,14 @@
 import json
+import io
 from pathlib import Path
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from org.metadatacenter import task_cache, reactor_tasks
 
@@ -47,6 +50,38 @@ class TaskCacheTest(unittest.TestCase):
         self.config['tasks']['browser']['source']['tests'] = 'changed test'
         self.assertIsNone(task_cache.reuse(self.config, 'browser', {'CED_WEBKIT': '1'}))
 
+    def test_restore_without_tarfile_filters_preserves_contents_and_executable_mode(self):
+        output = self.root / 'dist/app.js'
+        output.chmod(0o755)
+        task_cache.save(self.config, 'build')
+        output.write_text('stale')
+        output.chmod(0o644)
+        with patch.object(tarfile, 'data_filter', None, create=True):
+            self.assertIsNotNone(task_cache.reuse(self.config, 'build'))
+        self.assertEqual('current bundle', output.read_text())
+        self.assertEqual(0o755, output.stat().st_mode & 0o777)
+
+    def test_restore_without_tarfile_filters_rejects_escapes_links_and_devices(self):
+        for name, kind in [('../outside', tarfile.REGTYPE), ('/absolute', tarfile.REGTYPE),
+                           ('dist/link', tarfile.SYMTYPE), ('dist/link', tarfile.LNKTYPE),
+                           ('dist/device', tarfile.CHRTYPE), ('dist/pipe', tarfile.FIFOTYPE)]:
+            with self.subTest(name=name, kind=kind):
+                data = io.BytesIO()
+                with tarfile.open(fileobj=data, mode='w') as bundle:
+                    # Reject the complete archive before writing even an earlier valid entry.
+                    bundle.addfile(tarfile.TarInfo('valid'))
+                    member = tarfile.TarInfo(name)
+                    member.type = kind
+                    member.linkname = '../outside'
+                    bundle.addfile(member)
+                data.seek(0)
+                with tempfile.TemporaryDirectory(dir=self.home) as directory, \
+                        tarfile.open(fileobj=data) as bundle, \
+                        patch.object(tarfile, 'data_filter', None, create=True):
+                    with self.assertRaises(ValueError):
+                        task_cache.extract_outputs(bundle, Path(directory))
+                    self.assertEqual([], list(Path(directory).iterdir()))
+
     def test_resolved_external_lock_changes_invalidate(self):
         task_cache.save(self.config, 'build')
         (self.root / 'package-lock.json').write_text('{"version":2}')
@@ -82,7 +117,13 @@ class TaskCacheTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'requires node')
     def test_javascript_gate_restores_outputs_and_rejects_retry_success(self):
         module = Path(reactor_tasks.__file__).resolve().parents[2] / 'scripts/javascript/reactor-stage-cache.mjs'
-        self.config.update(python=sys.executable, engine=str(Path(task_cache.__file__).resolve()))
+        engine = self.home / 'engine'
+        engine.mkdir()
+        shutil.copyfile(task_cache.__file__, engine / 'task_cache.py')
+        # The real engine sits beside our operator package. Poison a stdlib name that is
+        # not preloaded by newer Python versions too, so every runner proves isolation.
+        (engine / 'json.py').write_text("raise RuntimeError('loaded a sibling instead of the standard library')")
+        self.config.update(python=sys.executable, engine=str(engine / 'task_cache.py'))
         path = self.home / 'config.json'
         path.write_text(json.dumps(self.config))
         code = '''
@@ -104,7 +145,7 @@ assert.equal(cache.reuse(browser), false);
 assert.ok(existsSync('unstable'));
 '''
         result = subprocess.run(['node', '--input-type=module', '-e', code], cwd=self.root,
-                                env={**os.environ, 'CACHE_MODULE': module.as_uri(),
+                                env={**os.environ, 'CACHE_MODULE': module.as_uri(), 'PYTHONPATH': str(engine),
                                      reactor_tasks.CONFIG: str(path)}, capture_output=True, text=True, timeout=30)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
