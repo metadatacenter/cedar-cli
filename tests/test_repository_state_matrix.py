@@ -41,7 +41,7 @@ from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.GitWorker import GitWorker
-from tests.test_smoke_gate import search_payload
+from tests.test_smoke_gate import REST_CHECKS, rest_payload, search_payload
 
 SUBJECT = "cedar-subject"
 OTHER = "cedar-other"
@@ -66,6 +66,9 @@ class Estate:
         ops = self.home / "cedar-development" / "ops"
         (ops / "e2e").mkdir(parents=True)
         (ops / "e2e" / "package.json").write_text("{}", encoding="utf-8")
+        (ops / "e2e" / "rest").mkdir()
+        (ops / "e2e" / "rest" / "expected-checks.json").write_text(
+            json.dumps({"version": 1, "checks": REST_CHECKS}), encoding="utf-8")
         (ops / "build-train.json").write_text(json.dumps({"repositories": list(REPOSITORIES)}),
                                               encoding="utf-8")
         for name in REPOSITORIES:
@@ -211,8 +214,8 @@ class StackStandIn:
         if args and str(args[0]).endswith("cedar-services.sh"):
             return SimpleNamespace(returncode=0, stdout=HEALTHY, stderr="")
         if args and args[0] == "npm":
-            payload = search_payload() if "smoke:search" in args else {
-                "runId": "r", "verdict": "PASS", "inventoryMatched": True}
+            payload = (search_payload() if "smoke:search" in args else
+                       rest_payload() if "smoke:rest" in args else {"runId": "r", "verdict": "PASS"})
             for argument in args:
                 if argument.startswith("--report="):
                     Path(argument.split("=", 1)[1]).write_text(json.dumps(payload), encoding="utf-8")
