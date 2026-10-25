@@ -342,7 +342,10 @@ def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False):
         with timing.phase('local deployment'):
             reactor.activate_runtime(Util.cedar_home, selection)
             console.print("Restarting local frontends with this reactor's exact component selection.")
-            result = NativeWorker.restart(NativeWorker.FRONTENDS, ready_through_nginx=True)
+            # Verification installs in isolated copies. A first deployment (or a moved lockfile)
+            # still needs the live checkout's tools before the controller syncs local components.
+            result = NativeWorker.restart(
+                NativeWorker.FRONTENDS, refresh_dependencies=True, ready_through_nginx=True)
             if result.returncode:
                 raise typer.Exit(result.returncode)
         with timing.phase('served bundle verification'):

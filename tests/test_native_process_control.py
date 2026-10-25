@@ -798,7 +798,7 @@ class ReactorReadinessOriginTest(unittest.TestCase):
             self._command(lambda: NativeWorker.restart(("ui-main",), ready_through_nginx=True))
             .startswith("CEDAR_FRONTEND_READY_ORIGIN=public /controller.sh restart ui-main"))
 
-    def test_the_reactor_restarts_its_frontends_through_nginx(self):
+    def test_the_reactor_refreshes_live_dependencies_and_waits_through_nginx(self):
         from org.metadatacenter import build, cee_demos
         from org.metadatacenter.frontend_inventory import inventory
         from org.metadatacenter.util.GlobalContext import GlobalContext
@@ -818,4 +818,5 @@ class ReactorReadinessOriginTest(unittest.TestCase):
             result = CliRunner().invoke(build.app, ["frontends"])
 
         self.assertEqual(3, result.exit_code, result.output)
-        restart.assert_called_once_with(NativeWorker.FRONTENDS, ready_through_nginx=True)
+        restart.assert_called_once_with(
+            NativeWorker.FRONTENDS, refresh_dependencies=True, ready_through_nginx=True)

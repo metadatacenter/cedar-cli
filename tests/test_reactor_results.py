@@ -16,7 +16,7 @@ from org.metadatacenter import reactor, reactor_results
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoType import RepoType
 
-TOOLING = {"cli": "c" * 64, "development": "d" * 64, "node": "v24.22.0", "npm": "11.0.0",
+TOOLING = {"cli": "c" * 64, "development": "d" * 64, "node": "v24.22.1", "npm": "11.0.0",
            "platform": "macOS", "machine": "arm64"}
 
 

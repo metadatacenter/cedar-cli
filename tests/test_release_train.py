@@ -4495,7 +4495,7 @@ class ReleasePreflightTest(unittest.TestCase):
         commands = FakeCommands({
             ("java", "-version"): FakeCompletedProcess(
                 stderr='openjdk version "17.0.13" 2024-10-15'),
-            ("node", "--version"): FakeCompletedProcess(stdout="v24.22.0"),
+            ("node", "--version"): FakeCompletedProcess(stdout="v24.22.1"),
         })
         self.assertEqual([], self._preflight(commands=commands).check_toolchain())
 
@@ -4520,7 +4520,7 @@ class ReleasePreflightTest(unittest.TestCase):
         findings = self._preflight(commands=commands).check_toolchain()
 
         self.assertEqual(1, len(findings))
-        self.assertIn("v24.22.0", findings[0].message)
+        self.assertIn("v24.22.1", findings[0].message)
 
     def test_an_unsourced_profile_is_named_variable_by_variable(self):
         findings = self._preflight(
@@ -6120,7 +6120,7 @@ class ToolchainResolverTest(unittest.TestCase):
             (f"{self.JAVA_HOME_17}/bin/java", "-version"): FakeCompletedProcess(
                 stderr='java version "17.0.14" 2025-01-21 LTS'),
             ("node", "--version"): FakeCompletedProcess(stdout=node),
-            (f"{self.NODE_DIR}/node", "--version"): FakeCompletedProcess(stdout="v24.22.0"),
+            (f"{self.NODE_DIR}/node", "--version"): FakeCompletedProcess(stdout="v24.22.1"),
         })
 
     def test_macos_substitutes_java_17_and_node_24_when_the_shell_offers_others(self):
@@ -6134,7 +6134,7 @@ class ToolchainResolverTest(unittest.TestCase):
         self.assertEqual(2, len(notes))
         self.assertIn("Java 17 from " + self.JAVA_HOME_17, notes[0])
         self.assertIn("the shell offered Java 23", notes[0])
-        self.assertIn("Node v24.22.0 from " + self.NODE_DIR, notes[1])
+        self.assertIn("Node v24.22.1 from " + self.NODE_DIR, notes[1])
         self.assertIn("the shell offered Node v22.22.0", notes[1])
         self.assertEqual(self.JAVA_HOME_17, environment["JAVA_HOME"])
         entries = environment["PATH"].split(os.pathsep)
@@ -6144,7 +6144,7 @@ class ToolchainResolverTest(unittest.TestCase):
     def test_a_matching_toolchain_is_left_alone(self):
         environment = {"PATH": "/usr/bin"}
         resolver = release_train.ToolchainResolver(
-            environment, command_runner=self._commands(java="17.0.14", node="v24.22.0"),
+            environment, command_runner=self._commands(java="17.0.14", node="v24.22.1"),
             system="Darwin", exists=lambda _path: True)
 
         self.assertEqual([], resolver.resolve())
@@ -6171,7 +6171,7 @@ class ToolchainResolverTest(unittest.TestCase):
 
         self.assertNotIn("JAVA_HOME", environment)
         self.assertEqual(1, len(notes))
-        self.assertIn("Node v24.22.0", notes[0])
+        self.assertIn("Node v24.22.1", notes[0])
 
     def test_linux_searches_the_jvm_directory(self):
         home = "/usr/lib/jvm/java-17-openjdk-amd64"
@@ -6179,7 +6179,7 @@ class ToolchainResolverTest(unittest.TestCase):
             ("java", "-version"): FakeCompletedProcess(stderr='openjdk version "21.0.2"'),
             (f"{home}/bin/java", "-version"): FakeCompletedProcess(
                 stderr='openjdk version "17.0.13" 2024-10-15'),
-            ("node", "--version"): FakeCompletedProcess(stdout="v24.22.0"),
+            ("node", "--version"): FakeCompletedProcess(stdout="v24.22.1"),
         })
         environment = {"PATH": "/usr/bin"}
         resolver = release_train.ToolchainResolver(
@@ -6198,7 +6198,7 @@ class ToolchainResolverTest(unittest.TestCase):
         with patch("platform.system", return_value="Linux"):
             linux = release_train.node_24_remediation()
         self.assertNotIn("/opt/homebrew", linux)
-        self.assertIn("nvm use 24.22.0", linux)
+        self.assertIn("nvm use 24.22.1", linux)
 
     def test_the_toolchain_check_names_the_node_remedy(self):
         commands = FakeCommands({

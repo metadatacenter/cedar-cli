@@ -85,7 +85,7 @@ require replacing the system Python or adding a newer Git package repository.
 
 Frontend builds check the selected Node interpreter before installing dependencies or compiling.
 The build directory's `.nvmrc` supplies the exact version when present; otherwise the shared
-release-toolchain pin applies (currently 24.22.0). A mixed Java/frontend plan checks all enabled
+release-toolchain pin applies (currently 24.22.1). A mixed Java/frontend plan checks all enabled
 frontends before starting any task. Java-only plans and dry runs do not require Node. The CLI
 reports the required version, detected version and executable path on a mismatch; it does not
 install Node or change the host's default interpreter.

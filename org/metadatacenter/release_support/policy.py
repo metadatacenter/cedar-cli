@@ -90,7 +90,7 @@ def maven_dependency_version(artifact: str, version: str) -> re.Pattern:
     )
 
 
-REQUIRED_NODE_VERSION = "v24.22.0"
+REQUIRED_NODE_VERSION = "v24.22.1"
 
 
 NPM_VERSION_SURFACES = {
