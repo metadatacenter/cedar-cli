@@ -85,7 +85,7 @@ require replacing the system Python or adding a newer Git package repository.
 
 Frontend builds check the selected Node interpreter before installing dependencies or compiling.
 The build directory's `.nvmrc` supplies the exact version when present; otherwise the shared
-release-toolchain pin applies (currently 24.22.0). A mixed Java/frontend plan checks all enabled
+release-toolchain pin applies (currently 24.22.1). A mixed Java/frontend plan checks all enabled
 frontends before starting any task. Java-only plans and dry runs do not require Node. The CLI
 reports the required version, detected version and executable path on a mismatch; it does not
 install Node or change the host's default interpreter.
@@ -146,17 +146,38 @@ exceptions, scope and rollout.
 
 ### Build concurrency
 
+Frontend builds have local snapshot semantics: `cedarcli build frontends` builds current
+working-tree components and supplies their packages to every consumer automatically, including
+uncommitted edits. A build request needs no follow-up approval, clean-tree ceremony, publication,
+commit or manual pin update. Narrow local frontend builds (`this`, `split-frontends` and
+`server-frontends` without `--server-payload`) automatically include their transitive local
+package producers. A missing or failed producer stops the build; registry pins and stale local
+artifacts cannot substitute for it. There is no locked-dependency switch for development builds.
+Explicit server payloads, immutable trains and releases keep their separate version rules. Use
+`cedarcli publish components` only when updating checked-in registry dependencies for standalone
+installs; its commit/CI requirements do not apply to local snapshot builds.
+
 `cedarcli build --jobs 2 --workers 2 frontends` schedules independent isolated repositories
-from their package and integration-test dependencies. Repository concurrency defaults to two; workers default to half the detected CPUs,
+from their package and integration-test dependencies. Hosts with 16+ cores default to three repository jobs and twelve workers per repository;
+smaller hosts use two jobs and half the detected CPUs,
 at least one and capped at eight. Use
 `--jobs 1 --workers 1` for serial diagnosis. Full frontend deployment and smoke gates remain
-mandatory. `cedarcli build java` uses Maven's dependency-aware module scheduling, with one
+mandatory for `cedarcli build frontends`. `cedarcli build java` uses Maven's dependency-aware module scheduling, with one
 reactor thread per detected CPU, at least one and capped at sixteen. It preserves the
 parent → libraries → project → clients order and serial tests within individual JVMs.
 Only one Maven reactor runs at a time, so its thread count follows the host, while frontend
-repository concurrency stays at two because each repository also spends its own worker
-budget. An explicit `--jobs N` sets both to N. Options belong before the build target. Command timings and task results
+concurrency uses the shared host worker pool. An explicit `--jobs N` sets both to N. Options belong before the build target. Command timings and task results
 are saved to `$CEDAR_HOME/.cedar/build-reports/`, including failures.
+
+`cedarcli test frontends` runs the same frontend build/check graph and conditional consumer
+demos, without activating or restarting runtimes or running whole-stack smoke. Use it for the
+edit/test loop; `cedarcli build frontends` remains the complete acceptance command. Both reuse
+unchanged passing results before copying or installing. CEE, CED, the model, Workspace,
+Monitoring, Bridging and OpenView also cache declared build outputs and verification tasks:
+a test-only edit can keep the production build and unrelated checks. Retry-dependent passes
+are not reusable. `--no-reuse` disables repository and task reuse. The frontend runbook
+documents input boundaries, retained outputs and cache recovery. Full command
+phase timings are recorded under `.cedar/build-reports/frontend-runs/`.
 
 `cedarcli test cee-demos` always lints, tests and builds the Angular, React and Ember
 consumer demos in isolated copies. It tests their checked-out CEE pins by default;

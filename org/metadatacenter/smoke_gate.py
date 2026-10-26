@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
@@ -358,7 +359,8 @@ def run_smoke(
     digest = sources_digest(heads)
     reports = reports_dir(home)
     reports.mkdir(parents=True, exist_ok=True)
-    rest_report = reports / f"rest-smoke-{digest}.json"
+    # Each attempt owns its evidence, even when the tested source heads have not changed.
+    rest_report = reports / f"rest-smoke-{digest}-{uuid.uuid4().hex}.json"
     split_report = reports / f"split-smoke-{digest}.json"
     # A refused or killed run must never inherit an earlier search verdict at the same source heads.
     search_report = reports / f"search-smoke-{digest}-{uuid.uuid4().hex}.json"
@@ -395,8 +397,8 @@ def run_smoke(
             "finishedAt": _stamp(clock()),
         }
         if tier == "rest":
-            record.update(_rest_details(rest_report))
-            if record["verdict"] == "PASS" and record.get("inventoryMatched") is False:
+            record.update(_rest_details(rest_report, e2e / "rest" / "expected-checks.json"))
+            if not record["evidenceValid"]:
                 record["verdict"] = "FAIL"
         if tier == "split":
             record.update(_split_details(split_report, code))
@@ -430,19 +432,50 @@ def run_smoke(
     return 0 if verdict == "PASS" else 1
 
 
-def _rest_details(rest_report: Path) -> dict:
-    """What the REST runner wrote about itself, or why it could not be read."""
+def _rest_details(rest_report: Path, inventory_path: Path) -> dict:
+    """Require complete REST evidence, independently of the subprocess exit code."""
+    details = {"report": str(rest_report), "evidenceValid": False}
     try:
         payload = json.loads(rest_report.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        return {"report": str(rest_report), "reportError": str(error)}
-    return {
-        "report": str(rest_report),
-        "runId": payload.get("runId"),
-        "runnerVerdict": payload.get("verdict"),
-        "counts": payload.get("counts"),
-        "inventoryMatched": payload.get("inventoryMatched"),
-    }
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("REST evidence is not an object")
+        expected = inventory["checks"]
+        if (inventory.get("version") != 1 or not isinstance(expected, list) or not expected
+                or any(not isinstance(key, str) or len(key.split("\x1f")) != 3
+                       or not all(key.split("\x1f")) for key in expected)):
+            raise ValueError("invalid committed REST inventory")
+        suites = list(dict.fromkeys(key.split("\x1f")[0] for key in expected
+                                    if not key.startswith("runner\x1f")))
+        checks = payload["checks"]
+        if not isinstance(checks, list):
+            raise ValueError("REST checks are not a list")
+        actual = ["\x1f".join(check[key] for key in ("suite", "section", "name")) for check in checks]
+        # Compare sequences, preserving multiplicity: a repeated check label is not a set member.
+        matched = actual == expected and payload.get("inventoryMatched") is True
+        statuses = Counter(check["status"] for check in checks)
+        counts = payload["counts"]
+        counts_valid = (isinstance(counts, dict)
+                        and all(type(counts.get(key)) is int and counts[key] >= 0
+                                for key in ("passed", "failed", "skipped", "total"))
+                        and counts["total"] == len(checks)
+                        and all(counts[key] == statuses[key] for key in ("passed", "failed", "skipped"))
+                        and counts["passed"] > 0 and counts["failed"] == 0
+                        and set(statuses) <= {"passed", "skipped"})
+        started = dt.datetime.fromisoformat(payload["startedAt"].replace("Z", "+00:00"))
+        finished = dt.datetime.fromisoformat(payload["finishedAt"].replace("Z", "+00:00"))
+        valid = (payload.get("schemaVersion") == 1 and payload.get("verdict") == "PASS"
+                 and payload.get("interrupted") is False
+                 and isinstance(payload.get("runId"), str) and bool(payload["runId"].strip())
+                 and started.tzinfo is not None and finished.tzinfo is not None and finished >= started
+                 and payload.get("selectedSuites") == suites and matched and counts_valid)
+        details.update({"runId": payload.get("runId"), "runnerVerdict": payload.get("verdict"),
+                        "counts": counts, "inventoryMatched": matched, "evidenceValid": valid})
+        if not valid:
+            details["reportError"] = "REST evidence is incomplete, failed, or does not cover the committed inventory"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        details["reportError"] = str(error)
+    return details
 
 
 def _search_details(path: Path) -> dict:
@@ -646,6 +679,8 @@ def evaluate(report: Mapping, expected: Mapping[str, str]) -> list[str]:
                             f"{record.get('finishedAt', when)}")
         elif tier == "rest" and record.get("inventoryMatched") is False:
             findings.append("the REST smoke ran a different check inventory than the committed one")
+        elif tier == "rest" and record.get("evidenceValid") is not True:
+            findings.append("the REST smoke has no validated complete check evidence")
         elif tier == "search" and record.get("evidenceValid") is not True:
             findings.append("the search smoke has no complete matrix and cleanup evidence")
     return findings

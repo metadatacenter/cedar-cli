@@ -147,3 +147,22 @@ class DevelopmentVerificationTest(unittest.TestCase):
             verify_active_development(self.state, verifier)
         reports = [call for call in output.call_args_list if 'pending' in str(call)]
         self.assertEqual(1, len(reports))
+
+    def test_the_model_library_develop_is_not_gated_on_its_own_ci(self):
+        """The release commits onto the library's develop as it finds it, so its CI is the library's."""
+        library = 'cedar-model-typescript-library'
+        self.repository('example')
+        self.repository(library)
+        self.manifest['releaseRepositories'] = ['example']
+        self.manifest['versionPreparation']['nextDevelopment']['repositories'] = {
+            'example': {}, library: {}}
+        probe = Mock(return_value=SimpleNamespace(runs=(self.run_record(),)))
+        verifier = DevelopmentVerifier(self.state, acceptance=self.acceptance, runner=self.runner,
+            probe=probe, sleeper=Mock(), polls=1, delay=0, environment={})
+
+        result = verify_active_development(self.state, verifier)
+
+        self.assertEqual('development-verified', result['phase'])
+        self.assertEqual(['example'], [call.args[0] for call in probe.call_args_list])
+        self.assertEqual('not-gated',
+                         result['developmentVerification']['repositories'][library]['status'])

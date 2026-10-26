@@ -371,10 +371,12 @@ def frontend_npm_cache(environment, workspace: Path) -> Path:
 
 
 @contextlib.contextmanager
-def isolated_frontend_workspace(source: Path):
+def isolated_frontend_workspace(source: Path, *, manifests_only=False):
     """Build a checkout copy with private dependencies, Angular cache and npm logs.
 
     npm's download cache is shared between builds; see `frontend_npm_cache`.
+    Nested applications retain their repository layout so sibling browser suites and
+    root-level surface registries are available in the isolated copy.
     """
     source = source.resolve()
     before_root = repository_root(source)
@@ -382,17 +384,31 @@ def isolated_frontend_workspace(source: Path):
     collisions = frontend_runtime_collisions(source)
     try:
         with executable_build_workspace() as (temporary_root, environment):
-            build_root = temporary_root / source.name
+            checkout = before_root or source
+            copy_root = temporary_root / checkout.name
+            build_root = copy_root / source.relative_to(checkout)
 
-            def ignore(_directory, names):
-                return {name for name in names if name in {".git", "node_modules", ".angular"}}
-
-            shutil.copytree(source, build_root, symlinks=True, ignore=ignore)
+            if manifests_only:
+                copy_root.mkdir(parents=True)
+                build_root.mkdir(parents=True, exist_ok=True)
+                for directory, children, files in os.walk(checkout):
+                    children[:] = [name for name in children if name not in
+                                   {'.git', 'node_modules', '.angular', 'dist', 'dist-npm', 'dist-bundle'}]
+                    for name in ('package.json', 'package-lock.json'):
+                        if name in files:
+                            origin = Path(directory) / name
+                            target = copy_root / origin.relative_to(checkout)
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(origin, target)
+            else:
+                shutil.copytree(checkout, copy_root, symlinks=True, ignore=frontend_copy_ignore(checkout))
             existing_path = environment.get("PATH", "")
             local_binaries = str(build_root / "node_modules" / ".bin")
             environment.update({
                 "CI": "true",
                 "NG_CLI_ANALYTICS": "false",
+                # Failure reports may live beside a nested app, in its browser package.
+                "CEDAR_BUILD_WORKSPACE_ROOT": str(copy_root),
                 "npm_config_cache": str(frontend_npm_cache(environment, temporary_root)),
                 # The cache is shared, but each build keeps its own debug logs, which are how the
                 # executor tells this build's installs apart from a concurrent one's.
@@ -419,3 +435,31 @@ def require_no_frontend_runtime_collision(source: Path) -> None:
     raise BuildSafetyError(
         f"refusing an in-place frontend build while a runtime uses {source}: {detail}"
     )
+
+
+def materialize_frontend_workspace(source: Path, build_root: Path):
+    """Only a cache miss needs a complete copy. Re-resolve copied manifests afterwards."""
+    source = source.resolve()
+    checkout = repository_root(source) or source
+    relative = source.relative_to(checkout)
+    copy_root = build_root
+    for _part in relative.parts:
+        copy_root = copy_root.parent
+    if copy_root.resolve() == checkout.resolve() or copy_root.resolve().is_relative_to(checkout.resolve()):
+        raise BuildSafetyError('frontend materialization requires a separate disposable workspace')
+    shutil.copytree(checkout, copy_root, symlinks=True, dirs_exist_ok=True,
+                    ignore=frontend_copy_ignore(checkout))
+
+
+def frontend_copy_ignore(checkout):
+    def ignore(directory, names):
+        excluded = set(names) & {'.git', 'node_modules', '.angular'}
+        # Workspace stages hashed assets without deleting old ones in the live checkout.
+        # A disposable build starts with no staged assets and writes/restores a complete output.
+        if checkout.name == 'cedar-workspace':
+            if Path(directory) == checkout:
+                excluded.add('.workspace-build')
+            elif Path(directory) == checkout / 'app':
+                excluded.add('workspace-build')
+        return excluded
+    return ignore

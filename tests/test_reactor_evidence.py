@@ -34,6 +34,21 @@ class EvidenceTest(unittest.TestCase):
         self.assertTrue(first['dirty'])
         self.assertNotEqual(original['sourceSha256'], first['sourceSha256'])
 
+    def test_nested_app_identity_changes_with_sibling_browser_tests_and_locks(self):
+        app = self.repo / 'consumer-src'
+        app.mkdir()
+        (app / 'package.json').write_text('{"name":"consumer"}')
+        browser = self.repo / 'browser'
+        browser.mkdir()
+        for name in ('surface.spec.mjs', 'package-lock.json'):
+            with self.subTest(name=name):
+                path = browser / name
+                path.write_text('first')
+                before = evidence.source_identity(app)
+                path.write_text('second')
+                self.assertNotEqual(before['sourceSha256'], evidence.source_identity(app)['sourceSha256'])
+                self.assertEqual(evidence.source_identity(self.repo), evidence.source_identity(app))
+
     def test_records_resolved_graph_without_modifying_source_and_detects_later_edits(self):
         copy = self.home / 'copy'
         copy.mkdir()
@@ -55,6 +70,28 @@ class EvidenceTest(unittest.TestCase):
     def test_runtime_links_to_evidence(self):
         reactor.activate_runtime(self.home, evidence.Selection({'producer': 'a' * 64}, 'b' * 64))
         self.assertEqual('b' * 64, json.loads((self.home / '.reactor/runtime.json').read_text())['build'])
+
+    def test_reuse_preserves_the_lock_that_was_actually_installed(self):
+        copy = self.home / 'copy'
+        copy.mkdir()
+        (copy / 'package.json').write_text('{}')
+        (copy / 'package-lock.json').write_text('{"oldRegistryPin":true}')
+        installed = {'resolvedManifests': {'package-lock.json': {'actualArtifact': 'a' * 64}},
+                     'dependencies': [{'dependency': 'producer', 'sha256': 'a' * 64}]}
+        with evidence.session():
+            result = evidence.record(self.repo, copy, evidence.begin(self.repo), ['npm install'],
+                                     reused={'fingerprint': 'b' * 64, 'passedAt': '2026-10-24T00:00:00Z',
+                                             'evidence': installed})
+        self.assertEqual(installed['resolvedManifests'], result['resolvedManifests'])
+        self.assertEqual(installed['dependencies'], result['dependencies'])
+
+    def test_ignored_local_configuration_changes_identity(self):
+        (self.repo / '.gitignore').write_text('.env.local\n')
+        config = self.repo / '.env.local'
+        config.write_text('FEATURE=one')
+        before = evidence.source_identity(self.repo)
+        config.write_text('FEATURE=two')
+        self.assertNotEqual(before['sourceSha256'], evidence.source_identity(self.repo)['sourceSha256'])
 
     def test_change_before_a_later_task_is_rejected(self):
         plan = SimpleNamespace(tasks=[SimpleNamespace(tasks=[], repo=object(),

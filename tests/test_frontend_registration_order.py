@@ -1,9 +1,8 @@
 """The frontends must be registered in dependency order, and stay that way.
 
-A plan is walked in the order repos are added in ReposFactory, and every consumer resolves its
-CEDAR packages from Nexus when its own build starts. A consumer registered before the package it
-consumes therefore builds against the snapshot that package replaced: it succeeds, and it is wrong.
-Nothing but the position in that file enforces this, so it is asserted here.
+The registration order keeps serial plans readable in dependency order. The scheduler separately
+derives edges from manifests and local SNAPSHOT resolution requires this build's producer outputs;
+the registration order is not a substitute for those runtime checks.
 
 Both halves matter. The declared edges below are the invariant, and they run anywhere. The second
 test derives the edges from the manifests in the workspace instead, because a declared list is what

@@ -9,7 +9,8 @@ from org.metadatacenter.util.Util import Util
 
 
 def check_design_tokens(repos=None, strict=False, json_output=False, show_all=False,
-                        init_baseline=False, prune_baseline=False, sync_surfaces=False, surface_inventory=None):
+                        init_baseline=False, prune_baseline=False, sync_surfaces=False, surface_inventory=None,
+                        source_consumers=()):
     home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not home:
         print('CEDAR_HOME is not set', file=sys.stderr)
@@ -21,6 +22,8 @@ def check_design_tokens(repos=None, strict=False, json_output=False, show_all=Fa
     command = [sys.executable, str(script), '--root', str(home)]
     for repo in repos or []:
         command += ['--repo', repo]
+    for repo in source_consumers:
+        command += ['--source-consumer', repo]
     for flag, enabled in (('--strict', strict), ('--json', json_output), ('--all', show_all),
                           ('--sync-surfaces', sync_surfaces), ('--init-baseline', init_baseline), ('--prune-baseline', prune_baseline)):
         if enabled:

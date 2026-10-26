@@ -133,7 +133,8 @@ class OperatorEvidenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             @contextmanager
-            def isolated(_source):
+            def isolated(_source, *, manifests_only=False):
+                self.assertTrue(manifests_only)
                 with tempfile.TemporaryDirectory() as temporary:
                     yield Path(temporary), {}, []
             task = SimpleNamespace(node_id=1, repo=SimpleNamespace(name='example', repo_type='TYPESCRIPT'),
@@ -152,6 +153,7 @@ class OperatorEvidenceTest(unittest.TestCase):
                  patch(module + '.reactor.resolve', return_value=[]), \
                  patch(module + '.reactor.prepare_checks', return_value=[]), \
                  patch(module + '.isolated_frontend_workspace', isolated), \
+                 patch(module + '.materialize_frontend_workspace'), \
                  patch.object(executor, '_execute_commands', side_effect=fail):
                 self.assertEqual(7, executor.execute_shell_command_list(task, Mock(), False))
             retained = next((home / '.cedar/build-reports/failures').iterdir())

@@ -1,22 +1,12 @@
-"""Advance a component's published dev snapshot, and the consumer pins that follow it.
+"""Publish registry packages and update consumers' checked-in dependencies.
 
-The Java estate gets this for nothing. `cedar-parent` names `cedar.version` once, every child pom
-names dependencies without a version, and the coordinate is a `-SNAPSHOT`, which Maven re-resolves
-from Nexus on every build. A merge to develop publishes a snapshot and every downstream build picks
-it up with no source edit anywhere.
+Local snapshot builds use `cedarcli build frontends` (or `cedarcli test frontends` for checks).
+The reactor builds working-tree sources and installs their tarballs into isolated consumers,
+without waiting for commits, CI publication or checked-in pin updates. This module is only
+for recording registry dependencies that standalone `npm ci` and consumer CI will install.
+Its publication restrictions are not prerequisites for a local snapshot build.
 
-npm has neither half. Each consumer declares an exact immutable version in its own package.json and
-again in its lock, and there is no moving coordinate to stand in for a snapshot: `npm ci` reads the
-lock rather than a dist-tag, and a semver range over these prereleases snaps back to release-time
-builds. The lock is what makes a build reproducible, so the pin has to be exact, and advancing it is
-therefore a source change across several repositories rather than a property of the build.
-
-That is why this is a command and not something `cedarcli build frontends` does. A build that
-rewrote package.json and package-lock.json would mutate tracked files mid-build, which the isolated
-frontend workspace already refuses, and it would make a train's output depend on when it ran rather
-than on the commits it captured.
-
-So the work is explicit, and it is the same three steps a person otherwise does by hand: derive the
+For that registry workflow, derive the
 component's development version from its pushed develop head, build and publish the package that
 version names, and repoint every declared consumer's manifest, lock and served bundles onto it.
 Nothing is committed. The diffs are source changes and belong to whoever reviews them.
@@ -621,6 +611,8 @@ def _run_once(directory, command):
 
 
 def _report(plans, apply):
+    console.print("Registry dependency update. For a local snapshot build, run cedarcli build frontends; "
+                  "it uses working-tree components without waiting for registry publication.")
     table = Table(
         "Component",
         "Surface",

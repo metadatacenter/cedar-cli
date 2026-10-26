@@ -22,6 +22,9 @@ from org.metadatacenter.release_support.lifecycle import (
 from org.metadatacenter.release_support.output import (
     console,
 )
+from org.metadatacenter.release_support.policy import (
+    _development_only_repositories,
+)
 from org.metadatacenter.release_support.preflight import (
     PreflightFinding,
 )
@@ -78,14 +81,17 @@ def _release_progress(manifest: dict) -> list[dict]:
         repository = consumer.get("repository")
         if repository:
             release_ref_repositories.add(repository)
+    # Each takes a next-development ref and has its develop integrated, and nothing else.
+    development_only = len(_development_only_repositories(manifest))
     plan = manifest.get("publicationPlan", {})
     totals = {
         "frontends": 1,
         "versions": 1,
         "builds": completed["builds"],
-        "local-refs": len(release_ref_repositories) + len(release_repositories),
+        "local-refs": (
+            len(release_ref_repositories) + len(release_repositories) + development_only),
         "snapshots": len(manifest.get("mavenPhases", [])) + 1,
-        "remotes": len(release_ref_repositories),
+        "remotes": len(release_ref_repositories) + development_only,
         "artifacts": 2 + len(plan.get("npm", {}).get("surfaces", [])),
         "development": 1,
         "acceptance": 1,

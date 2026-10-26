@@ -1,6 +1,10 @@
 """A passing reactor result is reused only for exactly the inputs it passed with."""
 import contextlib
 import hashlib
+import io
+import os
+import subprocess
+import tarfile
 import json
 import tempfile
 import unittest
@@ -12,7 +16,7 @@ from org.metadatacenter import reactor, reactor_results
 from org.metadatacenter.model.Repo import Repo
 from org.metadatacenter.model.RepoType import RepoType
 
-TOOLING = {"cli": "c" * 64, "development": "d" * 64, "node": "v24.22.0", "npm": "11.0.0",
+TOOLING = {"cli": "c" * 64, "development": "d" * 64, "node": "v24.22.1", "npm": "11.0.0",
            "platform": "macOS", "machine": "arm64"}
 
 
@@ -63,6 +67,22 @@ class FingerprintTest(unittest.TestCase):
         with patch.object(reactor_results, "tooling", return_value={**TOOLING, "node": "v24.20.0"}):
             self.assertNotEqual(baseline, self.key())
 
+    def test_environment_changes_invalidate_but_scheduling_does_not(self):
+        with patch.object(reactor_results, 'invocation_environment', return_value={'NODE_OPTIONS': '--a', 'CEDAR_TEST_WORKERS': '2'}):
+            baseline = self.key()
+        with patch.object(reactor_results, 'invocation_environment', return_value={'NODE_OPTIONS': '--a', 'CEDAR_TEST_WORKERS': '12'}):
+            self.assertEqual(baseline, self.key())
+        with patch.object(reactor_results, 'invocation_environment', return_value={'NODE_OPTIONS': '--b', 'CEDAR_TEST_WORKERS': '12'}):
+            self.assertNotEqual(baseline, self.key())
+
+    def test_launch_directory_and_interactive_node_metadata_do_not_invalidate(self):
+        with patch.object(reactor_results, 'invocation_environment', return_value={}):
+            baseline = self.key()
+        with patch.object(reactor_results, 'invocation_environment', return_value={
+                'CEDAR_CLI_CALLER_DIR': '/another/checkout', 'NODE_REPL_HISTORY': '/tmp/history',
+                'NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S': 'interactive-tool-metadata'}):
+            self.assertEqual(baseline, self.key())
+
     def test_nested_manifests_count_and_installed_ones_do_not(self):
         baseline = self.key()
         self.write({"devDependencies": {"cedar-design-tokens": "file:/h/.reactor/artifacts/" + "9" * 64 + ".tgz"}},
@@ -72,9 +92,63 @@ class FingerprintTest(unittest.TestCase):
                    "visual")
         self.assertNotEqual(baseline, self.key())
 
+    def test_java_dependencies_change_the_key_without_a_frontend_change(self):
+        with patch.object(reactor_results, "java_conformance_inputs", return_value={"classpath": ["old"]}):
+            baseline = self.key()
+        with patch.object(reactor_results, "java_conformance_inputs", return_value={"classpath": ["new"]}):
+            self.assertNotEqual(baseline, self.key())
+
     def test_an_incomplete_identity_reuses_nothing(self):
         with self.assertRaises(reactor_results.ResultError):
             reactor_results.fingerprint(application(), self.root, {}, [], None, [], "/h")
+
+
+class JavaConformanceInputsTest(unittest.TestCase):
+    def test_exact_classpath_bytes_and_java_runtime_are_fingerprinted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "model.tgz"
+            pom = b"<project>oracle dependencies</project>"
+            with tarfile.open(package, "w:gz") as archive:
+                member = tarfile.TarInfo("package/conformance/pom.xml")
+                member.size = len(pom)
+                archive.addfile(member, io.BytesIO(pom))
+            (root / "package.json").write_text(json.dumps({"cedarJavaConformance": True,
+                "dependencies": {"cedar-model-typescript-library": "file:" + str(package)}}))
+            jars = [root / "validator.jar", root / "reader.jar", root / "transitive.jar"]
+            for jar in jars:
+                jar.write_bytes(jar.name.encode())
+            java = 'openjdk version "17.0.1"'
+
+            def run(command, **_kwargs):
+                if command[-1] == "-version":
+                    return subprocess.CompletedProcess(command, 0, "", java)
+                self.assertIn("maven-dependency-plugin:3.8.1:build-classpath", " ".join(command))
+                Path(command[-1].split("=", 1)[1]).write_text(os.pathsep.join(map(str, jars)))
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.object(reactor_results.subprocess, "run", side_effect=run):
+                baseline = reactor_results.java_conformance_inputs(root)
+                self.assertEqual(baseline["pom"], hashlib.sha256(pom).hexdigest())
+                for jar in jars:
+                    previous = reactor_results.java_conformance_inputs(root)
+                    jar.write_bytes(b"updated " + jar.read_bytes())
+                    self.assertNotEqual(previous, reactor_results.java_conformance_inputs(root))
+                previous = reactor_results.java_conformance_inputs(root)
+                java = 'openjdk version "17.0.2"'
+                self.assertNotEqual(previous, reactor_results.java_conformance_inputs(root))
+                jars[0].unlink()
+                with self.assertRaises(OSError):
+                    reactor_results.java_conformance_inputs(root)
+
+    def test_undeclared_surfaces_need_no_java_and_unresolved_authoring_inputs_cannot_reuse(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "package.json").write_text("{}")
+            self.assertIsNone(reactor_results.java_conformance_inputs(root))
+            (root / "package.json").write_text('{"cedarJavaConformance":true}')
+            with self.assertRaises(reactor_results.ResultError):
+                reactor_results.java_conformance_inputs(root)
 
 
 class ToolingTest(unittest.TestCase):
@@ -129,6 +203,23 @@ class ToolingTest(unittest.TestCase):
         (self.cli / "org/metadatacenter/new_rule.py").write_text("new")
         self.assertNotEqual(baseline["cli"], self.tooling()["cli"])
 
+    def test_cli_tests_docs_and_later_smoke_do_not_invalidate_component_results(self):
+        baseline = self.tooling()
+        for relative in ['tests/test_backend.py', 'README.md', 'docs/commands.md',
+                         'org/metadatacenter/smoke_gate.py', 'org/metadatacenter/search_harness.py']:
+            path = self.cli / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('changed')
+            self.assertEqual(baseline, self.tooling(), relative)
+
+    def test_runtime_scripts_and_dependencies_remain_inputs(self):
+        for relative in ['scripts/javascript/new-rule.mjs', 'requirements.txt', 'CedarCliSettings.py']:
+            baseline = self.tooling()
+            path = self.cli / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('changed')
+            self.assertNotEqual(baseline, self.tooling(), relative)
+
     def test_an_edit_to_every_frontend_input_changes_it(self):
         for relative in self.inputs:
             with self.subTest(relative):
@@ -140,6 +231,12 @@ class ToolingTest(unittest.TestCase):
         baseline = self.tooling()
         (self.development / "ops/audit.py").write_text("edited")
         self.assertEqual(baseline, self.tooling())
+
+    def test_browser_image_bytes_are_inputs_even_when_its_tag_did_not_change(self):
+        with patch.object(reactor_results, 'browser_images', return_value={'tag': 'first'}):
+            before = self.tooling()
+        with patch.object(reactor_results, 'browser_images', return_value={'tag': 'replacement'}):
+            self.assertNotEqual(before, self.tooling())
 
 
 class RecordTest(unittest.TestCase):
@@ -155,7 +252,9 @@ class RecordTest(unittest.TestCase):
         self.artifact.write_bytes(self.content)
 
     def save(self, repo, package, key="k" * 64):
-        reactor_results.save(self.home, key, {"repository": repo.name}, package)
+        reactor_results.save(self.home, key, {"repository": repo.name}, package,
+                             {"resolvedManifests": {"package-lock.json": {"lockfileVersion": 3}},
+                              "dependencies": []})
         return key
 
     def test_a_saved_result_is_found_for_the_same_key_and_repository(self):
@@ -185,6 +284,14 @@ class RecordTest(unittest.TestCase):
         record = json.loads(path.read_text())
         path.write_text(json.dumps({**record, "schemaVersion": reactor_results.SCHEMA + 1}))
         self.assertIsNone(reactor_results.lookup(self.home, key, producer()))
+
+    def test_missing_or_malformed_pass_time_is_not_a_result(self):
+        key = self.save(producer(), self.digest)
+        path = reactor_results.results_root(self.home) / f'{key}.json'
+        record = json.loads(path.read_text())
+        for value in [None, 42, 'not a date']:
+            path.write_text(json.dumps({**record, 'passedAt': value}))
+            self.assertIsNone(reactor_results.lookup(self.home, key, producer()))
 
 
 class ReuseTest(unittest.TestCase):
@@ -229,8 +336,11 @@ class ExecutorReuseTest(unittest.TestCase):
         executor = ShellTaskExecutor()
         m = self.MODULE
         with patch(m + ".require_build_node"), patch(m + ".Util.get_wd", return_value="/tmp"), \
+                patch(m + ".Util.cedar_home", "/tmp/cedar-reuse-fixture"), \
                 patch(m + ".isolated_frontend_workspace",
                       return_value=contextlib.nullcontext((Path("/tmp"), {}, []))), \
+                patch(m + ".materialize_frontend_workspace") as materialize, \
+                patch(m + ".reactor_tasks.configure", return_value=None), \
                 patch(m + ".reactor_evidence.begin", return_value={"sourceSha256": "s" * 64}), \
                 patch(m + ".reactor_evidence.record") as record, \
                 patch.object(reactor, "resolve", return_value=[]), \
@@ -244,12 +354,13 @@ class ExecutorReuseTest(unittest.TestCase):
                 patch.object(executor, "_execute_packaged_commands", return_value=code) as commands:
             result = executor.execute_shell_command_list(task, Mock(), False)
         return SimpleNamespace(code=result, record=record, publish=publish, reused=reused,
-                               key=key, save=save, commands=commands)
+                               key=key, save=save, commands=commands, materialize=materialize)
 
     def test_a_matching_result_stands_for_running_the_commands(self):
         run = self.run_task({"fingerprint": "k" * 64, "package": "p" * 64, "passedAt": "2026-10-14T00:00:00Z"})
         self.assertEqual(0, run.code)
         run.commands.assert_not_called()
+        run.materialize.assert_not_called()
         run.publish.assert_not_called()
         run.save.assert_not_called()
         self.assertEqual("p" * 64, run.reused.call_args.args[3])
@@ -259,6 +370,7 @@ class ExecutorReuseTest(unittest.TestCase):
         run = self.run_task(None)
         self.assertEqual(0, run.code)
         run.commands.assert_called_once()
+        run.materialize.assert_called_once()
         run.publish.assert_called_once()
         run.save.assert_called_once()
         self.assertEqual("p" * 64, run.save.call_args.args[3])

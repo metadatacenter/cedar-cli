@@ -62,6 +62,7 @@ from org.metadatacenter.release_support.policy import (
     NEXUS_NPM_RETAINED_REGISTRY,
     NEXUS_REPOSITORY_PROBE,
     NEXUS_WRITABLE_ENDPOINT,
+    NEXT_DEVELOPMENT_VERSION_FILES,
     NPM_VERSION_SURFACES,
     PROFILE_COMMAND,
     PROFILE_REQUIRED_VARIABLES,
@@ -70,7 +71,9 @@ from org.metadatacenter.release_support.policy import (
     REQUIRED_NODE_VERSION,
     REQUIRED_TOOLS,
     SPACE_HEADROOM_PERCENT,
+    _development_only_repositories,
     _integration_repositories,
+    maven_dependency_version,
 )
 from org.metadatacenter.release_support.state import (
     ReleaseState,
@@ -230,6 +233,11 @@ class ReleasePreflight:
     def repositories(self) -> list[str]:
         return _integration_repositories(self.manifest)
 
+    @property
+    def development_only_repositories(self) -> list[str]:
+        """Repositories outside the release whose develop alone it advances."""
+        return _development_only_repositories(self.manifest)
+
     def _root(self, repository: str) -> Path:
         cedar_home = self.environment.get("CEDAR_HOME")
         if not cedar_home:
@@ -273,11 +281,12 @@ class ReleasePreflight:
                 console.print(f"Preflight {name.removeprefix('check_')}: {elapsed:.2f}s", markup=False)
         return findings
 
-    def _repository_findings(self, probe):
+    def _repository_findings(self, probe, repositories=None):
         # Each probe is read-only (or a dry-run push). Preserve repository order
         # in the findings while bounding concurrent connections to GitHub.
+        repositories = self.repositories if repositories is None else repositories
         with ThreadPoolExecutor(max_workers=4) as pool:
-            return [finding for result in pool.map(probe, self.repositories) for finding in result]
+            return [finding for result in pool.map(probe, repositories) for finding in result]
 
     def run_resume(self) -> list[PreflightFinding]:
         """Recheck only conditions still relevant to the recorded next stage."""
@@ -606,14 +615,16 @@ class ReleasePreflight:
     def check_push_permission(self) -> list[PreflightFinding]:
         """Ask each remote whether the release's own writes would be accepted.
 
-        A release writes main and a tag in every repository. A branch protection rule or a
-        lapsed token refuses those at remote integration, after the build phase has already
-        run, so the question is asked here with a push that transmits nothing.
+        A release writes main and a tag in every repository it releases, and develop in each
+        repository it only advances. A branch protection rule or a lapsed token refuses those
+        at remote integration, after the build phase has already run, so the question is
+        asked here with a push that transmits nothing.
         """
         version = self.manifest.get("releaseVersion")
         next_version = self.manifest.get("nextDevelopmentVersion")
         tag = f"release-{version}"
         completed = self.manifest.get("remoteIntegration", {}).get("completedTasks", {})
+        development_only = self.development_only_repositories
         def probe(repository):
             findings = []
             if isinstance(completed, dict) and repository in completed:
@@ -624,14 +635,20 @@ class ReleasePreflight:
             source = self.manifest.get("sourceRepositories", {}).get(repository)
             if not source:
                 return []
-            targets = [
-                f"{source}:refs/heads/main",
-                f"{source}:refs/heads/develop",
-                f"{source}:refs/heads/release/pre-{version}",
-                f"{source}:refs/tags/{tag}",
-            ]
-            if repository in self.manifest.get("releaseRepositories", []):
-                targets.append(f"{source}:refs/heads/release/post-{next_version}")
+            if repository in development_only:
+                targets = [
+                    f"{source}:refs/heads/develop",
+                    f"{source}:refs/heads/release/post-{next_version}",
+                ]
+            else:
+                targets = [
+                    f"{source}:refs/heads/main",
+                    f"{source}:refs/heads/develop",
+                    f"{source}:refs/heads/release/pre-{version}",
+                    f"{source}:refs/tags/{tag}",
+                ]
+                if repository in self.manifest.get("releaseRepositories", []):
+                    targets.append(f"{source}:refs/heads/release/post-{next_version}")
             code, _, stderr = self._capture([
                 "git", "-C", str(root), "push", "--dry-run", "--force", "origin",
                 *targets,
@@ -645,22 +662,26 @@ class ReleasePreflight:
                     "and tags",
                 ))
             return findings
-        return self._repository_findings(probe)
+        return self._repository_findings(probe, [*self.repositories, *development_only])
 
     def check_target_version_unused(self) -> list[PreflightFinding]:
         version = self.manifest.get("releaseVersion")
         next_version = self.manifest.get("nextDevelopmentVersion")
+        development_only = self.development_only_repositories
         def probe(repository):
             findings = []
             root = self._root(repository)
             if not root.is_dir():
                 return []
-            references = [
-                f"refs/tags/release-{version}",
-                f"refs/heads/release/pre-{version}",
-            ]
-            if repository in self.manifest.get("releaseRepositories", []):
-                references.append(f"refs/heads/release/post-{next_version}")
+            if repository in development_only:
+                references = [f"refs/heads/release/post-{next_version}"]
+            else:
+                references = [
+                    f"refs/tags/release-{version}",
+                    f"refs/heads/release/pre-{version}",
+                ]
+                if repository in self.manifest.get("releaseRepositories", []):
+                    references.append(f"refs/heads/release/post-{next_version}")
             code, output, stderr = self._capture([
                 "git", "-C", str(root), "ls-remote", "--refs", "origin", *references], timeout=60)
             if code != 0:
@@ -675,7 +696,7 @@ class ReleasePreflight:
                     "choose unused release/next versions, or remove the stale refs deliberately",
                 ))
             return findings
-        return self._repository_findings(probe)
+        return self._repository_findings(probe, [*self.repositories, *development_only])
 
     def _source_paths(self, repository: str) -> list[str]:
         if repository in self._source_path_cache:
@@ -1036,6 +1057,19 @@ class ReleasePreflight:
                             "which the release stamps into its Docker defaults",
                             "declare the variable in the images base script, or drop it from "
                             "frontend-train.json, and build a new train",
+                        ))
+        for repository in self.development_only_repositories:
+            for relative, artifacts in NEXT_DEVELOPMENT_VERSION_FILES.get(repository, {}).items():
+                content = self._source_content(repository, relative)
+                for artifact in artifacts:
+                    pattern = maven_dependency_version(artifact, source_version or "")
+                    if content is None or len(pattern.findall(content.encode())) != 1:
+                        findings.append(PreflightFinding(
+                            "source", "fail",
+                            f"train source {repository}:{relative} does not name {artifact} at "
+                            f"train source version {source_version} exactly once",
+                            f"name {source_version} for {artifact} on {repository} develop, and "
+                            "build a new train",
                         ))
         if "cedar-docker-deploy" in self.manifest.get("releaseRepositories", []):
             matches = 0

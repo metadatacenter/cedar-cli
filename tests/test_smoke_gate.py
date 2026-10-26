@@ -47,6 +47,8 @@ class FakeRunner:
 
 
 HEADS = {"cedar-a": "a" * 40, "cedar-b": "b" * 40}
+REST_CHECKS = ["runner\x1fpreflight\x1fclean", "folders\x1ffolders\x1fcreated",
+               "freeze\x1ffreeze\x1fpin", "runner\x1fpostflight\x1fclean"]
 
 HEALTHY_TSV = (
     "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
@@ -62,6 +64,9 @@ def fake_home(directory, repositories=HEADS):
     ops = home / "cedar-development" / "ops"
     (ops / "e2e").mkdir(parents=True)
     (ops / "e2e" / "package.json").write_text("{}", encoding="utf-8")
+    (ops / "e2e" / "rest").mkdir()
+    (ops / "e2e" / "rest" / "expected-checks.json").write_text(
+        json.dumps({"version": 1, "checks": REST_CHECKS}), encoding="utf-8")
     (ops / "cedar-services.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     (ops / "build-train.json").write_text(json.dumps({
         "organization": "metadatacenter",
@@ -82,15 +87,25 @@ def rev_parse(heads):
     return answer
 
 
-def rest_runner(verdict="PASS", inventory_matched=True, exit_code=0):
+def rest_payload():
+    return {
+        "schemaVersion": 1, "runId": "2026-09-07T10-00-00", "verdict": "PASS", "interrupted": False,
+        "startedAt": "2026-09-07T10:00:00Z", "finishedAt": "2026-09-07T10:01:00Z",
+        "selectedSuites": ["folders", "freeze"], "inventoryMatched": True,
+        "counts": {"passed": 3, "failed": 0, "skipped": 1, "total": 4},
+        "checks": [dict(zip(("suite", "section", "name"), key.split("\x1f")),
+                        status="skipped" if key.startswith("freeze\x1f") else "passed") for key in REST_CHECKS],
+    }
+
+
+def rest_runner(verdict="PASS", inventory_matched=True, exit_code=0, payload=None):
     def answer(args, _kwargs):
         report = next(a for a in args if a.startswith("--report=")).split("=", 1)[1]
         Path(report).parent.mkdir(parents=True, exist_ok=True)
-        Path(report).write_text(json.dumps({
-            "schemaVersion": 1, "runId": "2026-09-07T10-00-00", "verdict": verdict,
-            "counts": {"passed": 803, "failed": 0, "skipped": 7, "total": 810},
-            "inventoryMatched": inventory_matched,
-        }), encoding="utf-8")
+        evidence = rest_payload() if payload is None else payload
+        if payload is None:
+            evidence.update(verdict=verdict, inventoryMatched=inventory_matched)
+        Path(report).write_text(json.dumps(evidence), encoding="utf-8")
         return FakeResult(exit_code)
     return answer
 
@@ -270,7 +285,7 @@ def report_for(heads=HEADS, **overrides):
         "sources": dict(heads),
         "dirty": [],
         "tiers": {
-            "rest": {"verdict": "PASS", "inventoryMatched": True,
+            "rest": {"verdict": "PASS", "inventoryMatched": True, "evidenceValid": True,
                      "finishedAt": "2026-09-07T10:01:30+00:00"},
             "browser": {"verdict": "PASS", "finishedAt": "2026-09-07T10:02:30+00:00"},
             "split": {"verdict": "PASS", "finishedAt": "2026-09-07T10:03:30+00:00"},
@@ -298,6 +313,73 @@ class RunSmokeTest(unittest.TestCase):
         which = patch("org.metadatacenter.smoke_gate.shutil.which", return_value="/usr/bin/npm")
         which.start()
         self.addCleanup(which.stop)
+
+    def test_rest_evidence_fails_closed_even_when_the_process_exits_zero(self):
+        mutations = {
+            "failed verdict": lambda r: r.update(verdict="FAIL"),
+            "interrupted": lambda r: r.update(interrupted=True),
+            "unfinished": lambda r: r.pop("finishedAt"),
+            "wrong schema": lambda r: r.update(schemaVersion=2),
+            "no run id": lambda r: r.pop("runId"),
+            "partial suite": lambda r: r.update(selectedSuites=["folders"]),
+            "unverified inventory": lambda r: r.pop("inventoryMatched"),
+            "missing check": lambda r: r["checks"].pop(),
+            "duplicate check": lambda r: r["checks"].__setitem__(0, r["checks"][1]),
+            "unexpected check": lambda r: r["checks"][0].update(name="unplanned"),
+            "reordered checks": lambda r: r["checks"].reverse(),
+            "failed check": lambda r: r["checks"][0].update(status="failed"),
+            "unknown check status": lambda r: r["checks"][0].update(status="pending"),
+            "wrong counts": lambda r: r["counts"].update(total=800),
+            "string count": lambda r: r["counts"].update(passed="3"),
+            "cleanup failure": lambda r: r["counts"].update(failed=1, total=5),
+            "malformed checks": lambda r: r.update(checks=None),
+            "backwards timestamps": lambda r: r.update(finishedAt="2026-09-06T10:00:00Z"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                payload = rest_payload()
+                mutate(payload)
+                runner = runner_for(home, rest=rest_runner(payload=payload))
+                self.assertEqual(1, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+                report = read_report(home, HEADS)
+                self.assertEqual("FAIL", report["tiers"]["rest"]["verdict"])
+                self.assertFalse(report["tiers"]["rest"]["evidenceValid"])
+                self.assertTrue(evaluate(report, HEADS))
+                self.assertEqual(4, len(runner.commands("npm", "run")))
+
+    def test_rest_report_cannot_invent_its_own_check_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            inventory = home / smoke_gate.E2E / "rest" / "expected-checks.json"
+            inventory.write_text(json.dumps({"version": 1, "checks": REST_CHECKS + ["new\x1fnew\x1fnew"]}))
+            self.assertEqual(1, run_smoke(home, runner=runner_for(home), clock=clock(), environment={"PATH": "/usr/bin"}))
+
+    def test_rest_rerun_cannot_reuse_an_older_passing_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            self.assertEqual(0, run_smoke(home, runner=runner_for(home), clock=clock(), environment={"PATH": "/usr/bin"}))
+            previous = read_report(home, HEADS)["tiers"]["rest"]["report"]
+            for code in (0, 75):
+                self.assertEqual(1, run_smoke(home, runner=runner_for(home, rest=FakeResult(code)),
+                                             clock=clock(), environment={"PATH": "/usr/bin"}))
+                rest = read_report(home, HEADS)["tiers"]["rest"]
+                self.assertNotEqual(previous, rest["report"])
+                self.assertFalse(rest["evidenceValid"])
+                self.assertIn("reportError", rest)
+            self.assertTrue(Path(previous).exists())
+
+    def test_malformed_rest_reports_fail_without_preventing_the_other_tiers(self):
+        for content in ("{", "null", "[]", "{}"):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                def answer(args, _kwargs):
+                    path = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("--report=")))
+                    path.write_text(content)
+                    return FakeResult(0)
+                runner = runner_for(home, rest=answer)
+                self.assertEqual(1, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+                self.assertEqual(4, len(runner.commands("npm", "run")))
 
     def test_search_evidence_fails_closed_even_when_the_process_exits_zero(self):
         mutations = {
@@ -375,7 +457,7 @@ class RunSmokeTest(unittest.TestCase):
             self.assertEqual([], report["dirty"])
             self.assertEqual("PASS", report["tiers"]["rest"]["verdict"])
             self.assertTrue(report["tiers"]["rest"]["inventoryMatched"])
-            self.assertEqual(810, report["tiers"]["rest"]["counts"]["total"])
+            self.assertEqual(len(REST_CHECKS), report["tiers"]["rest"]["counts"]["total"])
             self.assertEqual("PASS", report["tiers"]["browser"]["verdict"])
             self.assertEqual("PASS", report["tiers"]["split"]["verdict"])
             self.assertEqual(270.0, report["durationSeconds"])
@@ -816,6 +898,12 @@ class EvaluateTest(unittest.TestCase):
             ["the REST smoke ran a different check inventory than the committed one"],
             evaluate(report, HEADS))
 
+    def test_old_rest_records_without_validated_evidence_require_a_new_run(self):
+        for value in (None, False):
+            report = report_for()
+            report["tiers"]["rest"]["evidenceValid"] = value
+            self.assertEqual(["the REST smoke has no validated complete check evidence"], evaluate(report, HEADS))
+
     def test_an_unknown_schema_is_one_finding(self):
         findings = evaluate(report_for(schemaVersion=2), HEADS)
         self.assertEqual(1, len(findings))
@@ -881,6 +969,12 @@ if __name__ == "__main__":
 
 class SourceCurrencyTest(unittest.TestCase):
     """A jar older than the commit the record names cannot contain it."""
+
+    def setUp(self):
+        # The native profile selects the deployed version. These fixtures own theirs.
+        version = patch.dict(os.environ, {"CEDAR_VERSION": "2.9.10-SNAPSHOT"})
+        version.start()
+        self.addCleanup(version.stop)
 
     def _service(self, home, service, *, jar_epoch, head_epoch):
         root = home / f"cedar-{service}-server"

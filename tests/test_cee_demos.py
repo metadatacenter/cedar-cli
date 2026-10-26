@@ -1,4 +1,5 @@
 from contextlib import ExitStack
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -26,17 +27,24 @@ class DemoCommandsTest(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_everyday_build_graph_omits_all_demos_but_keeps_other_frontends(self):
-        for command in ('frontends', 'all'):
-            with patch.object(build.plan_executor, 'execute') as execute:
-                result = self.runner.invoke(build.app, [command, '--dry-run'])
-            self.assertEqual(0, result.exit_code, result.output)
-            def names(task):
-                return ([task.repo.name] if getattr(task, 'repo', None) else []) + [
-                    name for child in task.tasks for name in names(child)]
-            repositories = names(execute.call_args.args[0])
-            self.assertFalse(any('demo' in name for name in repositories))
-            for name in ('cedar-embeddable-editor', 'cedar-workspace', 'cedar-embeddable-designer'):
-                self.assertIn(name, repositories)
+        # Plan preparation reads local manifests even in a dry run. Keep this graph test
+        # independent of whichever sibling source checkouts happen to exist on the host.
+        with tempfile.TemporaryDirectory() as directory, patch.object(Util, 'cedar_home', directory):
+            for repo in GlobalContext.repos.get_list_all():
+                root = Path(Util.get_wd(repo))
+                root.mkdir(parents=True, exist_ok=True)
+                (root / 'package.json').write_text(json.dumps({'name': repo.name}))
+            for command in ('frontends', 'all'):
+                with patch.object(build.plan_executor, 'execute') as execute:
+                    result = self.runner.invoke(build.app, [command, '--dry-run'])
+                self.assertEqual(0, result.exit_code, result.output)
+                def names(task):
+                    return ([task.repo.name] if getattr(task, 'repo', None) else []) + [
+                        name for child in task.tasks for name in names(child)]
+                repositories = names(execute.call_args.args[0])
+                self.assertFalse(any('demo' in name for name in repositories))
+                for name in ('cedar-embeddable-editor', 'cedar-workspace', 'cedar-embeddable-designer'):
+                    self.assertIn(name, repositories)
 
     def test_explicit_command_forces_all_demos_and_propagates_failure(self):
         with patch.object(cee_demos, 'run_demos', return_value=7) as run:

@@ -53,6 +53,10 @@ class BuildPlanner(Planner):
         )
         if not verification:
             return
+        BuildPlanner.verify_frontends(plan, reuse=reuse)
+
+    @staticmethod
+    def verify_frontends(plan: Plan, *, reuse: bool = False):
         # Full reactor completion includes the owning packages' verification gates.
         from org.metadatacenter.frontend_inventory import reactor_checks
         checks = reactor_checks()
@@ -98,5 +102,6 @@ class BuildPlanner(Planner):
                 plan.add_task(
                     "Build current repo",
                     TaskType.BUILD,
-                    [repo]
+                    [repo],
+                    parameters={"force_frontend_build": True},
                 )

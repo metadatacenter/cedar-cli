@@ -28,6 +28,18 @@ def cee_demos(cee_package: Optional[Path] = typer.Option(
         raise typer.Exit(1) from error
 
 
+@app.command("frontends")
+def frontends(jobs: Optional[int] = typer.Option(None, min=1, max=16),
+              workers: Optional[int] = typer.Option(None, min=1, max=16),
+              reuse: bool = typer.Option(True, "--reuse/--no-reuse"),
+              dry_run: bool = typer.Option(False),
+              dump_plan: bool = typer.Option(False)):
+    """Build and verify frontend sources and consumers, without deployment or whole-stack smoke."""
+    from org.metadatacenter.build import concurrency, run_frontends
+    concurrency(jobs=jobs, workers=workers)
+    run_frontends(dry_run=dry_run, dump_plan=dump_plan, reuse=reuse, deploy=False)
+
+
 @app.command("e2e")
 def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
         help="Concurrent REST suites and search reads; 1 runs each serially (defaults: REST 2, search 4)."),

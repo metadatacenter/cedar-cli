@@ -36,6 +36,9 @@ class BuildPolicyTest(unittest.TestCase):
         from org.metadatacenter.frontend_inventory import inventory
         recipes = inventory()
         contexts.enter_context(patch('org.metadatacenter.frontend_inventory.inventory', return_value=recipes))
+        # These fixtures inspect command policy, not a populated source tree. The SNAPSHOT
+        # suite separately exercises real manifests, missing producers and transitive closure.
+        contexts.enter_context(patch('org.metadatacenter.frontend_snapshot.internal_dependencies', return_value=set()))
         GlobalContext.init_task_operators()
         self.runner = CliRunner()
 
@@ -73,7 +76,7 @@ class BuildPolicyTest(unittest.TestCase):
     @patch.object(build.plan_executor, "execute")
     def test_maven_threads_follow_the_host_unless_jobs_is_given(self, execute):
         for cpus, args, threads, jobs in (
-                (16, [], 16, 2), (4, [], 4, 2), (32, [], 16, 2), (1, [], 1, 2), (None, [], 2, 2),
+                (16, [], 16, 3), (4, [], 4, 2), (32, [], 16, 3), (1, [], 1, 2), (None, [], 2, 2),
                 (16, ["--jobs", "3"], 3, 3), (16, ["--jobs", "1"], 1, 1)):
             with patch("org.metadatacenter.util.InvocationContext.os.cpu_count", return_value=cpus):
                 result = self.runner.invoke(build.app, args + ["java", "--dry-run"])
@@ -112,14 +115,14 @@ class BuildPolicyTest(unittest.TestCase):
             self.assertIn("npm run build", commands)
             self.assertIn("npm ci", commands)
             model_commands = self.commands(execute.call_args.args[0], "cedar-model-typescript-library")
-            self.assertEqual(not skipped, "npm run test:ci" in model_commands)
+            self.assertEqual(not skipped, "npm run test:ci:prebuilt" in model_commands)
             maven = [c for c in commands if c.startswith("./mvnw clean install")]
             self.assertTrue(maven)
             self.assertTrue(all(("-DskipTests" in c) == skipped for c in maven))
         # A previous compile-only command must not weaken the full reactor contract.
         result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("npm run test:ci", self.commands(execute.call_args.args[0], "cedar-model-typescript-library"))
+        self.assertIn("npm run test:ci:prebuilt", self.commands(execute.call_args.args[0], "cedar-model-typescript-library"))
 
     def test_test_option_is_only_on_commands_that_can_reach_java(self):
         for command in (
@@ -175,6 +178,32 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertEqual(
             ['npm ci --legacy-peer-deps', 'npm run build'],
             openview_source.build_command_list)
+
+    @patch.object(build.plan_executor, "execute")
+    def test_split_apps_check_built_browser_surfaces(self, execute):
+        result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
+        self.assertEqual(0, result.exit_code, result.output)
+        for repository in ('cedar-monitoring-src', 'cedar-bridging-src', 'cedar-openview-src'):
+            with self.subTest(repository=repository):
+                commands = self.commands(execute.call_args.args[0], repository)
+                browser = commands.index('npm --prefix ../browser test')
+                compiled = commands.index('npm run build')
+                self.assertLess(commands.index('npm --prefix ../browser ci'), compiled)
+                self.assertLess(commands.index('../browser/node_modules/.bin/playwright install --with-deps chromium'), browser)
+                self.assertLess(commands.index('npm test -- --watch=false'), compiled)
+                self.assertLess(compiled, browser)
+
+    @patch.object(build.plan_executor, "execute")
+    def test_reactor_includes_workspace_visuals_and_designer_webkit(self, execute):
+        result = self.runner.invoke(build.app, ["frontends", "--dry-run"])
+        self.assertEqual(0, result.exit_code, result.output)
+        plan = execute.call_args.args[0]
+        workspace = self.commands(plan, 'cedar-workspace')
+        self.assertLess(workspace.index('npm test'), workspace.index('npm run build'))
+        self.assertLess(workspace.index('npm run build'), workspace.index('npm run test:visual'))
+        designer = self.commands(plan, 'cedar-embeddable-designer')
+        self.assertLess(designer.index('./browser/node_modules/.bin/playwright install --with-deps chromium webkit'),
+                        designer.index('npm run test:ci'))
 
     def test_retired_typescript_roundtrip_is_not_registered(self):
         repos = ReposFactory.build_repos()
@@ -358,6 +387,7 @@ class BuildPolicyTest(unittest.TestCase):
             stack.enter_context(patch(module + ".Util.get_wd", return_value="/tmp/source"))
             stack.enter_context(patch(module + ".is_frontend_build", return_value=False))
             stack.enter_context(patch(module + ".reactor_evidence.begin"))
+            stack.enter_context(patch(module + ".materialize_frontend_workspace"))
             stack.enter_context(patch(module + ".reactor.resolve", return_value=[]))
             stack.enter_context(patch(module + ".reactor.prepare_checks", return_value=[]))
             stack.enter_context(patch(module + ".isolated_frontend_workspace", return_value=
@@ -367,6 +397,44 @@ class BuildPolicyTest(unittest.TestCase):
         environment = execute.call_args.args[-1]
         for variable in ("CEDAR_TEST_WORKERS", "NG_BUILD_MAX_WORKERS", "VITEST_MAX_WORKERS"):
             self.assertEqual("3", environment[variable])
+
+    def test_nested_browser_failure_retains_sibling_reports_and_command_log(self):
+        executor = ShellTaskExecutor()
+        task = SimpleNamespace(
+            node_id=3, repo=SimpleNamespace(name='frontend-src', repo_type='TYPESCRIPT'),
+            command_list=['npm --prefix ../browser test'],
+            get_parameter=lambda name: name == 'isolated_frontend_build',
+        )
+        module = 'org.metadatacenter.taskexecutor.ShellTaskExecutor'
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            home = Path(directory)
+            copy = home / 'copy'
+            app = copy / 'frontend-src'
+            app.mkdir(parents=True)
+            report = copy / 'browser/test-results/failure.txt'
+            report.parent.mkdir(parents=True)
+            report.write_text('browser failure')
+            environment = {'CEDAR_BUILD_WORKSPACE_ROOT': str(copy)}
+            stack.enter_context(use_context(InvocationContext(environment={**os.environ, 'CEDAR_HOME': directory})))
+            stack.enter_context(patch(module + '.Util.get_wd', return_value='/tmp/source/frontend-src'))
+            stack.enter_context(patch(module + '.is_frontend_build', return_value=False))
+            stack.enter_context(patch(module + '.reactor_evidence.begin'))
+            stack.enter_context(patch(module + '.materialize_frontend_workspace'))
+            stack.enter_context(patch(module + '.reactor.resolve', return_value=[]))
+            stack.enter_context(patch(module + '.reactor.prepare_checks', return_value=[]))
+            stack.enter_context(patch(module + '.isolated_frontend_workspace', return_value=
+                nullcontext((app, environment, []))))
+
+            def fail(_task, _repo, _commands, _cwd, _progress, child_env):
+                Path(child_env['CEDAR_BUILD_DIAGNOSTIC_LOG']).write_text('failed command')
+                return 1
+
+            stack.enter_context(patch.object(executor, '_execute_commands', side_effect=fail))
+            self.assertEqual(1, executor.execute_shell_command_list(task, Mock(), dry_run=False))
+            bundles = list((home / '.cedar/build-reports/failures').iterdir())
+            self.assertEqual(1, len(bundles))
+            self.assertEqual('browser failure', (bundles[0] / 'browser/test-results/failure.txt').read_text())
+            self.assertEqual('failed command', (bundles[0] / '.cedar-build-commands.log').read_text())
 
     def test_test_bearing_maven_task_checks_for_mongods_before_and_after(self):
         executor = ShellTaskExecutor()

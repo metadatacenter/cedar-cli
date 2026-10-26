@@ -68,10 +68,10 @@ jobs:
 
       # Packaging tests execute real npm commands. Runner-image npm versions differ
       # in whether pack --ignore-scripts suppresses prepare; use the estate toolchain.
-      - name: Set up Node 24.22.0
+      - name: Set up Node 24.22.1
         uses: actions/setup-node@v6
         with:
-          node-version: 24.22.0
+          node-version: 24.22.1
 
       - name: Report Node and npm versions
         run: |
