@@ -630,17 +630,35 @@ class CiPublishedComponentTest(unittest.TestCase):
         self.assertFalse(item.moves)
         self.assertFalse(any(consumer.moves for consumer in item.consumers))
 
-    def test_an_unpushed_head_leaves_the_consumers_where_they_are(self):
+    def test_local_work_does_not_hold_the_consumers_back(self):
+        """They follow the newest package, built from the pushed head, as a newer snapshot would win.
+
+        An unpushed commit and an uncommitted edit are in no package. A development build takes them
+        from the checkout, so a pin has no reason to wait for them.
+        """
+        pushed = self._cee().target
         WorkspaceTest._commit(self, self.cee, "Not yet pushed")
-
-        self._assert_stays("not the pushed origin/develop")
-
-    def test_uncommitted_changes_leave_the_consumers_where_they_are(self):
-        """No CI package contains them, so following the head would serve something else."""
         manifest = self.cee / "package.json"
         manifest.write_text(manifest.read_text().replace("aaaaaaaa", "bbbbbbbb"))
 
-        self._assert_stays("uncommitted changes")
+        item = self._cee()
+
+        self.assertEqual(pushed, item.target)
+        self.assertIsNone(item.blocked)
+        self.assertTrue(all(consumer.moves for consumer in item.consumers))
+
+    def test_a_stale_clone_still_follows_the_newest_pushed_head(self):
+        """The head is fetched first, so a clone that has not fetched cannot pin an older snapshot."""
+        origin = self.root / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+        subprocess.run(["git", "-C", str(self.cee), "remote", "add", "origin", str(origin)], check=True)
+        WorkspaceTest._commit(self, self.cee, "Pushed from here")
+        subprocess.run(["git", "-C", str(self.cee), "push", "-q", "origin", "develop"], check=True)
+        newest = self._cee().target
+        subprocess.run(["git", "-C", str(self.cee), "update-ref", "refs/remotes/origin/develop", "HEAD~1"],
+                       check=True)
+
+        self.assertEqual(newest, self._cee().target)
 
     def test_a_release_preparation_head_leaves_the_consumers_where_they_are(self):
         """Its CI publishes nothing: the release publishes itself to npmjs."""
