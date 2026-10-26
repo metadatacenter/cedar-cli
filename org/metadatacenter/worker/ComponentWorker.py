@@ -261,10 +261,23 @@ class ComponentWorker:
             package_dir = directory / "node_modules" / unscoped(name)
             locked = ComponentWorker._read_json(package_dir / "package.json")
             locked_version = locked.get("version") if isinstance(locked, dict) else None
+            bundle = ComponentWorker._staged_bundle(unscoped(name), entry)
             findings.append(evaluate_bundle(
                 host, unscoped(name), entry.get("source"), entry.get("sha256"),
-                locked_version, ComponentWorker._sha256(package_dir / f"{unscoped(name)}.js")))
+                # A file no package ships cannot be the locked bundle, so it is reported as a mismatch.
+                locked_version, ComponentWorker._sha256(package_dir / bundle) if bundle else ""))
         return findings
+
+    @staticmethod
+    def _staged_bundle(component, entry):
+        """The package file a staged bundle came from, or None for one no package ships.
+
+        A package ships a self-contained bundle and may ship a host-fonts one, for a page that
+        registers the CEDAR fonts itself. The host serves either under the component's own name
+        and records which it staged; a manifest without the record predates the second bundle.
+        """
+        recorded = entry.get("bundle", f"{component}.js")
+        return recorded if recorded in (f"{component}.js", f"{component}.host-fonts.js") else None
 
     @staticmethod
     def _evaluate_elements(host, directory, locked):
