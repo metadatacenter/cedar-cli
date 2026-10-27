@@ -138,9 +138,6 @@ def contract_verdict(repository: str, workflow: str, *, runner=None, environment
         if latest.get("status") != "completed":
             return ContractVerdict(repository, workflow, "pending",
                                    f"{workflow} is {latest.get('status') or 'pending'}", url)
-        if latest.get("conclusion") not in GREEN_CONCLUSIONS:
-            return ContractVerdict(repository, workflow, "red",
-                                   f"{workflow} concluded {latest.get('conclusion')}", url)
         started = latest.get("created_at") or ""
         later = []
         for consumer, branch in consumers:
@@ -149,6 +146,15 @@ def contract_verdict(repository: str, workflow: str, *, runner=None, environment
                 later.append(f"{consumer} {revision[:8]}")
     except (ValueError, KeyError, TypeError, binascii.Error, UnicodeDecodeError) as error:
         return ContractVerdict(repository, workflow, "error", f"{workflow}: {error}")
+    conclusion = latest.get("conclusion")
+    if conclusion not in GREEN_CONCLUSIONS:
+        # A failure that predates a consumer's push may be what that push fixed, so only a fresh
+        # run can say; a failure that saw every consumer head is the contract's answer.
+        if later:
+            return ContractVerdict(repository, workflow, "stale",
+                                   f"{workflow} concluded {conclusion} at {started}, before pushes to "
+                                   + ", ".join(later), url)
+        return ContractVerdict(repository, workflow, "red", f"{workflow} concluded {conclusion}", url)
     if later:
         return ContractVerdict(repository, workflow, "stale",
                                f"{workflow} last ran {started}, before pushes to " + ", ".join(later),

@@ -106,6 +106,18 @@ class ContractVerdictTest(unittest.TestCase):
         self.assertNotIn("cedar-workspace", verdict.detail)
         self.assertTrue(verdict.dispatchable)
 
+    def test_a_failure_before_a_consumer_push_is_stale_rather_than_red(self):
+        # On 2026-10-27 the contract failed on consumers' old baselines; their pushes then fixed
+        # it, and only a fresh run could say so.
+        verdict = self.verdict(contract_routes(CONSUMERS_WORKFLOW, run={"conclusion": "failure"}, pushes={
+            "cedar-embeddable-editor": "2026-10-27T11:00:00Z",
+            "cedar-workspace": "2026-10-27T09:00:00Z"}))
+        self.assertEqual("stale", verdict.state)
+        self.assertIn("concluded failure at 2026-10-27T10:00:00Z, before pushes to "
+                      "cedar-embeddable-editor rrrrrrrr", verdict.detail)
+        self.assertTrue(verdict.dispatchable)
+        self.assertTrue(verdict.blocks_a_train)
+
     def test_red_pending_missing_and_unreadable_runs_block(self):
         pushes = {"cedar-embeddable-editor": None, "cedar-workspace": None}
         for run, state in (({"conclusion": "failure"}, "red"),
