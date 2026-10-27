@@ -147,6 +147,7 @@ from org.metadatacenter.release_support.policy import (
     ABANDONABLE_RELEASE_PHASES,
     ACCEPT_MAIN_ONLY_HELP,
     ACCEPT_RED_DEVELOP_HELP,
+    ACCEPT_RED_DEVELOPMENT_HELP,
     CHECKOUT_BYTES_PER_REPOSITORY,
     DEV_CEE_NAME,
     DEV_MODEL_SPEC_RE,
@@ -289,13 +290,15 @@ def _build_or_exit(
         raise typer.Exit(1) from error
 
 
-def _parse_accepted_red_develop(values: list[str] | None) -> dict[str, str]:
+def _parse_accepted_red_develop(
+    values: list[str] | None, option: str = "--accept-red-develop",
+) -> dict[str, str]:
     accepted = {}
     for value in values or []:
         repository, separator, run_id = value.partition("=")
         if not separator or not repository.strip() or not run_id.strip():
             console.print(
-                f"[red]--accept-red-develop expects <repository>=<run-id>, not {value!r}[/red]")
+                f"[red]{option} expects <repository>=<run-id>, not {value!r}[/red]")
             raise typer.Exit(1)
         accepted[repository.strip()] = run_id.strip()
     return accepted
@@ -478,11 +481,15 @@ def _render_next_steps(phase):
 @app.command("resume")
 def resume(
     dry_run: bool = typer.Option(False, "--dry-run", help="Explain reuse, rechecks and remaining operations without executing them"),
+    accept_red_development: list[str] = typer.Option(
+        None, "--accept-red-development", help=ACCEPT_RED_DEVELOPMENT_HELP),
     verbose: bool = typer.Option(
         False, "--verbose", help="Stream full task output instead of compact progress"),
 ):
     """Resume the active train-backed release from its recorded phase."""
     state = ReleaseState()
+    accepted_red_development = _parse_accepted_red_develop(
+        accept_red_development, "--accept-red-development")
     try:
         if dry_run:
             from org.metadatacenter.release_resume_preview import render_resume_preview
@@ -493,6 +500,13 @@ def resume(
         with state.exclusive():
             _activate_toolchain()
             active, path = state.read_current_manifest()
+            if accepted_red_development:
+                # Kept in the ledger beside the release's other acceptances, so that a later
+                # resume applies it again and the record says which red run was accepted.
+                acceptances = dict(active.get("acceptances") or {})
+                acceptances["redDevelopment"] = dict(sorted(
+                    {**(acceptances.get("redDevelopment") or {}), **accepted_red_development}.items()))
+                active, path = state.update_current_manifest({"acceptances": acceptances})
             _release_resume_gate_or_exit(active)
             console.print("Compact progress is shown below; full task output is retained in attempt logs.")
             console.print("A second terminal may run: cedarcli release status --watch")

@@ -101,6 +101,29 @@ class DevelopmentVerificationTest(unittest.TestCase):
         self.assertEqual('development-verification-failed',self.state.manifest['phase'])
         self.assertNotIn('completedAt',self.state.manifest['developmentVerification'])
 
+    def test_an_accepted_red_run_passes_and_is_recorded_as_accepted(self):
+        self.repository('example')
+        self.manifest['acceptances'] = {'redDevelop': {}, 'mainOnly': [],
+                                        'redDevelopment': {'example': '123'}}
+        verifier = self.verifier([[self.run_record(conclusion='failure')]])
+        result = verify_active_development(self.state, verifier)
+        self.assertEqual('development-verified', result['phase'])
+        run = result['developmentVerification']['repositories']['example']['runs'][0]
+        self.assertEqual(('failure', True), (run['conclusion'], run['accepted']))
+
+    def test_an_acceptance_covers_only_the_run_it_names(self):
+        self.repository('example')
+        self.manifest['acceptances'] = {'redDevelopment': {'example': '123'}}
+        for runs in (
+            [self.run_record(id=124, conclusion='failure')],
+            [self.run_record(conclusion='failure'),
+             self.run_record(id=200, name='Other', conclusion='failure')],
+        ):
+            with self.subTest(runs=[run['id'] for run in runs]):
+                self.manifest['phase'] = 'artifacts-published'
+                with self.assertRaisesRegex(ReleaseError, 'Next-development CI failed'):
+                    verify_active_development(self.state, self.verifier([runs]))
+
     def test_aggregator_dispatch_is_after_readiness_and_not_repeated_on_resume(self):
         self.repository('cedar-project')
         verifier = self.verifier([[self.run_record()]])  # old push run is not proof

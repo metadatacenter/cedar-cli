@@ -1298,6 +1298,31 @@ class ReleaseStateAndCliTest(unittest.TestCase):
         ):
             self.assertNotIn(retired, result.output)
 
+    def test_resume_records_a_named_red_development_acceptance(self):
+        @contextmanager
+        def quiet(_state):
+            yield
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = ReleaseState(root=Path(directory))
+            state.start(manifest_fixture())
+            with patch.object(release_train, "ReleaseState", return_value=state), \
+                    patch.object(release_train, "_activate_toolchain"), \
+                    patch.object(release_train, "_release_resume_gate_or_exit"), \
+                    patch.object(release_train, "release_heartbeat", quiet), \
+                    patch.object(release_train, "_drive_release",
+                                 side_effect=ReleaseError("stopped after recording")):
+                result = self.runner.invoke(release_train.app, [
+                    "resume", "--accept-red-development", "cedar-design-tokens=40531448159"])
+            self.assertEqual(1, result.exit_code, result.output)
+            manifest, _ = state.read_current_manifest()
+            self.assertEqual({"cedar-design-tokens": "40531448159"},
+                             manifest["acceptances"]["redDevelopment"])
+        result = self.runner.invoke(
+            release_train.app, ["resume", "--accept-red-development", "no-run-id"])
+        self.assertEqual(1, result.exit_code)
+        self.assertIn("--accept-red-development expects <repository>=<run-id>", result.output)
+
     def test_transient_retry_is_default_not_a_flag(self):
         for command in ("start", "resume"):
             result = self.runner.invoke(release_train.app, [command, "--help"])

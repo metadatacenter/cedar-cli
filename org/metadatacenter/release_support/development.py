@@ -56,6 +56,20 @@ class DevelopmentVerifier:
         # The release commits onto such a repository's develop as it finds it, so the CI there
         # answers for the repository's own work as much as for the release's, and is not gated.
         development_only = set(_development_only_repositories(manifest))
+        # An operator may accept one finished red run per repository by its id, as the release
+        # accepts one red develop run before it starts. The acceptance names that run alone, so a
+        # later red run of the same workflow, or another workflow's, still stops the release.
+        accepted = dict((manifest.get('acceptances') or {}).get('redDevelopment') or {})
+
+        def accepted_run(repo, run):
+            return (run.get('status') == 'completed' and accepted.get(repo) is not None
+                    and str(run.get('id')) == accepted[repo])
+
+        def passed(repo, run):
+            return ((run.get('status') == 'completed'
+                     and run.get('conclusion') in {'success', 'skipped', 'neutral'})
+                    or accepted_run(repo, run))
+
         for record in records.values():
             if record['repository'] in development_only:
                 evidence['repositories'][record['repository']] = {
@@ -131,17 +145,18 @@ class DevelopmentVerifier:
                             and dt.datetime.fromisoformat(r['created_at'].replace('Z','+00:00')) >= requested]
                 latest = latest_runs_by_name(runs)
                 evidence['repositories'][repo] = {'revision': revision, 'runs': [
-                    {'id': r.get('id'), 'name': r.get('name'), 'url': run_url(r), 'status': r.get('status'),
-                     'conclusion': r.get('conclusion')} for r in latest.values()]}
+                    dict({'id': r.get('id'), 'name': r.get('name'), 'url': run_url(r),
+                          'status': r.get('status'), 'conclusion': r.get('conclusion')},
+                         **({'accepted': True} if accepted_run(repo, r) else {}))
+                    for r in latest.values()]}
                 if not latest:
                     pending.append(f'{repo}: waiting for exact-commit CI')
-                if latest and all(r.get('status') == 'completed' and
-                        r.get('conclusion') in {'success', 'skipped', 'neutral'} for r in latest.values()):
+                if latest and all(passed(repo, r) for r in latest.values()):
                     complete.add(repo)
                 for name, run in latest.items():
                     if run.get('status') != 'completed':
                         pending.append(f'{repo} {name}: {run.get("status")}')
-                    elif run.get('conclusion') not in {'success', 'skipped', 'neutral'}:
+                    elif not passed(repo, run):
                         failures.append(f'{repo} {name}: {run.get("conclusion")} {run_url(run)}')
             self.save(evidence)
             if failures:
