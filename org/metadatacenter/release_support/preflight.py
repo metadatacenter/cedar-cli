@@ -45,7 +45,14 @@ from org.metadatacenter.release_support.lifecycle import (
 from org.metadatacenter.release_support.output import (
     console,
 )
+from org.metadatacenter.release_support.packages import (
+    _verify_integrity,
+    compare_cee_packages,
+)
 from org.metadatacenter.release_support.policy import (
+    DEV_CEE_NAME,
+    PUBLIC_CEE_NAME,
+    PUBLIC_NPM_REGISTRY,
     NPM_RELEASE_SURFACES,
     CHECKOUT_BYTES_PER_REPOSITORY,
     FRONTEND_BUILD_SURFACES,
@@ -783,6 +790,114 @@ class ReleasePreflight:
                         "choose an unused release version",
                     ))
         return findings
+
+    def check_cee_promotion_rehearsal(self) -> list[PreflightFinding]:
+        """Run the release's CEE promotion proof before the train, against CEE's own build.
+
+        `release plan` proves the train's CEE a promotion of the public one, but only once the
+        train exists, so a refusal spends that train. CEE's CI publishes a development package
+        for every develop commit, built from the same source against CEE's pinned model and
+        design tokens. When those pins name the commits the train will build, that package
+        differs from the train's in its version strings alone, and the same proof answers now.
+        When they do not, a refusal may be the pins' doing and is reported without blocking.
+        """
+        cee_version = self.manifest.get("ceeVersion")
+        revisions = self.manifest.get("sourceRepositories", {})
+        revision = revisions.get("cedar-embeddable-editor")
+        if not isinstance(cee_version, str) or not isinstance(revision, str):
+            return []
+        check = "cee-promotion"
+        public_identity = f"{PUBLIC_CEE_NAME}@{cee_version}"
+        try:
+            public = self.http.read_json(
+                f"{PUBLIC_NPM_REGISTRY}{PUBLIC_CEE_NAME}/{urllib.parse.quote(cee_version)}",
+                missing_ok=True)
+            if public is None:
+                return [PreflightFinding(
+                    check, "warn",
+                    f"{public_identity} is not on npmjs yet, so the promotion proof waits for "
+                    "release plan; publish CEE before the train to rehearse it now")]
+            development = self._scoped_package_metadata(DEV_CEE_NAME)
+        except ReleaseError as error:
+            return [PreflightFinding(check, "fail", str(error))]
+        # Prefer the package CEE's own CI published to an earlier train's build of the commit.
+        built = sorted(
+            (version for version, record in development.get("versions", {}).items()
+             if isinstance(record, dict) and record.get("gitHead") == revision),
+            key=lambda version: (re.search(r"\.t\d+$", version) is None,
+                                 development.get("time", {}).get(version, "")))
+        if not built:
+            return [PreflightFinding(
+                check, "fail",
+                f"no {DEV_CEE_NAME} development package records CEE develop {revision[:12]}",
+                "wait for CEE's push CI to publish it, then rehearse again")]
+        dev_version = built[-1]
+        package = self._source_json("cedar-embeddable-editor", "package.json") or {}
+        stale = self._cee_pins_behind_train(package, revisions)
+        try:
+            dev_record = development["versions"][dev_version]
+            dev_tarball = self.http.read(dev_record["dist"]["tarball"])
+            _verify_integrity(f"{DEV_CEE_NAME}@{dev_version}", dev_tarball,
+                              dev_record["dist"]["integrity"])
+            public_tarball = self.http.read(public[0]["dist"]["tarball"])
+            _verify_integrity(public_identity, public_tarball, public[0]["dist"]["integrity"])
+            compare_cee_packages(
+                dev_tarball, dev_version, public_tarball, cee_version,
+                development_allow_scripts=package.get("allowScripts"),
+                development_design_tokens_spec=(package.get("devDependencies") or {}).get(
+                    "@org.metadatacenter/cedar-design-tokens"),
+                # CI publishes under a commit-derived version a bundle built under the committed one.
+                development_bundle_version=package.get("version"),
+            )
+        except (ReleaseError, KeyError, TypeError) as error:
+            if stale:
+                return [PreflightFinding(
+                    check, "warn",
+                    f"{DEV_CEE_NAME}@{dev_version} is not a promotion of {public_identity} "
+                    f"({error}), but CEE pins {', '.join(stale)} behind the train's source, so "
+                    "the train's CEE may still be; move the pins to rehearse exactly")]
+            return [PreflightFinding(
+                check, "fail",
+                f"{DEV_CEE_NAME}@{dev_version}, built from CEE develop {revision[:12]}, is not a "
+                f"promotion of {public_identity}: {error}",
+                "release plan would refuse this train's CEE the same way; release CEE from this "
+                "develop, or fix the difference, before dispatching")]
+        console.print(
+            f"CEE promotion rehearsal: {dev_version} -> {cee_version}, executable identical after "
+            "declared release-provenance changes", markup=False)
+        if stale:
+            return [PreflightFinding(
+                check, "warn",
+                f"the rehearsal passed, but CEE pins {', '.join(stale)} behind the train's source")]
+        return []
+
+    def _scoped_package_metadata(self, name: str) -> dict:
+        url = NEXUS_NPM_REGISTRY.rstrip("/") + "/" + urllib.parse.quote(name, safe="")
+        result = self.http.read_json(url, missing_ok=True)
+        if result is None:
+            raise ReleaseError(f"{NEXUS_NPM_REGISTRY} has no {name} package")
+        return result[0]
+
+    def _cee_pins_behind_train(self, package: dict, revisions: dict) -> list[str]:
+        """The CEDAR packages CEE pins that were not built from the commit the train captures."""
+        pins = (
+            ("cedar-model-typescript-library", "@org.metadatacenter/cedar-model-typescript-library",
+             (package.get("dependencies") or {}).get("cedar-model-typescript-library")),
+            ("cedar-design-tokens", "@org.metadatacenter/cedar-design-tokens",
+             (package.get("devDependencies") or {}).get("@org.metadatacenter/cedar-design-tokens")),
+        )
+        behind = []
+        for repository, name, spec in pins:
+            if not isinstance(spec, str) or repository not in revisions:
+                continue
+            version = spec.rsplit("@", 1)[-1] if spec.startswith("npm:") else spec
+            try:
+                record = self._scoped_package_metadata(name).get("versions", {}).get(version)
+            except ReleaseError:
+                record = None
+            if not isinstance(record, dict) or record.get("gitHead") != revisions[repository]:
+                behind.append(f"{name}@{version}")
+        return behind
 
     def check_develop_is_green(self) -> list[PreflightFinding]:
         """Refuse to release a source commit that its own CI reports broken.

@@ -4881,6 +4881,79 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertIn("already carries release-2.9.3", findings[0].message)
 
+    def _cee_rehearsal(self, *, public=True, git_head="c" * 40, pins_current=True,
+                       public_bundle=None):
+        """A preflight whose registries hold CEE's CI build of develop and the public CEE."""
+        import base64 as b64
+
+        ci_version = "2.0.4-dev.20260828.cccccc1"
+        committed = "2.0.4-dev.20260827.bbbbbbbb"
+        dev = package_tarball(
+            DEV_CEE_NAME, ci_version, development=True,
+            bundle=provenance_bundle(committed, "x", "2026-08-27 12:23 10212094"),
+            changelog=PUBLIC_CHANGELOG)
+        published = package_tarball(
+            PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
+            bundle=public_bundle or provenance_bundle(PUBLIC_VERSION, "x", "2026-08-27 15:09"),
+            changelog=PUBLIC_CHANGELOG)
+
+        def sri(content):
+            return "sha512-" + b64.b64encode(hashlib.sha512(content).digest()).decode()
+
+        revisions = {"cedar-embeddable-editor": "c" * 40,
+                     "cedar-model-typescript-library": "m" * 40, "cedar-design-tokens": "t" * 40}
+        nexus = release_train.NEXUS_NPM_REGISTRY.rstrip("/") + "/"
+
+        class Registries(FakeNexus):
+            def read(self, url, *, missing_ok=False):
+                return {"https://example/dev.tgz": dev, "https://example/public.tgz": published}[url]
+
+            def read_json(self, url, *, missing_ok=False):
+                if url.startswith("https://registry.npmjs.org/"):
+                    if not public:
+                        return None
+                    return {"dist": {"tarball": "https://example/public.tgz",
+                                     "integrity": sri(published)}}, b"{}"
+                if url == nexus + "%40org.metadatacenter%2Fcedar-embeddable-editor":
+                    return {"versions": {ci_version: {
+                        "gitHead": git_head,
+                        "dist": {"tarball": "https://example/dev.tgz", "integrity": sri(dev)}}},
+                        "time": {ci_version: "2026-08-28T00:00:00Z"}}, b"{}"
+                head = ("m" if "model" in url else "t") * 40 if pins_current else "0" * 40
+                return {"versions": {"1.0.5-dev.1": {"gitHead": head}}}, b"{}"
+
+        package = {"version": committed,
+                   "dependencies": {"cedar-model-typescript-library":
+                                    "npm:@org.metadatacenter/cedar-model-typescript-library@1.0.5-dev.1"},
+                   "devDependencies": {"@org.metadatacenter/cedar-design-tokens": "1.0.5-dev.1"}}
+        manifest = dict(manifest_fixture(), ceeVersion=PUBLIC_VERSION, sourceRepositories=revisions)
+        preflight = self._preflight(manifest=manifest, http=Registries())
+        with patch.object(ReleasePreflight, "_source_json", return_value=package):
+            return preflight.check_cee_promotion_rehearsal()
+
+    def test_cee_rehearsal_proves_the_ci_build_of_develop_before_a_train(self):
+        # The bundle reports the committed version, the package the commit-derived one.
+        self.assertEqual([], self._cee_rehearsal())
+
+    def test_cee_rehearsal_waits_for_an_unpublished_public_cee(self):
+        findings = self._cee_rehearsal(public=False)
+        self.assertEqual(["warn"], [finding.severity for finding in findings])
+        self.assertIn("not on npmjs yet", findings[0].message)
+
+    def test_cee_rehearsal_needs_ci_to_have_published_develop(self):
+        findings = self._cee_rehearsal(git_head="d" * 40)
+        self.assertEqual(["fail"], [finding.severity for finding in findings])
+        self.assertIn("records CEE develop", findings[0].message)
+
+    def test_cee_rehearsal_blocks_a_refusal_unless_cee_pins_lag_the_train(self):
+        changed = provenance_bundle(PUBLIC_VERSION, "x", "2026-08-27 15:09", suffix="different")
+        findings = self._cee_rehearsal(public_bundle=changed)
+        self.assertEqual(["fail"], [finding.severity for finding in findings])
+        self.assertIn("release plan would refuse", findings[0].remedy)
+        findings = self._cee_rehearsal(public_bundle=changed, pins_current=False)
+        self.assertEqual(["warn"], [finding.severity for finding in findings])
+        self.assertIn("behind the train's source", findings[0].message)
+
     def test_existing_maven_and_npm_release_versions_are_refused(self):
         class OccupiedRegistry(FakeNexus):
             def read_json(self, url, *, missing_ok=False):

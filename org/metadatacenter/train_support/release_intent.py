@@ -55,7 +55,8 @@ def preflight(intent, *, source=None, environment=None, runner=None, preflight_f
         checks = ('check_no_release_in_progress', 'check_toolchain', 'check_profile',
                   'check_git_identity', 'check_nexus_authorization', 'check_npm_authorization',
                   'check_npm_configuration', 'check_push_permission', 'check_target_version_unused',
-                  'check_target_artifacts_unused', 'check_source_contract', 'check_generated_version_files',
+                  'check_target_artifacts_unused', 'check_cee_promotion_rehearsal',
+                  'check_source_contract', 'check_generated_version_files',
                   'check_license_files', 'check_remote_survey')
         findings = checker._run_checks(checks)
     except (ReleaseError, OSError, KeyError) as error:
