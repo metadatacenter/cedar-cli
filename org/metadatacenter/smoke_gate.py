@@ -25,6 +25,7 @@ is not running.
 
 from __future__ import annotations
 from org.metadatacenter.util.InvocationContext import invocation_environment
+from org.metadatacenter.util.local_stack_lock import local_stack
 
 import datetime as dt
 import hashlib
@@ -319,6 +320,15 @@ def run_smoke(
         raise ValueError("the split tier's timeout cap must be an integer number of seconds from "
                          f"{SPLIT_TIMEOUT_CAP_RANGE[0]} to {SPLIT_TIMEOUT_CAP_RANGE[1]}")
     home = _home(cedar_home or invocation_environment().get("CEDAR_HOME"))
+    with local_stack(home, console.print):
+        return _run_tiers(home, rest_workers=rest_workers, split_lanes=split_lanes,
+                          split_timeout_cap=split_timeout_cap, runner=runner, clock=clock,
+                          environment=environment, sleeper=sleeper)
+
+
+def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, clock, environment,
+               sleeper) -> int:
+    """The smoke itself, run while this process holds the local stack."""
     environment = dict(environment if environment is not None else invocation_environment())
     e2e = home / E2E
     if not (e2e / "package.json").exists():

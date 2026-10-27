@@ -26,6 +26,7 @@ from org.metadatacenter.util.InvocationContext import default_build_jobs, defaul
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.NativeWorker import NativeWorker
 from org.metadatacenter.smoke_gate import run_smoke
+from org.metadatacenter.util.local_stack_lock import local_stack
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(maven.app, name="maven", help="Maven cache operations...")
@@ -362,29 +363,32 @@ def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False):
             console.print("Frontend checks passed. No runtime was activated or restarted; "
                           "whole-stack acceptance requires cedarcli build frontends.")
             return selection
-        with timing.phase('local deployment'):
-            reactor.activate_runtime(Util.cedar_home, selection)
-            console.print("Restarting local frontends with this reactor's exact component selection.")
-            # Verification installs in isolated copies. A first deployment (or a moved lockfile)
-            # still needs the live checkout's tools before the controller syncs local components.
-            result = NativeWorker.restart(
-                NativeWorker.FRONTENDS, refresh_dependencies=True, ready_through_nginx=True)
-            if result.returncode:
-                raise typer.Exit(result.returncode)
-        with timing.phase('served bundle verification'):
-            home = Path(Util.cedar_home)
-            record = json.loads((home / '.reactor/builds' / (selection.evidence + '.json')).read_text())
-            config = json.loads((home / 'cedar-development/ops/frontend-train.json').read_text())
-            applications = {frontend['repository'] for frontend in config['frontends']}
-            for repository in record['repositories']:
-                if Path(repository).parts[0] not in applications:
-                    continue
-                subprocess.run([sys.executable, str(home / 'cedar-development/ops/frontend_reactor_runtime.py'),
-                                'verify', str(home), str(home / repository)], check=True)
-        with timing.phase('whole-stack smoke'):
-            code = run_smoke(rest_workers=4 if current_context().settings.build_workers >= 12 else None)
-            if code:
-                raise typer.Exit(code)
+        # Checks run in isolated copies, but the frontends this restarts and the stack the smoke
+        # drives are shared, so another reactor or smoke waits until this one is done with them.
+        with local_stack(Util.cedar_home, console.print):
+            with timing.phase('local deployment'):
+                reactor.activate_runtime(Util.cedar_home, selection)
+                console.print("Restarting local frontends with this reactor's exact component selection.")
+                # Verification installs in isolated copies. A first deployment (or a moved lockfile)
+                # still needs the live checkout's tools before the controller syncs local components.
+                result = NativeWorker.restart(
+                    NativeWorker.FRONTENDS, refresh_dependencies=True, ready_through_nginx=True)
+                if result.returncode:
+                    raise typer.Exit(result.returncode)
+            with timing.phase('served bundle verification'):
+                home = Path(Util.cedar_home)
+                record = json.loads((home / '.reactor/builds' / (selection.evidence + '.json')).read_text())
+                config = json.loads((home / 'cedar-development/ops/frontend-train.json').read_text())
+                applications = {frontend['repository'] for frontend in config['frontends']}
+                for repository in record['repositories']:
+                    if Path(repository).parts[0] not in applications:
+                        continue
+                    subprocess.run([sys.executable, str(home / 'cedar-development/ops/frontend_reactor_runtime.py'),
+                                    'verify', str(home), str(home / repository)], check=True)
+            with timing.phase('whole-stack smoke'):
+                code = run_smoke(rest_workers=4 if current_context().settings.build_workers >= 12 else None)
+                if code:
+                    raise typer.Exit(code)
         console.print("Frontend reactor completed: build, local deployment and whole-stack smoke passed.")
 
 
