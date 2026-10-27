@@ -4,6 +4,7 @@ from org.metadatacenter.component_pins import advance_component_pins
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
+from org.metadatacenter.planner.Planner import PlanError
 from org.metadatacenter.planner.PublishPlanner import PublishPlanner
 from org.metadatacenter.util.CliResult import exit_on_failure
 from org.metadatacenter.util.GlobalContext import GlobalContext
@@ -98,13 +99,19 @@ def baselines(
 
 
 @app.command("this")
-def this(wd: str = typer.Option(None, help="Working directory"),
+def this(wd: str = typer.Option(
+             None, help="A directory in the repository to publish. Default: the directory cedarcli "
+                        "was called from, which a relative path is also resolved against."),
          dry_run: bool = typer.Option(False, help="Dry run"),
          dump_plan: bool = typer.Option(False, help="Dump plan")
          ):
     GlobalContext.mark_global_task_type(TaskType.PUBLISH)
     plan = Plan("Publish this")
-    PublishPlanner.this(plan, wd)
+    try:
+        PublishPlanner.this(plan, wd)
+    except PlanError as error:
+        typer.echo(str(error))
+        raise typer.Exit(1) from error
     plan_executor.execute(plan, dry_run, dump_plan)
 
 

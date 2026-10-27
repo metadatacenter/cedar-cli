@@ -17,6 +17,7 @@ The fake venv provides `python3` on `PATH` the way a real one does, so the
 wrapper under test resolves an interpreter without depending on what the machine
 running the suite happens to offer outside a virtualenv.
 """
+import json
 import os
 from pathlib import Path
 import shutil
@@ -116,6 +117,30 @@ class CliWrapperTest(unittest.TestCase):
                 env={**os.environ, 'CEDAR_HOME': str(home)}, capture_output=True, text=True)
             self.assertIn(f'CALLER:{caller.resolve()}', result.stdout)
             self.assertIn('AFTER:unset', result.stdout, 'the variable leaked into the calling shell')
+
+    def test_this_commands_receive_the_callers_arguments_unchanged(self):
+        """The wrapper used to append `--wd="$PWD"` to `build this` and `publish this`.
+
+        The later option wins, so an operator's own `--wd` was always overridden by the directory
+        they happened to be in. The CLI learns that directory from CEDAR_CLI_CALLER_DIR instead.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            home, script = self.make_fixture(directory, 0)
+            caller = home / 'caller'
+            caller.mkdir()
+            (home / 'cedar-cli' / 'cedar.py').write_text(
+                'import json, sys\nprint("ARGV:" + json.dumps(sys.argv[1:]))\n')
+            for arguments in (['build', 'this', '--wd', '../cedar-bridge-server'],
+                              ['build', 'this', '--wd=/elsewhere', '--skip-tests'],
+                              ['build', 'this'], ['publish', 'this', '--wd', 'module'],
+                              ['publish', 'this']):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        ['bash', '-c', 'source "$1" "${@:2}"', 'test', str(script), *arguments],
+                        cwd=caller, env={**os.environ, 'CEDAR_HOME': str(home)},
+                        capture_output=True, text=True)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn('ARGV:' + json.dumps(arguments), result.stdout)
 
     def test_setup_failures_never_invoke_python_or_change_cwd(self):
         for failure in ('directory', 'activation', 'interpreter'):

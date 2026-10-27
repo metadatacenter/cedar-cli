@@ -628,6 +628,56 @@ class CeePromotionTest(unittest.TestCase):
                 development_allow_scripts=allow_scripts,
             )
 
+    def test_bundle_without_an_embedded_manifest_is_proved_by_its_version_and_load_trace(self):
+        # Since CEE 2.0.30 a bundle embeds its version alone, not its package.json, so it names
+        # no design-token pin, install policy or model package.
+        allow_scripts = {"esbuild@0.28.1": True}
+        policy = ",allowScripts:" + json.dumps(allow_scripts, separators=(",", ":"))
+        token_spec = "npm:@org.metadatacenter/cedar-design-tokens@0.1.0-dev.20261027.g123456789abc.t1144"
+        token_field = ',devDependencies:{"@org.metadatacenter/cedar-design-tokens":"0.1.0"}'
+
+        def bundle(cee_version, load_trace, suffix=""):
+            return f"code-before|{cee_version}|code-middle|code-after|{load_trace}|{suffix}".encode()
+
+        def package(development, suffix=""):
+            return package_tarball(
+                DEV_CEE_NAME if development else PUBLIC_CEE_NAME,
+                DEV_VERSION if development else PUBLIC_VERSION,
+                development=development,
+                bundle=bundle(
+                    DEV_VERSION if development else PUBLIC_VERSION,
+                    "2026-08-27 12:23 10212094" if development else "2026-08-27 15:09",
+                    suffix,
+                ),
+                changelog=PUBLIC_CHANGELOG,
+            )
+
+        def compare(public):
+            return compare_cee_packages(
+                package(True), DEV_VERSION, public, PUBLIC_VERSION,
+                development_allow_scripts=allow_scripts,
+                development_design_tokens_spec=token_spec,
+            )
+
+        proof = compare(package(False))
+        self.assertIn("cedar-embeddable-editor.js:CEE version", proof["allowedMetadataChanges"])
+        self.assertIn("cedar-embeddable-editor.js:load trace", proof["allowedMetadataChanges"])
+        for label in (
+            "model package identity",
+            "embedded allowScripts install policy",
+            "embedded design-token development pin",
+        ):
+            self.assertNotIn(f"cedar-embeddable-editor.js:{label}", proof["allowedMetadataChanges"])
+        # A public bundle that carries what the train's does not is not a promotion of it.
+        for suffix, expected in (
+            (token_field, "exactly one embedded design-token development pin"),
+            (policy, "exactly one embedded allowScripts install policy"),
+            ("1.0.4", "outside declared release provenance"),
+        ):
+            with self.subTest(suffix=suffix):
+                with self.assertRaisesRegex(ReleaseError, expected):
+                    compare(package(False, suffix))
+
     def test_change_to_older_changelog_content_is_rejected(self):
         dev = package_tarball(
             DEV_CEE_NAME, DEV_VERSION, development=True,

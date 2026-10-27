@@ -327,25 +327,23 @@ def _reference_version(cedar_home, item):
 
 
 def _ci_head_version(cedar_home, item):
-    """The development version the component's CI published from its develop head, or why none.
+    """The development version the component's CI published from its pushed develop head, or why none.
 
     The CI names its package `<base>-dev.<date>.<sha7>` after the commit it built, reading the base
     from the committed manifest and the date with the git invocation below, so this derives it the
-    same way. A head that is not pushed, a tree holding changes no commit carries, a release
-    preparation head, and a version the registry does not hold yet each leave the consumers where
-    they are, and the plan says which.
+    same way. Consumers follow the newest package, as a Maven build takes the newest snapshot, so the
+    head is origin/develop as fetched now. Local commits not yet pushed and uncommitted edits are in
+    no package, and are what a development build uses from the checkout, so they hold nothing back. A
+    release preparation head, and a version the registry does not hold yet, each leave the consumers
+    where they are, and the plan says which.
     """
     directory = Path(cedar_home) / item["repository"]
-    head = _git(directory, ["rev-parse", "--verify", "develop"])
+    _git(directory, ["fetch", "--quiet", "origin", "develop"])
+    head = _git(directory, ["rev-parse", "--verify", "origin/develop"])
     if head is None:
-        raise ComponentPinError(f"cannot read the develop head of {directory.name}")
-    if _git(directory, ["rev-parse", "--verify", "origin/develop"]) != head:
-        return None, "develop is not the pushed origin/develop, so its CI has not built it"
-    if _git(directory, ["status", "--porcelain=v1", "--untracked-files=no"]):
-        return None, ("uncommitted changes, which no CI package contains; "
-                      "commit and push them, then run this again")
+        raise ComponentPinError(f"cannot read the pushed develop head of {directory.name}")
     manifest = item.get("sourceManifest", "package.json")
-    committed = _git(directory, ["show", f"develop:{manifest}"])
+    committed = _git(directory, ["show", f"origin/develop:{manifest}"])
     try:
         version = json.loads(committed or "")["version"]
     except (ValueError, KeyError, TypeError) as error:
@@ -353,9 +351,9 @@ def _ci_head_version(cedar_home, item):
     if "-dev." not in version:
         return None, (f"develop carries the release version {version}, "
                       "from which its CI publishes no development package")
-    date = _git(directory, ["show", "-s", "--format=%cd", "--date=format:%Y%m%d", "develop"],
+    date = _git(directory, ["show", "-s", "--format=%cd", "--date=format:%Y%m%d", "origin/develop"],
                 environment={"TZ": "UTC"})
-    sha = _git(directory, ["rev-parse", f"--short={CI_SHA_LENGTH}", "develop"])
+    sha = _git(directory, ["rev-parse", f"--short={CI_SHA_LENGTH}", "origin/develop"])
     target = f"{version.split('-')[0]}-dev.{date}.{sha}"
     if not _registry_holds(item["registry"], item["publishedName"], target):
         return None, f"{target} is not in the registry yet; its CI run on {sha} publishes it"

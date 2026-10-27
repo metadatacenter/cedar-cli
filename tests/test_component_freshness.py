@@ -246,6 +246,35 @@ class ComponentWorkerTest(unittest.TestCase):
         behind = [f for f in findings if f.surface == Surface.PIN and f.state == ComponentState.BEHIND]
         self.assertEqual(["Add embeddable field designer"], list(behind[0].unseen))
 
+    def _staged_host(self, entry, hosted_bundle):
+        """A host serving the designer from a package that ships both bundles."""
+        host = self.root / "cedar-template-designer"
+        self._install(host, "cedar-embeddable-designer", "0.1.0-dev.20261026.aaaaaaa", "// standalone")
+        package_dir = host / "node_modules" / "cedar-embeddable-designer"
+        (package_dir / "cedar-embeddable-designer.host-fonts.js").write_text(hosted_bundle)
+        (host / "app/components").mkdir(parents=True)
+        (host / "app/components/manifest.json").write_text(json.dumps({"cedar-embeddable-designer": entry}))
+        return host
+
+    def test_a_staged_host_fonts_bundle_is_compared_with_the_file_it_came_from(self):
+        hosted = sha256(b"// host fonts").hexdigest()
+        host = self._staged_host({"source": "package", "bundle": "cedar-embeddable-designer.host-fonts.js",
+                                  "sha256": hosted}, "// host fonts")
+        [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
+        self.assertEqual(ComponentState.CURRENT, finding.state)
+
+    def test_a_staged_bundle_that_matches_neither_package_file_is_mismatched(self):
+        host = self._staged_host({"source": "package", "bundle": "cedar-embeddable-designer.host-fonts.js",
+                                  "sha256": sha256(b"// standalone").hexdigest()}, "// host fonts")
+        [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
+        self.assertEqual(ComponentState.MISMATCHED, finding.state)
+
+    def test_a_manifest_naming_a_file_no_package_ships_is_never_read(self):
+        host = self._staged_host({"source": "package", "bundle": "../../package.json",
+                                  "sha256": sha256(b"// host fonts").hexdigest()}, "// host fonts")
+        [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
+        self.assertEqual(ComponentState.MISMATCHED, finding.state)
+
     def _train_configuration(self, configuration):
         ops = self.root / "cedar-development" / "ops"
         ops.mkdir(parents=True, exist_ok=True)

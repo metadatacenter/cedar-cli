@@ -38,11 +38,7 @@ _cedarcli_run() {
       echo "environment with the three commands in the cedar-cli README." >&2
       exit 1
     fi
-    if { [ "${1:-}" = build ] || [ "${1:-}" = publish ]; } && [ "${2:-}" = this ]; then
-      .venv/bin/python3 "$CEDAR_HOME/cedar-cli/cedar.py" "$@" --wd="$cedar_cli_cwd"
-    else
-      .venv/bin/python3 "$CEDAR_HOME/cedar-cli/cedar.py" "$@"
-    fi
+    .venv/bin/python3 "$CEDAR_HOME/cedar-cli/cedar.py" "$@"
   ); then
     cedar_cli_rc=0
   else

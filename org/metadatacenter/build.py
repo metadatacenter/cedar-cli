@@ -17,9 +17,10 @@ from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.BuildPlanner import BuildPlanner
+from org.metadatacenter.planner.Planner import PlanError
 from org.metadatacenter.util.BuildSafety import capture_estate_state, changed_repositories, tracked_path_state
 from org.metadatacenter.util.BuildSafety import BuildSafetyError
-from org.metadatacenter.util.NodeBuildCheck import require_plan_node
+from org.metadatacenter.util.NodeBuildCheck import is_frontend_build, require_plan_node
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.InvocationContext import default_build_jobs, default_build_workers, default_maven_threads
 from org.metadatacenter.util.Util import Util
@@ -157,20 +158,35 @@ def build_input_roots(plan):
     return roots
 
 
-# Profiles and frontend configuration live in this mixed-purpose repository.
-# Backend audits, repairs and documentation are not build inputs, for Java either.
-FRONTEND_DEVELOPMENT_INPUTS = (
-    'bin', 'ops/frontend-train.json', 'ops/frontend_inventory.py',
+# This mixed-purpose repository also holds backend audits, repairs and documentation, and none
+# of them is a build input. A build runs in the environment that the native or Docker profile
+# under bin exports, and the profile sources the scripts beside it. A Java build reads nothing
+# else here. Maven takes its settings from ~/.m2, and no POM, Java source or test reads a file in
+# this repository.
+JAVA_DEVELOPMENT_INPUTS = ('bin',)
+# A frontend build also reads the frontend inventory and runs the controller and build scripts.
+FRONTEND_DEVELOPMENT_INPUTS = JAVA_DEVELOPMENT_INPUTS + (
+    'ops/frontend-train.json', 'ops/frontend_inventory.py',
     'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py', 'ops/frontend_ready.py',
     'ops/build-native-split-frontend.sh', 'ops/write-native-frontend-build-info.mjs',
 )
 
 
-def capture_build_state(home: Path, frontend_only: bool):
+def builds_frontends(plan):
+    """Whether any task in the plan runs a frontend build, in an isolated copy or in place.
+
+    The Node check selects its tasks the same way. A frontend repository whose build is skipped,
+    or a dist repository with nothing to build, reads none of the frontend inputs.
+    """
+    return is_frontend_build(plan) or any(builds_frontends(task) for task in plan.tasks)
+
+
+def capture_build_state(home: Path, frontends: bool):
     state = capture_estate_state(home)
     development = (home / 'cedar-development').resolve()
     if development in state:
-        state[development] = tracked_path_state(development, FRONTEND_DEVELOPMENT_INPUTS)
+        inputs = FRONTEND_DEVELOPMENT_INPUTS if frontends else JAVA_DEVELOPMENT_INPUTS
+        state[development] = tracked_path_state(development, inputs)
     return state
 
 
@@ -203,7 +219,8 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
         console.print(str(error), markup=False)
         raise typer.Exit(code=1) from error
     input_roots = build_input_roots(plan)
-    before = capture_build_state(Path(Util.cedar_home), frontend_only)
+    frontends = builds_frontends(plan)
+    before = capture_build_state(Path(Util.cedar_home), frontends)
     failure = None
     try:
         with reactor_evidence.session(plan), reactor.session_for_plan(Util.cedar_home, plan):
@@ -215,7 +232,7 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
                     selection, reactor_evidence.finish(Util.cedar_home, selection))
     except BaseException as error:
         failure = error
-    after = capture_build_state(Path(Util.cedar_home), frontend_only)
+    after = capture_build_state(Path(Util.cedar_home), frontends)
     changed = [path for path in changed_repositories(before, after) if path in input_roots]
     if changed:
         names = ", ".join(path.name for path in changed)
@@ -231,7 +248,9 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
 
 
 @app.command("this")
-def this(wd: str = typer.Option(None, help="Working directory"),
+def this(wd: str = typer.Option(
+             None, help="A directory in the repository to build. Default: the directory cedarcli "
+                        "was called from, which a relative path is also resolved against."),
          dry_run: bool = typer.Option(False, help="Dry run"),
          dump_plan: bool = typer.Option(False, help="Dump plan"),
          tests: bool = typer.Option(
@@ -239,7 +258,11 @@ def this(wd: str = typer.Option(None, help="Working directory"),
     configure_java_tests(tests)
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build this")
-    BuildPlanner.this(plan, wd)
+    try:
+        BuildPlanner.this(plan, wd)
+    except PlanError as error:
+        console.print(str(error), markup=False, soft_wrap=True)
+        raise typer.Exit(1) from error
     execute_java_build(plan, dry_run, dump_plan)
 
 

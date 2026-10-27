@@ -211,23 +211,35 @@ def _normalize_bundle_provenance(
     public_model_version: str,
     development_allow_scripts: dict[str, bool] | None = None,
     development_design_tokens_spec: str | None = None,
-) -> tuple[bytes, bytes]:
-    """Normalize provenance and captured build-only install policy, never executable code."""
+) -> tuple[bytes, bytes, list[str]]:
+    """Normalize provenance and captured build-only install policy, never executable code.
+
+    Returns both bundles and the labels of the normalizations applied. Until CEE 2.0.30 the
+    bundle embedded CEE's whole package.json, and with it the design-token pin, the install
+    policy and the model package identity. A bundle that embeds only its version carries none of
+    the three, so each is normalized only where the bundles carry it. Skipping one leaves more
+    bytes to compare, never fewer.
+    """
 
     normalized_dev = dev_bundle
     normalized_public = public_bundle
+    applied = []
     if development_design_tokens_spec is not None:
-        # The root build manifest is embedded in CEE. Normalize only this one
-        # build-time pin, inside devDependencies; compiled styles still compare.
+        # Normalize only this one build-time pin, inside an embedded build manifest's
+        # devDependencies; compiled styles still compare.
         pin = rb'(?:npm:@org\.metadatacenter/cedar-design-tokens@)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?'
         if not re.fullmatch(pin, development_design_tokens_spec.encode()):
             raise ReleaseError('Train design-token dependency is not an exact package pin')
         field = rb'("@org\.metadatacenter/cedar-design-tokens":"' + pin + rb'")'
         pattern = re.compile(rb'(?:devDependencies|"devDependencies"):\{[^{}]*?' + field)
+        # A bundle on either side that carries the pin requires exactly one on both.
+        embedded = bool(pattern.search(normalized_dev) or pattern.search(normalized_public))
+        if embedded:
+            applied.append("embedded design-token development pin")
         for identity, bundle, expected in (
             (dev_identity, normalized_dev, development_design_tokens_spec),
             (public_identity, normalized_public, None),
-        ):
+        ) if embedded else ():
             value = _one_match(identity, 'embedded design-token development pin', pattern, bundle)
             if expected is not None and value != (
                 b'"@org.metadatacenter/cedar-design-tokens":"' + expected.encode() + b'"'
@@ -256,22 +268,24 @@ def _normalize_bundle_provenance(
                 separators=(",", ":"),
             ).encode("utf-8")
         )
-        normalized_dev = _replace_once(
-            dev_identity,
-            "embedded allowScripts install policy",
-            normalized_dev,
-            policy,
-            b"",
-        )
         public_count = normalized_public.count(policy)
-        if public_count > 1:
-            raise ReleaseError(
-                f"{public_identity} bundle must contain at most one embedded allowScripts "
-                f"install policy; found {public_count}"
+        if policy in normalized_dev or public_count:
+            applied.append("embedded allowScripts install policy")
+            normalized_dev = _replace_once(
+                dev_identity,
+                "embedded allowScripts install policy",
+                normalized_dev,
+                policy,
+                b"",
             )
-        if public_count == 1:
-            normalized_public = normalized_public.replace(policy, b"", 1)
-    substitutions = (
+            if public_count > 1:
+                raise ReleaseError(
+                    f"{public_identity} bundle must contain at most one embedded allowScripts "
+                    f"install policy; found {public_count}"
+                )
+            if public_count == 1:
+                normalized_public = normalized_public.replace(policy, b"", 1)
+    substitutions = [
         (
             "CEE version",
             dev_version.encode(),
@@ -279,27 +293,31 @@ def _normalize_bundle_provenance(
             b"<cee-version>",
         ),
         (
-            "model package identity",
-            _one_match(dev_identity, "development model package identity", DEV_MODEL_SPEC_RE,
-                       dev_bundle),
-            public_model_version.encode(),
-            b"<model-package-identity>",
-        ),
-        (
             "load trace",
             _one_match(dev_identity, "load trace", LOAD_TRACE_RE, dev_bundle),
             _one_match(public_identity, "load trace", LOAD_TRACE_RE, public_bundle),
             b"<cee-load-trace>",
         ),
-    )
+    ]
+    # The model package is named only by an embedded build manifest. Without one, the public
+    # model version is left in place, so a bundle that names it anyway fails the comparison.
+    if DEV_MODEL_SPEC_RE.search(dev_bundle):
+        substitutions.insert(1, (
+            "model package identity",
+            _one_match(dev_identity, "development model package identity", DEV_MODEL_SPEC_RE,
+                       dev_bundle),
+            public_model_version.encode(),
+            b"<model-package-identity>",
+        ))
     for label, dev_value, public_value, placeholder in substitutions:
+        applied.append(label)
         normalized_dev = _replace_once(
             dev_identity, label, normalized_dev, dev_value, placeholder,
         )
         normalized_public = _replace_once(
             public_identity, label, normalized_public, public_value, placeholder,
         )
-    return normalized_dev, normalized_public
+    return normalized_dev, normalized_public, applied
 
 
 def _canonicalize_minified_renames(
@@ -400,6 +418,9 @@ def compare_cee_packages(
             f"development-only={only_dev}, public-only={only_public}"
         )
     minified_renames = 0
+    # The normalizations each bundle needed, by bundle name; a bundle identical in both packages
+    # needed none.
+    applied_by_bundle: dict[str, list[str]] = {}
     changed = [
         name for name in sorted(normalized_dev)
         if normalized_dev[name] != normalized_public[name]
@@ -452,7 +473,7 @@ def compare_cee_packages(
             assert public_model_version is not None
             # Each bundle carries the same provenance strings, so each is proved the same way.
             for bundle_name, manifest_name in changed_pairs:
-                dev_bundle, public_bundle = _normalize_bundle_provenance(
+                dev_bundle, public_bundle, applied_by_bundle[bundle_name] = _normalize_bundle_provenance(
                     dev_identity,
                     dev_files[bundle_name],
                     dev_version,
@@ -486,16 +507,25 @@ def compare_cee_packages(
     pairs = _bundle_pairs(normalized_dev)
     bundle_changes = []
     for bundle_name, manifest_name in pairs:
-        bundle_changes.extend([
-            f"{bundle_name}:CEE version",
-            f"{bundle_name}:model package identity",
-            f"{bundle_name}:load trace",
-            f"{manifest_name}:derived bundle bytes and sha256",
-        ])
-        if development_allow_scripts:
-            bundle_changes.append(f"{bundle_name}:embedded allowScripts install policy")
-        if development_design_tokens_spec is not None:
-            bundle_changes.append(f"{bundle_name}:embedded design-token development pin")
+        applied = applied_by_bundle.get(bundle_name, [])
+        bundle_changes.extend(
+            f"{bundle_name}:{label}"
+            for label in (
+                "CEE version",
+                "model package identity",
+                "load trace",
+            )
+            if label in applied
+        )
+        bundle_changes.append(f"{manifest_name}:derived bundle bytes and sha256")
+        bundle_changes.extend(
+            f"{bundle_name}:{label}"
+            for label in (
+                "embedded allowScripts install policy",
+                "embedded design-token development pin",
+            )
+            if label in applied
+        )
         if minified_renames:
             bundle_changes.append(f"{bundle_name}:minified identifier names")
     return {

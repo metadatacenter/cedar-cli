@@ -2,7 +2,6 @@ from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.Planner import Planner
 from org.metadatacenter.util.GlobalContext import GlobalContext
-from org.metadatacenter.util.Util import Util
 
 
 class BuildPlanner(Planner):
@@ -96,12 +95,10 @@ class BuildPlanner(Planner):
         )
 
     @staticmethod
-    def this(plan: Plan, wd: str):
-        for repo in GlobalContext.repos.get_list_all():
-            if Util.get_wd(repo).lower() == wd.lower():
-                plan.add_task(
-                    "Build current repo",
-                    TaskType.BUILD,
-                    [repo],
-                    parameters={"force_frontend_build": True},
-                )
+    def this(plan: Plan, wd: str = None):
+        plan.add_task(
+            "Build current repo",
+            TaskType.BUILD,
+            [Planner.repo_containing(wd)],
+            parameters={"force_frontend_build": True},
+        )
