@@ -2,7 +2,6 @@ from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.Planner import Planner
 from org.metadatacenter.util.GlobalContext import GlobalContext
-from org.metadatacenter.util.Util import Util
 
 
 class PublishPlanner(Planner):
@@ -56,14 +55,12 @@ class PublishPlanner(Planner):
         )
 
     @staticmethod
-    def this(plan: Plan, wd: str):
-        for repo in GlobalContext.repos.get_list_all():
-            if Util.get_wd(repo).lower() == wd.lower():
-                plan.add_task(
-                    "Publish current repo",
-                    TaskType.PUBLISH,
-                    [repo]
-                )
+    def this(plan: Plan, wd: str = None):
+        plan.add_task(
+            "Publish current repo",
+            TaskType.PUBLISH,
+            [Planner.repo_containing(wd)]
+        )
 
     @staticmethod
     def all(plan: Plan):
