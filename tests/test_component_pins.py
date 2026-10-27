@@ -332,6 +332,9 @@ class WorkspaceTest(unittest.TestCase):
             _require_clean(str(self.root), plan(str(self.root)))
 
         self.assertIn("cedar-template-designer", str(refused.exception))
+        # The refusal names the file and says how to proceed, so nothing has to be set aside blind.
+        self.assertIn("cedar-template-designer (package.json)", str(refused.exception))
+        self.assertIn("Commit those changes first", str(refused.exception))
 
     def test_a_workspace_with_no_declared_components_is_refused(self):
         (self.root / "cedar-development" / "ops" / "frontend-train.json").write_text("{}")

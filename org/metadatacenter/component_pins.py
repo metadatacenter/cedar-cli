@@ -526,11 +526,14 @@ def _require_clean(cedar_home, plans):
         if status is None:
             raise ComponentPinError(f"cannot read the state of {repository}")
         if status:
-            dirty.append(repository)
+            # Each line is a two-letter status, then the path; the first may have lost its leading space.
+            paths = [line[2:].strip() for line in status.splitlines() if line.strip()]
+            dirty.append(f"{repository} ({', '.join(paths)})")
     if dirty:
         raise ComponentPinError(
             "these repositories hold uncommitted tracked changes, and this command writes to "
-            "them: " + ", ".join(dirty))
+            "them: " + "; ".join(dirty) + ". Commit those changes first, then run this again; "
+            "its pin moves can be committed on top or amended into that commit.")
 
 
 def _publish_target(staged):
