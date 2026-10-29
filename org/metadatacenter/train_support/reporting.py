@@ -2,6 +2,7 @@
 from __future__ import annotations
 from rich.table import Column, Table
 from rich.text import Text
+from org.metadatacenter.train_support import contracts as _contracts_component
 from org.metadatacenter.train_support import output as _output_component
 from org.metadatacenter.train_support import policy as _policy_component
 from org.metadatacenter.train_support import survey as _survey_component
@@ -16,7 +17,7 @@ def _report_open_work(findings):
         'and dispatch again.')
 
 
-def report_source_ci(show_all=False):
+def report_source_ci(show_all=False, dispatch_stale_contracts=False):
     """Show CI at every head a train would capture, and whether a train would refuse.
 
         A release advances `develop` in forty repositories at once, and a red run among them is
@@ -74,14 +75,40 @@ def report_source_ci(show_all=False):
                 f'  gh run rerun {verdict.run_id} --failed --repo {verdict.run_repository}',
                 soft_wrap=True,
             )
-    blocking = [verdict for verdict in verdicts if verdict.blocks_a_train]
-    if blocking:
+    contracts = _contracts_component.contract_survey()
+    shown_contracts = [verdict for verdict in contracts if show_all or verdict.state != 'green']
+    if shown_contracts:
+        table = Table(
+            Column('Repository', no_wrap=True),
+            Column('Workflow', no_wrap=True),
+            Column('Result'),
+            Column('Run', overflow='fold'),
+            title='Cross-repository contracts at develop',
+        )
+        contract_styles = {'green': 'green', 'stale': 'yellow', 'red': 'red', 'pending': 'yellow',
+                           'missing': 'yellow', 'error': 'red'}
+        for verdict in shown_contracts:
+            table.add_row(verdict.repository, verdict.workflow,
+                          Text(verdict.detail, style=contract_styles[verdict.state]), verdict.url)
+        _output_component.console.print(table)
+    stale = [verdict for verdict in contracts if verdict.dispatchable]
+    if stale and dispatch_stale_contracts:
+        for line in _contracts_component.dispatch_contracts(stale):
+            _output_component.console.print(f'  {line}', markup=False)
+        _output_component.console.print('Run cedarcli check ci again once those runs finish.')
+    elif stale:
         _output_component.console.print(
-            f'[red]A train would refuse: {len(blocking)} verdict(s) are not green.[/red]')
+            'A contract no run covers yet starts with cedarcli check ci --dispatch-stale-contracts.')
+    blocking = [verdict for verdict in verdicts if verdict.blocks_a_train]
+    blocking_contracts = [verdict for verdict in contracts if verdict.blocks_a_train]
+    if blocking or blocking_contracts:
+        _output_component.console.print(
+            f'[red]A train would refuse: {len(blocking)} verdict(s) are not green and '
+            f'{len(blocking_contracts)} contract(s) do not cover their consumers.[/red]')
         return 1
     _output_component.console.print(
-        '[green]Every captured head with a workflow is green; a train may be dispatched.'
-        '[/green]')
+        '[green]Every captured head with a workflow is green, and every contract covers its '
+        'consumers; a train may be dispatched.[/green]')
     return 0
 
 

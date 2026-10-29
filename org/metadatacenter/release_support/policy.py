@@ -468,6 +468,12 @@ ACCEPT_RED_DEVELOP_HELP = (
 )
 
 
+ACCEPT_RED_DEVELOPMENT_HELP = (
+    "Accept one finished red run at a repository's integrated next-development commit by naming "
+    "it, as <repository>=<run-id>"
+)
+
+
 ACCEPT_MAIN_ONLY_HELP = (
     "Accept replacing one repository's main-only files by naming the repository"
 )

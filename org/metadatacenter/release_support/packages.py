@@ -387,8 +387,14 @@ def compare_cee_packages(
     *,
     development_allow_scripts: dict[str, bool] | None = None,
     development_design_tokens_spec: str | None = None,
+    development_bundle_version: str | None = None,
 ) -> dict:
-    """Prove that a public CEE package is a metadata-only promotion of a train package."""
+    """Prove that a public CEE package is a metadata-only promotion of a train package.
+
+    A train stamps its version before it builds, so its bundle reports the package's version.
+    CEE's own CI publishes a commit-derived version for a bundle built under the committed one;
+    `development_bundle_version` names what such a bundle reports, when it differs.
+    """
 
     dev_identity = f"{DEV_CEE_NAME}@{dev_version}"
     public_identity = f"{PUBLIC_CEE_NAME}@{public_version}"
@@ -476,7 +482,7 @@ def compare_cee_packages(
                 dev_bundle, public_bundle, applied_by_bundle[bundle_name] = _normalize_bundle_provenance(
                     dev_identity,
                     dev_files[bundle_name],
-                    dev_version,
+                    development_bundle_version or dev_version,
                     public_identity,
                     public_files[bundle_name],
                     public_version,

@@ -121,14 +121,21 @@ class CheckCommandsTest(unittest.TestCase):
                    return_value=1) as report:
             result = self.runner.invoke(check.app, ["ci"])
         self.assertEqual(1, result.exit_code, result.output)
-        report.assert_called_once_with(show_all=False)
+        report.assert_called_once_with(show_all=False, dispatch_stale_contracts=False)
 
     def test_ci_check_can_list_every_repository(self):
         with patch("org.metadatacenter.check.BuildTrainWorker.report_source_ci",
                    return_value=0) as report:
             result = self.runner.invoke(check.app, ["ci", "--all"])
         self.assertEqual(0, result.exit_code, result.output)
-        report.assert_called_once_with(show_all=True)
+        report.assert_called_once_with(show_all=True, dispatch_stale_contracts=False)
+
+    def test_ci_check_can_dispatch_stale_contracts(self):
+        with patch("org.metadatacenter.check.BuildTrainWorker.report_source_ci",
+                   return_value=1) as report:
+            result = self.runner.invoke(check.app, ["ci", "--dispatch-stale-contracts"])
+        self.assertEqual(1, result.exit_code, result.output)
+        report.assert_called_once_with(show_all=False, dispatch_stale_contracts=True)
 
 
 if __name__ == "__main__":

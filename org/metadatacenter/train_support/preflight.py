@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 from org.metadatacenter import ci_env as _ci_env_component
+from org.metadatacenter.train_support import contracts as _contracts_component
 from org.metadatacenter.train_support import output as _output_component
 from org.metadatacenter.train_support import policy as _policy_component
 from org.metadatacenter.train_support import survey as _survey_component
@@ -214,6 +215,23 @@ def _source_ci_preflight(source=None):
             failures.append(f'{verdict.repository}: {verdict.detail}{suffix}')
     if failures:
         raise ValueError('train source CI is not settled: ' + '; '.join(failures))
+
+
+def _contract_preflight():
+    """Refuse a train while a cross-repository contract has not checked the consumer heads.
+
+    A contract's run answers only for the consumer heads it checked out, and a consumer push does
+    not run it. A release pushes the contract's repository too, so a contract that last ran before
+    a consumer changed is first asked about it by the release, which can accept no fix.
+    """
+    blocking = [verdict for verdict in _contracts_component.contract_survey()
+                if verdict.blocks_a_train]
+    if blocking:
+        raise ValueError(
+            'cross-repository contracts do not cover the heads a train would capture: '
+            + '; '.join(f'{verdict.repository} {verdict.detail}'
+                        + (f' ({verdict.url})' if verdict.url else '') for verdict in blocking)
+            + '. Run cedarcli check ci --dispatch-stale-contracts, and dispatch when they pass')
 
 
 def _credential_free_environment():
@@ -470,6 +488,7 @@ def _preflight(selected, resume):
     settle(_anonymous_source_readability_preflight, source)
     if github_ready:
         settle(_source_ci_preflight, source)
+        settle(_contract_preflight)
     settle(_publication_targets_preflight)
     _ci_env_preflight()
     _test_tag_preflight()

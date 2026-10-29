@@ -1,5 +1,6 @@
 import time
 import re
+import socket
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -41,6 +42,13 @@ console = Console()
 
 # The variables through which a frontend's tools learn how many workers they may start.
 _WORKER_VARIABLES = ('CEDAR_TEST_WORKERS', 'NG_BUILD_MAX_WORKERS', 'VITEST_MAX_WORKERS')
+
+
+def _free_port() -> int:
+    """A loopback port no process is listening on, for one isolated copy's test server."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
 
 
 class ShellTaskExecutor(TaskExecutor):
@@ -98,6 +106,10 @@ class ShellTaskExecutor(TaskExecutor):
                             commands_to_execute = reactor.install_commands(commands_to_execute)
                         workers = current_context().settings.build_workers
                         environment.update({name: str(workers) for name in _WORKER_VARIABLES})
+                        # A browser suite serves this copy's build on PORT, or on its own fixed
+                        # default. Two builds at once then met on the default, as OpenView's 4796
+                        # did on 2026-10-27, so each copy takes a port nothing is listening on.
+                        environment['PORT'] = str(_free_port())
                         pool = worker_pool()
                         if pool is not None:
                             environment[POOL_VARIABLE] = str(pool.directory)

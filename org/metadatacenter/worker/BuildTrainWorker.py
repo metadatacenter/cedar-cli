@@ -225,8 +225,8 @@ class BuildTrainWorker:
         return _preflight_component._source_ci_preflight(source)
 
     @staticmethod
-    def report_source_ci(show_all=False):
-        return _reporting_component.report_source_ci(show_all)
+    def report_source_ci(show_all=False, dispatch_stale_contracts=False):
+        return _reporting_component.report_source_ci(show_all, dispatch_stale_contracts)
     BranchDivergence = BranchDivergence
     VERSION_FILES = VERSION_FILES
 

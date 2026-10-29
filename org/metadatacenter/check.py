@@ -103,9 +103,16 @@ def main(
 def ci(
         show_all: bool = typer.Option(
             False, "--all",
-            help="List every repository, not only those whose CI is not green.")):
-    """Check GitHub CI at the exact develop commit of every repository a train would capture."""
-    exit_on_failure(BuildTrainWorker.report_source_ci(show_all=show_all))
+            help="List every repository, not only those whose CI is not green."),
+        dispatch_stale_contracts: bool = typer.Option(
+            False, "--dispatch-stale-contracts",
+            help="Start a run of every cross-repository contract no run covers yet.")):
+    """Check GitHub CI at the exact develop commit of every repository a train would capture.
+
+    Also checks that each cross-repository contract has run since its consumers last changed.
+    """
+    exit_on_failure(BuildTrainWorker.report_source_ci(
+        show_all=show_all, dispatch_stale_contracts=dispatch_stale_contracts))
 
 
 @app.command("design-tokens")

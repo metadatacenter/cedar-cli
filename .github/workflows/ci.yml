@@ -61,7 +61,7 @@ jobs:
       # The sourced native controller rejects any JDK except the estate's supported Java 17.
       # Pin it on both runners so these are platform tests, not runner-image JDK tests.
       - name: Set up Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
