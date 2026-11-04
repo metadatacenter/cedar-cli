@@ -42,13 +42,6 @@ STRUCTURED_MEDIA_SUFFIXES = ('json', 'yaml')
 # A 204 says there is no payload, so it is the one 2xx that describes itself by staying empty.
 NO_CONTENT_STATUS = '204'
 
-# Services excluded from the OpenAPI audit, and left out of this check for the same reason. The
-# impex server is legacy. It still answers requests, and its document receives no further work, so
-# failing on it would report a gap nobody intends to close.
-SKIPPED_REPOSITORIES = {
-    'cedar-impex-server': 'legacy service excluded from the audit',
-}
-
 # Write operations whose handler reads no request body, so a document that declares none for them is
 # right. Each entry names the repository, the method and the path, and says what the handler does
 # instead. Every entry was read against its resource class before it was added; an entry whose route

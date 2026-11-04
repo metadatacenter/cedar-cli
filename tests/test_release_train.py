@@ -992,7 +992,7 @@ class ReleasePlannerTest(unittest.TestCase):
                 "image": f"cedar-image-{index:02d}",
                 "reference": f"nexus.example/cedar-image-{index:02d}:{TRAIN}",
             }
-            for index in range(28)
+            for index in range(27)
         ]
         docker_plan = {
             "version": TRAIN,
@@ -1217,7 +1217,7 @@ class ReleasePlannerTest(unittest.TestCase):
     def test_plan_refuses_a_train_without_complete_docker_evidence(self):
         planner = self.make_planner()
         planner.state.values[f"docker/completed/{TRAIN}.json"][0]["images"].pop()
-        with self.assertRaisesRegex(ReleaseError, "28 planned images"):
+        with self.assertRaisesRegex(ReleaseError, "27 planned images"):
             planner.build(
                 release_version="2.9.3",
                 next_version="2.9.4-SNAPSHOT",

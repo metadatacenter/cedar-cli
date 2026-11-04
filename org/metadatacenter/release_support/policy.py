@@ -141,14 +141,6 @@ MAVEN_GENERATED_VERSION_FILES = {
             "version: {}"
         ),
     },
-    "cedar-impex-server": {
-        "cedar-impex-server-application/src/main/resources/assets/swagger-api/swagger.json": (
-            '"version" : "{}"'
-        ),
-        "cedar-impex-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
-            "version: {}"
-        ),
-    },
     "cedar-messaging-server": {
         "cedar-messaging-server-application/src/main/resources/assets/swagger-api/swagger.json": (
             '"version" : "{}"'

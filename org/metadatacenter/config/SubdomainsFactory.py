@@ -17,7 +17,6 @@ class SubdomainsFactory:
         subdomains.add_microservice('artifact')
         subdomains.add_microservice('bridge')
         subdomains.add_microservice('group')
-        subdomains.add_microservice('impex')
         subdomains.add_microservice('messaging')
         subdomains.add_microservice('monitor')
         subdomains.add_microservice('open')

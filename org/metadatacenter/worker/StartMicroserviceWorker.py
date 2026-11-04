@@ -21,10 +21,6 @@ class StartMicroserviceWorker(Worker):
         return StartMicroserviceWorker._start("group")
 
     @staticmethod
-    def impex():
-        return StartMicroserviceWorker._start("impex")
-
-    @staticmethod
     def messaging():
         return StartMicroserviceWorker._start("messaging")
 

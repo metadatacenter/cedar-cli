@@ -17,7 +17,6 @@ class DockerMicroserviceTarget(str, Enum):
     ARTIFACT = "artifact"
     BRIDGE = "bridge"
     GROUP = "group"
-    IMPEX = "impex"
     MESSAGING = "messaging"
     MONITOR = "monitor"
     OPEN = "open"

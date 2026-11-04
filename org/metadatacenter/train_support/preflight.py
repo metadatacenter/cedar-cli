@@ -91,8 +91,8 @@ def _configuration_summary():
         if not images or len(images) != len(set(images)) or any(not image for image in images):
             raise ValueError(f'Docker train {group} images must be present and unique')
         ordered_images.extend(images)
-    if len(ordered_images) != 28 or len(set(ordered_images)) != 28:
-        raise ValueError('Docker train must contain 28 unique core images')
+    if len(ordered_images) != 27 or len(set(ordered_images)) != 27:
+        raise ValueError('Docker train must contain 27 unique core images')
     if {item['image'] for item in frontends} != set(groups['frontends']):
         raise ValueError('frontend and Docker train image sets differ')
     return len(repositories), model, cee, len(frontends), len(additional)

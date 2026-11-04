@@ -36,7 +36,6 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-monitor-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-openview-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-group-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
-        repos.add_repo(Repo("cedar-impex-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
         repos.add_repo(Repo("cedar-bridge-server", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT], is_microservice=True))
 
         repos.add_repo(Repo("cedar-keycloak-event-listener", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))

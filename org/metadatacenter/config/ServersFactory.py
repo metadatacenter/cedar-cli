@@ -13,7 +13,6 @@ class ServersFactory:
         servers.add_microservice('artifact', 1)
         servers.add_microservice('bridge', 15)
         servers.add_microservice('group', 9)
-        servers.add_microservice('impex', 8)
         servers.add_microservice('messaging', 12)
         servers.add_microservice('monitor', 14)
         servers.add_microservice('open', 13)

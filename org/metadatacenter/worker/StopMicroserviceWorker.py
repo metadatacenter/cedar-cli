@@ -21,10 +21,6 @@ class StopMicroserviceWorker(Worker):
         return StopMicroserviceWorker._stop("group")
 
     @staticmethod
-    def impex():
-        return StopMicroserviceWorker._stop("impex")
-
-    @staticmethod
     def messaging():
         return StopMicroserviceWorker._stop("messaging")
 
