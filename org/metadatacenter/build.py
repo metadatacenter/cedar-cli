@@ -167,7 +167,7 @@ def build_input_roots(plan):
 JAVA_DEVELOPMENT_INPUTS = ('bin',)
 # A frontend build also reads the frontend inventory and runs the controller and build scripts.
 FRONTEND_DEVELOPMENT_INPUTS = JAVA_DEVELOPMENT_INPUTS + (
-    'ops/frontend-train.json', 'ops/frontend_inventory.py',
+    'ops/frontend-train.json', 'ops/frontend_inventory.py', 'ops/frontend_payload.py',
     'ops/cedar-services.sh', 'ops/frontend_reactor_runtime.py', 'ops/frontend_ready.py',
     'ops/build-native-split-frontend.sh', 'ops/write-native-frontend-build-info.mjs',
 )

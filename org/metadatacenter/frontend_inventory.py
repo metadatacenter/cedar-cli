@@ -38,6 +38,7 @@ def reactor_checks():
         # Publishing that same output needs no second, unverified rebuild afterwards.
         if row['build'] and row['build'] not in commands:
             commands.append(row['build'])
+        commands.extend(module.payload_commands(row))
         checks[row['reactorName']] = ReactorCheck(
             [shlex.join(command) for command in commands],
             len(produce) if row.get('package') else None)

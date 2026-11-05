@@ -57,6 +57,24 @@ def repos():
     exit_on_failure(RepoWorker.check_repos())
 
 
+@app.command("frontend-sizes")
+def frontend_sizes(
+        surface: str = typer.Option(None, "--surface", help="Check one page surface from the frontend inventory."),
+        root: str = typer.Option(None, "--root", help="Source working directory of an isolated build."),
+        report: str = typer.Option(None, "--report", help="Write measured sizes and asset hashes as JSON.")):
+    """Check complete built page payloads, including copied components and CSS."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    from org.metadatacenter.util.InvocationContext import invocation_environment
+    environment = invocation_environment()
+    command = [sys.executable, str(Path(environment['CEDAR_HOME']) / 'cedar-development/ops/frontend_payload.py')]
+    for flag, value in [('--surface', surface), ('--root', root), ('--report', report)]:
+        if value:
+            command += [flag, value]
+    exit_on_failure(subprocess.run(command, env=environment, check=False))
+
+
 @app.command("snapshots")
 def snapshots(
         version: str = typer.Option(

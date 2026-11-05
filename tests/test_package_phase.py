@@ -69,7 +69,8 @@ class ExecutorPackagePhaseTest(unittest.TestCase):
 
 class ReactorChecksTest(unittest.TestCase):
     def checks(self, *rows):
-        module = SimpleNamespace(surfaces=lambda _config: list(rows))
+        module = SimpleNamespace(surfaces=lambda _config: list(rows),
+                                 payload_commands=lambda row: row.get('payloadCommands', []))
         with patch.object(frontend_inventory, "inventory", return_value=(module, {})):
             return frontend_inventory.reactor_checks()
 
@@ -85,6 +86,12 @@ class ReactorChecksTest(unittest.TestCase):
                              "verify": [["npm", "test"]], "build": ["npm", "run", "build"]})["app"]
         self.assertEqual(["npm ci", "npm test", "npm run build"], check.commands)
         self.assertIsNone(check.package_ready_after)
+
+    def test_payload_budgets_run_after_the_final_build(self):
+        check = self.checks({"reactorName": "app", "setup": [], "verify": [["npm", "test"]],
+                             "build": ["npm", "run", "build"],
+                             "payloadCommands": [["python3", "payload.py"]]})["app"]
+        self.assertEqual(["npm test", "npm run build", "python3 payload.py"], check.commands)
 
 
 if __name__ == "__main__":
