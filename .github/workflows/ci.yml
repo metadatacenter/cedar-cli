@@ -117,9 +117,12 @@ jobs:
           curl --fail --location https://www.kernel.org/pub/software/scm/git/git-2.34.1.tar.gz -o "$RUNNER_TEMP/git-2.34.1.tar.gz"
           tar -xzf "$RUNNER_TEMP/git-2.34.1.tar.gz" -C "$RUNNER_TEMP"
           flags="NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_CURL=YesPlease NO_OPENSSL=YesPlease"
+          # Ubuntu 26.04's compiler defaults to C23, in which `thread_local` is a keyword, and
+          # 2.34.1's builtin/index-pack.c uses it as an identifier. Build it as C17 instead.
+          cflags="-g -O2 -Wall -std=gnu17"
           # builtin/bugreport.c includes the generated hook-list.h, and 2.34.1's Makefile
           # declares that dependency for hook.o and builtin/help.o alone. A parallel build
           # therefore reaches bugreport.o before the header exists, so generate it first.
-          make -C "$RUNNER_TEMP/git-2.34.1" $flags hook-list.h
-          make -C "$RUNNER_TEMP/git-2.34.1" $flags -j2 git
+          make -C "$RUNNER_TEMP/git-2.34.1" $flags CFLAGS="$cflags" hook-list.h
+          make -C "$RUNNER_TEMP/git-2.34.1" $flags CFLAGS="$cflags" -j2 git
           PATH="$RUNNER_TEMP/git-2.34.1:$PATH" python -m pytest tests/test_git_checkout.py tests/test_git_failures.py -v
