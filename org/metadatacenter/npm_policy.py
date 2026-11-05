@@ -7,6 +7,12 @@ from pathlib import Path
 import re
 
 
+# Every CI workflow that installs a CEDAR frontend sets this, and with it npm refuses a locked
+# package whose install script the package.json `allowScripts` policy has no verdict on. A local
+# install without it accepts such a package, so a lock that CI refuses passed every local gate.
+STRICT_INSTALL_ENVIRONMENT = {"NPM_CONFIG_STRICT_ALLOW_SCRIPTS": "true"}
+
+
 @dataclass(frozen=True)
 class NpmConfigFinding:
     severity: str

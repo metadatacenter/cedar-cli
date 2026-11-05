@@ -83,6 +83,7 @@ class DemoCommandsTest(unittest.TestCase):
             for name in ('cedar-workspace', 'cedar-template-editor', 'cedar-component-demo'):
                 self.assertTrue(any(str(Path(home) / name) in arg for arg in command))
             self.assertIn('PATH', run.call_args.kwargs['env'])
+            self.assertEqual('true', run.call_args.kwargs['env']['NPM_CONFIG_STRICT_ALLOW_SCRIPTS'])
 
 
 if __name__ == '__main__':

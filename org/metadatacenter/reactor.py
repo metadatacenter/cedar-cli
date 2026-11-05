@@ -333,6 +333,21 @@ def _advertise_settled(build, store):
             settled = True
 
 
+def _deny_install_scripts(package, spec, manifest):
+    """Record in a rewritten manifest that npm must not run the local package's scripts.
+
+    npm counts a file dependency's `prepare` script as an install script, although a registry
+    install of the same package never runs it, and a strict install refuses a package the
+    `allowScripts` policy has no verdict on. The design tokens declare `prepare: npm run build`,
+    which needs a source tree their tarball does not carry. npm keys a file dependency's verdict by
+    its spec, here the content-addressed tarball path, so the verdict covers this package alone.
+    """
+    policy = package.setdefault("allowScripts", {})
+    if not isinstance(policy, dict):
+        raise ReactorError(f"{manifest}: allowScripts must be an object")
+    policy[spec] = False
+
+
 def resolve(build_root, cedar_home) -> list[str]:
     """Point every dependency the store holds at the store, in this copy only.
 
@@ -383,6 +398,7 @@ def resolve(build_root, cedar_home) -> list[str]:
                 if source_only and hashlib.sha256(target.read_bytes()).hexdigest() != target.stem:
                     raise ReactorError(f'Local SNAPSHOT artifact no longer matches its digest: {target}')
                 declared[key] = f"file:{target}"
+                _deny_install_scripts(package, declared[key], manifest)
                 rewritten = True
                 resolved.add(unscoped(name))
                 notes.append(f"{manifest.parent.name}/{key} -> {target.name}")

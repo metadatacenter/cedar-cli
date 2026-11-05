@@ -1,4 +1,5 @@
 from __future__ import annotations
+from org.metadatacenter.npm_policy import STRICT_INSTALL_ENVIRONMENT
 from org.metadatacenter.util.InvocationContext import invocation_environment
 
 import contextlib
@@ -417,6 +418,7 @@ def isolated_frontend_workspace(source: Path, *, manifests_only=False):
                 # bare ng/gulp/vite command from the isolated dependency graph, even on a clean
                 # runner that has no globally installed frontend CLI.
                 "PATH": local_binaries + (os.pathsep + existing_path if existing_path else ""),
+                **STRICT_INSTALL_ENVIRONMENT,
             })
             yield build_root, environment, collisions
     finally:

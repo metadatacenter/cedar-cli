@@ -54,6 +54,8 @@ class BuildSafetyTest(unittest.TestCase):
                     self.assertEqual("developer change\n", (workspace / "source.txt").read_text())
                     (workspace / "source.txt").write_text("generated\n", encoding="utf-8")
                     self.assertEqual("true", environment["CI"])
+                    self.assertEqual("true", environment["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"],
+                                     "installs refuse an unapproved install script, as CI's do")
                     self.assertEqual(str(Path(directory) / ".cedar" / "frontend-npm-cache"),
                                      environment["npm_config_cache"])
                     self.assertTrue(environment["npm_config_logs_dir"].startswith(str(workspace.parent)))

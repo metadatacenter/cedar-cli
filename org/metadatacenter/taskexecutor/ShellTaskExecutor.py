@@ -11,6 +11,7 @@ from rich.style import Style
 
 from org.metadatacenter import npm_install, reactor, reactor_evidence, reactor_results, reactor_stages, reactor_tasks, task_cache
 from org.metadatacenter.build_diagnostics import failure_diagnostics, COMMAND_LOG
+from org.metadatacenter.npm_policy import STRICT_INSTALL_ENVIRONMENT
 from org.metadatacenter.build_scheduler import (
     package_ready,
     record_dropped_optional_dependencies,
@@ -162,6 +163,7 @@ class ShellTaskExecutor(TaskExecutor):
                 if parameter("in_place_frontend_build") is True:
                     require_no_frontend_runtime_collision(Path(cwd))
                     with executable_build_workspace() as (_, environment):
+                        environment.update(STRICT_INSTALL_ENVIRONMENT)
                         return self._execute_commands(
                             task, repo, commands_to_execute, cwd, job_progress, environment)
                 return self._execute_commands(

@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 from org.metadatacenter.frontend_inventory import inventory
+from org.metadatacenter.npm_policy import STRICT_INSTALL_ENVIRONMENT
 from org.metadatacenter.util.InvocationContext import current_context, invocation_environment
 from org.metadatacenter.util.NodeBuildCheck import require_build_node
 from org.metadatacenter.util.Util import Util
@@ -35,6 +36,7 @@ def run_demos(package=None, *, if_changed=False):
             command.extend(['--consumer-input', str(home / consumer['repository'] / consumer[key])])
     environment = dict(invocation_environment())
     environment['npm_config_cache'] = str(home / '.cedar/cee-demos/npm-cache')
+    environment.update(STRICT_INSTALL_ENVIRONMENT)
     workers = str(current_context().settings.build_workers)
     environment.update({name: workers for name in ('CEDAR_TEST_WORKERS', 'NG_BUILD_MAX_WORKERS', 'VITEST_MAX_WORKERS')})
     return subprocess.run(command, env=environment).returncode
