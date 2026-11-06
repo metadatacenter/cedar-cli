@@ -229,12 +229,13 @@ NPM_RELEASE_SURFACES = [
         "preserveFiles": ["README.md", "license.txt", "package-lock.json", "package.json"],
         "packedRuntimeDirectories": ["node_modules"],
         "ceeRuntime": {
+            "assetManifest": "cedar-openview-src/angular.json",
             "source": (
                 "cedar-openview-src/node_modules/cedar-embeddable-editor/"
-                "cedar-embeddable-editor.js"
+                "cedar-embeddable-editor.host-fonts.js"
             ),
             "distribution": (
-                "node_modules/cedar-embeddable-editor/cedar-embeddable-editor.js"
+                "node_modules/cedar-embeddable-editor/cedar-embeddable-editor.host-fonts.js"
             ),
             "replacements": [
                 [

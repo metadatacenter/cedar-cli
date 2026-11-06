@@ -4,6 +4,7 @@ from org.metadatacenter.util.InvocationContext import invocation_environment
 from pathlib import Path, PurePosixPath
 import copy
 import datetime as dt
+import json
 import os
 import shutil
 from org.metadatacenter.release_support.errors import (
@@ -107,10 +108,56 @@ class ReleaseDistributionMaterializer:
                 shutil.copy2(child, target)
 
     @staticmethod
+    def _cee_runtime_config(root: Path, config: dict) -> dict:
+        """Resolve the runtime from the captured application's asset declaration.
+
+        Older release ledgers predate OpenView's switch to host-provided fonts.
+        Resolve those ledgers from the same captured Angular configuration, without
+        changing their source, build output, or already completed build evidence.
+        """
+        config = copy.deepcopy(config)
+        asset_manifest = config.get("assetManifest")
+        legacy_source = (
+            "cedar-openview-src/node_modules/cedar-embeddable-editor/"
+            "cedar-embeddable-editor.js"
+        )
+        if asset_manifest is None and config.get("source") == legacy_source:
+            legacy_manifest = "cedar-openview-src/angular.json"
+            if (root / legacy_manifest).is_file():
+                asset_manifest = legacy_manifest
+        if asset_manifest is None:
+            return config
+        if asset_manifest != "cedar-openview-src/angular.json":
+            raise ReleaseError("OpenView CEE asset declaration path is invalid")
+        try:
+            angular = json.loads((root / asset_manifest).read_text(encoding="utf-8"))
+            assets = angular["projects"]["cedar-openview"]["architect"]["build"]["options"]["assets"]
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise ReleaseError("OpenView CEE asset declaration is missing or invalid") from error
+        package_path = "node_modules/cedar-embeddable-editor"
+        matches = [
+            asset for asset in assets if isinstance(asset, dict)
+            and str(asset.get("input", "")).rstrip("/") == package_path
+        ] if isinstance(assets, list) else []
+        if (
+            len(matches) != 1
+            or matches[0].get("glob") not in {
+                "cedar-embeddable-editor.js", "cedar-embeddable-editor.host-fonts.js",
+            }
+            or str(matches[0].get("output", "")).rstrip("/") != package_path
+        ):
+            raise ReleaseError("OpenView must declare exactly one supported CEE runtime asset")
+        bundle = matches[0]["glob"]
+        config["source"] = f"cedar-openview-src/{package_path}/{bundle}"
+        config["distribution"] = f"{package_path}/{bundle}"
+        return config
+
+    @staticmethod
     def _cee_evidence(manifest: dict, root: Path, destination: Path, task: dict) -> dict | None:
         config = task.get("ceeRuntime")
         if not isinstance(config, dict):
             return None
+        config = ReleaseDistributionMaterializer._cee_runtime_config(root, config)
         source = root / config.get("source", "")
         relative = config.get("distribution")
         if not isinstance(relative, str) or not relative:
@@ -119,8 +166,11 @@ class ReleaseDistributionMaterializer:
         source_bytes = source.read_bytes() if source.is_file() else None
         if source_bytes is None:
             raise ReleaseError(f"installed public CEE bundle is missing: {source}")
-        expected_public = manifest.get("cee", {}).get(
-            "promotionProof", {}).get("publicBundleSha256")
+        proof = manifest.get("cee", {}).get("promotionProof", {})
+        bundle = PurePosixPath(config["source"]).name
+        expected_public = proof.get("provenBundles", {}).get(bundle, {}).get("publicBundleSha256")
+        if expected_public is None and bundle != "cedar-embeddable-editor.host-fonts.js":
+            expected_public = proof.get("publicBundleSha256")
         if not isinstance(expected_public, str) or _sha256(source_bytes) != expected_public:
             raise ReleaseError("installed OpenView CEE does not match the proven public bundle")
         expected_served = source_bytes

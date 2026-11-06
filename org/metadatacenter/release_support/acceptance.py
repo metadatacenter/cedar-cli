@@ -10,6 +10,7 @@ import sys
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
 )
+from org.metadatacenter.release_support.distribution import ReleaseDistributionMaterializer
 from org.metadatacenter.release_support.integration import (
     ReleaseRemoteIntegrator,
 )
@@ -171,7 +172,12 @@ class ReleaseAcceptance:
         publication = manifest.get("artifactPublication", {}).get(
             "completedTasks", {}).get("npm:release:openview")
         runtime_files = publication.get("runtimeFiles") if isinstance(publication, dict) else None
-        relative = openview["ceeRuntime"].get("distribution")
+        root = Path(manifest["versionPreparation"]["release"]["workspace"]) / openview["repository"]
+        verified_runtime = ReleaseDistributionMaterializer._cee_evidence(
+            manifest, root, root / openview["directory"], openview)
+        if verified_runtime != cee_runtime:
+            raise ReleaseError("OpenView runtime CEE evidence changed before acceptance")
+        relative = verified_runtime["distribution"]
         if (
             not isinstance(runtime_files, dict)
             or runtime_files.get(relative) != cee_runtime.get("servedBundleSha256")
