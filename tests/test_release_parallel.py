@@ -1,0 +1,75 @@
+import hashlib
+from pathlib import Path
+import tempfile
+import threading
+import unittest
+
+from org.metadatacenter.release_support.parallel import checked_map
+from org.metadatacenter.release_support.publication import ReleaseArtifactPublisher
+from org.metadatacenter.release_support.errors import ReleaseError
+from org.metadatacenter.release_support.state import ReleaseState
+
+
+class ReleaseParallelTest(unittest.TestCase):
+    def test_bounded_checks_overlap_and_results_keep_input_order(self):
+        barrier = threading.Barrier(4, timeout=5)
+        lock = threading.Lock()
+        active = peak = 0
+
+        def check(value):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            barrier.wait()
+            with lock:
+                active -= 1
+            return value * 2
+
+        self.assertEqual(list(range(0, 16, 2)), checked_map(check, range(8)))
+        self.assertEqual(4, peak)
+
+    def test_a_failure_propagates_after_inflight_checks_finish(self):
+        barrier = threading.Barrier(2, timeout=5)
+        finished = threading.Event()
+
+        def check(value):
+            barrier.wait()
+            if value == 0:
+                raise ReleaseError('changed artifact')
+            finished.set()
+
+        with self.assertRaisesRegex(ReleaseError, 'changed artifact'):
+            checked_map(check, [0, 1], workers=2)
+        self.assertTrue(finished.is_set())
+
+    def test_parallel_maven_verification_checks_every_byte_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payloads = {str(i): str(i).encode() for i in range(8)}
+            for name, content in payloads.items():
+                (root / name).write_bytes(content)
+            barrier = threading.Barrier(4, timeout=5)
+            reads = []
+
+            class Http:
+                def read(self, url):
+                    reads.append(url)
+                    barrier.wait()
+                    return payloads[url.rsplit('/', 1)[-1]]
+
+            task = {'id': 'maven', 'kind': 'maven-release-upload',
+                    'localRepository': directory, 'repository': 'https://registry.example'}
+            record = {**task, 'files': {name: hashlib.sha256(body).hexdigest()
+                                       for name, body in payloads.items()}}
+            publisher = ReleaseArtifactPublisher(ReleaseState(root=root / 'state'), http=Http(), environment={})
+            publisher.verify_record({}, record, [task])
+            self.assertEqual(8, len(set(reads)))
+            # Avoid a barrier in the failing run: cancelled queued reads cannot arrive at it.
+            publisher.http.read = lambda url: b'changed'
+            with self.assertRaisesRegex(ReleaseError, 'artifact changed'):
+                publisher.verify_record({}, record, [task])
+
+
+if __name__ == '__main__':
+    unittest.main()

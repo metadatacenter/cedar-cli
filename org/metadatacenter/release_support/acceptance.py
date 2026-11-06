@@ -7,6 +7,7 @@ import datetime as dt
 import os
 import subprocess
 import sys
+from org.metadatacenter.release_support.parallel import checked_map
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
 )
@@ -114,8 +115,8 @@ class ReleaseAcceptance:
             if extra:
                 detail.append("unknown " + ", ".join(sorted(extra)))
             raise ReleaseError("remote integration evidence is incomplete: " + "; ".join(detail))
-        for record in records.values():
-            self.remote_integrator.verify_record(manifest, record)
+        checked_map(lambda record: self.remote_integrator.verify_record(manifest, record),
+                    records.values())
         tag = f"release-{manifest['releaseVersion']}"
         # A repository whose develop alone the release advanced carries no release tag.
         tagged = sum(1 for record in records.values() if "tag" in record)
@@ -133,10 +134,9 @@ class ReleaseAcceptance:
     def _published_artifacts_still_hold(self, manifest: dict) -> list[dict]:
         release_tasks, records, snapshot_tasks, snapshots = _publication_evidence_by_plan(
             manifest, self.publisher, require_complete=True)
-        for record in records:
-            self.publisher.verify_record(manifest, record, release_tasks)
-        for record in snapshots:
-            self.publisher.verify_record(manifest, record, snapshot_tasks)
+        checked_map(lambda item: self.publisher.verify_record(manifest, *item),
+                    [(record, release_tasks) for record in records]
+                    + [(record, snapshot_tasks) for record in snapshots])
         return [self._check(
             "artifact-publication",
             f"{len(records)} release and {len(snapshots)} snapshot publication tasks still "

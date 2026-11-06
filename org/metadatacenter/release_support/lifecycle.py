@@ -361,8 +361,9 @@ def publish_active_release(
     publisher = publisher or ReleaseArtifactPublisher(state)
     publisher.ensure_nexus_ready("artifact publication")
     remote_integrator = remote_integrator or ReleaseRemoteIntegrator(state)
-    for record in manifest.get("remoteIntegration", {}).get("completedTasks", {}).values():
-        remote_integrator.verify_record(manifest, record)
+    from org.metadatacenter.release_support.parallel import checked_map
+    checked_map(lambda record: remote_integrator.verify_record(manifest, record),
+                manifest.get("remoteIntegration", {}).get("completedTasks", {}).values())
     build_validator = build_validator or ReleaseBuildValidator(state)
     for record in manifest.get("buildValidation", {}).get("completedTasks", {}).values():
         build_validator.verify_completed_task(record)
