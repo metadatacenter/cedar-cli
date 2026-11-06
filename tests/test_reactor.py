@@ -326,6 +326,39 @@ class ResolveTest(unittest.TestCase):
         self.assertTrue(written.endswith(".tgz"), written)
         self.assertEqual(1, len(notes))
 
+    def test_a_local_package_s_scripts_are_denied_beside_the_existing_policy(self):
+        # A strict install refuses the design tokens' `prepare` script unless the policy has a
+        # verdict on it, and npm keys a file dependency's verdict by its spec.
+        self._store("cedar-design-tokens")
+        manifest = self._manifest({
+            "devDependencies": {"@org.metadatacenter/cedar-design-tokens": "0.1.0"},
+            "allowScripts": {"esbuild@0.28.0": True},
+        })
+
+        reactor.resolve(self.build, self.home)
+
+        package = json.loads(manifest.read_text())
+        spec = package["devDependencies"]["@org.metadatacenter/cedar-design-tokens"]
+        self.assertEqual({"esbuild@0.28.0": True, spec: False}, package["allowScripts"])
+
+    def test_a_manifest_without_a_policy_gains_one_for_its_local_packages(self):
+        self._store("cedar-design-tokens")
+        manifest = self._manifest({"dependencies": {"cedar-design-tokens": "0.1.0"}})
+
+        reactor.resolve(self.build, self.home)
+
+        package = json.loads(manifest.read_text())
+        self.assertEqual({package["dependencies"]["cedar-design-tokens"]: False},
+                         package["allowScripts"])
+
+    def test_a_manifest_the_reactor_leaves_alone_gains_no_policy(self):
+        self._store("cedar-design-tokens")
+        manifest = self._manifest({"dependencies": {"rxjs": "7.8.1"}})
+
+        reactor.resolve(self.build, self.home)
+
+        self.assertNotIn("allowScripts", json.loads(manifest.read_text()))
+
     def test_the_alias_form_is_matched_by_the_package_it_reaches(self):
         self._store("cedar-model-typescript-library")
         manifest = self._manifest({"dependencies": {"cedar-model-typescript-library":

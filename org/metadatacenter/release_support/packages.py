@@ -7,7 +7,9 @@ import hashlib
 import io
 import json
 import re
+import subprocess
 import tarfile
+import urllib.parse
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
 )
@@ -20,11 +22,10 @@ from org.metadatacenter.release_support.policy import (
     DEV_CEE_NAME,
     DEV_MODEL_SPEC_RE,
     LOAD_TRACE_RE,
-    MINIFIED_NAME_RE,
-    MINIFIED_TOKEN_SPLIT,
     PUBLIC_CEE_NAME,
     REQUIRED_CEE_FILES,
-    RESERVED_SHORT_WORDS,
+    NEXUS_NPM_REGISTRY,
+    PUBLIC_NPM_REGISTRY,
 )
 
 
@@ -40,7 +41,7 @@ def _verify_integrity(identity: str, content: bytes, integrity: str) -> None:
         raise ReleaseError(f"{identity} tarball does not match registry integrity")
 
 
-def _tarball_files(identity: str, content: bytes) -> dict[str, bytes]:
+def _tarball_files(identity: str, content: bytes, *, required_files=None) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     try:
         with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
@@ -61,10 +62,99 @@ def _tarball_files(identity: str, content: bytes) -> dict[str, bytes]:
                 files[relative] = stream.read()
     except tarfile.TarError as error:
         raise ReleaseError(f"{identity} is not a readable npm tarball") from error
-    missing = REQUIRED_CEE_FILES - files.keys()
+    missing = (REQUIRED_CEE_FILES if required_files is None else required_files) - files.keys()
     if missing:
         raise ReleaseError(f"{identity} is missing required files: {', '.join(sorted(missing))}")
     return files
+
+
+def load_model_runtime(http, version: str) -> bytes:
+    """Fetch the exact model package whose bytes an integration manifest records."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:-dev\.[0-9A-Za-z.-]+)?", version):
+        raise ReleaseError("CEE integration has an invalid model version")
+    development = "-dev." in version
+    name = ("@org.metadatacenter/" if development else "") + "cedar-model-typescript-library"
+    registry = NEXUS_NPM_REGISTRY if development else PUBLIC_NPM_REGISTRY
+    result = http.read_json(registry.rstrip("/") + "/" + urllib.parse.quote(name, safe="") + "/" + version)
+    if result is None:
+        raise ReleaseError(f"Missing integration model {name}@{version}")
+    record = result[0]
+    if record.get("name") != name or record.get("version") != version:
+        raise ReleaseError(f"Registry returned a different integration model for {name}@{version}")
+    payload = http.read(record["dist"]["tarball"])
+    _verify_integrity(f"{name}@{version}", payload, record["dist"]["integrity"])
+    return payload
+
+
+def _model_runtime_fingerprints(content: bytes, version: str) -> tuple[str, str]:
+    files = _tarball_files("integration model", content, required_files={"package.json"})
+    metadata = _read_package_json("integration model", files, "package.json")
+    name = ("@org.metadatacenter/" if "-dev." in version else "") + "cedar-model-typescript-library"
+    if metadata.get("version") != version or metadata.get("name") != name:
+        raise ReleaseError("Integration model tarball has a different package identity")
+    normalized = {key: value for key, value in metadata.items() if key not in {"name", "version", "publishConfig"}}
+    module = "esm" if any(path.startswith("esm/") for path in files) else metadata.get("module")
+    if not isinstance(module, str) or module.startswith("/") or ".." in PurePosixPath(module).parts:
+        raise ReleaseError("Integration model has no safe ESM entry")
+    def fingerprint(normalize):
+        digest = hashlib.sha256()
+        def visit(path):
+            digest.update(path.encode() + b"\0")
+            if path in files:
+                value = (json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+                         if normalize and path == "package.json" else files[path])
+                digest.update(value)
+            else:
+                children = sorted({name[len(path) + 1:].split("/")[0] for name in files if name.startswith(path + "/")})
+                if not children:
+                    raise ReleaseError(f"Integration model is missing {path}")
+                for child in children:
+                    visit(path + "/" + child)
+            digest.update(b"\0")
+        visit("package.json")
+        visit(module)
+        return digest.hexdigest()
+    return fingerprint(False), fingerprint(True)
+
+
+def _integration_manifests(dev_files, public_files, public_version, model_runtime_loader):
+    """Prove external model bytes as well as the integration bundle itself."""
+    if "integration-manifest.json" not in dev_files:
+        return None
+    if model_runtime_loader is None:
+        raise ReleaseError("CEE integration promotion requires verified model runtime packages")
+    _, public_model = _public_release_changelog("public CEE", public_files["CHANGELOG.md"], public_version)
+    normalized = []
+    loaded = {}
+    for label, files in (("development", dev_files), ("public", public_files)):
+        manifest = _read_package_json(label, files, "integration-manifest.json")
+        if (set(manifest) != {"format", "version", "source", "bytes", "sha256", "runtimes"}
+                or manifest.get("format") != "cedar-integration" or manifest.get("version") != 1
+                or not re.fullmatch(r"[a-f0-9]{64}", str(manifest.get("source", "")))
+                or not isinstance(manifest.get("runtimes"), dict)):
+            raise ReleaseError(f"{label} CEE has malformed integration provenance")
+        model = manifest["runtimes"].get("cedar-model-typescript-library")
+        if not isinstance(model, dict) or set(model) != {"version", "sha256", "runtimeSha256"}:
+            raise ReleaseError(f"{label} CEE integration lacks a complete model runtime fingerprint")
+        version = model.get("version")
+        if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-dev\.[0-9A-Za-z.-]+)?", version):
+            raise ReleaseError(f"{label} CEE integration has an invalid model version")
+        if label == "public" and version != public_model:
+            raise ReleaseError("Public CEE integration model differs from its changelog")
+        if version not in loaded:
+            loaded[version] = _model_runtime_fingerprints(model_runtime_loader(version), version)
+        if (model.get("sha256"), model.get("runtimeSha256")) != loaded[version]:
+            raise ReleaseError(f"{label} CEE integration model fingerprint does not match its published package")
+        for name, runtime in manifest["runtimes"].items():
+            if name != "cedar-model-typescript-library" and (not isinstance(runtime, dict) or set(runtime) != {"version"}):
+                raise ReleaseError(f"{label} CEE integration has malformed runtime {name}")
+        manifest["source"] = "<source-provenance>"
+        model["version"] = "<model-package-version>"
+        model["sha256"] = "<model-package-provenance>"
+        normalized.append(manifest)
+    if normalized[0]["runtimes"] != normalized[1]["runtimes"]:
+        raise ReleaseError("CEE promotion changes integration runtime code or dependencies")
+    return normalized
 
 
 def _read_package_json(identity: str, files: dict[str, bytes], name: str) -> dict:
@@ -327,52 +417,44 @@ def _canonicalize_minified_renames(
     public_bundle: bytes,
     bundle_name: str = "cedar-embeddable-editor.js",
 ) -> tuple[bytes, int]:
-    """Spell the development bundle with the public bundle's minified names, or refuse.
+    """Prove alpha-equivalence with lexical binding identities, preserving every other byte.
 
-    esbuild draws short identifier names from an alphabet it orders by how often each character
-    occurs in the output. The provenance strings a train stamps into a bundle change those counts,
-    so two builds of the same code can differ in every name at one rank of that alphabet while
-    agreeing everywhere else. This accepts exactly that: the two bundles must match byte for byte
-    outside identifiers, and every identifier that differs must be a short minified name rather
-    than a property or a reserved word, renamed the same way at every position where the bundles
-    differ, in both directions. The same short string may still stand unchanged elsewhere, because
-    it also occurs inside data such as regex classes, version strings and base64 text, and nothing
-    short of parsing the bundle can tell those from code. Two kinds of source change therefore pass
-    as renames: one that permutes short local names consistently and changes nothing else, and one
-    that leaves a renamed name in place at a single site. Both bundles have passed the complete CEE
-    gate before they meet here, which is the defence that remains.
+    Independent scopes can reuse a short name or rename it differently. A global spelling map
+    cannot prove those bundles equivalent. The parser resolves every declaration/reference and
+    keeps properties, public exports, globals, strings, regexes and punctuation unchanged.
     """
     refusal = ReleaseError(
         f"CEE promotion changes executable JavaScript in {bundle_name} outside declared "
         "release provenance"
     )
-    dev_parts = MINIFIED_TOKEN_SPLIT.split(dev_bundle)
-    public_parts = MINIFIED_TOKEN_SPLIT.split(public_bundle)
-    if len(dev_parts) != len(public_parts):
+    directory = Path(__file__).resolve().parents[3] / "scripts" / "javascript"
+    dependencies = json.loads((directory / "package.json").read_text())["dependencies"]
+    ready = True
+    for name, version in dependencies.items():
+        try:
+            installed = json.loads((directory / "node_modules" / name / "package.json").read_text())
+            ready = ready and installed.get("version") == version
+        except (OSError, ValueError):
+            ready = False
+    if not ready:
+        setup = subprocess.run(
+            ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+            cwd=directory, capture_output=True, text=True,
+        )
+        if setup.returncode:
+            raise ReleaseError("Could not install pinned JavaScript release verification tools")
+    try:
+        result = subprocess.run(
+            ["node", str(directory / "compare-scoped-bundles.cjs")],
+            input=json.dumps({"development": dev_bundle.decode(), "public": public_bundle.decode()}),
+            capture_output=True, text=True, timeout=60,
+        )
+        proof = json.loads(result.stdout) if result.returncode == 0 else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        raise ReleaseError("Could not run scoped JavaScript release verification") from error
+    if proof.get("equivalent") is not True or not isinstance(proof.get("renames"), int):
         raise refusal
-    forward: dict[bytes, bytes] = {}
-    backward: dict[bytes, bytes] = {}
-    canonical = list(dev_parts)
-    for index, (dev_part, public_part) in enumerate(zip(dev_parts, public_parts)):
-        if index % 2 == 0:
-            if dev_part != public_part:
-                raise refusal
-            continue
-        if dev_part == public_part:
-            continue
-        if not (MINIFIED_NAME_RE.match(dev_part) and MINIFIED_NAME_RE.match(public_part)):
-            raise refusal
-        if dev_part in RESERVED_SHORT_WORDS or public_part in RESERVED_SHORT_WORDS:
-            raise refusal
-        preceding = dev_parts[index - 1]
-        if preceding.endswith(b".") and not preceding.endswith(b"..."):
-            raise refusal
-        if forward.setdefault(dev_part, public_part) != public_part:
-            raise refusal
-        if backward.setdefault(public_part, dev_part) != dev_part:
-            raise refusal
-        canonical[index] = public_part
-    return b"".join(canonical), len(forward)
+    return public_bundle, proof["renames"]
 
 
 def _normalized_bundle_manifest(bundle: bytes) -> bytes:
@@ -388,6 +470,7 @@ def compare_cee_packages(
     development_allow_scripts: dict[str, bool] | None = None,
     development_design_tokens_spec: str | None = None,
     development_bundle_version: str | None = None,
+    model_runtime_loader=None,
 ) -> dict:
     """Prove that a public CEE package is a metadata-only promotion of a train package.
 
@@ -423,6 +506,9 @@ def compare_cee_packages(
             "CEE promotion changes the package file set: "
             f"development-only={only_dev}, public-only={only_public}"
         )
+    integration_manifests = _integration_manifests(
+        dev_files, public_files, public_version, model_runtime_loader,
+    )
     minified_renames = 0
     # The normalizations each bundle needed, by bundle name; a bundle identical in both packages
     # needed none.
@@ -446,13 +532,13 @@ def compare_cee_packages(
         # A bundle and its manifest move together, because the manifest records the bytes. One
         # without the other means the manifest no longer describes what it names.
         for bundle_name, manifest_name in pairs:
-            if (bundle_name in changed_set) != (manifest_name in changed_set):
+            if bundle_name != "integration.mjs" and (bundle_name in changed_set) != (manifest_name in changed_set):
                 raise ReleaseError(
                     "CEE promotion changes an incomplete bundle-provenance pair: "
                     + ", ".join(changed)
                 )
         changed_pairs = [
-            pair for pair in pairs if pair[0] in changed_set
+            pair for pair in pairs if pair[0] in changed_set or pair[1] in changed_set
         ]
         bundle_changed = bool(changed_pairs)
 
@@ -500,6 +586,12 @@ def compare_cee_packages(
                 normalized_public[bundle_name] = public_bundle
                 normalized_dev[manifest_name] = _normalized_bundle_manifest(dev_bundle)
                 normalized_public[manifest_name] = _normalized_bundle_manifest(public_bundle)
+                if bundle_name == "integration.mjs":
+                    for target, manifest, bundle in (
+                        (normalized_dev, integration_manifests[0], dev_bundle),
+                        (normalized_public, integration_manifests[1], public_bundle),
+                    ):
+                        target[manifest_name] = _json_bytes({**manifest, "bytes": len(bundle), "sha256": _sha256(bundle)})
         changed = [
             name for name in sorted(normalized_dev)
             if normalized_dev[name] != normalized_public[name]
@@ -524,6 +616,8 @@ def compare_cee_packages(
             if label in applied
         )
         bundle_changes.append(f"{manifest_name}:derived bundle bytes and sha256")
+        if bundle_name == "integration.mjs":
+            bundle_changes.append("integration-manifest.json:source and verified model package provenance")
         bundle_changes.extend(
             f"{bundle_name}:{label}"
             for label in (

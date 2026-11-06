@@ -10,7 +10,6 @@ from org.metadatacenter.model.RepoType import RepoType
 from org.metadatacenter.util.GlobalContext import GlobalContext
 from org.metadatacenter.util.OpenApiContract import (
     DOCUMENT_GLOB,
-    SKIPPED_REPOSITORIES,
     analyze_document,
     cross_document_findings,
     unreadable_document,
@@ -77,7 +76,7 @@ class OpenApiWorker(Worker):
         """Every committed document under a Java repository, with the repository that owns it."""
         seen = set()
         for repo in Worker.get_flat_repo_list(GlobalContext.repos.get_list_all()):
-            if repo.repo_type not in DOCUMENT_TYPES or repo.name in SKIPPED_REPOSITORIES:
+            if repo.repo_type not in DOCUMENT_TYPES:
                 continue
             if repo.get_fqn() in seen:
                 continue
@@ -127,10 +126,6 @@ class OpenApiWorker(Worker):
             caption += f'\n[yellow]{warnings} to review[/yellow]'
         caption += ('\nWrites without body counts the POST, PUT and PATCH operations that declare no '
                     'requestBody and are not on the bodiless allowlist.')
-        if SKIPPED_REPOSITORIES:
-            skipped = ', '.join(f'{name} ({reason})'
-                                for name, reason in sorted(SKIPPED_REPOSITORIES.items()))
-            caption += f'\nSkipped: {skipped}'
         return caption
 
     @staticmethod

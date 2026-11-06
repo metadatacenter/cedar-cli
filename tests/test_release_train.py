@@ -82,6 +82,7 @@ def package_tarball(
     changelog=b"Changes\n",
     host_fonts_bundle=None,
     host_fonts_manifest=None,
+    extra_files=None,
 ):
     package = {
         "name": name,
@@ -121,6 +122,7 @@ def package_tarball(
             "bytes": len(described),
             "sha256": hashlib.sha256(described).hexdigest(),
         }, indent=2) + "\n").encode()
+    files.update(extra_files or {})
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz") as archive:
         for path, content in files.items():
@@ -348,21 +350,25 @@ class CeePromotionTest(unittest.TestCase):
             compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
 
     def _renamed_pair(self, dev_code, public_code):
+        def javascript(version, model, trace, code):
+            metadata = provenance_bundle(version, model, trace).decode()
+            return ('const provenance=' + json.dumps(metadata) + ';' + code).encode()
+
         dev = package_tarball(
             DEV_CEE_NAME, DEV_VERSION, development=True,
-            bundle=provenance_bundle(
+            bundle=javascript(
                 DEV_VERSION,
                 "npm:@org.metadatacenter/cedar-model-typescript-library@"
                 "1.0.5-dev.20260827.2030.g9261381c1fb4",
                 "2026-08-27 12:23 10212094",
-                suffix=dev_code,
+                dev_code,
             ),
             changelog=PUBLIC_CHANGELOG,
         )
         public = package_tarball(
             PUBLIC_CEE_NAME, PUBLIC_VERSION, development=False,
-            bundle=provenance_bundle(
-                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09", suffix=public_code,
+            bundle=javascript(
+                PUBLIC_VERSION, "1.0.4", "2026-08-27 15:09", public_code,
             ),
             changelog=PUBLIC_CHANGELOG,
         )
@@ -473,6 +479,37 @@ class CeePromotionTest(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "outside declared release provenance"):
             compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
 
+    def test_independent_scopes_can_rename_the_same_spelling_differently(self):
+        for development, public in (
+            ('function f(a){return a+1}function g(a){return a+2}',
+             'function f(b){return b+1}function g(c){return c+2}'),
+            ('const iI=()=>1;const x={setup:iI};function f(i22){return i22+1}',
+             'const i22=()=>1;const x={setup:i22};function f(i23){return i23+1}'),
+            ('class a{method(){return a}}const x=a;',
+             'class b{method(){return b}}const x=b;'),
+        ):
+            with self.subTest(development=development):
+                dev, public = self._renamed_pair(development, public)
+                self.assertGreater(compare_cee_packages(
+                    dev, DEV_VERSION, public, PUBLIC_VERSION)['minifiedIdentifierRenames'], 0)
+
+    def test_scope_proof_rejects_changes_to_bindings_and_observable_names(self):
+        for development, public in (
+            ('function f(a){let b=2;return a+b}', 'function f(x){let y=2;return y+y}'),
+            ('function f(a){return ()=>a}', 'function f(b){return ()=>a}'),
+            ('const a=1;const x={a};', 'const b=1;const x={b};'),
+            ('export const a=1;', 'export const b=1;'),
+            ('const a=1;export {a};', 'const b=1;export {b};'),
+            ('import {a} from "runtime";a();', 'import {b} from "runtime";b();'),
+            ('function f(){return a()}', 'function f(){return b()}'),
+            ('function f(a){return eval("a")}', 'function f(b){return eval("a")}'),
+            ('const a=1;const s="a";', 'const b=1;const s="b";'),
+        ):
+            with self.subTest(development=development):
+                dev, public = self._renamed_pair(development, public)
+                with self.assertRaisesRegex(ReleaseError, 'outside declared release provenance'):
+                    compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
     def test_a_renamed_name_may_still_stand_unchanged_in_data(self):
         dev, public = self._renamed_pair(
             'function eB(t){return eB(t)}var r=/^[-+]?0[eB]/,s="eB";',
@@ -501,8 +538,8 @@ class CeePromotionTest(unittest.TestCase):
 
     def test_a_spread_of_a_renamed_name_is_still_a_rename(self):
         dev, public = self._renamed_pair(
-            "providers:[...qB,...KB],x:qB(KB)",
-            "providers:[...q8,...K8],x:q8(K8)",
+            "const qB=[],KB=[];const x={providers:[...qB,...KB],x:qB.concat(KB)};",
+            "const q8=[],K8=[];const x={providers:[...q8,...K8],x:q8.concat(K8)};",
         )
         proof = compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
         self.assertEqual(2, proof["minifiedIdentifierRenames"])
@@ -992,7 +1029,7 @@ class ReleasePlannerTest(unittest.TestCase):
                 "image": f"cedar-image-{index:02d}",
                 "reference": f"nexus.example/cedar-image-{index:02d}:{TRAIN}",
             }
-            for index in range(28)
+            for index in range(27)
         ]
         docker_plan = {
             "version": TRAIN,
@@ -1141,13 +1178,15 @@ class ReleasePlannerTest(unittest.TestCase):
             self.build_release(planner)
 
     def test_release_docker_defaults_install_from_the_retained_registry(self):
-        inputs = {"CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4"}
+        inputs = {"CEDAR_WORKSPACE_NPM_VERSION": "2.9.3-dev.202609050436.gf81aa253e312.p4",
+                  "CEDAR_NPM_REGISTRY": NEXUS_NPM_REGISTRY.rstrip("/")}
         plan = {"npm": {"surfaces": [], "retainedRegistry": NEXUS_NPM_RETAINED_REGISTRY}}
         defaults = ReleasePlanner._docker_frontend_defaults(
             {}, {"dockerInputs": inputs}, plan, "2.9.8", "2.0.6")
         self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY.rstrip("/"),
                          defaults["release"]["CEDAR_NPM_REGISTRY"])
-        self.assertNotIn("CEDAR_NPM_REGISTRY", defaults["nextDevelopment"])
+        self.assertEqual(NEXUS_NPM_REGISTRY.rstrip("/"),
+                         defaults["nextDevelopment"]["CEDAR_NPM_REGISTRY"])
 
     def test_release_docker_defaults_name_released_frontends_and_the_public_editor(self):
         frontend_config = {
@@ -1217,7 +1256,7 @@ class ReleasePlannerTest(unittest.TestCase):
     def test_plan_refuses_a_train_without_complete_docker_evidence(self):
         planner = self.make_planner()
         planner.state.values[f"docker/completed/{TRAIN}.json"][0]["images"].pop()
-        with self.assertRaisesRegex(ReleaseError, "28 planned images"):
+        with self.assertRaisesRegex(ReleaseError, "27 planned images"):
             planner.build(
                 release_version="2.9.3",
                 next_version="2.9.4-SNAPSHOT",

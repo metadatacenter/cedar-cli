@@ -15,6 +15,7 @@ from org.metadatacenter.release_support.hashes import (
 from org.metadatacenter.release_support.packages import (
     _verify_integrity,
     compare_cee_packages,
+    load_model_runtime,
 )
 from org.metadatacenter.release_support.policy import (
     DEV_CEE_NAME,
@@ -314,10 +315,10 @@ class ReleasePlanner:
         planned_names = [item.get("image") for item in planned if isinstance(item, dict)]
         verified_names = [item.get("image") for item in verified if isinstance(item, dict)]
         if (
-            len(planned_names) != 28 or len(set(planned_names)) != 28
+            len(planned_names) != 27 or len(set(planned_names)) != 27
             or verified_names != planned_names
         ):
-            raise ReleaseError("Docker train is not complete for all 28 planned images")
+            raise ReleaseError("Docker train is not complete for all 27 planned images")
         for item in verified:
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", item.get("digest", "")):
                 raise ReleaseError(
@@ -460,6 +461,7 @@ class ReleasePlanner:
             cee_version,
             development_allow_scripts=development_allow_scripts,
             development_design_tokens_spec=token_spec,
+            model_runtime_loader=lambda version: load_model_runtime(self.http, version),
         )
 
         # Carry the train's shared-component graph through release preparation too.

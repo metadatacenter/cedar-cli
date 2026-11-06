@@ -398,6 +398,22 @@ class BuildPolicyTest(unittest.TestCase):
         for variable in ("CEDAR_TEST_WORKERS", "NG_BUILD_MAX_WORKERS", "VITEST_MAX_WORKERS"):
             self.assertEqual("3", environment[variable])
 
+    def test_in_place_payload_build_installs_with_strict_allow_scripts(self):
+        executor = ShellTaskExecutor()
+        task = SimpleNamespace(
+            node_id=3, repo=SimpleNamespace(name="frontend", repo_type="ANGULAR"),
+            command_list=["npm ci"],
+            get_parameter=lambda name: name == "in_place_frontend_build",
+        )
+        module = "org.metadatacenter.taskexecutor.ShellTaskExecutor"
+        with ExitStack() as stack:
+            stack.enter_context(patch(module + ".Util.get_wd", return_value="/tmp/source"))
+            stack.enter_context(patch(module + ".is_frontend_build", return_value=False))
+            stack.enter_context(patch(module + ".require_no_frontend_runtime_collision"))
+            execute = stack.enter_context(patch.object(executor, "_execute_commands", return_value=0))
+            self.assertEqual(0, executor.execute_shell_command_list(task, Mock(), dry_run=False))
+        self.assertEqual("true", execute.call_args.args[-1]["NPM_CONFIG_STRICT_ALLOW_SCRIPTS"])
+
     def test_nested_browser_failure_retains_sibling_reports_and_command_log(self):
         executor = ShellTaskExecutor()
         task = SimpleNamespace(

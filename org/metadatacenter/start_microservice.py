@@ -26,11 +26,6 @@ def microservice_group():
     exit_on_failure(StartMicroserviceWorker.group())
 
 
-@app.command("impex")
-def microservice_impex():
-    exit_on_failure(StartMicroserviceWorker.impex())
-
-
 @app.command("messaging")
 def microservice_messaging():
     exit_on_failure(StartMicroserviceWorker.messaging())

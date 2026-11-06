@@ -109,6 +109,9 @@ from org.metadatacenter.release_support.output import (
 )
 
 from org.metadatacenter.release_support.packages import (
+    load_model_runtime,
+    _model_runtime_fingerprints,
+    _integration_manifests,
     _bundle_pairs,
     _canonicalize_minified_renames,
     _normalize_bundle_provenance,

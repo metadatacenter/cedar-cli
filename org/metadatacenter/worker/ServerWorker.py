@@ -33,7 +33,7 @@ EDITOR_FRONTENDS = {
 class ServerWorker(Worker):
     NATIVE_MICROSERVICES = {
         "group", "messaging", "repo", "resource", "artifact", "terminology",
-        "user", "worker", "openview", "monitor", "impex", "bridge",
+        "user", "worker", "openview", "monitor", "bridge",
     }
 
     def __init__(self):

@@ -267,16 +267,6 @@ class OpenApiWorkerTest(unittest.TestCase):
         self.assertEqual(1, returncode)
         self.assertIn('GET /users 200', self.detail(console))
 
-    def test_a_skipped_repository_is_left_out_of_the_check(self):
-        returncode, console = self.check(
-            ['cedar-user-server', 'cedar-impex-server'],
-            {'cedar-user-server': document({'/users': {'get': {'responses': {'200': USER_RESPONSE}}}}),
-             'cedar-impex-server': document(
-                 {'/impex': {'post': {'responses': {'200': {'description': 'Successful operation'}}}}})})
-
-        self.assertEqual(0, returncode)
-        self.assertNotIn('cedar-impex-server', self.cells(console))
-
     def test_a_repository_that_ships_no_document_is_not_looked_at(self):
         returncode, console = self.check(
             ['cedar-user-server', ('cedar-template-editor', RepoType.ANGULAR_JS)],
@@ -414,9 +404,6 @@ class EmptyResponseTest(unittest.TestCase):
         self.assertEqual([], report.failures)
         self.assertEqual([RULE_EMPTY_RESPONSE], [f.rule for f in report.warnings])
 
-    def test_every_listed_response_names_a_repository_the_check_reads(self):
-        for repository, _method, _path, _status in EMPTY_RESPONSES:
-            self.assertNotIn(repository, OpenApiContract.SKIPPED_REPOSITORIES)
 
 
 if __name__ == '__main__':

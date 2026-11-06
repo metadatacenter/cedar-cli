@@ -48,6 +48,7 @@ from org.metadatacenter.release_support.output import (
 from org.metadatacenter.release_support.packages import (
     _verify_integrity,
     compare_cee_packages,
+    load_model_runtime,
 )
 from org.metadatacenter.release_support.policy import (
     DEV_CEE_NAME,
@@ -848,6 +849,7 @@ class ReleasePreflight:
                     "@org.metadatacenter/cedar-design-tokens"),
                 # CI publishes under a commit-derived version a bundle built under the committed one.
                 development_bundle_version=package.get("version"),
+                model_runtime_loader=lambda version: load_model_runtime(self.http, version),
             )
         except (ReleaseError, KeyError, TypeError) as error:
             if stale:

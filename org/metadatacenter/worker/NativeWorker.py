@@ -20,7 +20,7 @@ class NativeWorker(Worker):
 
     MICROSERVICES = (
         "group", "messaging", "repo", "resource", "artifact", "terminology",
-        "user", "worker", "openview", "monitor", "impex", "bridge",
+        "user", "worker", "openview", "monitor", "bridge",
     )
     FRONTENDS = (
         "ui-main", "ui-workspace", "ui-designer", "ui-openview", "ui-content",

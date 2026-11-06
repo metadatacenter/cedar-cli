@@ -262,6 +262,13 @@ class ComponentWorker:
             locked = ComponentWorker._read_json(package_dir / "package.json")
             locked_version = locked.get("version") if isinstance(locked, dict) else None
             bundle = ComponentWorker._staged_bundle(unscoped(name), entry)
+            delivery = entry.get("delivery")
+            if bundle == "integration.mjs":
+                # The package supplies a compiled module; the host serves the combined runtime.
+                # Check both identities, so correct installed modules cannot conceal stale output.
+                if not isinstance(delivery, dict) or delivery.get("file") != "cedar-editors.js" \
+                        or ComponentWorker._sha256(directory / "app/components/cedar-editors.js") != delivery.get("sha256"):
+                    bundle = None
             findings.append(evaluate_bundle(
                 host, unscoped(name), entry.get("source"), entry.get("sha256"),
                 # A file no package ships cannot be the locked bundle, so it is reported as a mismatch.
@@ -277,7 +284,7 @@ class ComponentWorker:
         and records which it staged; a manifest without the record predates the second bundle.
         """
         recorded = entry.get("bundle", f"{component}.js")
-        return recorded if recorded in (f"{component}.js", f"{component}.host-fonts.js") else None
+        return recorded if recorded in (f"{component}.js", f"{component}.host-fonts.js", "integration.mjs") else None
 
     @staticmethod
     def _evaluate_elements(host, directory, locked):

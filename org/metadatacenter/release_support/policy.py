@@ -55,6 +55,7 @@ REQUIRED_CEE_FILES = {
 CEE_BUNDLE_PAIRS = (
     ("cedar-embeddable-editor.js", "bundle-manifest.json"),
     ("cedar-embeddable-editor.host-fonts.js", "bundle-manifest.host-fonts.json"),
+    ("integration.mjs", "integration-manifest.json"),
 )
 
 
@@ -138,14 +139,6 @@ MAVEN_GENERATED_VERSION_FILES = {
             '"version" : "{}"'
         ),
         "cedar-group-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
-            "version: {}"
-        ),
-    },
-    "cedar-impex-server": {
-        "cedar-impex-server-application/src/main/resources/assets/swagger-api/swagger.json": (
-            '"version" : "{}"'
-        ),
-        "cedar-impex-server-application/src/main/resources/assets/swagger-api/swagger.yaml": (
             "version: {}"
         ),
     },
