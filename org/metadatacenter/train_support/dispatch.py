@@ -10,6 +10,26 @@ from org.metadatacenter.train_support import preflight as _preflight_component
 from org.metadatacenter.train_support import workflow as _workflow_component
 
 
+def _resume_command(selected, fallback):
+    """Retry only failed jobs; GitHub preserves successful job outputs and dependencies."""
+    try:
+        BuildTrain._read(f'docker/completed/{selected}.json')
+    except ValueError as error:
+        if 'does not exist' not in str(error):
+            raise
+    else:
+        return None
+    workflow = _workflow_component._workflow_run(selected)
+    if workflow is None:
+        return fallback
+    if workflow.get('status') != 'completed':
+        raise ValueError('the train workflow is still active; do not dispatch another run')
+    if workflow.get('conclusion') not in _policy_component.FAILED_CONCLUSIONS:
+        raise ValueError('the workflow succeeded; inspect train-status for its completion record')
+    return ['gh', 'run', 'rerun', str(workflow['databaseId']), '--failed',
+            '--repo', _policy_component.REPOSITORY]
+
+
 def _dry_run(selected, resume, command):
     try:
         summary, _source = _preflight_component._preflight(selected, resume)
@@ -66,8 +86,16 @@ def _dry_run(selected, resume, command):
                 return 1
         _output_component.console.print(f'Next incomplete stage: {next_stage or "none (train is complete)"}')
 
-    _output_component.console.print('Would dispatch:', soft_wrap=True)
-    _output_component.console.print(f'  {shlex.join(command)}', soft_wrap=True)
+    try:
+        command = _resume_command(selected, command) if resume else command
+    except ValueError as error:
+        _output_component.console.print(str(error), markup=False)
+        return 1
+    if command:
+        _output_component.console.print('Would dispatch:', soft_wrap=True)
+        _output_component.console.print(f'  {shlex.join(command)}', soft_wrap=True)
+    else:
+        _output_component.console.print('Train is complete; no retry is needed.')
     _output_component.console.print('[green]No changes made.[/green]')
     return 0
 
@@ -116,9 +144,14 @@ def dispatch(resume=None, dry_run=False, release_version=None, next_version=None
 
     try:
         _preflight_component._preflight(selected, resume)
+        command = _resume_command(selected, command) if resume else command
     except ValueError as error:
         _output_component.console.print(f'[red]Build-train preflight failed: {error}[/red]')
         return 1
+
+    if command is None:
+        _output_component.console.print(f'Train {selected} is complete; no retry is needed.')
+        return 0
 
     try:
         result = subprocess.run(
@@ -136,8 +169,10 @@ def dispatch(resume=None, dry_run=False, release_version=None, next_version=None
         if detail:
             _output_component.console.print(detail, markup=False)
         return result.returncode
-    _output_component.console.print(f'[green]Dispatched build train {selected}.[/green]')
-    run_id = _workflow_component._dispatched_run_id(result)
+    retry = command[1:3] == ['run', 'rerun']
+    action = 'Retrying failed jobs for' if retry else 'Dispatched build train'
+    _output_component.console.print(f'[green]{action} {selected}.[/green]')
+    run_id = command[3] if retry else _workflow_component._dispatched_run_id(result)
     if run_id:
         _output_component.console.print(
             f'https://github.com/{_policy_component.REPOSITORY}/actions/runs/{run_id}',

@@ -28,6 +28,10 @@ class Response(io.BytesIO):
 class BuildTrainTest(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
+        for target in ('_packaging_preflight', '_contract_preflight'):
+            probe = patch('org.metadatacenter.train_support.preflight.' + target)
+            probe.start()
+            self.addCleanup(probe.stop)
 
     def test_allocate_uses_parent_snapshot_and_utc_minute(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(Util, 'cedar_home', directory):
@@ -159,14 +163,50 @@ class BuildTrainTest(unittest.TestCase):
         self.assertIn('No such option', result.output)
 
     @patch("org.metadatacenter.train_support.preflight._preflight", return_value=((44, 'model', 'cee', 7, 3), None))
+    @patch.object(BuildTrain, '_read', side_effect=ValueError('build-train state does not exist'))
+    @patch("org.metadatacenter.train_support.workflow._workflow_run", return_value={
+        'databaseId': 42, 'status': 'completed', 'conclusion': 'failure'})
     @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
-    def test_cli_resume_uses_recorded_id(self, run, _preflight):
+    def test_cli_resume_retries_failed_jobs_without_rebuilding_successful_jobs(self, run, _workflow, _read, _preflight):
         run.return_value.returncode = 0
         result = self.runner.invoke(publish.app, [
             'train', '--resume', '2.9.3-dev.20260824.1847',
         ])
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn('resume=true', run.call_args.args[0])
+        self.assertEqual(['gh', 'run', 'rerun', '42', '--failed', '--repo',
+                          'metadatacenter/cedar-development'], run.call_args.args[0])
+        self.assertIn('Retrying failed jobs', result.output)
+        self.assertIn('actions/runs/42', result.output)
+
+    @patch("org.metadatacenter.train_support.preflight._preflight")
+    @patch.object(BuildTrain, '_read', return_value={})
+    @patch('org.metadatacenter.worker.BuildTrainWorker.subprocess.run')
+    def test_completed_train_is_never_dispatched_again(self, run, _read, _preflight):
+        result = self.runner.invoke(publish.app, ['train', '--resume', '2.9.3-dev.20260824.1847'])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('no retry is needed', result.output)
+        run.assert_not_called()
+
+    def test_retry_selection_uses_update_time_including_original_run_retries(self):
+        version = '2.9.3-dev.20260824.1847'
+        retried = {'databaseId': 1, 'displayTitle': f'Build train {version}',
+                   'createdAt': '2026-08-24T18:47:00Z', 'updatedAt': '2026-08-24T20:00:00Z'}
+        duplicate = {'databaseId': 2, 'displayTitle': f'Build train {version} (resume)',
+                     'createdAt': '2026-08-24T19:00:00Z', 'updatedAt': '2026-08-24T19:15:00Z'}
+        with patch('org.metadatacenter.train_support.workflow._workflow_runs', return_value=[duplicate, retried]):
+            self.assertEqual(retried, BuildTrainWorker._workflow_run(version))
+
+    def test_completion_record_wins_over_cancelled_duplicate_workflow(self):
+        with (
+            patch.object(BuildTrain, '_read', return_value={}),
+            patch('org.metadatacenter.train_support.workflow._workflow_run', return_value={'databaseId': 2}),
+            patch('org.metadatacenter.train_support.workflow._workflow_progress',
+                  return_value={'status': 'completed', 'conclusion': 'cancelled'}),
+            patch('org.metadatacenter.train_support.survey.releasability_survey', return_value=([], [], 42)),
+        ):
+            result = self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Decision: complete', result.output)
 
     @patch("org.metadatacenter.train_support.survey._open_work", return_value=[])
     def test_cli_dry_run_checks_but_never_dispatches(self, _open_work):
@@ -739,6 +779,11 @@ class PreflightReportTest(unittest.TestCase):
 
     def setUp(self):
         self.runner = CliRunner()
+        for target in ('org.metadatacenter.train_support.preflight._packaging_preflight',
+                       'org.metadatacenter.train_support.reporting._contracts_component.contract_survey'):
+            probe = patch(target, return_value=[])
+            probe.start()
+            self.addCleanup(probe.stop)
 
     @staticmethod
     def _home(directory, repositories, workflows=()):

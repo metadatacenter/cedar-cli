@@ -267,4 +267,5 @@ def status(version=None, watch=False):
     )
     if _render_recovery(selected, records, progress or workflow):
         _render_releasability(selected)
+        return 0
     return int(bool(progress and progress.get('conclusion') in _policy_component.FAILED_CONCLUSIONS))
