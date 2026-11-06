@@ -55,6 +55,7 @@ REQUIRED_CEE_FILES = {
 CEE_BUNDLE_PAIRS = (
     ("cedar-embeddable-editor.js", "bundle-manifest.json"),
     ("cedar-embeddable-editor.host-fonts.js", "bundle-manifest.host-fonts.json"),
+    ("integration.mjs", "integration-manifest.json"),
 )
 
 

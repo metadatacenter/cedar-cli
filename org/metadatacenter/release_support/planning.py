@@ -15,6 +15,7 @@ from org.metadatacenter.release_support.hashes import (
 from org.metadatacenter.release_support.packages import (
     _verify_integrity,
     compare_cee_packages,
+    load_model_runtime,
 )
 from org.metadatacenter.release_support.policy import (
     DEV_CEE_NAME,
@@ -460,6 +461,7 @@ class ReleasePlanner:
             cee_version,
             development_allow_scripts=development_allow_scripts,
             development_design_tokens_spec=token_spec,
+            model_runtime_loader=lambda version: load_model_runtime(self.http, version),
         )
 
         # Carry the train's shared-component graph through release preparation too.

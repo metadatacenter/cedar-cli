@@ -82,6 +82,7 @@ def package_tarball(
     changelog=b"Changes\n",
     host_fonts_bundle=None,
     host_fonts_manifest=None,
+    extra_files=None,
 ):
     package = {
         "name": name,
@@ -121,6 +122,7 @@ def package_tarball(
             "bytes": len(described),
             "sha256": hashlib.sha256(described).hexdigest(),
         }, indent=2) + "\n").encode()
+    files.update(extra_files or {})
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz") as archive:
         for path, content in files.items():
