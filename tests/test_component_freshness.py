@@ -275,6 +275,20 @@ class ComponentWorkerTest(unittest.TestCase):
         [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
         self.assertEqual(ComponentState.MISMATCHED, finding.state)
 
+    def test_a_shared_delivery_checks_the_input_module_and_served_script(self):
+        module, served = b"// compiled module", b"// combined runtime"
+        host = self._staged_host({"source": "package", "bundle": "integration.mjs",
+                                  "sha256": sha256(module).hexdigest(), "delivery": {
+                                      "file": "cedar-editors.js", "sha256": sha256(served).hexdigest()}}, "// host fonts")
+        (host / "node_modules/cedar-embeddable-designer/integration.mjs").write_bytes(module)
+        output = host / "app/components/cedar-editors.js"
+        output.write_bytes(served)
+        [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
+        self.assertEqual(ComponentState.CURRENT, finding.state)
+        output.write_bytes(b"// stale")
+        [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
+        self.assertEqual(ComponentState.MISMATCHED, finding.state)
+
     def _train_configuration(self, configuration):
         ops = self.root / "cedar-development" / "ops"
         ops.mkdir(parents=True, exist_ok=True)
