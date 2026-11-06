@@ -1,6 +1,7 @@
 """Reads what each browser application pins, stages and creates, and reports where the three disagree."""
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -269,11 +270,27 @@ class ComponentWorker:
                 if not isinstance(delivery, dict) or delivery.get("file") != "cedar-editors.js" \
                         or ComponentWorker._sha256(directory / "app/components/cedar-editors.js") != delivery.get("sha256"):
                     bundle = None
+                elif not ComponentWorker._delivery_assets_match(directory / "app/components", delivery):
+                    bundle = None
             findings.append(evaluate_bundle(
                 host, unscoped(name), entry.get("source"), entry.get("sha256"),
                 # A file no package ships cannot be the locked bundle, so it is reported as a mismatch.
                 locked_version, ComponentWorker._sha256(package_dir / bundle) if bundle else ""))
         return findings
+
+    @staticmethod
+    def _delivery_assets_match(directory, delivery):
+        assets = delivery.get("assets", {})
+        if not isinstance(assets, dict):
+            return False
+        for name, expected in assets.items():
+            if not re.fullmatch(r"cedar-rdf-(jsonld|n3)-[a-f0-9]{12}\.js", name) or not isinstance(expected, dict):
+                return False
+            path = directory / name
+            if not path.is_file() or path.stat().st_size != expected.get("bytes") \
+                    or ComponentWorker._sha256(path) != expected.get("sha256"):
+                return False
+        return True
 
     @staticmethod
     def _staged_bundle(component, entry):
