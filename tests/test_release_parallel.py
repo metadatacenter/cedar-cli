@@ -1,4 +1,5 @@
 import hashlib
+from contextvars import ContextVar
 from pathlib import Path
 import tempfile
 import threading
@@ -13,6 +14,19 @@ from org.metadatacenter.release_support.lifecycle import integrate_active_releas
 
 
 class ReleaseParallelTest(unittest.TestCase):
+    def test_checks_inherit_the_invocations_context_without_sharing_mutations(self):
+        selected = ContextVar('selected_release_environment', default='missing')
+        token = selected.set('resolved profile')
+        try:
+            def check(value):
+                inherited = selected.get()
+                selected.set(value)
+                return inherited
+            self.assertEqual(['resolved profile'] * 8, checked_map(check, range(8)))
+            self.assertEqual('resolved profile', selected.get())
+        finally:
+            selected.reset(token)
+
     def test_remote_failure_drains_success_and_resume_does_not_push_it_again(self):
         with tempfile.TemporaryDirectory() as directory:
             state = ReleaseState(root=Path(directory))
