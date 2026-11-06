@@ -19,7 +19,7 @@ import re
 
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.release_support.packaging import packaging_findings
-from org.metadatacenter.release_support.policy import NPM_RELEASE_SURFACES
+from org.metadatacenter.release_support.policy import NPM_RELEASE_SURFACES, NEXUS_NPM_RETAINED_REGISTRY
 
 SNAPSHOT_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)-SNAPSHOT$")
 RELEASE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -135,6 +135,21 @@ def version_findings(release_version: str | None, next_version: str | None,
     return findings
 
 
+def docker_default_findings(workspace: Path) -> list[str]:
+    """Compatibility defaults must survive train-registry cleanup and the next release."""
+    path = workspace / 'cedar-docker-build' / 'bin' / 'cedar-images-base.sh'
+    if not path.exists():
+        return []
+    text = path.read_text(encoding='utf-8')
+    versions = re.findall(r'^export (CEDAR_\w+_NPM_VERSION)=(\S+)$', text, re.MULTILINE)
+    findings = [f'Docker compatibility default {name} must name a retained release, not {value}'
+                for name, value in versions if not RELEASE_RE.fullmatch(value)]
+    registry = re.search(r'^export CEDAR_NPM_REGISTRY=(\S+)$', text, re.MULTILINE)
+    if versions and (not registry or registry[1].rstrip('/') != NEXUS_NPM_RETAINED_REGISTRY.rstrip('/')):
+        findings.append('Docker compatibility defaults must use the retained npm-cedar-releases registry')
+    return findings
+
+
 def readiness_findings(workspace, release_version=None, next_version=None,
                        packaging=True) -> list[str]:
     """Every release precondition that a train has no bearing on."""
@@ -145,6 +160,7 @@ def readiness_findings(workspace, release_version=None, next_version=None,
     findings.extend(required_artifact_findings(root, build))
     findings.extend(surface_findings(root))
     findings.extend(version_findings(release_version, next_version, root))
+    findings.extend(docker_default_findings(root))
     if packaging:
         findings.extend(
             f"a published surface cannot be packed from its committed tree: {item}"

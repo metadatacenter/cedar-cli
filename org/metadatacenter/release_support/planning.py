@@ -168,10 +168,10 @@ class ReleasePlanner:
         """The frontend package each stamped tree's Docker build defaults should name.
 
         The train records under dockerInputs the exact package behind every frontend build
-        argument it verified. The next-development tree takes those as they are: they exist the
-        moment the release pushes, so the Docker build's CI at the post-release commit resolves
-        them, and they are the newest development packages there are. The release tree takes what
-        outlives them. Nexus removes a development package from the train registry three days
+        argument it verified. Next development preserves the captured retained compatibility
+        defaults: those already exist when remote integration triggers CI, before the new release
+        packages are published. The release tree takes its own permanent packages.
+        Nexus removes a development package from the train registry three days
         after upload and a release thirty days after, so the released frontends are named at the
         release version in the retained registry, which nothing cleans up, and OpenView's Editor
         at the public CEE version on npmjs.
@@ -200,7 +200,7 @@ class ReleasePlanner:
             # The frontend images download the released package and install the shared
             # components it names, both of which only the retained registry keeps.
             release_values[DOCKER_NPM_REGISTRY_VARIABLE] = retained.rstrip("/")
-        return {"release": release_values, "nextDevelopment": dict(inputs)}
+        return {"release": release_values, "nextDevelopment": {}}
 
     @staticmethod
     def _cee_consumers(config: dict, npm_plan: dict, source: dict) -> list[dict]:
