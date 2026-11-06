@@ -9,9 +9,37 @@ import unittest
 from unittest.mock import Mock, patch
 from org.metadatacenter.release_readiness_report import ReadinessReport
 from org.metadatacenter.release_support.errors import ReleaseError
+from org.metadatacenter.release_support.readiness import surface_findings
 
 
 class ReadinessReportTest(unittest.TestCase):
+    def test_openview_asset_compatibility_is_checked_before_building_a_train(self):
+        surface = {'id': 'openview', 'repository': 'cedar-openview',
+                   'directory': 'cedar-openview-dist',
+                   'ceeRuntime': {'assetManifest': 'cedar-openview-src/angular.json'}}
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / surface['repository']
+            (root / '.git').mkdir(parents=True)
+            (root / surface['directory']).mkdir()
+            (root / surface['directory'] / 'package.json').write_text('{}')
+            asset_path = root / surface['ceeRuntime']['assetManifest']
+            asset_path.parent.mkdir()
+            assets = [{'input': 'node_modules/cedar-embeddable-editor',
+                       'output': 'node_modules/cedar-embeddable-editor',
+                       'glob': 'cedar-embeddable-editor.host-fonts.js'}]
+            def write_assets():
+                asset_path.write_text(json.dumps({'projects': {'cedar-openview': {
+                    'architect': {'build': {'options': {'assets': assets}}}}}}))
+            with patch('org.metadatacenter.release_support.readiness.NPM_RELEASE_SURFACES', [surface]):
+                write_assets()
+                self.assertEqual([], surface_findings(workspace))
+                assets[0]['glob'] = 'unreviewed-runtime.js'
+                write_assets()
+                self.assertIn('supported CEE runtime asset', surface_findings(workspace)[0])
+                asset_path.unlink()
+                self.assertIn('missing or invalid', surface_findings(workspace)[0])
+
     def test_package_integrity_and_identity_are_required(self):
         output = io.BytesIO()
         with tarfile.open(fileobj=output, mode='w:gz') as archive:

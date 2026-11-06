@@ -104,6 +104,12 @@ def surface_findings(workspace: Path) -> list[str]:
         manifest = root / directory / "package.json" if directory != "." else root / "package.json"
         if not manifest.exists():
             findings.append(f"{surface['id']}: {directory}/package.json is missing")
+        if surface.get('ceeRuntime'):
+            from org.metadatacenter.release_support.distribution import ReleaseDistributionMaterializer
+            try:
+                ReleaseDistributionMaterializer._cee_runtime_config(root, surface['ceeRuntime'])
+            except ReleaseError as error:
+                findings.append(f"{surface['id']}: {error}")
     return findings
 
 
