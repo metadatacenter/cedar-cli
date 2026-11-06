@@ -78,6 +78,10 @@ jobs:
           node --version
           npm --version
 
+      - name: Install pinned JavaScript release verification tools
+        working-directory: cedar-cli/scripts/javascript
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       # Ubuntu 22.04 deployment hosts use Python 3.10; keep that baseline covered.
       - name: Set up Python
         uses: actions/setup-python@v6

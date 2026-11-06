@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import re
+import subprocess
 import tarfile
 import urllib.parse
 from org.metadatacenter.release_support.errors import (
@@ -21,11 +22,8 @@ from org.metadatacenter.release_support.policy import (
     DEV_CEE_NAME,
     DEV_MODEL_SPEC_RE,
     LOAD_TRACE_RE,
-    MINIFIED_NAME_RE,
-    MINIFIED_TOKEN_SPLIT,
     PUBLIC_CEE_NAME,
     REQUIRED_CEE_FILES,
-    RESERVED_SHORT_WORDS,
     NEXUS_NPM_REGISTRY,
     PUBLIC_NPM_REGISTRY,
 )
@@ -419,52 +417,44 @@ def _canonicalize_minified_renames(
     public_bundle: bytes,
     bundle_name: str = "cedar-embeddable-editor.js",
 ) -> tuple[bytes, int]:
-    """Spell the development bundle with the public bundle's minified names, or refuse.
+    """Prove alpha-equivalence with lexical binding identities, preserving every other byte.
 
-    esbuild draws short identifier names from an alphabet it orders by how often each character
-    occurs in the output. The provenance strings a train stamps into a bundle change those counts,
-    so two builds of the same code can differ in every name at one rank of that alphabet while
-    agreeing everywhere else. This accepts exactly that: the two bundles must match byte for byte
-    outside identifiers, and every identifier that differs must be a short minified name rather
-    than a property or a reserved word, renamed the same way at every position where the bundles
-    differ, in both directions. The same short string may still stand unchanged elsewhere, because
-    it also occurs inside data such as regex classes, version strings and base64 text, and nothing
-    short of parsing the bundle can tell those from code. Two kinds of source change therefore pass
-    as renames: one that permutes short local names consistently and changes nothing else, and one
-    that leaves a renamed name in place at a single site. Both bundles have passed the complete CEE
-    gate before they meet here, which is the defence that remains.
+    Independent scopes can reuse a short name or rename it differently. A global spelling map
+    cannot prove those bundles equivalent. The parser resolves every declaration/reference and
+    keeps properties, public exports, globals, strings, regexes and punctuation unchanged.
     """
     refusal = ReleaseError(
         f"CEE promotion changes executable JavaScript in {bundle_name} outside declared "
         "release provenance"
     )
-    dev_parts = MINIFIED_TOKEN_SPLIT.split(dev_bundle)
-    public_parts = MINIFIED_TOKEN_SPLIT.split(public_bundle)
-    if len(dev_parts) != len(public_parts):
+    directory = Path(__file__).resolve().parents[3] / "scripts" / "javascript"
+    dependencies = json.loads((directory / "package.json").read_text())["dependencies"]
+    ready = True
+    for name, version in dependencies.items():
+        try:
+            installed = json.loads((directory / "node_modules" / name / "package.json").read_text())
+            ready = ready and installed.get("version") == version
+        except (OSError, ValueError):
+            ready = False
+    if not ready:
+        setup = subprocess.run(
+            ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+            cwd=directory, capture_output=True, text=True,
+        )
+        if setup.returncode:
+            raise ReleaseError("Could not install pinned JavaScript release verification tools")
+    try:
+        result = subprocess.run(
+            ["node", str(directory / "compare-scoped-bundles.cjs")],
+            input=json.dumps({"development": dev_bundle.decode(), "public": public_bundle.decode()}),
+            capture_output=True, text=True, timeout=60,
+        )
+        proof = json.loads(result.stdout) if result.returncode == 0 else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        raise ReleaseError("Could not run scoped JavaScript release verification") from error
+    if proof.get("equivalent") is not True or not isinstance(proof.get("renames"), int):
         raise refusal
-    forward: dict[bytes, bytes] = {}
-    backward: dict[bytes, bytes] = {}
-    canonical = list(dev_parts)
-    for index, (dev_part, public_part) in enumerate(zip(dev_parts, public_parts)):
-        if index % 2 == 0:
-            if dev_part != public_part:
-                raise refusal
-            continue
-        if dev_part == public_part:
-            continue
-        if not (MINIFIED_NAME_RE.match(dev_part) and MINIFIED_NAME_RE.match(public_part)):
-            raise refusal
-        if dev_part in RESERVED_SHORT_WORDS or public_part in RESERVED_SHORT_WORDS:
-            raise refusal
-        preceding = dev_parts[index - 1]
-        if preceding.endswith(b".") and not preceding.endswith(b"..."):
-            raise refusal
-        if forward.setdefault(dev_part, public_part) != public_part:
-            raise refusal
-        if backward.setdefault(public_part, dev_part) != dev_part:
-            raise refusal
-        canonical[index] = public_part
-    return b"".join(canonical), len(forward)
+    return public_bundle, proof["renames"]
 
 
 def _normalized_bundle_manifest(bundle: bytes) -> bytes:
