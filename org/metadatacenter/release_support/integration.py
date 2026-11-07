@@ -6,6 +6,7 @@ import datetime as dt
 import os
 import re
 import tempfile
+from org.metadatacenter.release_support.parallel import checked_map
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
 )
@@ -621,10 +622,10 @@ class ReleaseRemoteIntegrator:
             raise ReleaseError("CEDAR_HOME is not set")
         retired: list[dict] = []
         failures: list[dict] = []
-        for repository in sorted(manifest.get("sourceRepositories", {})):
+        def retire(repository):
             root = Path(cedar_home) / repository
             if not root.is_dir():
-                continue
+                return None, None
             try:
                 remote = self.remote_resolver(repository)
                 listing = self.git._run([
@@ -637,13 +638,18 @@ class ReleaseRemoteIntegrator:
                 })
                 superseded = [branch for branch in present if branch not in keep]
                 if not superseded:
-                    continue
+                    return None, None
                 self.git._run([
                     "git", "-C", str(root), "push", remote, "--delete", *superseded,
                 ])
-                retired.append({"repository": repository, "branches": superseded})
+                return {"repository": repository, "branches": superseded}, None
             except ReleaseError as error:
-                failures.append({"repository": repository, "error": str(error)})
+                return None, {"repository": repository, "error": str(error)}
+        for record, failure in checked_map(retire, sorted(manifest.get("sourceRepositories", {}))):
+            if record:
+                retired.append(record)
+            if failure:
+                failures.append(failure)
         return {
             "retiredAt": dt.datetime.now(dt.timezone.utc).isoformat(),
             "kept": sorted(keep),

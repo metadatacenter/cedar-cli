@@ -214,6 +214,11 @@ def execute_build(plan: Plan, dry_run: bool, dump_plan: bool, *, frontend_only=F
     plan.build_jobs = current_context().settings.build_jobs
     if dry_run or dump_plan:
         return plan_executor.execute(plan, dry_run, dump_plan)
+    if builds_frontends(plan):
+        from org.metadatacenter.release_support.toolchain import ToolchainResolver
+        from org.metadatacenter.util.InvocationContext import invocation_environment
+        for note in ToolchainResolver(invocation_environment()).resolve():
+            console.print(f'Toolchain: {note}', markup=False)
     try:
         require_plan_node(plan)
     except BuildSafetyError as error:

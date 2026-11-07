@@ -82,6 +82,7 @@ class NodeBuildCheckTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             project, env = self.fixture(root, 'v16.20.2')
             with use_context(InvocationContext(environment=env)), \
+                    patch('org.metadatacenter.release_support.toolchain.ToolchainResolver.resolve', return_value=[]), \
                     patch('org.metadatacenter.util.NodeBuildCheck.Util.get_wd', return_value=str(project)), \
                     patch.object(build.plan_executor, 'execute') as execute, \
                     patch.object(build, 'capture_estate_state') as snapshot:
@@ -97,6 +98,21 @@ class NodeBuildCheckTest(unittest.TestCase):
         with patch('org.metadatacenter.util.NodeBuildCheck.require_build_node') as check:
             require_plan_node(plan)
             check.assert_not_called()
+
+    def test_frontend_command_resolves_toolchain_before_checking_the_selected_node(self):
+        plan = SimpleNamespace(tasks=[SimpleNamespace(
+            parameters={'isolated_frontend_build': True}, repo=Mock(), tasks=[])])
+        events = []
+        def check(_plan):
+            events.append('check')
+            raise BuildSafetyError('fixture stops before build')
+        with patch('org.metadatacenter.frontend_snapshot.prepare'), \
+                patch('org.metadatacenter.release_support.toolchain.ToolchainResolver.resolve',
+                      side_effect=lambda: events.append('resolve') or []), \
+                patch.object(build, 'require_plan_node', side_effect=check):
+            with self.assertRaises(typer.Exit):
+                build.execute_build(plan, False, False)
+        self.assertEqual(['resolve', 'check'], events)
 
     def test_both_frontend_paths_stop_before_copy_or_install(self):
         with tempfile.TemporaryDirectory() as root:

@@ -15,6 +15,25 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
+@app.command("frontend-performance")
+def frontend_performance(
+        samples: int = typer.Option(5, min=1, max=30, help="Repetitions per page/profile, each with cold and warm cache."),
+        profiles: str = typer.Option("normal,constrained", help="Comma-separated normal and/or constrained profiles."),
+        scenarios: Optional[str] = typer.Option(None, help="Comma-separated scenario names; --plan lists them."),
+        output: Optional[Path] = typer.Option(None, help="Report directory; defaults under .cedar/reports/frontend-performance."),
+        plan: bool = typer.Option(False, help="List the measurement plan without building or contacting the stack."),
+        check: bool = typer.Option(False, help="Test the harness against local fixtures without contacting the stack.")):
+    """Report modern frontend performance using isolated production builds and the local test stack."""
+    from org.metadatacenter.frontend_performance import run_performance
+    from org.metadatacenter.util.BuildSafety import BuildSafetyError
+    try:
+        raise typer.Exit(run_performance(samples=samples, profiles=profiles, scenarios=scenarios,
+                                         output=output, plan=plan, check=check))
+    except (ValueError, BuildSafetyError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("cee-demos")
 def cee_demos(cee_package: Optional[Path] = typer.Option(
         None, help="Test a staged CEE package directory or tarball; default tests the demos' checked-out pins.")):

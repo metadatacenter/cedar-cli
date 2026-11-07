@@ -289,6 +289,24 @@ class ComponentWorkerTest(unittest.TestCase):
         [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
         self.assertEqual(ComponentState.MISMATCHED, finding.state)
 
+    def test_shared_delivery_requires_unchanged_deferred_processors(self):
+        module, served, processor = b"// module", b"// runtime", b"// processor"
+        name = "cedar-rdf-jsonld-123456abcdef.js"
+        delivery = {"file": "cedar-editors.js", "sha256": sha256(served).hexdigest(),
+                    "assets": {name: {"bytes": len(processor), "sha256": sha256(processor).hexdigest()}}}
+        host = self._staged_host({"source": "package", "bundle": "integration.mjs",
+                                  "sha256": sha256(module).hexdigest(), "delivery": delivery}, "// host fonts")
+        (host / "node_modules/cedar-embeddable-designer/integration.mjs").write_bytes(module)
+        (host / "app/components/cedar-editors.js").write_bytes(served)
+        output = host / "app/components" / name
+        for content, expected in [(None, ComponentState.MISMATCHED), (processor, ComponentState.CURRENT),
+                                  (b"x" * len(processor), ComponentState.MISMATCHED)]:
+            with self.subTest(content=content):
+                if content is not None:
+                    output.write_bytes(content)
+                [finding] = ComponentWorker._evaluate_staged("cedar-template-designer", host)
+                self.assertEqual(expected, finding.state)
+
     def _train_configuration(self, configuration):
         ops = self.root / "cedar-development" / "ops"
         ops.mkdir(parents=True, exist_ok=True)

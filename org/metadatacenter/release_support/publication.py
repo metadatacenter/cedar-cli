@@ -16,6 +16,7 @@ import tempfile
 import time
 import urllib.request
 from org.metadatacenter.npm_package import NpmPackageError, inspect_tarball, pack_and_inspect
+from org.metadatacenter.release_support.parallel import checked_map
 from org.metadatacenter.release_support.distribution import (
     ReleaseDistributionMaterializer,
 )
@@ -825,13 +826,15 @@ class ReleaseArtifactPublisher:
             files = record.get("files")
             if not isinstance(files, dict) or not files:
                 raise ReleaseError("recorded Maven release has no file evidence")
-            for relative, digest in files.items():
+            def verify_file(item):
+                relative, digest = item
                 local = local_repository / relative
                 if _file_sha256(local) != digest:
                     raise ReleaseError(f"recorded Maven release input changed: {local}")
                 remote = self.http.read(task["repository"].rstrip("/") + "/" + relative)
                 if remote is None or _sha256(remote) != digest:
                     raise ReleaseError(f"recorded Maven release artifact changed: {relative}")
+            checked_map(verify_file, files.items())
         elif task["kind"] == "maven-verify":
             self._verify_maven_inventory(task, wait=False)
         elif task["kind"] == "npm-release":

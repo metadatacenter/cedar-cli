@@ -178,6 +178,13 @@ def build_images(images, local=False, train=None):
     if frontend_manifest and not re.fullmatch(r'[0-9a-f]{64}', frontend_manifest):
         _output_component.console.print('[red]CEDAR_FRONTEND_MANIFEST_SHA256 must be a lowercase SHA-256 digest.[/red]')
         return 1
+    backend_manifest = environment.get('CEDAR_BACKEND_MANIFEST_SHA256')
+    if backend_manifest and (not re.fullmatch(r'[0-9a-f]{64}', backend_manifest) or frontend_manifest):
+        _output_component.console.print('[red]Backend provenance requires its own SHA-256 and no frontend digest.[/red]')
+        return 1
+    if backend_manifest and any(image.startswith('cedar-frontend-') for image in images):
+        _output_component.console.print('[red]Frontend images require frontend provenance, not backend inputs.[/red]')
+        return 1
     steps = []
     for image in images:
         stage = local and DockerImages.stageable(image)
@@ -200,6 +207,11 @@ def build_images(images, local=False, train=None):
             labels.append(
                 '--label org.metadatacenter.cedar.frontend-manifest-sha256='
                 f'"{frontend_manifest}"'
+            )
+        if backend_manifest:
+            labels.append(
+                '--label org.metadatacenter.cedar.backend-manifest-sha256='
+                f'"{backend_manifest}"'
             )
         steps.append(f"""
 echo "==> {image}"

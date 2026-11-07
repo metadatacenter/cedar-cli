@@ -230,42 +230,57 @@ def integrate_active_release(
     completed = evidence.get("completedTasks")
     if not isinstance(completed, dict) or not set(completed).issubset(task_ids):
         raise ReleaseError("recorded remote integration does not match the release plan")
-    for record in completed.values():
-        integrator.verify_record(manifest, record)
+    from org.metadatacenter.build_scheduler import run_graph
+    from org.metadatacenter.release_support.parallel import checked_map
+    jobs = manifest.get('remoteConcurrency', {}).get('jobs', 1)
+    if not isinstance(jobs, int) or not 1 <= jobs <= 4:
+        raise ReleaseError('Release remote jobs must be between 1 and 4')
+    repositories = [task['repository'] for task in tasks]
+    if len(set(repositories)) != len(repositories):
+        raise ReleaseError('Remote integration tasks must own distinct repositories')
+    checked_map(lambda record: integrator.verify_record(manifest, record), completed.values())
+    pending = [task for task in tasks if task['id'] not in completed]
+    records, failures, active = {}, {}, set()
     state.update_current_manifest({
-        "phase": "integrating-remotes",
-        "remoteIntegration": evidence,
-        "failure": None,
+        "phase": "integrating-remotes", "remoteIntegration": evidence, "failure": None,
     })
-    for task in tasks:
-        if task["id"] in completed:
-            continue
-        evidence["inProgressTask"] = task["id"]
-        state.update_current_manifest({
-            "phase": "integrating-remotes",
-            "remoteIntegration": evidence,
-            "failure": None,
-        })
-        console.print(
-            f"Remote {len(completed) + 1}/{len(tasks)}: {task['id']}", markup=False)
+
+    def run(task):
         try:
-            record = integrator.integrate(manifest, task)
-        except ReleaseError as error:
-            evidence["failedTask"] = task["id"]
-            state.update_current_manifest({
-                "phase": "remote-integration-failed",
-                "remoteIntegration": evidence,
-                "failure": str(error),
-            })
-            raise
-        completed[task["id"]] = record
-        evidence.pop("failedTask", None)
-        evidence.pop("inProgressTask", None)
-        state.update_current_manifest({
-            "phase": "integrating-remotes",
-            "remoteIntegration": evidence,
-            "failure": None,
-        })
+            records[task['id']] = integrator.integrate(manifest, task)
+            return 0
+        except Exception as error:
+            failures[task['id']] = error
+            return 1
+
+    def status(index, outcome):
+        identity = pending[index]['id']
+        if outcome == 'running':
+            active.add(identity)
+            console.print(f'Remote: {identity}', markup=False)
+        else:
+            active.discard(identity)
+        if outcome == 'passed':
+            completed[identity] = records[identity]
+        if outcome == 'failed':
+            evidence['failedTask'] = identity
+        evidence['inProgressTasks'] = sorted(active)
+        evidence['inProgressTask'] = next(iter(sorted(active)), None)
+        # Only the coordinator writes evidence, including successful in-flight siblings
+        # that finish after a failure. Resume verifies and reuses each recorded success.
+        state.update_current_manifest({'phase': 'integrating-remotes', 'remoteIntegration': evidence})
+
+    run_graph(pending, {i: set() for i in range(len(pending))}, run, jobs, on_status=status)
+    if failures:
+        message = '; '.join(f'{name}: {error}' for name, error in sorted(failures.items()))
+        state.update_current_manifest({'phase': 'remote-integration-failed',
+                                       'remoteIntegration': evidence, 'failure': message})
+        if len(failures) == 1:
+            raise next(iter(failures.values()))
+        raise ReleaseError(message)
+    evidence.pop('failedTask', None)
+    evidence.pop('inProgressTask', None)
+    evidence.pop('inProgressTasks', None)
     evidence["completedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
     completed_manifest, _ = state.update_current_manifest({
         "phase": "remote-integrated",
@@ -361,8 +376,9 @@ def publish_active_release(
     publisher = publisher or ReleaseArtifactPublisher(state)
     publisher.ensure_nexus_ready("artifact publication")
     remote_integrator = remote_integrator or ReleaseRemoteIntegrator(state)
-    for record in manifest.get("remoteIntegration", {}).get("completedTasks", {}).values():
-        remote_integrator.verify_record(manifest, record)
+    from org.metadatacenter.release_support.parallel import checked_map
+    checked_map(lambda record: remote_integrator.verify_record(manifest, record),
+                manifest.get("remoteIntegration", {}).get("completedTasks", {}).values())
     build_validator = build_validator or ReleaseBuildValidator(state)
     for record in manifest.get("buildValidation", {}).get("completedTasks", {}).values():
         build_validator.verify_completed_task(record)

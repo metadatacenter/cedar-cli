@@ -42,6 +42,10 @@ class NativeWorker(Worker):
                 show_command: bool = True, echo_streams: bool = True,
                 show_title: bool = True, refresh_dependencies: bool = False,
                 ready_through_nginx: bool = False):
+        if action in {'start', 'restart', 'run-one'}:
+            from org.metadatacenter.release_support.toolchain import ToolchainResolver
+            for note in ToolchainResolver(invocation_environment()).resolve():
+                console.print(f'Toolchain: {note}', markup=False)
         arguments = [cls.controller_path(), action, *services]
         command = " ".join(shlex.quote(argument) for argument in arguments)
         # Both decisions are carried in the script text rather than the environment. A subprocess

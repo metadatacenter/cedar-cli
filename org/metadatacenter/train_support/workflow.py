@@ -91,7 +91,11 @@ def _workflow_run(version):
         if run.get('displayTitle') == prefix
         or str(run.get('displayTitle', '')).startswith(prefix + ' (')
     ]
-    return max(matches, key=lambda run: run.get('createdAt', '')) if matches else None
+    # A retry updates the original run rather than creating a new one. A later-created
+    # cancelled duplicate must not hide a subsequently completed retry.
+    return max(matches, key=lambda run: (
+        run.get('updatedAt') or run.get('createdAt', ''), run.get('createdAt', '')
+    )) if matches else None
 
 
 def _workflow_progress(run_id):

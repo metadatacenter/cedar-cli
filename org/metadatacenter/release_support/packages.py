@@ -509,6 +509,20 @@ def compare_cee_packages(
     integration_manifests = _integration_manifests(
         dev_files, public_files, public_version, model_runtime_loader,
     )
+    license_identity_changed = False
+    # Only after proving the exact published model runtimes equivalent may their
+    # channel-specific notice headings differ. Every license byte remains compared.
+    notice = "integration-licenses.txt"
+    if integration_manifests and normalized_dev.get(notice) != normalized_public.get(notice):
+        dev_heading = b"Package: @org.metadatacenter/cedar-model-typescript-library\n"
+        public_heading = b"Package: cedar-model-typescript-library\n"
+        dev_lines = normalized_dev.get(notice, b"").splitlines(keepends=True)
+        public_lines = normalized_public.get(notice, b"").splitlines(keepends=True)
+        if (dev_lines.count(dev_heading) == 1 and public_lines.count(public_heading) == 1
+                and public_heading not in dev_lines and dev_heading not in public_lines):
+            dev_lines[dev_lines.index(dev_heading)] = public_heading
+            normalized_dev[notice] = b"".join(dev_lines)
+            license_identity_changed = True
     minified_renames = 0
     # The normalizations each bundle needed, by bundle name; a bundle identical in both packages
     # needed none.
@@ -604,6 +618,8 @@ def compare_cee_packages(
     digest = _tree_digest(normalized_dev)
     pairs = _bundle_pairs(normalized_dev)
     bundle_changes = []
+    if license_identity_changed:
+        bundle_changes.append("integration-licenses.txt:verified model package identity")
     for bundle_name, manifest_name in pairs:
         applied = applied_by_bundle.get(bundle_name, [])
         bundle_changes.extend(

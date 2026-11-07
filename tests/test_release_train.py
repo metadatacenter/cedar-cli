@@ -1102,16 +1102,12 @@ class ReleasePlannerTest(unittest.TestCase):
             manifest["trainState"]["dockerCompletion"],
         )
         defaults = manifest["dockerFrontendDefaults"]
-        self.assertEqual(
-            "2.9.3-dev.202608262030.gwork.p4",
-            defaults["nextDevelopment"]["CEDAR_WORKSPACE_NPM_VERSION"],
-        )
-        self.assertEqual(DEV_VERSION, defaults["nextDevelopment"]["CEDAR_OPENVIEW_CEE_NPM_VERSION"])
+        self.assertEqual({}, defaults["nextDevelopment"])
         # The fixture's frontends are not release surfaces, so only the Editor moves to its
         # public version on the release side.
         self.assertEqual(PUBLIC_VERSION, defaults["release"]["CEDAR_OPENVIEW_CEE_NPM_VERSION"])
         self.assertEqual(
-            defaults["nextDevelopment"]["CEDAR_WORKSPACE_NPM_VERSION"],
+            "2.9.3-dev.202608262030.gwork.p4",
             defaults["release"]["CEDAR_WORKSPACE_NPM_VERSION"],
         )
 
@@ -1185,8 +1181,7 @@ class ReleasePlannerTest(unittest.TestCase):
             {}, {"dockerInputs": inputs}, plan, "2.9.8", "2.0.6")
         self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY.rstrip("/"),
                          defaults["release"]["CEDAR_NPM_REGISTRY"])
-        self.assertEqual(NEXUS_NPM_REGISTRY.rstrip("/"),
-                         defaults["nextDevelopment"]["CEDAR_NPM_REGISTRY"])
+        self.assertEqual({}, defaults["nextDevelopment"])
 
     def test_release_docker_defaults_name_released_frontends_and_the_public_editor(self):
         frontend_config = {
@@ -1218,7 +1213,7 @@ class ReleasePlannerTest(unittest.TestCase):
         defaults = ReleasePlanner._docker_frontend_defaults(
             frontend_config, {"dockerInputs": inputs}, plan, "2.9.8", "2.0.6")
 
-        self.assertEqual(inputs, defaults["nextDevelopment"])
+        self.assertEqual({}, defaults["nextDevelopment"])
         self.assertEqual({
             "CEDAR_TEMPLATE_EDITOR_NPM_VERSION": "2.9.8",
             "CEDAR_WORKSPACE_NPM_VERSION": "2.9.8",
