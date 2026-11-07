@@ -34,7 +34,8 @@ def model_tarball(version, code=b'export const model = 1;'):
 
 class IntegrationPromotionTest(unittest.TestCase):
     def pair(self, *, changed_code=False, changed_model=False, bad_hash=False,
-             angular='22.2.4', bad_bytes=False, omitted_module=False):
+             angular='22.2.4', bad_bytes=False, omitted_module=False,
+             dev_licenses=b'Licenses unchanged', public_licenses=b'Licenses unchanged'):
         models = {DEV_MODEL: model_tarball(DEV_MODEL), PUBLIC_MODEL: model_tarball(
             PUBLIC_MODEL, b'export const model = 2;' if changed_model else b'export const model = 1;')}
         packages = []
@@ -55,7 +56,7 @@ class IntegrationPromotionTest(unittest.TestCase):
             if bad_bytes and not dev:
                 manifest['sha256'] = '0' * 64
             extra = {'integration.mjs': module, 'integration-manifest.json': json.dumps(manifest).encode(),
-                     'integration-licenses.txt': b'Licenses unchanged'}
+                     'integration-licenses.txt': dev_licenses if dev else public_licenses}
             if omitted_module and not dev:
                 del extra['integration.mjs']
             packages.append(package_tarball(DEV_CEE_NAME if dev else PUBLIC_CEE_NAME, version,
@@ -81,6 +82,31 @@ class IntegrationPromotionTest(unittest.TestCase):
         (dev, public), _ = self.pair()
         with self.assertRaisesRegex(ReleaseError, 'verified model runtime packages'):
             compare_cee_packages(dev, DEV_VERSION, public, PUBLIC_VERSION)
+
+    def test_verified_model_channel_notice_heading_is_provenance(self):
+        dev = b'Package: @org.metadatacenter/cedar-model-typescript-library\nLicense: "BSD-2-Clause"\nCopyright notice\n'
+        public = dev.replace(b'@org.metadatacenter/', b'')
+        proof = self.compare(dev_licenses=dev, public_licenses=public)
+        self.assertIn('integration-licenses.txt:verified model package identity', proof['allowedMetadataChanges'])
+        for change in ({'changed_model': True}, {'bad_hash': True}):
+            with self.subTest(change=change), self.assertRaises(ReleaseError):
+                self.compare(dev_licenses=dev, public_licenses=public, **change)
+
+    def test_license_text_and_unrecognized_headings_remain_fatal(self):
+        dev = b'Package: @org.metadatacenter/cedar-model-typescript-library\nLicense text\n'
+        public = dev.replace(b'@org.metadatacenter/', b'')
+        cases = [
+            (dev, public.replace(b'License text', b'Changed license')),
+            (dev, public + b'Extra notice\n'),
+            (dev + dev, public + public),
+            (dev, public.replace(b'cedar-model-typescript-library', b'another-package')),
+            (b'Inline ' + dev, b'Inline ' + public),
+            (dev + public, public + public),
+            (dev, b''),
+        ]
+        for before, after in cases:
+            with self.subTest(before=before, after=after), self.assertRaisesRegex(ReleaseError, 'integration-licenses.txt'):
+                self.compare(dev_licenses=before, public_licenses=after)
 
     def test_identity_normalization_keeps_code(self):
         dev = _model_runtime_fingerprints(model_tarball(DEV_MODEL), DEV_MODEL)
