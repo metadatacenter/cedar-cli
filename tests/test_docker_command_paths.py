@@ -41,6 +41,33 @@ class DockerCommandPathsTest(unittest.TestCase):
         self.assertIn('org.opencontainers.image.revision="' + 'a' * 40 + '"', command)
         self.assertIn('-t "example/cedar/cedar-infra-nginx:2.9.3-dev.20260824.1847"', command)
 
+    def test_backend_build_records_independent_inputs_and_refuses_frontend_mix(self):
+        from org.metadatacenter.docker_support import images
+        environment = {'CEDAR_BACKEND_MANIFEST_SHA256': 'b' * 64,
+                       'CEDAR_TRAIN_MANIFEST_SHA256': 'a' * 64}
+        with patch.object(images, 'invocation_environment', return_value=environment), \
+             patch.object(DockerImages, 'manifest', return_value=([], '2.9.3-dev.20260824.1847', 'example')), \
+             patch.object(DockerImages, 'base_image_prefix', return_value='example/internal'), \
+             patch.object(DockerImages, 'build_home', return_value='/tmp/build'), \
+             patch.object(DockerImages, 'server_versions', return_value={}), \
+             patch.object(DockerImages, 'source_revision', return_value='c' * 40), \
+             patch.object(DockerImages, 'reference', return_value='example/backend:test'), \
+             patch.object(images.Worker, 'execute_generic_shell_commands', return_value=CommandOutput(['All requested images built.'], 0)) as execute:
+            self.assertEqual(0, images.build_images(['cedar-server-repo'], train='2.9.3-dev.20260824.1847'))
+            command = execute.call_args.args[0][0]
+            self.assertIn('backend-manifest-sha256="' + 'b' * 64 + '"', command)
+            self.assertNotIn('frontend-manifest-sha256', command)
+            execute.reset_mock()
+            self.assertEqual(1, images.build_images(['cedar-frontend-workspace']))
+            execute.assert_not_called()
+            environment['CEDAR_FRONTEND_MANIFEST_SHA256'] = 'd' * 64
+            self.assertEqual(1, images.build_images(['cedar-server-repo']))
+            execute.assert_not_called()
+            environment.pop('CEDAR_FRONTEND_MANIFEST_SHA256')
+            environment['CEDAR_BACKEND_MANIFEST_SHA256'] = 'invalid'
+            self.assertEqual(1, images.build_images(['cedar-server-repo']))
+            execute.assert_not_called()
+
     def test_server_versions_allow_the_train_manifest_to_override_frontend_pins(self):
         with patch.object(DockerImages, '_manifest_path', return_value='/tmp/cedar-images-base.sh'):
             with patch('builtins.open', unittest.mock.mock_open(
