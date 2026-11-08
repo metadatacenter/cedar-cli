@@ -18,9 +18,10 @@ class FrontendPerformanceTest(unittest.TestCase):
     @patch.object(perf, "require_build_node")
     def test_reports_resolve_from_caller_and_functional_failures_propagate(self, node, environment, run):
         with patch.object(perf.Util, "cedar_home", "/tmp/cedar"):
-            self.assertEqual(perf.run_performance(output="measurements", scenarios="ced-standalone-large"), 1)
+            self.assertEqual(perf.run_performance(output="measurements", scenarios="ced-standalone-large", deployment_manifest="published.json"), 1)
         command = run.call_args.args[0]
         self.assertIn("--scenarios=ced-standalone-large", command)
+        self.assertIn(f"--deployment-manifest={Path('/tmp/caller/published.json').resolve()}", command)
         self.assertIn(f"--output={Path('/tmp/caller/measurements').resolve()}", command)
         self.assertNotIn("--skip-tests", command)
 

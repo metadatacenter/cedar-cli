@@ -8,7 +8,7 @@ from org.metadatacenter.util.NodeBuildCheck import require_build_node
 
 
 def run_performance(*, samples=5, profiles="normal,constrained", scenarios=None,
-                    output=None, plan=False, check=False):
+                    output=None, plan=False, check=False, deployment_manifest=None):
     if plan and check:
         raise ValueError("Choose --plan or --check")
     if type(samples) is not int or not 1 <= samples <= 30:
@@ -27,6 +27,10 @@ def run_performance(*, samples=5, profiles="normal,constrained", scenarios=None,
         if not output.is_absolute():
             output = Path(environment.get("CEDAR_CLI_CALLER_DIR", Path.cwd())) / output
         command.append(f"--output={output.resolve()}")
+    if deployment_manifest is not None:
+        manifest = Path(deployment_manifest)
+        caller = Path(environment.get("CEDAR_CLI_CALLER_DIR", Path.cwd()))
+        command.append(f"--deployment-manifest={(manifest if manifest.is_absolute() else caller / manifest).resolve()}")
     if plan:
         command.append("--plan")
     if check:
