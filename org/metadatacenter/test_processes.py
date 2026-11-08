@@ -21,6 +21,7 @@ def frontend_performance(
         profiles: str = typer.Option("normal,constrained", help="Comma-separated normal and/or constrained profiles."),
         scenarios: Optional[str] = typer.Option(None, help="Comma-separated scenario names; --plan lists them."),
         output: Optional[Path] = typer.Option(None, help="Report directory; defaults under .cedar/reports/frontend-performance."),
+        deployment_manifest: Optional[Path] = typer.Option(None, help="Verified published assets from an isolated Docker deployment."),
         plan: bool = typer.Option(False, help="List the measurement plan without building or contacting the stack."),
         check: bool = typer.Option(False, help="Test the harness against local fixtures without contacting the stack.")):
     """Report modern frontend performance using isolated production builds and the local test stack."""
@@ -28,8 +29,46 @@ def frontend_performance(
     from org.metadatacenter.util.BuildSafety import BuildSafetyError
     try:
         raise typer.Exit(run_performance(samples=samples, profiles=profiles, scenarios=scenarios,
-                                         output=output, plan=plan, check=check))
+                                         output=output, plan=plan, check=check, deployment_manifest=deployment_manifest))
     except (ValueError, BuildSafetyError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
+@app.command("frontend-performance-paired")
+def frontend_performance_paired(
+        component: str = typer.Option(..., help="Rendering case: cee, ced or designer (host plus equivalent CED+CEF)."),
+        baseline: Path = typer.Option(..., help="Baseline production JS bundle, or staged app directory for designer."),
+        candidate: Path = typer.Option(..., help="Candidate production JS bundle, or staged app directory for designer."),
+        output: Path = typer.Option(..., help="New report directory; existing directories are refused."),
+        samples: int = typer.Option(5, min=1, max=30, help="Sequential pairs per fixture, cold and warm.")):
+    """Compare production frontend rendering without a backend. Timings advisory; loading errors fail."""
+    from org.metadatacenter.frontend_performance import run_paired
+    from org.metadatacenter.util.BuildSafety import BuildSafetyError
+    try:
+        raise typer.Exit(run_paired(component=component, baseline=baseline, candidate=candidate,
+                                    output=output, samples=samples))
+    except (ValueError, BuildSafetyError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
+@app.command("frontend-performance-schedule")
+def frontend_performance_schedule(
+        install: bool = typer.Option(False, help="Install the idle-only macOS 03:30 Europe/Madrid sweep."),
+        remove: bool = typer.Option(False, help="Unload and remove this schedule."),
+        status: bool = typer.Option(False, help="Show the installed launch agent."),
+        check: bool = typer.Option(False, help="Read current idle/window eligibility without running or writing anything.")):
+    """Run the scheduled full-stack report only in its nightly idle window, or manage its schedule."""
+    from org.metadatacenter.frontend_performance_schedule import configure_schedule, run_scheduled
+    from org.metadatacenter.util.BuildSafety import BuildSafetyError
+    if sum((install, remove, status, check)) > 1:
+        console.print("Choose only one schedule action")
+        raise typer.Exit(2)
+    try:
+        action = "install" if install else "remove" if remove else "status" if status else None
+        raise typer.Exit(configure_schedule(action) if action else run_scheduled(check=check))
+    except (ValueError, OSError, BuildSafetyError) as error:
         console.print(str(error), markup=False)
         raise typer.Exit(2) from error
 

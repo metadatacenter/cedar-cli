@@ -1,4 +1,6 @@
 from org.metadatacenter.util.InvocationContext import invocation_environment
+from contextlib import contextmanager
+from contextvars import ContextVar
 import datetime as dt
 import json
 import os
@@ -100,6 +102,46 @@ class BuildTrain:
 
 class DockerTrain(BuildTrain):
     """Resolves only image trains whose complete registry inventory has been verified."""
+
+    _verified_state = ContextVar('docker_verified_state', default=None)
+
+    @classmethod
+    @contextmanager
+    def verified_state(cls, directory=None):
+        """Read the controller's verified candidate before it publishes completion.
+
+        Only the ephemeral train runner can opt in. This does not weaken image digest
+        validation or let a workstation bypass the published completion contract.
+        """
+        if directory is None:
+            yield
+            return
+        environment = invocation_environment()
+        workspace = environment.get('GITHUB_WORKSPACE')
+        if (environment.get('GITHUB_ACTIONS') != 'true'
+                or environment.get('RUNNER_ENVIRONMENT') != 'github-hosted' or not workspace):
+            raise ValueError('--verified-state is restricted to GitHub-hosted train acceptance')
+        directory = Path(directory).resolve()
+        if directory != Path(workspace).resolve() / 'build-trains' or not directory.is_dir():
+            raise ValueError('--verified-state must be GITHUB_WORKSPACE/build-trains')
+        token = cls._verified_state.set(directory)
+        try:
+            yield
+        finally:
+            cls._verified_state.reset(token)
+
+    @classmethod
+    def _read(cls, relative_path, opener=None):
+        directory = cls._verified_state.get()
+        if directory is None:
+            return super()._read(relative_path, opener=opener)
+        path = (directory / relative_path).resolve()
+        if not path.is_relative_to(directory / 'docker'):
+            raise ValueError('Candidate state must be a Docker verification record')
+        try:
+            return json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f'Cannot read verified candidate: {relative_path}') from error
 
     @classmethod
     def current(cls, environment=None, opener=None):

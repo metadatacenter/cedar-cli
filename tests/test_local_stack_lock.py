@@ -7,13 +7,13 @@ import unittest
 from pathlib import Path
 
 from org.metadatacenter.taskexecutor.ShellTaskExecutor import _free_port
-from org.metadatacenter.util.local_stack_lock import local_stack
+from org.metadatacenter.util.local_stack_lock import local_stack, LocalStackBusy
 
 ROOT = Path(__file__).resolve().parents[1]
 
 HOLDER = """
 import sys, time
-from org.metadatacenter.util.local_stack_lock import local_stack
+from org.metadatacenter.util.local_stack_lock import local_stack, LocalStackBusy
 with local_stack(sys.argv[1], report=lambda _line: None):
     print("held", flush=True)
     time.sleep(1.5)
@@ -46,6 +46,19 @@ class LocalStackLockTest(unittest.TestCase):
                 holder.kill()
                 holder.wait()
                 holder.stdout.close()
+
+
+    def test_scheduled_measurements_skip_instead_of_waiting_for_a_busy_stack(self):
+        with tempfile.TemporaryDirectory() as home:
+            holder = subprocess.Popen([sys.executable, "-c", HOLDER, home], cwd=ROOT,
+                                      stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual("held", holder.stdout.readline().strip())
+                with self.assertRaises(LocalStackBusy):
+                    with local_stack(home, wait=False):
+                        self.fail("acquired a busy stack")
+            finally:
+                holder.kill(); holder.wait(); holder.stdout.close()
 
 
 class FreePortTest(unittest.TestCase):

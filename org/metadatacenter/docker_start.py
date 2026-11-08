@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -85,14 +86,23 @@ def start_all(
         pull: PullPolicy = PULL,
         timeout: int = TIMEOUT,
         train: str = TRAIN,
-        local: bool = LOCAL):
+        local: bool = LOCAL,
+        verified_state: Path = typer.Option(None, "--verified-state",
+            help="GitHub-hosted acceptance only: verified candidate state before completion is published.")):
+    if verified_state is not None and (not train or local):
+        raise typer.BadParameter('--verified-state requires an explicit --train and forbids --local')
     mode = ModeManager.docker_topology()
-    exit_on_failure(DockerWorker.start_all(
-        mode=mode,
-        pull=pull.value,
-        timeout=timeout,
-        train=resolve_train(train, local),
-    ))
+    try:
+        with DockerTrain.verified_state(verified_state):
+            exit_on_failure(DockerWorker.start_all(
+                mode=mode,
+                pull=pull.value,
+                timeout=timeout,
+                train=resolve_train(train, local),
+            ))
+    except ValueError as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(code=1)
 
 
 @app.command("infra", help="Start the seven infrastructure containers.")
