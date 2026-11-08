@@ -478,7 +478,9 @@ await_ready {name}
                     "/main.js": answer,
                 })
 
-                result, _ = self.await_ready(server.server_port, budget=1)
+                # This checks the failed asset diagnosis, not interpreter startup speed.
+                # A one-second budget can expire before the first probe on a loaded CI runner.
+                result, _ = self.await_ready(server.server_port, budget=3)
 
                 self.assertIn("root: healthy", result.stdout)
                 self.assertEqual(1, result.returncode, result.stdout + result.stderr)
