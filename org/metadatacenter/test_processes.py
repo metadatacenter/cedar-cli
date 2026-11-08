@@ -52,6 +52,26 @@ def frontend_performance_paired(
         raise typer.Exit(2) from error
 
 
+@app.command("frontend-performance-schedule")
+def frontend_performance_schedule(
+        install: bool = typer.Option(False, help="Install the idle-only macOS 03:30 Europe/Madrid sweep."),
+        remove: bool = typer.Option(False, help="Unload and remove this schedule."),
+        status: bool = typer.Option(False, help="Show the installed launch agent."),
+        check: bool = typer.Option(False, help="Read current idle/window eligibility without running or writing anything.")):
+    """Run the scheduled full-stack report only in its nightly idle window, or manage its schedule."""
+    from org.metadatacenter.frontend_performance_schedule import configure_schedule, run_scheduled
+    from org.metadatacenter.util.BuildSafety import BuildSafetyError
+    if sum((install, remove, status, check)) > 1:
+        console.print("Choose only one schedule action")
+        raise typer.Exit(2)
+    try:
+        action = "install" if install else "remove" if remove else "status" if status else None
+        raise typer.Exit(configure_schedule(action) if action else run_scheduled(check=check))
+    except (ValueError, OSError, BuildSafetyError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("cee-demos")
 def cee_demos(cee_package: Optional[Path] = typer.Option(
         None, help="Test a staged CEE package directory or tarball; default tests the demos' checked-out pins.")):

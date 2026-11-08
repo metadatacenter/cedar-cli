@@ -18,8 +18,12 @@ LOCK = Path('.cedar') / 'locks' / 'local-stack.lock'
 _held = 0
 
 
+class LocalStackBusy(RuntimeError):
+    pass
+
+
 @contextmanager
-def local_stack(cedar_home, report=print):
+def local_stack(cedar_home, report=print, *, wait=True):
     """Hold the local stack, waiting for another process that holds it."""
     global _held
     if _held:
@@ -37,6 +41,8 @@ def local_stack(cedar_home, report=print):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             holder = os.pread(descriptor, 64, 0).decode(errors='replace').strip() or 'another process'
+            if not wait:
+                raise LocalStackBusy(f'{holder} is using the local stack.')
             report(f'Waiting for {holder} to finish its local deployment or smoke.')
             fcntl.flock(descriptor, fcntl.LOCK_EX)
         os.ftruncate(descriptor, 0)
