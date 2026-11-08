@@ -36,12 +36,12 @@ def frontend_performance(
 
 @app.command("frontend-performance-paired")
 def frontend_performance_paired(
-        component: str = typer.Option(..., help="Standalone component: cee or ced."),
-        baseline: Path = typer.Option(..., help="Baseline production JavaScript bundle."),
-        candidate: Path = typer.Option(..., help="Candidate production JavaScript bundle."),
+        component: str = typer.Option(..., help="Rendering case: cee, ced or designer (host plus equivalent CED+CEF)."),
+        baseline: Path = typer.Option(..., help="Baseline production JS bundle, or staged app directory for designer."),
+        candidate: Path = typer.Option(..., help="Candidate production JS bundle, or staged app directory for designer."),
         output: Path = typer.Option(..., help="New report directory; existing directories are refused."),
         samples: int = typer.Option(5, min=1, max=30, help="Sequential pairs per fixture, cold and warm.")):
-    """Compare standalone bundles without a backend. Timings advisory; loading errors fail."""
+    """Compare production frontend rendering without a backend. Timings advisory; loading errors fail."""
     from org.metadatacenter.frontend_performance import run_paired
     from org.metadatacenter.util.BuildSafety import BuildSafetyError
     try:

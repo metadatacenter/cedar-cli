@@ -35,8 +35,8 @@ def run_performance(*, samples=5, profiles="normal,constrained", scenarios=None,
 
 
 def run_paired(*, component, baseline, candidate, output, samples=5):
-    if component not in ("cee", "ced"):
-        raise ValueError("component must be cee or ced")
+    if component not in ("cee", "ced", "designer"):
+        raise ValueError("component must be cee, ced or designer")
     if type(samples) is not int or not 1 <= samples <= 30:
         raise ValueError("samples must be an integer from 1 to 30")
     root = Path(Util.cedar_home).resolve() / "cedar-development/ops/e2e"
