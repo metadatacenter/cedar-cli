@@ -162,6 +162,64 @@ class ProdSanityTest(unittest.TestCase):
                 with self.assertRaisesRegex(ProdError, "CEDAR_HOST is not set"):
                     ProdWorker.configure_frontends()
 
+    def test_configure_frontends_follows_shared_and_lazy_chunks_once(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.create_frontend_payloads(temp_dir)
+            dist = Path(temp_dir, 'cedar-monitoring/cedar-monitoring-dist')
+            main = dist / 'main-A3S6MZD7.js'
+            config = main.read_text()
+            entry = 'import{e}from"./chunk-SHARED.js";import("./chunk-LAZY.js");'
+            main.write_text(entry)
+            (dist / 'chunk-SHARED.js').write_text('export{e}from"./chunk-CONFIG.js";')
+            (dist / 'chunk-LAZY.js').write_text('import "./chunk-CONFIG.js";')
+            (dist / 'chunk-CONFIG.js').write_text(config + 'import "./chunk-SHARED.js";')
+            # An old unreferenced chunk must neither be changed nor make the graph ambiguous.
+            (dist / 'chunk-OLD.js').write_text(config)
+            with patch.object(Util, 'cedar_home', temp_dir), \
+                    patch.dict(os.environ, {'CEDAR_HOST': 'staging.example.org'}):
+                self.assertEqual(0, ProdWorker.configure_frontends())
+                self.assertEqual(0, ProdWorker.configure_frontends())
+                self.assertEqual('chunk-CONFIG.js', ProdWorker.frontend_payload_files()[-1][1].name)
+            self.assertEqual(entry, main.read_text())
+            self.assertIn('cedarDomain:"staging.example.org"', (dist / 'chunk-CONFIG.js').read_text())
+            self.assertEqual(config, (dist / 'chunk-OLD.js').read_text())
+
+    def test_lazy_only_configuration_is_reached(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.create_frontend_payloads(temp_dir)
+            dist = Path(temp_dir, 'cedar-monitoring/cedar-monitoring-dist')
+            main = dist / 'main-A3S6MZD7.js'
+            (dist / 'chunk-LAZY.js').write_text(main.read_text())
+            main.write_text("import('./chunk-LAZY.js');")
+            with patch.object(Util, 'cedar_home', temp_dir), \
+                    patch.dict(os.environ, {'CEDAR_HOST': 'staging.example.org'}):
+                self.assertEqual(0, ProdWorker.configure_frontends())
+            self.assertIn('cedarDomain:"staging.example.org"', (dist / 'chunk-LAZY.js').read_text())
+
+    def test_invalid_chunk_graphs_fail_before_any_payload_is_changed(self):
+        for case in ('missing', 'orphan-only', 'duplicate', 'duplicate-in-one-file'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp_dir:
+                self.create_frontend_payloads(temp_dir)
+                dist = Path(temp_dir, 'cedar-monitoring/cedar-monitoring-dist')
+                main = dist / 'main-A3S6MZD7.js'
+                config = main.read_text()
+                if case == 'missing':
+                    main.write_text(config + 'import "./chunk-MISSING.js";')
+                elif case == 'orphan-only':
+                    main.write_text('const production=true;')
+                    (dist / 'chunk-OLD.js').write_text(config)
+                elif case == 'duplicate':
+                    main.write_text(config + 'import "./chunk-CONFIG.js";')
+                    (dist / 'chunk-CONFIG.js').write_text(config)
+                else:
+                    main.write_text(config + config)
+                before = {p: p.read_bytes() for p in Path(temp_dir).rglob('*.js')}
+                with patch.object(Util, 'cedar_home', temp_dir), \
+                        patch.dict(os.environ, {'CEDAR_HOST': 'staging.example.org'}):
+                    with self.assertRaises(ProdError):
+                        ProdWorker.configure_frontends()
+                self.assertEqual(before, {p: p.read_bytes() for p in before})
+
     @patch("org.metadatacenter.worker.ProdWorker.Worker.execute_generic_shell_commands")
     def test_reset_frontends_restores_the_bundle_by_repository_relative_path(self, execute):
         execute.return_value = SimpleNamespace(returncode=0)
@@ -176,6 +234,20 @@ class ProdSanityTest(unittest.TestCase):
             self.assertTrue(command.startswith("git restore --source=HEAD -- "))
             self.assertIn("main-A3S6MZD7.js", command)
             self.assertNotIn(temp_dir, command)
+
+    @patch("org.metadatacenter.worker.ProdWorker.Worker.execute_generic_shell_commands")
+    def test_reset_frontends_restores_the_configuration_chunk(self, execute):
+        execute.return_value = SimpleNamespace(returncode=0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.create_frontend_payloads(temp_dir)
+            dist = Path(temp_dir, 'cedar-monitoring/cedar-monitoring-dist')
+            main = dist / 'main-A3S6MZD7.js'
+            (dist / 'chunk-CONFIG.js').write_text(main.read_text())
+            main.write_text('import{e}from"./chunk-CONFIG.js";')
+            with patch.object(Util, 'cedar_home', temp_dir):
+                self.assertEqual(0, ProdWorker.reset_frontends())
+        self.assertEqual(['git restore --source=HEAD -- cedar-monitoring-dist/chunk-CONFIG.js'],
+                         execute.call_args.args[0])
 
     @patch("org.metadatacenter.prod.ProdWorker.configure_frontends", return_value=8)
     def test_prod_command_propagates_worker_failure(self, configure_frontends):

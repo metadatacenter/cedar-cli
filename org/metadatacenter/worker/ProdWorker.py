@@ -62,7 +62,7 @@ class ProdWorker(Worker):
         was skipped on every staging deploy in favour of a hand `sed`. Rewriting the bundle is what
         the hand step did; doing it here is what makes the zero-match guard possible, because a
         content-hashed filename that a stale command no longer matches is the failure a `sed` cannot
-        report.
+        report. Code splitting may put the configuration in an imported chunk rather than main.
 
         Every other URL is derived: `appConfig.json` templates carry `{{cedarDomain}}` and
         `AppConfig` substitutes this one value, so the separate content-host rewrite the index.html
@@ -121,15 +121,38 @@ class ProdWorker(Worker):
         return 0
 
     FRONTEND_PAYLOAD_REPOS = ('cedar-openview', 'cedar-bridging', 'cedar-monitoring')
+    # Angular's emitted, flat ESM payload: static imports/re-exports and lazy imports.
+    # Follow references, not every file in the directory: an orphaned old chunk must
+    # never supply configuration that the served application does not actually load.
+    PAYLOAD_IMPORT = re.compile(
+        r'''(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)(["'])(\./[A-Za-z0-9_.-]+\.js)\1'''
+    )
+
+    @staticmethod
+    def frontend_modules(entry):
+        pending, visited, modules = [entry], set(), []
+        while pending:
+            path = pending.pop()
+            if path in visited:
+                continue
+            visited.add(path)
+            if not path.is_file() or path.resolve().parent != entry.parent.resolve():
+                raise ProdError(f"Cannot configure frontends; missing or external built module: {path}")
+            content = path.read_text()
+            modules.append((path, content))
+            pending.extend(path.parent / match[1]
+                           for match in ProdWorker.PAYLOAD_IMPORT.findall(content))
+        return modules
 
     @staticmethod
     def frontend_payload_files():
-        """The one built bundle per Angular payload that carries the compiled configuration.
+        """The one reachable module per Angular payload carrying compiled configuration.
 
         The filename is content-hashed, so it changes with the build and cannot be named in advance.
         Resolve it by glob and insist on exactly one: no match means the payload was never built,
         and several means a previous build was left beside the current one, where picking either is
-        a guess about which tree nginx serves.
+        a guess about which tree nginx serves. Follow the entry's imports, including lazy imports,
+        and require exactly one configuration across that graph before any payload is changed.
         """
         cedar_home = Path(Util.cedar_home)
         payloads = []
@@ -146,5 +169,17 @@ class ProdWorker(Worker):
                 raise ProdError(
                     f"Cannot configure frontends; {dist_dir} holds several bundles ({names}). "
                     f"Remove the stale one so the served payload is unambiguous.")
-            payloads.append((repo_dir, bundles[0]))
+            modules = ProdWorker.frontend_modules(bundles[0])
+            configured = [(path, len(re.findall(r'cedarDomain:"[^"]*"', content)))
+                          for path, content in modules if re.search(r'cedarDomain:"[^"]*"', content)]
+            count = sum(count for _, count in configured)
+            if count == 0:
+                raise ProdError(
+                    f"Cannot find a compiled cedarDomain in {bundles[0]} or its imported chunks. "
+                    f"Do not assume this host is configured.")
+            if count != 1:
+                raise ProdError(
+                    f"Found {count} compiled cedarDomain values in {dist_dir}'s module graph; "
+                    f"expected exactly one. Rewriting all of them may not be correct.")
+            payloads.append((repo_dir, configured[0][0]))
         return payloads

@@ -30,5 +30,5 @@ def configure_frontends():
 
 @app.command("reset-frontends")
 def reset_frontends():
-    """Restore tracked static frontend entry points from Git."""
+    """Restore tracked static frontend configuration modules from Git."""
     run_prod_action(ProdWorker.reset_frontends)
