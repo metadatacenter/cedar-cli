@@ -32,3 +32,19 @@ def run_performance(*, samples=5, profiles="normal,constrained", scenarios=None,
     if check:
         command.append("--check")
     return subprocess.run(command, cwd=root, env=environment).returncode
+
+
+def run_paired(*, component, baseline, candidate, output, samples=5):
+    if component not in ("cee", "ced"):
+        raise ValueError("component must be cee or ced")
+    if type(samples) is not int or not 1 <= samples <= 30:
+        raise ValueError("samples must be an integer from 1 to 30")
+    root = Path(Util.cedar_home).resolve() / "cedar-development/ops/e2e"
+    environment = dict(invocation_environment())
+    require_build_node(Path(Util.cedar_home) / "cedar-workspace", environment)
+    caller = Path(environment.get("CEDAR_CLI_CALLER_DIR", Path.cwd()))
+    command = ["node", str(root / "frontend-perf/isolated.mjs"), f"--component={component}", f"--samples={samples}"]
+    for name, value in (("baseline", baseline), ("candidate", candidate), ("output", output)):
+        path = Path(value)
+        command.append(f"--{name}={(path if path.is_absolute() else caller / path).resolve()}")
+    return subprocess.run(command, cwd=root, env=environment).returncode

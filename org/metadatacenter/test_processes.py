@@ -34,6 +34,24 @@ def frontend_performance(
         raise typer.Exit(2) from error
 
 
+@app.command("frontend-performance-paired")
+def frontend_performance_paired(
+        component: str = typer.Option(..., help="Standalone component: cee or ced."),
+        baseline: Path = typer.Option(..., help="Baseline production JavaScript bundle."),
+        candidate: Path = typer.Option(..., help="Candidate production JavaScript bundle."),
+        output: Path = typer.Option(..., help="New report directory; existing directories are refused."),
+        samples: int = typer.Option(5, min=1, max=30, help="Sequential pairs per fixture, cold and warm.")):
+    """Compare standalone bundles without a backend. Timings advisory; loading errors fail."""
+    from org.metadatacenter.frontend_performance import run_paired
+    from org.metadatacenter.util.BuildSafety import BuildSafetyError
+    try:
+        raise typer.Exit(run_paired(component=component, baseline=baseline, candidate=candidate,
+                                    output=output, samples=samples))
+    except (ValueError, BuildSafetyError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("cee-demos")
 def cee_demos(cee_package: Optional[Path] = typer.Option(
         None, help="Test a staged CEE package directory or tarball; default tests the demos' checked-out pins.")):
