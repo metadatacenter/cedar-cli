@@ -595,3 +595,10 @@ def timings(compare: str = typer.Option(None, "--compare", help="Compare with a 
     except (ReleaseError, OSError, ValueError) as error:
         console.print(str(error), markup=False)
         raise typer.Exit(1) from error
+
+
+from org.metadatacenter import npm_release  # noqa: E402  (registered after the platform commands)
+
+app.add_typer(
+    npm_release.app, name="npm",
+    help="Publish the model library and CEE to public npmjs through a resumable route")
