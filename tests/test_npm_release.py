@@ -501,6 +501,38 @@ def test_red_ci_stops_before_merge_and_the_run_can_still_be_abandoned(world, tmp
     assert not world.registry
 
 
+def test_a_package_whose_develop_moved_before_it_started_is_planned_again(world, tmp_path):
+    _make_repository(world.home, world.origins, PACKAGES["model"], _model_files())
+    cee = _make_repository(world.home, world.origins, PACKAGES["cee"], _cee_files())
+    state = NpmReleaseState(tmp_path / "state")
+    notes = _notes(tmp_path, "- Adds a thing.\n")
+    request = parse_run_request(["model@1.0.28", "cee@2.0.34"], ["model@1.0.29", "cee@2.0.35"],
+                                None, None, [f"cee={notes}"])
+    run = _run(world, state, request.packages)
+    # While the model is released, someone pushes to CEE's develop.
+    (cee / "src.txt").write_text("new work\n")
+    git(cee, "add", "src.txt")
+    git(cee, "commit", "-m", "New work")
+    git(cee, "push", "origin", "develop")
+    with pytest.raises(NpmReleaseError, match="not develop .* as planned"):
+        _route(world, state).drive(run)
+    run, _ = state.read()
+
+    with pytest.raises(NpmReleaseError, match="model is not a package this run has yet to start"):
+        NpmReleasePreflight(world.home, world).rebase(run, {"model": "- Late.\n"})
+    lines = NpmReleasePreflight(world.home, world).rebase(run, {"cee": "- Adds a thing.\n- And new work.\n"})
+    state.save(run)
+    assert lines and lines[0].startswith("cedar-embeddable-editor: develop ")
+    cee_record = next(record for record in run["packages"] if record["package"] == "cee")
+    assert cee_record["baseCommit"] == git(cee, "rev-parse", "HEAD")
+    finished = _route(world, state).drive(run)
+    assert finished["conclusion"] == "released"
+    merge = finished["packages"][1]["evidence"]["merge"]["commit"]
+    changelog = git(world.origins / "cedar-embeddable-editor.git", "show", f"{merge}:CHANGELOG.md")
+    assert "- And new work." in changelog
+    assert git(world.origins / "cedar-embeddable-editor.git", "show", f"{merge}:src.txt") == "new work"
+
+
 def test_ci_still_running_at_the_deadline_waits_rather_than_fails(world, tmp_path):
     _make_repository(world.home, world.origins, PACKAGES["model"], _model_files())
     state = NpmReleaseState(tmp_path / "state")

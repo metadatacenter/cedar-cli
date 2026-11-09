@@ -9,7 +9,7 @@ from org.metadatacenter.npm_policy import STRICT_INSTALL_ENVIRONMENT
 from org.metadatacenter.npm_release_support.definitions import DEV_MODEL_VERSION, PACKAGES
 from org.metadatacenter.npm_release_support.errors import NpmReleaseError, NpmReleaseWait
 from org.metadatacenter.npm_release_support.preflight import NpmReleasePreflight, run_identifier
-from org.metadatacenter.npm_release_support.requests import parse_run_request
+from org.metadatacenter.npm_release_support.requests import parse_run_request, read_notes
 from org.metadatacenter.npm_release_support.route import ABANDONABLE_BEFORE, PACKAGE_STAGES, NpmReleaseRoute
 from org.metadatacenter.npm_release_support.state import NpmReleaseState, now
 from org.metadatacenter.npm_release_support.tools import Tools
@@ -26,6 +26,8 @@ MODEL_HELP = "Public model version CEE, CED and CETP pin, when the model is not 
 DEV_MODEL_HELP = "Development model version develop returns to, instead of the one it pinned before"
 NOTES_HELP = "Markdown bullets for a package's changelog entry and release draft, as <package>=<file>"
 DEFER_HELP = "Leave the lock baseline refresh in cedar-development to the operator"
+REBASE_HELP = ("Plan every package the run has not started again, from develop as it now stands; "
+               "--notes then replaces such a package's notes")
 
 
 def _say(message: str) -> None:
@@ -174,12 +176,27 @@ def start(
 @app.command("resume")
 def resume(
     development_model_version: str = typer.Option(None, "--dev-model-version", help=DEV_MODEL_HELP),
+    rebase: bool = typer.Option(False, "--rebase", help=REBASE_HELP),
+    notes: list[str] = typer.Option(None, "--notes", help=NOTES_HELP),
 ):
     """Continue the active npm release from the stage it stopped at."""
     state = NpmReleaseState()
     try:
         with state.exclusive():
             run, _ = state.read()
+            if notes and not rebase:
+                raise NpmReleaseError("--notes on resume replaces an unstarted package's notes; pass --rebase too")
+            if rebase:
+                home, tools = _context()
+                replacements = {}
+                for spec in notes or []:
+                    name, separator, path = spec.partition("=")
+                    if not separator:
+                        raise NpmReleaseError(f"--notes expects <package>=<file>, not {spec!r}")
+                    replacements[name.strip()] = read_notes(path.strip(), name.strip())
+                for line in NpmReleasePreflight(home, tools).rebase(run, replacements):
+                    _say(f"Planned again: {line}")
+                state.save(run)
             if development_model_version:
                 if not DEV_MODEL_VERSION.fullmatch(development_model_version):
                     raise NpmReleaseError(f"{development_model_version!r} is not a model development version")

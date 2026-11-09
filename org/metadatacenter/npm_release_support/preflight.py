@@ -13,7 +13,9 @@ from org.metadatacenter.npm_release_support.definitions import (
     PUBLIC_REGISTRY,
 )
 from org.metadatacenter.npm_release_support.edits import development_model_pin
-from org.metadatacenter.npm_release_support.requests import RunRequest, version_key
+from org.metadatacenter.npm_release_support.errors import NpmReleaseError
+from org.metadatacenter.npm_release_support.requests import (
+    PackageRequest, RunRequest, read_notes, version_key)
 from org.metadatacenter.npm_release_support.route import nexus_tarball_url
 from org.metadatacenter.npm_release_support.tools import Tools
 from org.metadatacenter.release_support.policy import REQUIRED_NODE_VERSION
@@ -29,6 +31,45 @@ class NpmReleasePreflight:
         self.cedar_home = Path(cedar_home)
         self.tools = tools
         self.user_home = home or Path.home()
+
+    def rebase(self, run: dict, notes: dict[str, str] | None = None) -> list[str]:
+        """Plan again every package the run has not started, from develop as it now stands.
+
+        A run carries its packages one after another, and an earlier package can spend hours
+        waiting for CI. A later package's develop may move meanwhile, and its prepare stage then
+        refuses a head the plan never checked. Re-planning such a package runs its preflight again
+        against the new head and starts it from there. A package that has begun preparing is left
+        alone: its preparation commit already names its base.
+        """
+        notes = dict(notes or {})
+        unstarted = [record for record in run["packages"] if not record.get("completed")]
+        for name in notes:
+            if not any(record["package"] == name for record in unstarted):
+                raise NpmReleaseError(f"{name} is not a package this run has yet to start")
+        model_in_run = any(record["package"] == "model" for record in run["packages"])
+        requests = {record["package"]: PackageRequest(
+            record["package"], record["version"], record["nextBase"], record.get("modelVersion"),
+            record.get("developmentModelVersion"),
+            notes.get(record["package"], record.get("notes"))) for record in unstarted}
+        request = RunRequest(tuple(requests.values()), bool(run.get("deferBaselines")), model_in_run)
+        lines = []
+        findings: list[str] = []
+        planned = {}
+        for record in unstarted:
+            replanned, package_findings = self._package(requests[record["package"]], request)
+            findings += package_findings
+            planned[record["package"]] = replanned
+        if findings:
+            raise NpmReleaseError("cannot plan the unstarted packages again:\n  " + "\n  ".join(findings))
+        for record in unstarted:
+            base = planned[record["package"]]["baseCommit"]
+            if base != record.get("baseCommit"):
+                lines.append(f"{record['repository']}: develop {str(record.get('baseCommit'))[:8]} -> {base[:8]}")
+            record["baseCommit"] = base
+            record["notes"] = requests[record["package"]].notes
+            record["rebasedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            record["failure"] = None
+        return lines
 
     def run(self, request: RunRequest) -> tuple[list[str], list[dict]]:
         findings: list[str] = []
