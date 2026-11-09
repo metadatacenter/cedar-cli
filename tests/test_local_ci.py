@@ -309,7 +309,8 @@ def test_a_run_posts_its_verdict_as_a_commit_status():
     assert command[4] == f"repos/metadatacenter/cedar-sample/statuses/{'a' * 40}"
     assert "state=success" in command and "context=cedar/local-ci" in command
     description = next(item for item in command if item.startswith("description="))
-    assert "2 job(s) passed on workstation in 3 min; registry bbbbbbbb" in description
+    assert "2 job(s) passed locally in 3 min; registry bbbbbbbb" in description
+    assert "workstation" not in description
     assert posted["state"] == "success"
 
 

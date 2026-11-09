@@ -71,7 +71,8 @@ def status_description(record: dict) -> str:
     jobs = record.get("jobs", [])
     minutes = max(1, round(sum(job.get("seconds", 0) for job in jobs) / 60))
     verdict = "passed" if record.get("conclusion") == "success" else "failed"
-    text = (f"{len(jobs)} job(s) {verdict} on {record.get('host', 'a workstation')} in {minutes} min; "
+    # The public description names no machine; the record kept on the machine does.
+    text = (f"{len(jobs)} job(s) {verdict} locally in {minutes} min; "
             f"registry {record.get('registrySha256', '')[:8]}")
     return text[:140]
 
