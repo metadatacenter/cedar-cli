@@ -74,7 +74,8 @@ class NpmReleaseRoute:
     def __init__(self, cedar_home: Path, tools: Tools, state: NpmReleaseState, *, reporter=print,
                  ci_poll_seconds: float = CI_POLL_SECONDS, ci_timeout_seconds: float = CI_TIMEOUT_SECONDS,
                  registry_delays: tuple[float, ...] = REGISTRY_DELAYS, ci_probe=probe_exact_commit,
-                 baseline_refresher=None, platform_release_active=None, cli: tuple[str, ...] | None = None):
+                 baseline_refresher=None, platform_release_active=None, cli: tuple[str, ...] | None = None,
+                 local_ci=None):
         self.home = Path(cedar_home)
         self.tools = tools
         self.state = state
@@ -86,6 +87,7 @@ class NpmReleaseRoute:
         self.baseline_refresher = baseline_refresher
         self.platform_release_active = platform_release_active
         self.cli = cli or ("bash", str(self.home / "cedar-cli" / "cli.sh"))
+        self.local_ci = local_ci if local_ci is not None else self._run_local_ci
 
     # The driver ------------------------------------------------------------------------------
 
@@ -218,13 +220,55 @@ class NpmReleaseRoute:
             })
         return resolutions
 
+    def _gh_command(self, command, **_):
+        """A gh command, in the shape the local CI gate helpers expect, through the route's tools."""
+        import subprocess as _subprocess
+        result = self.tools.gh(*command[1:], check=False)
+        return _subprocess.CompletedProcess(command, result.returncode, result.stdout, result.stderr)
+
+    def _run_local_ci(self, repository: str, commit: str):
+        """Run the repository's CI here at `commit`; None when local CI does not cover it."""
+        from org.metadatacenter.local_ci.coverage import repository_coverage
+        from org.metadatacenter.local_ci.errors import LocalCIError
+        from org.metadatacenter.local_ci.registry import load_registry
+        from org.metadatacenter.local_ci.run import run as run_local_ci
+        try:
+            registry = load_registry(self.home)
+        except LocalCIError:
+            return None
+        if registry.entry(repository) is None:
+            return None
+        if not repository_coverage(self.home, repository, commit, registry).covered:
+            return None
+        [outcome] = run_local_ci(self.home, [repository], revisions={repository: commit},
+                                 reporter=lambda line: None,
+                                 source_environment=dict(self.tools.environment))
+        return outcome
+
     def _wait_for_runs(self, definition: NpmPackage, commit: str, *, pull_request: int | None,
                        label: str) -> dict:
-        """Wait until every workflow run on `commit` has finished green, and the pull request's too.
+        """Answer for `commit` with local CI where it covers the repository, else wait for GitHub.
 
-        A run that has not been indexed yet is indistinguishable from one that will never exist, so
-        a push run is required to appear before anything counts as finished.
+        Local CI runs the repository's own workflows here, in minutes, and posts its verdict as a
+        commit status. Where it does not cover the repository, every workflow run on `commit` must
+        finish green, and the pull request's checks too. A run that has not been indexed yet is
+        indistinguishable from one that will never exist, so a push run is required to appear
+        before anything counts as finished.
         """
+        self.report(f"  running {label} CI locally on {commit[:8]}")
+        outcome = self.local_ci(definition.repository, commit)
+        if outcome is not None:
+            if outcome.state != "passed":
+                raise NpmReleaseError(
+                    f"{definition.repository} {label} {commit[:8]} failed local CI: {outcome.detail}; "
+                    f"the record is {outcome.record_path}")
+            self.report(f"  {label} CI passed locally: {outcome.detail}")
+            return {"commit": commit, "localCI": {"record": outcome.record_path,
+                                                   "detail": outcome.detail,
+                                                   "status": outcome.status}}
+        self.report(f"  local CI does not cover {definition.repository}; waiting for GitHub")
+        from org.metadatacenter.local_ci.gates import github_failed_to_start, rerun
+        reruns: set = set()
         deadline = self.tools.clock() + self.ci_timeout_seconds
         last_report = 0.0
         while True:
@@ -237,10 +281,21 @@ class NpmReleaseRoute:
             push_runs = [run for run in runs if run.get("event") == "push"]
             failed = [run for run in runs if run.get("status") == "completed"
                       and run.get("conclusion") not in GREEN_CONCLUSIONS]
+            unstarted = [run for run in failed if github_failed_to_start(
+                definition.repository, run, runner=self._gh_command,
+                environment=self.tools.environment)]
+            for run in unstarted:
+                if run.get("id") not in reruns:
+                    reruns.add(run.get("id"))
+                    refusal = rerun(definition.repository, run.get("id"),
+                                    runner=self._gh_command, environment=self.tools.environment)
+                    self.report(f"  GitHub failed to start {run.get('name')} on {commit[:8]}; "
+                                + (f"its rerun was refused: {refusal}" if refusal else "rerunning it"))
+            failed = [run for run in failed if run not in unstarted]
             if failed:
                 detail = "; ".join(f"{run.get('name')} {run.get('conclusion')} {run_url(run)}" for run in failed)
                 raise NpmReleaseError(f"{definition.repository} {label} {commit[:8]} failed CI: {detail}")
-            pending = [run for run in runs if run.get("status") != "completed"]
+            pending = [run for run in runs if run.get("status") != "completed"] + unstarted
             rollup: list[dict] = []
             rollup_pending = False
             if pull_request is not None:

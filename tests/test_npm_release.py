@@ -220,6 +220,8 @@ class World(Tools):
         self.fail_publish_after_upload = False
         self.failing_ci: set[str] = set()
         self.unreachable: set[str] = set()
+        self.unstarted_ci: set[str] = set()
+        self.reruns: list[str] = []
 
     def _tick(self):
         self.time += 1
@@ -347,6 +349,16 @@ class World(Tools):
             git(work, "push", "origin", "main")
             pull.update(state="MERGED", merge=git(work, "rev-parse", "HEAD"), head=head)
             return Result(0, "", "")
+        if args[0] == "api" and args[1].endswith("/jobs?per_page=100"):
+            run_id = args[1].split("/runs/")[1].split("/")[0]
+            started = run_id not in {f"unstarted-{revision}" for revision in self.unstarted_ci}
+            jobs = [{"name": "test", "conclusion": "failure" if started else "skipped"}]
+            return Result(0, json.dumps({"jobs": jobs}), "")
+        if args[:2] == ("run", "rerun"):
+            self.reruns.append(args[2])
+            self.unstarted_ci = {revision for revision in self.unstarted_ci
+                                 if args[2] != f"unstarted-{revision}"}
+            return Result(0, "", "")
         if args[:2] == ("release", "view"):
             key = (repository, args[2])
             if key not in self.releases:
@@ -358,6 +370,11 @@ class World(Tools):
         raise AssertionError(f"unexpected gh {args}")
 
     def probe(self, repository, revision, **_):
+        if revision in self.unstarted_ci:
+            return GithubCIProbe(repository, revision, tuple(
+                {"id": f"unstarted-{revision}", "name": "Test", "event": event, "head_sha": revision,
+                 "status": "completed", "conclusion": "failure", "html_url": "https://ci/u"}
+                for event in ("push", "pull_request")), 1)
         conclusion = "failure" if revision in self.failing_ci else "success"
         return GithubCIProbe(repository, revision, (
             {"id": 1, "name": "Test", "event": "push", "head_sha": revision, "status": "completed",
@@ -531,6 +548,60 @@ def test_a_package_whose_develop_moved_before_it_started_is_planned_again(world,
     changelog = git(world.origins / "cedar-embeddable-editor.git", "show", f"{merge}:CHANGELOG.md")
     assert "- And new work." in changelog
     assert git(world.origins / "cedar-embeddable-editor.git", "show", f"{merge}:src.txt") == "new work"
+
+
+def test_a_run_github_failed_to_start_is_rerun_rather_than_reported_red(world, tmp_path):
+    _make_repository(world.home, world.origins, PACKAGES["model"], _model_files())
+    state = NpmReleaseState(tmp_path / "state")
+    request = parse_run_request(["model@1.0.28"], ["model@1.0.29"], None, None, [])
+    run = _run(world, state, request.packages)
+    original_commit = route_module.NpmReleaseRoute._commit
+
+    def commit_without_starting_ci(self, definition, record, run):
+        evidence = original_commit(self, definition, record, run)
+        world.unstarted_ci.add(evidence["commit"])
+        return evidence
+
+    route = _route(world, state)
+    route._commit = lambda definition, record, run: commit_without_starting_ci(route, definition, record, run)
+    finished = route.drive(run)
+    assert finished["conclusion"] == "released"
+    assert len(world.reruns) == 1 and world.reruns[0].startswith("unstarted-")
+
+
+def test_local_ci_answers_for_a_covered_repository_without_waiting_for_github(world, tmp_path):
+    from org.metadatacenter.local_ci.run import RepositoryOutcome
+    _make_repository(world.home, world.origins, PACKAGES["model"], _model_files())
+    state = NpmReleaseState(tmp_path / "state")
+    request = parse_run_request(["model@1.0.28"], ["model@1.0.29"], None, None, [])
+    run = _run(world, state, request.packages)
+    asked = []
+
+    def local_ci(repository, commit):
+        asked.append(commit)
+        return RepositoryOutcome(repository, commit, "passed", "3 job(s) passed", "/records/x.json",
+                                 {"context": "cedar/local-ci", "state": "success"})
+
+    def no_github(*args, **kwargs):
+        raise AssertionError("GitHub was consulted although local CI answered")
+
+    route = NpmReleaseRoute(world.home, world, state, reporter=lambda line: None, ci_probe=no_github,
+                            registry_delays=(0, 0), local_ci=local_ci)
+    finished = route.drive(run)
+    record = finished["packages"][0]
+    assert finished["conclusion"] == "released" and len(asked) == 2
+    assert record["evidence"]["checks"]["localCI"]["record"] == "/records/x.json"
+    assert record["evidence"]["development-checks"]["localCI"]["status"]["state"] == "success"
+
+    failing = parse_run_request(["model@1.0.29"], ["model@1.0.30"], None, None, [])
+    state2 = NpmReleaseState(tmp_path / "state2")
+    run2 = _run(world, state2, failing.packages)
+    route = NpmReleaseRoute(world.home, world, state2, reporter=lambda line: None, ci_probe=no_github,
+                            registry_delays=(0, 0),
+                            local_ci=lambda repository, commit: RepositoryOutcome(
+                                repository, commit, "failed", "1 job(s); failed: ci.yml:test", "/r.json"))
+    with pytest.raises(NpmReleaseError, match="failed local CI"):
+        route.drive(run2)
 
 
 def test_ci_still_running_at_the_deadline_waits_rather_than_fails(world, tmp_path):

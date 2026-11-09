@@ -235,6 +235,12 @@ def source_ci_survey(source=None, reporter=None):
                 repository, revision, '', 'advisory',
                 f'{repository} has no workflow contract; the train gates its outputs.'))
             return verdicts
+        from org.metadatacenter.local_ci.gates import github_failed_to_start, local_answer
+        answer = local_answer(cedar_home, repository, revision)
+        if answer.green:
+            verdicts.append(_policy_component.SourceCIVerdict(
+                repository, revision, 'local CI', 'green', answer.detail))
+            return verdicts
         try:
             probe = probe_exact_commit(
                 repository, revision, reporter=report, environment=invocation_environment())
@@ -260,6 +266,13 @@ def source_ci_survey(source=None, reporter=None):
                 verdicts.append(_policy_component.SourceCIVerdict(
                     repository, revision, name, 'pending',
                     f'{name} is {status or "pending"}', url, run_id, run_repository))
+            elif conclusion not in GREEN_CONCLUSIONS and github_failed_to_start(
+                    repository, record, environment=invocation_environment()):
+                verdicts.append(_policy_component.SourceCIVerdict(
+                    repository, revision, name, 'pending',
+                    f'GitHub failed to start {name}, so it never ran the code; rerun it with '
+                    f'gh run rerun {run_id} --repo metadatacenter/{repository}, or run '
+                    f'cedarcli ci run {repository}', url, run_id, run_repository))
             elif conclusion not in GREEN_CONCLUSIONS:
                 verdicts.append(_policy_component.SourceCIVerdict(
                     repository, revision, name, 'red',

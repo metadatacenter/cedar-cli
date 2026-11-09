@@ -123,6 +123,15 @@ class DevelopmentVerifier:
                     raise ReleaseError('Next-development CI is still pending at the time limit; use release resume')
                 if not (workspace / repo).is_dir():
                     raise ReleaseError(f'Missing prepared development repository: {repo}')
+                from org.metadatacenter.local_ci.gates import (
+                    cedar_home_from, github_failed_to_start, local_answer, rerun)
+                answer = local_answer(cedar_home_from(self.environment), repo, revision,
+                                      environment=self.environment, runner=self.runner)
+                if answer.green:
+                    evidence['repositories'][repo] = {'revision': revision, 'status': 'local-ci',
+                                                      'detail': answer.detail}
+                    complete.add(repo)
+                    continue
                 workflows = workspace / repo / '.github' / 'workflows'
                 if not any(workflows.glob('*.y*ml')):
                     evidence['repositories'][repo] = {'revision': revision, 'status': 'no-workflow',
@@ -156,6 +165,15 @@ class DevelopmentVerifier:
                 for name, run in latest.items():
                     if run.get('status') != 'completed':
                         pending.append(f'{repo} {name}: {run.get("status")}')
+                    elif not passed(repo, run) and github_failed_to_start(
+                            repo, run, runner=self.runner, environment=self.environment):
+                        reruns = evidence.setdefault('reruns', {})
+                        if str(run.get('id')) not in reruns:
+                            reruns[str(run.get('id'))] = rerun(
+                                repo, run.get('id'), runner=self.runner,
+                                environment=self.environment) or 'requested'
+                            self.save(evidence)
+                        pending.append(f'{repo} {name}: GitHub failed to start it; rerun requested')
                     elif not passed(repo, run):
                         failures.append(f'{repo} {name}: {run.get("conclusion")} {run_url(run)}')
             self.save(evidence)
