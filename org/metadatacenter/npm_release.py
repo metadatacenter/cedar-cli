@@ -1,4 +1,4 @@
-"""`cedarcli release npm`: publish the model library and CEE to public npmjs."""
+"""`cedarcli release npm`: publish the model library, CEE, CED and CETP to public npmjs."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,9 +20,9 @@ from org.metadatacenter.util.InvocationContext import invocation_environment
 
 app = typer.Typer(no_args_is_help=True)
 
-PACKAGES_HELP = "Packages to release, as <package>@<version>: model or cee"
+PACKAGES_HELP = "Packages to release, as <package>@<version>: model, cee, ced or cetp"
 NEXT_HELP = "Each package's next development base, as <package>@<version>"
-MODEL_HELP = "Public model version CEE pins, when the model is not released in the run"
+MODEL_HELP = "Public model version CEE, CED and CETP pin, when the model is not released in the run"
 DEV_MODEL_HELP = "Development model version develop returns to, instead of the one it pinned before"
 NOTES_HELP = "Markdown bullets for a package's changelog entry and release draft, as <package>=<file>"
 DEFER_HELP = "Leave the lock baseline refresh in cedar-development to the operator"
@@ -107,6 +107,10 @@ def _render_next_steps(run: dict) -> None:
         version = next(record["version"] for record in run["packages"] if record["package"] == "cee")
         _say("Publishing is not deployment. Pin the public CEE in its consumers with:")
         _say(f"  node $CEDAR_HOME/cedar-development/ops/propagate-cee-release.mjs --apply {version}")
+    for record in run["packages"]:
+        if record["package"] in ("ced", "cetp"):
+            _say(f"Name {PACKAGES[record['package']].title} {record['version']} in the next platform "
+                 f"release: cedarcli release plan ... --{record['package']}-version {record['version']}")
     _say("Once CI has published each advanced develop head: cedarcli publish components --apply")
     baselines = (run.get("evidence") or {}).get("baselines") or {}
     if baselines.get("deferred"):

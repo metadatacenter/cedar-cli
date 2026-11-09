@@ -117,44 +117,66 @@ def _model_runtime_fingerprints(content: bytes, version: str) -> tuple[str, str]
     return fingerprint(False), fingerprint(True)
 
 
-def _integration_manifests(dev_files, public_files, public_version, model_runtime_loader):
+def _integration_manifests(dev_files, public_files, public_version, model_runtime_loader,
+                           label="CEE"):
     """Prove external model bytes as well as the integration bundle itself."""
     if "integration-manifest.json" not in dev_files:
         return None
     if model_runtime_loader is None:
-        raise ReleaseError("CEE integration promotion requires verified model runtime packages")
-    _, public_model = _public_release_changelog("public CEE", public_files["CHANGELOG.md"], public_version)
+        raise ReleaseError(f"{label} integration promotion requires verified model runtime packages")
+    _, public_model = _public_release_changelog(f"public {label}", public_files["CHANGELOG.md"], public_version)
     normalized = []
     loaded = {}
-    for label, files in (("development", dev_files), ("public", public_files)):
-        manifest = _read_package_json(label, files, "integration-manifest.json")
+    for side, files in (("development", dev_files), ("public", public_files)):
+        manifest = _read_package_json(side, files, "integration-manifest.json")
         if (set(manifest) != {"format", "version", "source", "bytes", "sha256", "runtimes"}
                 or manifest.get("format") != "cedar-integration" or manifest.get("version") != 1
                 or not re.fullmatch(r"[a-f0-9]{64}", str(manifest.get("source", "")))
                 or not isinstance(manifest.get("runtimes"), dict)):
-            raise ReleaseError(f"{label} CEE has malformed integration provenance")
+            raise ReleaseError(f"{side} {label} has malformed integration provenance")
         model = manifest["runtimes"].get("cedar-model-typescript-library")
         if not isinstance(model, dict) or set(model) != {"version", "sha256", "runtimeSha256"}:
-            raise ReleaseError(f"{label} CEE integration lacks a complete model runtime fingerprint")
+            raise ReleaseError(f"{side} {label} integration lacks a complete model runtime fingerprint")
         version = model.get("version")
         if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-dev\.[0-9A-Za-z.-]+)?", version):
-            raise ReleaseError(f"{label} CEE integration has an invalid model version")
-        if label == "public" and version != public_model:
-            raise ReleaseError("Public CEE integration model differs from its changelog")
+            raise ReleaseError(f"{side} {label} integration has an invalid model version")
+        if side == "public" and version != public_model:
+            raise ReleaseError(f"Public {label} integration model differs from its changelog")
         if version not in loaded:
             loaded[version] = _model_runtime_fingerprints(model_runtime_loader(version), version)
         if (model.get("sha256"), model.get("runtimeSha256")) != loaded[version]:
-            raise ReleaseError(f"{label} CEE integration model fingerprint does not match its published package")
+            raise ReleaseError(f"{side} {label} integration model fingerprint does not match its published package")
         for name, runtime in manifest["runtimes"].items():
             if name != "cedar-model-typescript-library" and (not isinstance(runtime, dict) or set(runtime) != {"version"}):
-                raise ReleaseError(f"{label} CEE integration has malformed runtime {name}")
+                raise ReleaseError(f"{side} {label} integration has malformed runtime {name}")
         manifest["source"] = "<source-provenance>"
         model["version"] = "<model-package-version>"
         model["sha256"] = "<model-package-provenance>"
         normalized.append(manifest)
     if normalized[0]["runtimes"] != normalized[1]["runtimes"]:
-        raise ReleaseError("CEE promotion changes integration runtime code or dependencies")
+        raise ReleaseError(f"{label} promotion changes integration runtime code or dependencies")
     return normalized
+
+
+def _normalize_license_identity(normalized_dev: dict, normalized_public: dict) -> bool:
+    """Give the development notice the public model's heading, when that is all that differs.
+
+    Call this only after proving the exact published model runtimes equivalent: only then may
+    their channel-specific notice headings differ. Every other license byte remains compared.
+    """
+    notice = "integration-licenses.txt"
+    if normalized_dev.get(notice) == normalized_public.get(notice):
+        return False
+    dev_heading = b"Package: @org.metadatacenter/cedar-model-typescript-library\n"
+    public_heading = b"Package: cedar-model-typescript-library\n"
+    dev_lines = normalized_dev.get(notice, b"").splitlines(keepends=True)
+    public_lines = normalized_public.get(notice, b"").splitlines(keepends=True)
+    if (dev_lines.count(dev_heading) == 1 and public_lines.count(public_heading) == 1
+            and public_heading not in dev_lines and dev_heading not in public_lines):
+        dev_lines[dev_lines.index(dev_heading)] = public_heading
+        normalized_dev[notice] = b"".join(dev_lines)
+        return True
+    return False
 
 
 def _read_package_json(identity: str, files: dict[str, bytes], name: str) -> dict:
@@ -213,16 +235,16 @@ def _normalize_package_metadata(
     return result
 
 
-def _bundle_pairs(files: dict[str, bytes]) -> list[tuple[str, str]]:
+def _bundle_pairs(files: dict[str, bytes], pairs=CEE_BUNDLE_PAIRS) -> list[tuple[str, str]]:
     """The bundle/manifest pairs this package carries, the first one always."""
-    required, *optional = CEE_BUNDLE_PAIRS
+    required, *optional = pairs
     return [required] + [
         pair for pair in optional if pair[0] in files or pair[1] in files
     ]
 
 
-def _verify_bundle(identity: str, files: dict[str, bytes]) -> None:
-    for bundle_name, manifest_name in _bundle_pairs(files):
+def _verify_bundle(identity: str, files: dict[str, bytes], pairs=CEE_BUNDLE_PAIRS) -> None:
+    for bundle_name, manifest_name in _bundle_pairs(files, pairs):
         if bundle_name not in files:
             raise ReleaseError(f"{identity} has {manifest_name} without {bundle_name}")
         manifest = _read_package_json(identity, files, manifest_name)
@@ -416,6 +438,7 @@ def _canonicalize_minified_renames(
     public_identity: str,
     public_bundle: bytes,
     bundle_name: str = "cedar-embeddable-editor.js",
+    label: str = "CEE",
 ) -> tuple[bytes, int]:
     """Prove alpha-equivalence with lexical binding identities, preserving every other byte.
 
@@ -424,7 +447,7 @@ def _canonicalize_minified_renames(
     keeps properties, public exports, globals, strings, regexes and punctuation unchanged.
     """
     refusal = ReleaseError(
-        f"CEE promotion changes executable JavaScript in {bundle_name} outside declared "
+        f"{label} promotion changes executable JavaScript in {bundle_name} outside declared "
         "release provenance"
     )
     directory = Path(__file__).resolve().parents[3] / "scripts" / "javascript"
@@ -509,20 +532,8 @@ def compare_cee_packages(
     integration_manifests = _integration_manifests(
         dev_files, public_files, public_version, model_runtime_loader,
     )
-    license_identity_changed = False
-    # Only after proving the exact published model runtimes equivalent may their
-    # channel-specific notice headings differ. Every license byte remains compared.
-    notice = "integration-licenses.txt"
-    if integration_manifests and normalized_dev.get(notice) != normalized_public.get(notice):
-        dev_heading = b"Package: @org.metadatacenter/cedar-model-typescript-library\n"
-        public_heading = b"Package: cedar-model-typescript-library\n"
-        dev_lines = normalized_dev.get(notice, b"").splitlines(keepends=True)
-        public_lines = normalized_public.get(notice, b"").splitlines(keepends=True)
-        if (dev_lines.count(dev_heading) == 1 and public_lines.count(public_heading) == 1
-                and public_heading not in dev_lines and dev_heading not in public_lines):
-            dev_lines[dev_lines.index(dev_heading)] = public_heading
-            normalized_dev[notice] = b"".join(dev_lines)
-            license_identity_changed = True
+    license_identity_changed = bool(integration_manifests) and _normalize_license_identity(
+        normalized_dev, normalized_public)
     minified_renames = 0
     # The normalizations each bundle needed, by bundle name; a bundle identical in both packages
     # needed none.
@@ -673,4 +684,139 @@ def compare_cee_packages(
         ] + bundle_changes + [
             f"CHANGELOG.md:{public_version} release entry",
         ],
+    }
+
+
+def _normalized_component_manifest(manifest: dict, bundle: bytes) -> dict:
+    """A bundle manifest describing `bundle`, with its build fingerprints set aside.
+
+    A component's manifest records a fingerprint of the sources a build read, which covers its
+    package.json and the installed model package, and one of the build's output. Both change with
+    the channel even when no executable byte does. Every other field is still compared.
+    """
+    normalized = {**manifest, "bytes": len(bundle), "sha256": _sha256(bundle)}
+    if "provenance" in normalized:
+        normalized["provenance"] = "<build-provenance>"
+    return normalized
+
+
+def compare_component_packages(
+    component,
+    dev_tarball: bytes,
+    dev_version: str,
+    public_tarball: bytes,
+    public_version: str,
+    *,
+    model_runtime_loader=None,
+) -> dict:
+    """Prove that a public CED or CETP package is a metadata-only promotion of a train package.
+
+    The train stamps its version before it builds, so a bundle that reports its version reports
+    the train's, as one quoted literal. The proof is directional: replacing that one literal in the
+    train's bundle with the public version must reproduce the public bundle. A short public
+    version such as 0.1.0 also occurs inside unrelated strings, so the proof never searches the
+    public bundle for it. A bundle that reports no version, as CETP's does not, must be identical.
+    """
+
+    label = component.label
+    pairs = component.bundle_pairs
+    dev_identity = f"{component.development_name}@{dev_version}"
+    public_identity = f"{component.public_name}@{public_version}"
+    dev_files = _tarball_files(dev_identity, dev_tarball, required_files=component.required_files)
+    public_files = _tarball_files(
+        public_identity, public_tarball, required_files=component.required_files)
+    _verify_bundle(dev_identity, dev_files, pairs)
+    _verify_bundle(public_identity, public_files, pairs)
+    normalized_dev = _normalize_package_metadata(
+        dev_identity, dev_files, expected_name=component.development_name,
+        expected_version=dev_version, development=True)
+    normalized_public = _normalize_package_metadata(
+        public_identity, public_files, expected_name=component.public_name,
+        expected_version=public_version, development=False)
+    if normalized_dev.keys() != normalized_public.keys():
+        only_dev = sorted(normalized_dev.keys() - normalized_public.keys())
+        only_public = sorted(normalized_public.keys() - normalized_dev.keys())
+        raise ReleaseError(
+            f"{label} promotion changes the package file set: "
+            f"development-only={only_dev}, public-only={only_public}")
+    changes = [
+        "package.json:name",
+        "package.json:version",
+        "package.json:publishConfig",
+    ]
+
+    # The public package carries one entry the train's may lack. A train that captured develop
+    # after the release has the entry too, and then the two changelogs are identical.
+    changelog, _ = _public_release_changelog(
+        public_identity, public_files["CHANGELOG.md"], public_version)
+    if normalized_dev["CHANGELOG.md"] == changelog:
+        changes.append(f"CHANGELOG.md:{public_version} release entry")
+    elif normalized_dev["CHANGELOG.md"] != public_files["CHANGELOG.md"]:
+        raise ReleaseError(
+            f"{label} promotion changes CHANGELOG.md outside the one current-release entry")
+    normalized_dev["CHANGELOG.md"] = normalized_public["CHANGELOG.md"] = changelog
+
+    integration = _integration_manifests(
+        dev_files, public_files, public_version, model_runtime_loader, label=label)
+    if integration and _normalize_license_identity(normalized_dev, normalized_public):
+        changes.append("integration-licenses.txt:verified model package identity")
+
+    renames = 0
+    proven = {}
+    dev_literal = b'"' + dev_version.encode() + b'"'
+    public_literal = b'"' + public_version.encode() + b'"'
+    for bundle_name, manifest_name in _bundle_pairs(normalized_dev, pairs):
+        dev_bundle = dev_files[bundle_name]
+        public_bundle = public_files[bundle_name]
+        promoted = dev_bundle
+        if dev_bundle != public_bundle:
+            count = dev_bundle.count(dev_literal)
+            if count > 1:
+                raise ReleaseError(
+                    f"{dev_identity} {bundle_name} must report its version once; found {count}")
+            if count == 1:
+                promoted = dev_bundle.replace(dev_literal, public_literal, 1)
+                changes.append(f"{bundle_name}:{label} version")
+            if promoted != public_bundle:
+                promoted, count = _canonicalize_minified_renames(
+                    dev_identity, promoted, public_identity, public_bundle, bundle_name,
+                    label=label)
+                renames += count
+                changes.append(f"{bundle_name}:minified identifier names")
+        normalized_dev[bundle_name] = promoted
+        normalized_public[bundle_name] = public_bundle
+        if bundle_name == "integration.mjs" and integration:
+            dev_manifest, public_manifest = integration
+            changes.append(
+                "integration-manifest.json:source and verified model package provenance")
+        else:
+            dev_manifest = _read_package_json(dev_identity, dev_files, manifest_name)
+            public_manifest = _read_package_json(public_identity, public_files, manifest_name)
+            if dev_manifest.get("provenance") != public_manifest.get("provenance"):
+                changes.append(f"{manifest_name}:build input and output fingerprints")
+        if dev_bundle != public_bundle:
+            changes.append(f"{manifest_name}:derived bundle bytes and sha256")
+        normalized_dev[manifest_name] = _json_bytes(
+            _normalized_component_manifest(dev_manifest, promoted))
+        normalized_public[manifest_name] = _json_bytes(
+            _normalized_component_manifest(public_manifest, public_bundle))
+        proven[bundle_name] = {
+            "bundleSha256": _sha256(dev_bundle),
+            "publicBundleSha256": _sha256(public_bundle),
+            "normalizedBundleSha256": _sha256(promoted),
+        }
+
+    changed = [name for name in sorted(normalized_dev)
+               if normalized_dev[name] != normalized_public[name]]
+    if changed:
+        raise ReleaseError(
+            f"{label} promotion changes package content outside allowed channel metadata: "
+            + ", ".join(changed))
+    return {
+        "algorithm": "sha256",
+        "normalizedPayloadSha256": _tree_digest(normalized_dev),
+        "fileCount": len(normalized_dev),
+        "provenBundles": proven,
+        "minifiedIdentifierRenames": renames,
+        "allowedMetadataChanges": changes,
     }

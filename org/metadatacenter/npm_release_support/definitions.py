@@ -38,10 +38,6 @@ class NpmPackage:
     load_trace: str | None = None
     published_manifest: str | None = None
     framework_demos: bool = False
-    # Whether the repository's main and its release tags are this route's. The platform release
-    # writes CED's and CETP's main itself and tags it with CEDAR's version, so a release merged
-    # from develop would meet thirty-odd release commits develop never takes.
-    independent: bool = True
 
     @property
     def consumes_model(self) -> bool:
@@ -109,7 +105,6 @@ PACKAGES: dict[str, NpmPackage] = {
             development_check=(("npm", "run", "test:ci"),),
             model_manifests=(".",),
             changelog="CHANGELOG.md",
-            independent=False,
         ),
         NpmPackage(
             id="cetp",
@@ -124,7 +119,6 @@ PACKAGES: dict[str, NpmPackage] = {
             development_check=(("npm", "run", "test:ci"),),
             model_manifests=(".",),
             changelog="CHANGELOG.md",
-            independent=False,
         ),
     )
 }

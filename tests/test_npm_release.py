@@ -167,6 +167,19 @@ def _cee_files() -> dict[str, str]:
     }
 
 
+def _component_files(name: str) -> dict[str, str]:
+    """A CED or CETP checkout: one manifest that pins the model, and a browser test package."""
+    files = {key: value for key, value in _cee_files().items()
+             if not key.startswith("visual/") and key != PACKAGES["cee"].load_trace}
+    files["README.md"] = f"# {name}\n\nText.\n"
+    files["CHANGELOG.md"] = HEADER + "## [0.1.0-dev.20260916.2593d382] - 2026-09-16 (Nexus)\n\n- Old.\n"
+    manifest = json.loads(files["package.json"])
+    manifest.update(name=name, version="0.1.0-dev.20261002.8bca7f71")
+    files["package.json"] = json.dumps(manifest, indent=2) + "\n"
+    files["browser/package.json"] = json.dumps({"name": f"{name}-browser"}, indent=2) + "\n"
+    return files
+
+
 def _tarball(stage: Path) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
@@ -635,8 +648,27 @@ def test_the_release_command_group_offers_npm():
         assert command in result.output
 
 
-def test_preflight_refuses_a_package_whose_main_the_platform_release_writes(world, tmp_path):
-    notes = _notes(tmp_path)
+def test_a_ced_release_publishes_the_public_package_and_returns_develop_to_its_pin(world, tmp_path):
+    _make_repository(world.home, world.origins, PACKAGES["ced"], _component_files("cedar-embeddable-designer"))
+    state = NpmReleaseState(tmp_path / "state")
+    notes = _notes(tmp_path, "- First public release.\n")
     request = parse_run_request(["ced@0.1.0"], ["ced@0.1.1"], "1.0.28", None, [f"ced={notes}"])
-    _, findings = NpmReleasePreflight(world.home, world)._package(request.packages[0], request)
-    assert len(findings) == 1 and "released by the platform release" in findings[0]
+    run = _run(world, state, request.packages)
+
+    finished = _route(world, state).drive(run)
+
+    assert finished["conclusion"] == "released"
+    published = inspect_tarball(world.registry["cedar-embeddable-designer@0.1.0"], "x").package
+    assert published == {"name": "cedar-embeddable-designer", "version": "0.1.0"}
+    origin = world.origins / "cedar-embeddable-designer.git"
+    merge = finished["packages"][0]["evidence"]["merge"]["commit"]
+    assert git(origin, "rev-parse", "release-0.1.0^{commit}") == merge
+    released = json.loads(git(origin, "show", f"{merge}:package.json"))
+    assert released["dependencies"]["cedar-model-typescript-library"] == "1.0.28"
+    advanced = json.loads(git(origin, "show", "develop:package.json"))
+    assert re.fullmatch(r"0\.1\.1-dev\.\d{8}\.[0-9a-f]{7,}", advanced["version"])
+    assert advanced["dependencies"]["cedar-model-typescript-library"].startswith(
+        "npm:@org.metadatacenter/cedar-model-typescript-library@1.0.28-dev.")
+    changelog = git(origin, "show", f"{merge}:CHANGELOG.md")
+    assert "## [0.1.0] - " in changelog and "- First public release." in changelog
+    assert ("cedar-embeddable-designer", "release-0.1.0") in world.releases

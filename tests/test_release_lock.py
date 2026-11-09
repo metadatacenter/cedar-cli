@@ -23,7 +23,8 @@ class ReleaseLockTest(unittest.TestCase):
                     patch.object(release_train, 'abandon_active_release') as abandon:
                 for args in (
                     ['start', '--version', '1.0.0', '--next-version', '1.0.1-SNAPSHOT',
-                     '--from-train', '1.0.0-dev.20260909.1200', '--cee-version', '2.0.0'],
+                     '--from-train', '1.0.0-dev.20260909.1200', '--cee-version', '2.0.0',
+                     '--ced-version', '0.1.0', '--cetp-version', '0.1.0'],
                     ['resume'], ['abandon', '--version', '1.0.0', '--reason', 'test'],
                 ):
                     result = CliRunner().invoke(release_train.app, args)

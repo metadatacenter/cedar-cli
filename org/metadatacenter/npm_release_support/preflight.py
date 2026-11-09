@@ -68,11 +68,6 @@ class NpmReleasePreflight:
         record = {**package.as_record(), "repository": definition.repository, "completed": [],
                   "evidence": {}, "stage": None}
         label = definition.repository
-        if not definition.independent:
-            return record, [
-                f"{definition.title} is released by the platform release, which writes {label}'s main "
-                "and tags it with CEDAR's version; the route publishes it once its main and release "
-                "tags are the route's"]
         if not (repository / ".git").exists():
             return record, [f"{label} is not checked out at {repository}"]
         tools = self.tools

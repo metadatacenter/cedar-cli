@@ -1,5 +1,6 @@
 """CEDAR release policy."""
 from __future__ import annotations
+from dataclasses import dataclass
 import re
 from org.metadatacenter.release_support.errors import (
     ReleaseError,
@@ -59,9 +60,57 @@ CEE_BUNDLE_PAIRS = (
 )
 
 
+@dataclass(frozen=True)
+class PublicComponent:
+    """A Web Component, other than CEE, that the release pins at a public npmjs version.
+
+    The train builds and tests each one as a development package, and the release names the
+    public version the operator publishes from the same source. The release proves the public
+    package a promotion of the train's before it pins it into any consumer.
+    """
+
+    id: str
+    label: str
+    repository: str
+    development_name: str
+    public_name: str
+
+    @property
+    def option(self) -> str:
+        return f"--{self.id}-version"
+
+    @property
+    def bundle_pairs(self) -> tuple[tuple[str, str], ...]:
+        return (
+            (f"{self.public_name}.js", "bundle-manifest.json"),
+            (f"{self.public_name}.host-fonts.js", "bundle-manifest.host-fonts.json"),
+            ("integration.mjs", "integration-manifest.json"),
+        )
+
+    @property
+    def required_files(self) -> set[str]:
+        return {
+            "package.json", "CHANGELOG.md", "bundle-manifest.json",
+            f"{self.public_name}.js", f"{self.public_name}.d.ts",
+        }
+
+
+PUBLIC_COMPONENTS = (
+    PublicComponent(
+        "ced", "CED", "cedar-embeddable-designer",
+        "@org.metadatacenter/cedar-embeddable-designer", "cedar-embeddable-designer"),
+    PublicComponent(
+        "cetp", "CETP", "cedar-embeddable-term-picker",
+        "@org.metadatacenter/cedar-embeddable-term-picker", "cedar-embeddable-term-picker"),
+)
+
+
+# Repositories that release to npmjs on versions of their own, through `cedarcli release npm`.
+# The platform release writes none of their main branches or tags.
 INDEPENDENT_RELEASE_REPOSITORIES = {
     "cedar-embeddable-editor",
     "cedar-model-typescript-library",
+    *(component.repository for component in PUBLIC_COMPONENTS),
 }
 
 

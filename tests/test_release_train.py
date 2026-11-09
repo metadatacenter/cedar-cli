@@ -28,6 +28,7 @@ from org.metadatacenter.release_support.scheduling import build_edges
 from org.metadatacenter.release_support.policy import (
     NEXUS_NPM_REGISTRY,
     NEXUS_NPM_RETAINED_REGISTRY,
+    PUBLIC_COMPONENTS,
 )
 from org.metadatacenter.release_train import (
     DEV_CEE_NAME,
@@ -139,6 +140,125 @@ def provenance_bundle(cee_version, model_identity, load_trace, suffix=""):
     ).encode()
 
 
+COMPONENT_DEV_VERSION = "0.1.0-dev.20261108.gbe8f533c3b80.t2032"
+COMPONENT_PUBLIC_VERSION = "0.1.0"
+COMPONENT_CHANGELOG = b"""# Changelog
+
+## [Unreleased]
+
+- Pending.
+
+## [0.1.0-dev.20260916.2593d382] - 2026-09-16 (Nexus)
+
+First snapshot.
+"""
+COMPONENT_RELEASED_CHANGELOG = COMPONENT_CHANGELOG.replace(
+    b"## [0.1.0-dev.",
+    b"## [0.1.0] - 2026-11-10\n\nAligns with `cedar-model-typescript-library@1.0.28`.\n\n"
+    b"- First public release.\n\n## [0.1.0-dev.", 1)
+
+
+def component_bundle(version=None, code="return a+b"):
+    """A component bundle; one that reports its version does so as a quoted literal.
+
+    It also names versions that contain the short public version, as CED's real bundle does.
+    """
+    reported = f'var reported="{version}";' if version else ""
+    return (f'var deps={{a:"10.1.0",b:"0.1.0-rc.1"}};{reported}'
+            f'function add(a,b){{{code}}}').encode()
+
+
+def component_tarball(
+    component,
+    version,
+    *,
+    development,
+    bundle,
+    host_fonts_bundle=None,
+    changelog=COMPONENT_CHANGELOG,
+    provenance="source-fingerprint",
+    inputs=("dist/browser/main.js",),
+    integration=None,
+    extra_files=None,
+):
+    """A staged CED or CETP package as the component's own staging step writes it."""
+    package = {
+        "name": component.development_name if development else component.public_name,
+        "version": version,
+        "main": f"{component.public_name}.js",
+        "types": f"{component.public_name}.d.ts",
+    }
+    if development:
+        package["publishConfig"] = {
+            "registry": "https://nexus.bmir.stanford.edu/repository/npm-cedar/",
+            "tag": "dev",
+        }
+
+    def manifest(content):
+        return (json.dumps({
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "inputs": list(inputs),
+            "provenance": {"source": hashlib.sha256(provenance.encode()).hexdigest(),
+                           "output": hashlib.sha256(content).hexdigest()},
+        }, indent=2) + "\n").encode()
+
+    files = {
+        "package.json": (json.dumps(package, indent=2) + "\n").encode(),
+        f"{component.public_name}.js": bundle,
+        f"{component.public_name}.d.ts": b"export interface Config {}\n",
+        "bundle-manifest.json": manifest(bundle),
+        "README.md": b"Component\n",
+        "CHANGELOG.md": changelog,
+        "license.txt": b"BSD\n",
+    }
+    if host_fonts_bundle is not None:
+        files[f"{component.public_name}.host-fonts.js"] = host_fonts_bundle
+        files["bundle-manifest.host-fonts.json"] = manifest(host_fonts_bundle)
+    if integration is not None:
+        module, runtimes = integration
+        files["integration.mjs"] = module
+        files["integration-manifest.json"] = (json.dumps({
+            "format": "cedar-integration", "version": 1,
+            "source": hashlib.sha256(provenance.encode()).hexdigest(),
+            "bytes": len(module), "sha256": hashlib.sha256(module).hexdigest(),
+            "runtimes": runtimes,
+        }, indent=2) + "\n").encode()
+    files.update(extra_files or {})
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+        for path, content in files.items():
+            info = tarfile.TarInfo(f"package/{path}")
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return stream.getvalue()
+
+
+def public_component_fixture(identifier, *, public_code="return a+b", revision=None):
+    """One train-tested component and the public package promoted from it, for the planner."""
+    component = next(item for item in PUBLIC_COMPONENTS if item.id == identifier)
+    reports = identifier == "ced"
+    development = component_tarball(
+        component, COMPONENT_DEV_VERSION, development=True,
+        bundle=component_bundle(COMPONENT_DEV_VERSION if reports else None),
+        provenance="train build")
+    public = component_tarball(
+        component, COMPONENT_PUBLIC_VERSION, development=False,
+        bundle=component_bundle(COMPONENT_PUBLIC_VERSION if reports else None, public_code),
+        changelog=COMPONENT_RELEASED_CHANGELOG, provenance="public build")
+    return {
+        "id": component.id,
+        "repository": component.repository,
+        "revision": revision or hashlib.sha1(component.id.encode()).hexdigest(),
+        "developmentName": component.development_name,
+        "developmentVersion": COMPONENT_DEV_VERSION,
+        "developmentTarball": development,
+        "publicName": component.public_name,
+        "publicVersion": COMPONENT_PUBLIC_VERSION,
+        "publicTarball": public,
+    }
+
+
 BASE_CHANGELOG = b"""# Changelog
 
 ## [Unreleased]
@@ -232,12 +352,14 @@ class FakeHttp:
         frontend_config,
         build_config,
         cee_source_package=None,
+        package_metadata=None,
     ):
         self.contents = contents
         self.public_metadata = public_metadata
         self.frontend_config = frontend_config
         self.build_config = build_config
         self.cee_source_package = cee_source_package or {}
+        self.package_metadata = package_metadata or {}
 
     def read(self, url, *, missing_ok=False):
         return self.contents[url]
@@ -249,6 +371,8 @@ class FakeHttp:
             value = self.build_config
         elif "/cedar-embeddable-editor/" in url and url.endswith("/package.json"):
             value = self.cee_source_package
+        elif url in self.package_metadata:
+            value = self.package_metadata[url]
         else:
             value = self.public_metadata
         content = json.dumps(value, indent=2, sort_keys=True).encode()
@@ -818,15 +942,15 @@ class CeePromotionTest(unittest.TestCase):
 
 
 class ReleasePlannerTest(unittest.TestCase):
-    COMPONENT = "@org.metadatacenter/cedar-embeddable-designer"
+    COMPONENT = "@org.metadatacenter/cedar-design-tokens"
     COMPONENT_VERSION = "0.1.0-dev.20260826.gffffffffffff.t1554"
-    COMPONENT_BYTES = b"designer tarball"
+    COMPONENT_BYTES = b"design tokens tarball"
     COMPONENT_TRAIN_URL = (
         "https://nexus.bmir.stanford.edu/repository/npm-cedar/"
-        "@org.metadatacenter/cedar-embeddable-designer/-/designer.tgz")
+        "@org.metadatacenter/cedar-design-tokens/-/tokens.tgz")
     COMPONENT_RETAINED_URL = (
         "https://nexus.bmir.stanford.edu/repository/npm-cedar-releases/"
-        "@org.metadatacenter/cedar-embeddable-designer/-/designer.tgz")
+        "@org.metadatacenter/cedar-design-tokens/-/tokens.tgz")
     MODEL = "@org.metadatacenter/cedar-model-typescript-library"
     MODEL_VERSION = "1.0.18-dev.202608261554.g999999999999"
     MODEL_BYTES = b"model tarball"
@@ -834,7 +958,8 @@ class ReleasePlannerTest(unittest.TestCase):
         "https://nexus.bmir.stanford.edu/repository/npm-cedar-releases/"
         "@org.metadatacenter/cedar-model-typescript-library/-/model.tgz")
 
-    def make_planner(self, allow_scripts=None, components=False, model=False):
+    def make_planner(self, allow_scripts=None, components=False, model=False,
+                     public_components=()):
         if allow_scripts:
             policy = (
                 b",allowScripts:"
@@ -888,7 +1013,9 @@ class ReleasePlannerTest(unittest.TestCase):
             },
         }
         if components:
-            source["repositories"]["cedar-embeddable-designer"] = "f" * 40
+            source["repositories"]["cedar-design-tokens"] = "f" * 40
+        for component in public_components:
+            source["repositories"][component["repository"]] = component["revision"]
         if model:
             source["repositories"]["cedar-model-typescript-library"] = "9" * 40
         source_content = (json.dumps(source, indent=2, sort_keys=True) + "\n").encode()
@@ -970,11 +1097,20 @@ class ReleasePlannerTest(unittest.TestCase):
         }
         if components:
             npm_plan["components"] = [{
-                "id": "ced", "name": self.COMPONENT, "version": self.COMPONENT_VERSION,
-                "repository": "cedar-embeddable-designer", "revision": "f" * 40,
-                "consumers": [{"repository": "frontend-main", "dependency": "cedar-embeddable-designer",
+                "id": "tokens", "name": self.COMPONENT, "version": self.COMPONENT_VERSION,
+                "repository": "cedar-design-tokens", "revision": "f" * 40,
+                "consumers": [{"repository": "frontend-main", "dependency": self.COMPONENT,
                                "manifest": "package.json", "lock": "package-lock.json"}],
             }]
+        for component in public_components:
+            npm_plan.setdefault("components", []).append({
+                "id": component["id"], "name": component["developmentName"],
+                "version": component["developmentVersion"],
+                "repository": component["repository"], "revision": component["revision"],
+                "consumers": [{"repository": "cedar-template-designer",
+                               "dependency": component["publicName"],
+                               "manifest": "package.json", "lock": "package-lock.json"}],
+            })
         if model:
             npm_plan["model"] = {
                 "name": self.MODEL, "version": self.MODEL_VERSION,
@@ -1006,7 +1142,7 @@ class ReleasePlannerTest(unittest.TestCase):
                 "name": self.COMPONENT, "version": self.COMPONENT_VERSION,
                 "integrity": integrity(self.COMPONENT_BYTES),
                 "tarballSha256": hashlib.sha256(self.COMPONENT_BYTES).hexdigest(),
-                "repository": "cedar-embeddable-designer", "revision": "f" * 40,
+                "repository": "cedar-design-tokens", "revision": "f" * 40,
             }
             npm_completion["packages"].append({**recorded, "tarball": self.COMPONENT_TRAIN_URL})
             npm_completion["retainedRegistry"] = NEXUS_NPM_RETAINED_REGISTRY
@@ -1022,8 +1158,38 @@ class ReleasePlannerTest(unittest.TestCase):
                 "repository": "cedar-model-typescript-library", "revision": "9" * 40,
             }
             npm_completion["packages"].append({**recorded, "tarball": "https://nexus.example/model.tgz"})
-            npm_completion["retainedPackages"].append({**recorded, "tarball": self.MODEL_RETAINED_URL})
+            npm_completion["retainedRegistry"] = NEXUS_NPM_RETAINED_REGISTRY
+            npm_completion.setdefault("retainedPackages", []).append(
+                {**recorded, "tarball": self.MODEL_RETAINED_URL})
             contents[self.MODEL_RETAINED_URL] = self.MODEL_BYTES
+        package_metadata = {}
+        for component in public_components:
+            dev_bytes = component["developmentTarball"]
+            recorded = {
+                "name": component["developmentName"],
+                "version": component["developmentVersion"],
+                "integrity": integrity(dev_bytes),
+                "tarballSha256": hashlib.sha256(dev_bytes).hexdigest(),
+                "repository": component["repository"], "revision": component["revision"],
+            }
+            retained_url = (f"{NEXUS_NPM_RETAINED_REGISTRY}{component['developmentName']}/-/"
+                            f"{component['id']}.tgz")
+            npm_completion["packages"].append(
+                {**recorded, "tarball": f"https://nexus.example/{component['id']}.tgz"})
+            npm_completion["retainedRegistry"] = NEXUS_NPM_RETAINED_REGISTRY
+            npm_completion.setdefault("retainedPackages", []).append(
+                {**recorded, "tarball": retained_url})
+            contents[retained_url] = dev_bytes
+            component_url = (f"https://registry.npmjs.org/{component['publicName']}/-/"
+                             f"{component['publicName']}-{component['publicVersion']}.tgz")
+            contents[component_url] = component["publicTarball"]
+            package_metadata[f"https://registry.npmjs.org/{component['publicName']}"] = {
+                "versions": {component["publicVersion"]: {
+                    "gitHead": component["revision"],
+                    "dist": {"tarball": component_url,
+                             "integrity": integrity(component["publicTarball"])},
+                }},
+            }
         docker_images = [
             {
                 "image": f"cedar-image-{index:02d}",
@@ -1073,6 +1239,7 @@ class ReleasePlannerTest(unittest.TestCase):
             frontend_config,
             build_config,
             cee_source_package={"allowScripts": allow_scripts} if allow_scripts else {},
+            package_metadata=package_metadata,
         )
         return ReleasePlanner(http=http, state=state)
 
@@ -1133,22 +1300,83 @@ class ReleasePlannerTest(unittest.TestCase):
 
         wired = {(item["repository"], item["dependency"]): item["package"]
                  for item in manifest["componentWiring"]}
-        model = wired[("cedar-embeddable-designer", "cedar-model-typescript-library")]
+        # An application that follows the model is built against the train's model, so the
+        # release pins the same retained copy there, at the manifest the configuration names.
+        model = wired[("frontend-bridging", "cedar-model-typescript-library")]
         self.assertEqual(self.MODEL, model["name"])
         self.assertEqual(self.MODEL_VERSION, model["version"])
         self.assertEqual(self.MODEL_RETAINED_URL, model["tarball"])
         self.assertEqual(NEXUS_NPM_RETAINED_REGISTRY, model["registry"])
         self.assertEqual(integrity(self.MODEL_BYTES), model["integrity"])
-        # An application that follows the model is built against the train's model as well, so
-        # the release pins the same retained copy there, at the manifest the configuration names.
         application = next(item for item in manifest["componentWiring"]
                            if item["repository"] == "frontend-bridging"
                            and item["dependency"] == "cedar-model-typescript-library")
-        self.assertEqual(model, application["package"])
         self.assertEqual(("src/package.json", "src/package-lock.json"),
                          (application["manifest"], application["lock"]))
         # The public CEE carries its own public model; the train's model is never wired into it.
         self.assertNotIn("cedar-embeddable-editor", {repository for repository, _ in wired})
+
+    def build_with_components(self, planner, **versions):
+        return planner.build(
+            release_version="2.9.3", next_version="2.9.4-SNAPSHOT",
+            train=TRAIN, cee_version=PUBLIC_VERSION, component_versions=versions)
+
+    def test_release_pins_proven_public_ced_and_cetp_into_their_consumers(self):
+        fixtures = [public_component_fixture("ced"), public_component_fixture("cetp")]
+        manifest = self.build_with_components(
+            self.make_planner(public_components=fixtures),
+            ced=COMPONENT_PUBLIC_VERSION, cetp=COMPONENT_PUBLIC_VERSION)
+
+        for fixture in fixtures:
+            record = manifest["publicComponents"][fixture["id"]]
+            self.assertEqual(COMPONENT_DEV_VERSION, record["development"]["version"])
+            self.assertEqual(COMPONENT_PUBLIC_VERSION, record["public"]["version"])
+            self.assertEqual(fixture["revision"], record["public"]["gitHead"])
+            self.assertEqual(["cedar-template-designer"], record["consumers"])
+            self.assertRegex(record["promotionProof"]["normalizedPayloadSha256"], r"^[0-9a-f]{64}$")
+            [wiring] = [item for item in manifest["componentWiring"]
+                        if item["dependency"] == fixture["publicName"]]
+            self.assertEqual("cedar-template-designer", wiring["repository"])
+            package = wiring["package"]
+            self.assertEqual(fixture["publicName"], package["name"])
+            self.assertEqual(COMPONENT_PUBLIC_VERSION, package["version"])
+            self.assertEqual("https://registry.npmjs.org/", package["registry"])
+            self.assertTrue(package["tarball"].startswith("https://registry.npmjs.org/"))
+            self.assertEqual(integrity(fixture["publicTarball"]), package["integrity"])
+            # The platform release writes neither component's main nor its tags.
+            self.assertNotIn(fixture["repository"], manifest["releaseRepositories"])
+        self.assertIn("cedar-embeddable-designer.js:CED version",
+                      manifest["publicComponents"]["ced"]["promotionProof"]["allowedMetadataChanges"])
+
+    def test_release_wires_the_train_s_model_into_no_independent_component(self):
+        manifest = self.build_with_components(
+            self.make_planner(model=True, public_components=[public_component_fixture("ced")]),
+            ced=COMPONENT_PUBLIC_VERSION)
+        wired = {item["repository"] for item in manifest["componentWiring"]
+                 if item["dependency"] == "cedar-model-typescript-library"}
+        self.assertEqual({"frontend-bridging"}, wired)
+
+    def test_release_requires_the_public_version_of_each_component_its_train_built(self):
+        planner = self.make_planner(public_components=[public_component_fixture("cetp")])
+        with self.assertRaisesRegex(ReleaseError, "tested CETP .*--cetp-version"):
+            self.build_with_components(planner)
+
+    def test_release_refuses_a_public_component_its_train_did_not_test(self):
+        planner = self.make_planner(public_components=[
+            public_component_fixture("ced", public_code="return a-b")])
+        with self.assertRaisesRegex(ReleaseError, "CED promotion changes executable JavaScript"):
+            self.build_with_components(planner, ced=COMPONENT_PUBLIC_VERSION)
+
+    def test_release_refuses_a_component_version_its_train_did_not_build(self):
+        planner = self.make_planner(public_components=[public_component_fixture("ced")])
+        with self.assertRaisesRegex(ReleaseError, "built no CETP"):
+            self.build_with_components(
+                planner, ced=COMPONENT_PUBLIC_VERSION, cetp=COMPONENT_PUBLIC_VERSION)
+
+    def test_release_refuses_a_public_component_missing_from_npmjs(self):
+        planner = self.make_planner(public_components=[public_component_fixture("ced")])
+        with self.assertRaisesRegex(ReleaseError, "npmjs does not contain cedar-embeddable-designer@0.1.1"):
+            self.build_with_components(planner, ced="0.1.1")
 
     def test_release_refuses_a_train_that_did_not_retain_the_model_its_components_follow(self):
         planner = self.make_planner(components=True, model=True)
@@ -1479,6 +1707,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
                 "--next-version", "2.9.4-SNAPSHOT",
                 "--from-train", TRAIN,
                 "--cee-version", PUBLIC_VERSION,
+                "--ced-version", "0.1.0", "--cetp-version", "0.1.0",
             ])
             self.assertEqual(0, result.exit_code, result.output)
             self.assertIn("No changes made.", result.output)
@@ -1513,6 +1742,7 @@ class ReleaseStateAndCliTest(unittest.TestCase):
                 "--next-version", "2.9.4-SNAPSHOT",
                 "--from-train", TRAIN,
                 "--cee-version", PUBLIC_VERSION,
+                "--ced-version", "0.1.0", "--cetp-version", "0.1.0",
             ])
             self.assertEqual(0, start.exit_code, start.output)
             self.assertIn("Phase:               accepted", start.output)
@@ -5563,6 +5793,7 @@ class ReleaseAcceptanceRecordTest(unittest.TestCase):
                 "--next-version", "2.9.4-SNAPSHOT",
                 "--from-train", TRAIN,
                 "--cee-version", PUBLIC_VERSION,
+                "--ced-version", "0.1.0", "--cetp-version", "0.1.0",
                 "--accept-red-develop", "cedar-repo-server=33211136456",
                 "--accept-main-only", "cedar-template-editor",
                 "--accept-main-only", " cedar-workspace ",
@@ -6410,6 +6641,7 @@ class ToolchainResolverTest(unittest.TestCase):
             result = runner.invoke(release_train.app, [
                 "plan", "--version", "2.9.9", "--next-version", "2.9.10-SNAPSHOT",
                 "--from-train", "2.9.9-dev.20260905.1200", "--cee-version", "2.0.6",
+                "--ced-version", "0.1.0", "--cetp-version", "0.1.0",
             ])
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("Toolchain:           Java 17 from /jdk17; the shell offered Java 23",
