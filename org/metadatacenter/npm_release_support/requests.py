@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 
 from org.metadatacenter.npm_release_support.definitions import (
     DEV_MODEL_VERSION,
@@ -72,11 +73,16 @@ def _split_assignment(value: str, option: str) -> tuple[str, str]:
     return package, text.strip()
 
 
+_SUBSECTION = re.compile(r"### [A-Z][A-Za-z ]*")
+
+
 def read_notes(path: str, package: str) -> str:
     """Read the bullets an entry carries, refusing anything that would break the changelog's shape.
 
     The changelog entry is cut out again by the platform release's promotion proof, from its heading
-    to the next `## [`, so notes holding a heading of their own would end that cut early.
+    to the next `## [`, so notes holding an entry heading of their own would end that cut early.
+    Keep a Changelog's `### Added`-style subsection headings cannot, so notes may group their
+    bullets under them; every other heading is refused.
     """
     try:
         text = Path(path).expanduser().read_text(encoding="utf-8")
@@ -86,10 +92,10 @@ def read_notes(path: str, package: str) -> str:
     if not lines:
         raise NpmReleaseError(f"the {package} notes at {path} are empty")
     for line in lines:
-        if line.lstrip().startswith("#"):
+        if line.lstrip().startswith("#") and not _SUBSECTION.fullmatch(line):
             raise NpmReleaseError(
                 f"the {package} notes at {path} contain a heading ({line!r}); "
-                "notes hold the entry's bullets only")
+                "notes hold the entry's bullets, under '### ' subsections at most")
     if not any(line.startswith("- ") for line in lines):
         raise NpmReleaseError(f"the {package} notes at {path} contain no '- ' bullet")
     return "\n".join(lines) + "\n"

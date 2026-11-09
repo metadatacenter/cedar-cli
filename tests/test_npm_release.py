@@ -71,6 +71,23 @@ def test_a_changelog_package_needs_notes_without_headings(tmp_path):
         parse_run_request(["cee@2.0.34"], ["cee@2.0.35"], "1.0.28", None, [f"cee={heading}"])
 
 
+def test_notes_may_group_their_bullets_under_changelog_subsections(tmp_path):
+    text = "- First public release.\n\n### Added\n\n- A thing.\n\n### Fixed\n\n- A defect.\n"
+    request = parse_run_request(["ced@0.1.0"], ["ced@0.1.1"], "1.0.27", None,
+                                [f"ced={_notes(tmp_path, text)}"])
+    assert request.packages[0].notes == text
+    # The proof cuts the entry from its heading to the next `## [`, which a subsection never is.
+    changelog = HEADER + "## [0.1.0-dev.20260916.2593d382] - 2026-09-16 (Nexus)\n\n- Old.\n"
+    entry = changelog_entry("0.1.0", "2026-11-09", "1.0.27", text)
+    result = insert_changelog_entry(changelog, "0.1.0", entry)
+    start = result.index("## [0.1.0]")
+    assert result[:start] + result[result.index("## [0.1.0-dev."):] == changelog
+    for heading in ("#### Deeper\n- A thing.\n", "### added\n- A thing.\n", "# Title\n- A thing.\n"):
+        with pytest.raises(NpmReleaseError, match="contain a heading"):
+            parse_run_request(["ced@0.1.0"], ["ced@0.1.1"], "1.0.27", None,
+                              [f"ced={_notes(tmp_path, heading)}"])
+
+
 # Edits ---------------------------------------------------------------------------------------
 
 
