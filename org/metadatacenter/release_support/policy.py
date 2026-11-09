@@ -105,9 +105,13 @@ PUBLIC_COMPONENTS = (
 )
 
 
-# Repositories that release to npmjs on versions of their own, through `cedarcli release npm`.
-# The platform release writes none of their main branches or tags.
+# Repositories that publish on a cadence and a version of their own: the four `cedarcli release
+# npm` releases to npmjs, and the design tokens, whose development packages the trains and
+# `cedarcli publish components` publish. The platform release writes none of their main branches,
+# develop branches or tags; it pins the packages they publish. The repository registry marks the
+# same set `skip_from_release`, and a test holds the two equal.
 INDEPENDENT_RELEASE_REPOSITORIES = {
+    "cedar-design-tokens",
     "cedar-embeddable-editor",
     "cedar-model-typescript-library",
     *(component.repository for component in PUBLIC_COMPONENTS),
