@@ -119,9 +119,12 @@ def coverage_command(
 def status_command(
         repositories: list[str] = typer.Argument(None, help="Repositories; default every one the "
                                                           "registry names"),
+        post: bool = typer.Option(
+            False, "--post", help="Publish the commit status of each passing record on this "
+                                  "machine that GitHub does not hold"),
 ):
     """Show local CI's answer for each repository's develop head."""
-    from org.metadatacenter.local_ci.evidence import verdict
+    from org.metadatacenter.local_ci.evidence import publish_record, verdict
     from org.metadatacenter.local_ci.registry import load_registry
     from org.metadatacenter.local_ci.run import resolve_revision
     cedar_home = _cedar_home()
@@ -131,6 +134,8 @@ def status_command(
             commit = resolve_revision(cedar_home, name, None)
             answer = verdict(cedar_home, name, commit, registry=registry)
             typer.echo(f"{answer.state.upper():6} {name} {commit[:8]}  {answer.detail}")
+            if post and publish_record(cedar_home, name, commit, registry):
+                typer.echo(f"       published {registry.status_context} on {commit[:8]}")
     except LocalCIError as error:
         typer.echo(f"Stopped: {error}")
         raise typer.Exit(1) from error

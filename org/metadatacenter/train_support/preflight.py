@@ -414,7 +414,7 @@ def _packaging_preflight():
         raise ValueError(str(error)) from error
 
 
-def _preflight(selected, resume):
+def _preflight(selected, resume, rehearsal=False):
     source_path = f'trains/{selected}.json'
     try:
         source = BuildTrain._read(source_path)
@@ -438,10 +438,15 @@ def _preflight(selected, resume):
     # half.
     #
     # Within a phase every stage runs even after one has refused, so the operator still reads
-    # one report and fixes a whole phase rather than one finding at a time. The remote phase
-    # does not run at all once the local one has refused: a train the workspace already
+    # one report and fixes a whole phase rather than one finding at a time. A dispatch does not
+    # run the remote phase once the local one has refused: a train the workspace already
     # disqualifies cannot dispatch whatever GitHub would answer, so the minute and a half buys
     # nothing but a longer wait for a verdict that is already decided.
+    #
+    # A rehearsal runs both phases whatever the first finds, because its verdict is the list. A
+    # remote finding can take minutes to clear, a contract run or a smoke run for instance, and
+    # an operator who learns of it only after repairing the workspace waits for it afterwards
+    # rather than meanwhile.
     #
     # The checks that need the GitHub CLI are skipped once it has failed, because each would
     # only repeat that failure.
@@ -469,7 +474,7 @@ def _preflight(selected, resume):
     settle(_component_preflight)
     settle(_npm_configuration_preflight)
     settle(_packaging_preflight)
-    if findings:
+    if findings and not rehearsal:
         raise ValueError(_preflight_failure(findings, remote_checked=False))
 
     _, github_ready = settle(_github_preflight)
@@ -546,7 +551,7 @@ def _ci_env_preflight():
 
 REMOTE_PHASE_SKIPPED = (
     'GitHub, the smoke record and the publication targets were not asked, because this train '
-    'is already refused here. Repair the above and rehearse again.')
+    'is already refused here. A rehearsal, cedarcli publish train --dry-run, asks them as well.')
 
 
 def _preflight_failure(findings, remote_checked=True):

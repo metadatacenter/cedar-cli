@@ -12,6 +12,7 @@ from org.metadatacenter.github_ci import (
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
+    unanswered_workflows,
 )
 from org.metadatacenter.npm_policy import (
     npm_user_config_findings,
@@ -964,6 +965,13 @@ class ReleasePreflight:
                     "rerun the cancelled run" if ran else "",
                 ))
                 continue
+            for name in unanswered_workflows(ran):
+                findings.append(PreflightFinding(
+                    "ci", "fail",
+                    f"{repository}: every {name} run for the train source {source[:8]} was "
+                    "cancelled",
+                    "rerun the cancelled run",
+                ))
             for name, record in latest_runs_by_name(runs).items():
                 conclusion = record.get("conclusion")
                 status = record.get("status")

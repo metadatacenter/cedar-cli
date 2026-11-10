@@ -11,7 +11,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from org.metadatacenter.local_ci.evidence import LocalVerdict, verdict
+from org.metadatacenter.local_ci.evidence import LocalVerdict, status_verdict, verdict
 from org.metadatacenter.local_ci.errors import LocalCIError
 
 FAILED_JOB_CONCLUSIONS = frozenset({"failure", "timed_out"})
@@ -34,6 +34,25 @@ def local_answer(cedar_home, repository: str, revision: str, *, environment=None
                        environment=environment, read_status=read_status)
     except (LocalCIError, OSError) as error:
         return LocalVerdict("none", str(error))
+
+
+def published_answer(cedar_home, repository: str, revision: str, *, environment=None,
+                     runner=subprocess.run) -> LocalVerdict:
+    """Local CI's answer as another machine reads it: the commit status, never this machine's record.
+
+    A gate that runs elsewhere, the train's hosted preflight among them, holds none of this machine's
+    records. A gate here that must agree with it asks what that machine will be able to see.
+    """
+    if not cedar_home:
+        return LocalVerdict("none", "CEDAR_HOME is not set")
+    from org.metadatacenter.local_ci.registry import load_registry
+    try:
+        registry = load_registry(cedar_home)
+    except LocalCIError as error:
+        return LocalVerdict("none", str(error))
+    if registry.entry(repository) is None:
+        return LocalVerdict("none", f"local CI does not cover {repository}")
+    return status_verdict(repository, revision, registry.status_context, runner, environment)
 
 
 def github_failed_to_start(repository: str, run: dict, *, runner=subprocess.run,

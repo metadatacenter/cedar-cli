@@ -4,7 +4,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from org.metadatacenter.github_ci import GithubCIProbeError, probe_exact_commit
+from org.metadatacenter.github_ci import (
+    GithubCIProbeError,
+    finished_runs,
+    latest_runs_by_name,
+    local_ci_passed,
+    newest_commit_status,
+    probe_exact_commit,
+    unanswered_workflows,
+)
 
 
 class Result:
@@ -85,6 +93,70 @@ class GithubCIProbeTest(unittest.TestCase):
                 runner=lambda *_args, **_kwargs: Result(),
                 sleeper=lambda _delay: self.fail("malformed JSON must not sleep"),
             )
+
+
+def _run(name, conclusion, status="completed"):
+    return {"name": name, "status": status, "conclusion": conclusion}
+
+
+class WorkflowAnswerTest(unittest.TestCase):
+    def test_a_workflow_whose_every_run_was_cancelled_is_unanswered_beside_one_that_finished(self):
+        runs = [_run("Test", "cancelled"), _run("Lint", "success")]
+
+        self.assertEqual(["Test"], unanswered_workflows(runs))
+        self.assertEqual(["Lint"], list(latest_runs_by_name(finished_runs(runs))))
+
+    def test_a_finished_run_of_the_same_workflow_answers_for_a_cancelled_one(self):
+        runs = [_run("Test", "cancelled"), _run("Test", "success"), _run("Lint", "success")]
+
+        self.assertEqual([], unanswered_workflows(runs))
+
+    def test_a_run_still_in_progress_is_an_answer_to_wait_for(self):
+        runs = [_run("Test", "cancelled"), _run("Test", None, status="in_progress")]
+
+        self.assertEqual([], unanswered_workflows(runs))
+
+    def test_every_cancelled_workflow_is_named_once_in_the_order_github_lists_them(self):
+        runs = [_run("Test", "cancelled"), _run("Lint", "cancelled"), _run("Test", "cancelled")]
+
+        self.assertEqual(["Test", "Lint"], unanswered_workflows(runs))
+
+
+class CommitStatusTest(unittest.TestCase):
+    def _statuses(self, *statuses):
+        return lambda *_args, **_kwargs: Result(payload=list(statuses))
+
+    def test_the_newest_status_of_the_context_answers(self):
+        runner = self._statuses(
+            {"context": "cedar/local-ci", "state": "failure", "updated_at": "2026-11-10T09:00:00Z"},
+            {"context": "cedar/local-ci", "state": "success", "updated_at": "2026-11-10T10:00:00Z"},
+            {"context": "other", "state": "failure", "updated_at": "2026-11-10T11:00:00Z"},
+        )
+
+        newest, reason = newest_commit_status("repo", "a" * 40, "cedar/local-ci", runner=runner)
+
+        self.assertEqual(("success", ""), (newest["state"], reason))
+        self.assertTrue(local_ci_passed("repo", "a" * 40, runner=runner))
+
+    def test_a_later_failure_withdraws_an_earlier_pass(self):
+        runner = self._statuses(
+            {"context": "cedar/local-ci", "state": "success", "updated_at": "2026-11-10T09:00:00Z"},
+            {"context": "cedar/local-ci", "state": "failure", "updated_at": "2026-11-10T10:00:00Z"},
+        )
+
+        self.assertFalse(local_ci_passed("repo", "a" * 40, runner=runner))
+
+    def test_no_status_and_an_unreadable_one_both_say_why(self):
+        absent, reason = newest_commit_status(
+            "repo", "a" * 40, "cedar/local-ci", runner=self._statuses())
+        self.assertIsNone(absent)
+        self.assertEqual("no cedar/local-ci status on aaaaaaaa", reason)
+
+        refused = lambda *_args, **_kwargs: Result(returncode=1, stderr="HTTP 403")
+        unreadable, reason = newest_commit_status("repo", "a" * 40, "cedar/local-ci", runner=refused)
+        self.assertIsNone(unreadable)
+        self.assertIn("unreadable: HTTP 403", reason)
+        self.assertFalse(local_ci_passed("repo", "a" * 40, runner=refused))
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from org.metadatacenter.github_ci import newest_commit_status
 from org.metadatacenter.local_ci.errors import LocalCIError
 
 SCHEMA_VERSION = 1
@@ -141,25 +142,10 @@ def ledger_verdict(cedar_home, repository: str, revision: str, registry_digest: 
 def status_verdict(repository: str, revision: str, context: str, runner=subprocess.run,
                    environment=None) -> LocalVerdict:
     """The newest `cedar/local-ci` status GitHub holds for the commit, for another machine's runs."""
-    try:
-        result = runner(["gh", "api", f"repos/metadatacenter/{repository}/commits/{revision}/statuses"
-                         "?per_page=100"], text=True, capture_output=True, check=False, env=environment)
-    except OSError as error:
-        return LocalVerdict("none", f"the {context} status is unreadable: {error}")
-    stdout = getattr(result, "stdout", None) or ""
-    if getattr(result, "returncode", 1):
-        detail = (getattr(result, "stderr", None) or stdout).strip()[:120]
-        return LocalVerdict("none", f"the {context} status is unreadable: {detail}")
-    try:
-        statuses = json.loads(stdout or "[]")
-    except (json.JSONDecodeError, TypeError):
-        return LocalVerdict("none", f"the {context} status is malformed")
-    if not isinstance(statuses, list):
-        return LocalVerdict("none", f"the {context} status is malformed")
-    ours = [status for status in statuses if isinstance(status, dict) and status.get("context") == context]
-    if not ours:
-        return LocalVerdict("none", f"no {context} status on {revision[:8]}")
-    newest = max(ours, key=lambda status: status.get("updated_at") or status.get("created_at") or "")
+    newest, reason = newest_commit_status(repository, revision, context, runner=runner,
+                                          environment=environment)
+    if newest is None:
+        return LocalVerdict("none", reason)
     if newest.get("state") == "success":
         return LocalVerdict("green", f"{context}: {newest.get('description', '')}", "status")
     if newest.get("state") in ("failure", "error"):
@@ -185,3 +171,20 @@ def verdict(cedar_home, repository: str, revision: str, *, registry=None, runner
     if answer.state != "none" or not read_status:
         return answer
     return status_verdict(repository, revision, context, runner, environment)
+
+
+def publish_record(cedar_home, repository: str, revision: str, registry, runner=subprocess.run,
+                   environment=None) -> dict | None:
+    """Post the status of this machine's passing record, unless GitHub already holds a passing one.
+
+    A record is evidence on this machine alone, and a run made with `--no-status` posted nothing
+    beside it. A gate elsewhere, the train's runner among them, reads only the status. Returns the
+    posted status, or None when the record does not pass or its status is already there.
+    """
+    answer = ledger_verdict(cedar_home, repository, revision, registry.digest(repository), environment)
+    if not answer.green:
+        return None
+    if status_verdict(repository, revision, registry.status_context, runner, environment).green:
+        return None
+    return post_status(read_record(repository, revision, environment), registry.status_context,
+                       runner, environment)

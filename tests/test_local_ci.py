@@ -401,6 +401,50 @@ def test_a_record_made_under_another_registry_entry_answers_for_nothing(tmp_path
     assert answer.state == "none" and "earlier registry" in answer.detail
 
 
+def _passing_record(tmp_path, registry, **changes):
+    environment = {"CEDAR_LOCAL_CI_DIR": str(tmp_path)}
+    record = {"schemaVersion": 1, "repository": "r", "revision": "d" * 40, "tree": "e" * 40,
+              "conclusion": "success", "covered": True, "registrySha256": registry.digest("r"),
+              "jobs": [{"seconds": 60}], **changes}
+    evidence.write_record(record, environment)
+    return environment
+
+
+PUBLISHING_REGISTRY = Registry({"schemaVersion": 1, "repositories": {"r": {"jobs": {}}}})
+
+
+def test_a_passing_record_without_a_status_is_published(tmp_path):
+    environment = _passing_record(tmp_path, PUBLISHING_REGISTRY)
+    gh = FakeGh()
+    posted = evidence.publish_record(tmp_path, "r", "d" * 40, PUBLISHING_REGISTRY, gh, environment)
+    assert posted["state"] == "success" and posted["context"] == "cedar/local-ci"
+    read, post = gh.calls
+    assert read[2].endswith(f"commits/{'d' * 40}/statuses?per_page=100")
+    assert post[:4] == ["gh", "api", "--method", "POST"] and "state=success" in post
+
+
+def test_a_status_github_already_holds_is_not_posted_again(tmp_path):
+    environment = _passing_record(tmp_path, PUBLISHING_REGISTRY)
+    gh = FakeGh([{"context": "cedar/local-ci", "state": "success",
+                  "updated_at": "2026-11-10T10:00:00Z"}])
+    assert evidence.publish_record(
+        tmp_path, "r", "d" * 40, PUBLISHING_REGISTRY, gh, environment) is None
+    assert all("--method" not in command for command in gh.calls)
+
+
+@pytest.mark.parametrize("changes", [
+    {"conclusion": "failure"},
+    {"covered": False},
+    {"registrySha256": "an earlier entry"},
+])
+def test_a_record_that_does_not_answer_here_is_never_published(tmp_path, changes):
+    environment = _passing_record(tmp_path, PUBLISHING_REGISTRY, **changes)
+    gh = FakeGh()
+    assert evidence.publish_record(
+        tmp_path, "r", "d" * 40, PUBLISHING_REGISTRY, gh, environment) is None
+    assert gh.calls == []
+
+
 # Gates --------------------------------------------------------------------------------------
 
 
