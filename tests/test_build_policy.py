@@ -214,6 +214,12 @@ class BuildPolicyTest(unittest.TestCase):
             [repo.name for repo in repos.get_frontends()],
         )
 
+    def test_retired_export_roundtrip_tools_are_not_registered(self):
+        repos = ReposFactory.build_repos()
+
+        self.assertNotIn("cedar-model-library-roundtrip", repos.map)
+        self.assertNotIn("cedar-model-typescript-library-python", repos.map)
+
     @patch.dict("os.environ", {
         "CEDAR_HOME": "/tmp/CEDAR",
         "CEDAR_DEV_BUILD_FRONTENDS": "true",
