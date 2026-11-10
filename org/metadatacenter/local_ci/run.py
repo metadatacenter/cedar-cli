@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Callable
 
 from org.metadatacenter.local_ci import evidence
-from org.metadatacenter.local_ci.coverage import RepositoryCoverage, repository_coverage
+from org.metadatacenter.local_ci.coverage import (
+    RepositoryCoverage, repository_coverage, runs_in_linux)
 from org.metadatacenter.local_ci.errors import LocalCIError
 from org.metadatacenter.local_ci.executor import JobRunner, JobResult, base_environment
 from org.metadatacenter.local_ci.registry import Registry, load_registry
@@ -166,7 +167,9 @@ def run_repository(cedar_home: Path, repository: str, revision: str, coverage: R
     secrets = {name: credentials[name] for name in ("BMIR_NEXUS_USERNAME", "BMIR_NEXUS_PASSWORD")
                if credentials.get(name)}
     requirements = sorted({requirement for leg in coverage.legs if leg.config
-                           for requirement in leg.config.requires})
+                           for requirement in leg.config.requires}
+                          | ({"docker"} if any(runs_in_linux(leg.leg, leg.config)
+                                               for leg in coverage.legs) else set()))
     if "docker" in requirements and not _docker_ready(clean):
         return RepositoryOutcome(repository, revision, "error",
                                  "its jobs need Docker, and Docker is not running")

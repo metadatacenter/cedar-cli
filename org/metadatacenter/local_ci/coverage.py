@@ -3,9 +3,12 @@
 A job is covered when the registry names it and every step in it is one local CI runs exactly as
 GitHub would, or one the registry skips or substitutes with a reason. A step that publishes, an
 action local CI does not implement, a secret it does not hold, an expression it cannot evaluate, a
-job container or a service: each makes the job uncovered, and with it the repository, so a gate
-waits for GitHub there instead of accepting a weaker answer. A workflow change that adds any of
-these is caught the same way, at the commit that makes it.
+service, or a job container the registry has not said may run here: each makes the job uncovered,
+and with it the repository, so a gate waits for GitHub there instead of accepting a weaker answer.
+A workflow change that adds any of these is caught the same way, at the commit that makes it.
+
+A step whose condition reads only the leg's matrix and runner, and is false for the leg, never runs
+on it, so nothing in that step decides the leg's coverage.
 """
 from __future__ import annotations
 
@@ -14,9 +17,11 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from org.metadatacenter.local_ci import containers
 from org.metadatacenter.local_ci.errors import LocalCIError
 from org.metadatacenter.local_ci.expressions import (
-    UnsupportedExpression, expressions_in, referenced_contexts, uses_status_function, _tokens)
+    UnsupportedExpression, evaluate, expressions_in, interpolate, referenced_contexts, truthy,
+    uses_status_function, _tokens)
 from org.metadatacenter.local_ci.registry import JobConfig, Registry
 from org.metadatacenter.local_ci.workflows import (
     JobLeg, Workflow, changed_files, git, job_legs, load_document, step_key, triggered_by_push,
@@ -83,7 +88,10 @@ class RepositoryCoverage:
 
 
 def python_interpreter(version: str) -> str | None:
-    """A local Python whose version is the one a workflow asks setup-python for."""
+    """A local Python whose version is the one a workflow asks setup-python for.
+
+    Homebrew's interpreters come first, then those uv manages, which `uv python install` adds.
+    """
     version = str(version).strip()
     for candidate in (f"python{version}", f"/opt/homebrew/opt/python@{version}/bin/python{version}",
                       f"/usr/local/opt/python@{version}/bin/python{version}"):
@@ -91,7 +99,53 @@ def python_interpreter(version: str) -> str | None:
             candidate if Path(candidate).is_file() else None)
         if found:
             return found
+    if re.fullmatch(r"3\.\d+", version):
+        for root in (Path.home() / ".local" / "share" / "uv" / "python",):
+            builds = sorted(root.glob(f"cpython-{version}.*-macos-*/bin/python{version}"))
+            if builds:
+                return str(builds[-1])
     return None
+
+
+def _with_matrix(value, leg: JobLeg):
+    """A value with the leg's matrix substituted, or None when it reads anything else."""
+    try:
+        if any(reference.partition(".")[0] != "matrix"
+               for expression in expressions_in(value) for reference in referenced_contexts(expression)):
+            return None
+        return interpolate(value, {"matrix": dict(leg.matrix)})
+    except UnsupportedExpression:
+        return None
+
+
+def never_runs(step: dict, leg: JobLeg, linux: bool) -> bool:
+    """Whether the step's condition, read with the leg's matrix and runner alone, is false."""
+    text = step.get("if")
+    if text is None or isinstance(text, bool):
+        return text is False
+    expression = str(text).strip()
+    if expression.startswith("${{") and expression.endswith("}}"):
+        expression = expression[3:-2].strip()
+    try:
+        references = referenced_contexts(expression)
+        if not references or uses_status_function(expression):
+            return False
+        if any(reference.partition(".")[0] not in ("matrix", "runner") for reference in references):
+            return False
+        context = {"matrix": dict(leg.matrix),
+                   "runner": {"os": "Linux" if linux else "macOS", "arch": "ARM64"}}
+        return not truthy(evaluate(expression, context))
+    except UnsupportedExpression:
+        return False
+
+
+def runs_in_linux(leg: JobLeg, config: JobConfig | None) -> bool:
+    """Whether local CI runs the leg in a Linux container: its own, or the runner image."""
+    if config is None or not config.linux:
+        return False
+    if containers.job_container(leg.definition):
+        return True
+    return containers.runner_release(containers.runs_on(leg.definition, leg.matrix)) is not None
 
 
 def _expression_problems(value, label: str) -> list[str]:
@@ -130,7 +184,8 @@ def _action(uses: str) -> str:
     return uses.split("@", 1)[0].strip()
 
 
-def step_problems(step: dict, key: str, config: JobConfig) -> list[str]:
+def step_problems(step: dict, key: str, config: JobConfig, *, leg: JobLeg | None = None,
+                  linux: bool = False) -> list[str]:
     if key in config.skip:
         return []
     label = f"step {key!r}"
@@ -156,9 +211,18 @@ def step_problems(step: dict, key: str, config: JobConfig) -> list[str]:
                 problems.append(f"{label} names no Node version")
         if action == "actions/setup-python":
             version = str(inputs.get("python-version", "")).strip()
-            if "${{" not in version and not python_interpreter(version):
-                problems.append(f"{label} asks for Python {version or '(unspecified)'}, "
-                                "which this machine does not have")
+            if "${{" in version and leg is not None:
+                resolved = _with_matrix(version, leg)
+                version = str(resolved).strip() if resolved is not None else version
+            if "${{" in version:
+                pass
+            elif linux:
+                if version not in containers.PYTHONS:
+                    problems.append(f"{label} asks for Python {version or '(unspecified)'}, which the "
+                                    f"runner image does not carry")
+            elif not python_interpreter(version):
+                problems.append(f"{label} asks for Python {version or '(unspecified)'}, which this "
+                                f"machine does not have; uv python install {version} adds it")
         if action == "actions/checkout":
             repository = str(inputs.get("repository", "")).strip()
             if repository and "${{" not in repository and not repository.startswith("metadatacenter/"):
@@ -171,7 +235,7 @@ def step_problems(step: dict, key: str, config: JobConfig) -> list[str]:
             problems.append(f"{label} runs under the shell {step.get('shell')!r}, which local CI does not")
         if PUBLISHES.search(script):
             problems.append(f"{label} publishes or writes to GitHub; skip it in the registry")
-        if SYSTEM_PACKAGES.search(script):
+        if SYSTEM_PACKAGES.search(script) and not linux:
             problems.append(f"{label} installs system packages with sudo, apt or dpkg; "
                             "skip or substitute it in the registry")
     else:
@@ -200,8 +264,8 @@ def leg_coverage(cedar_home: Path, repository: str, leg: JobLeg, config: JobConf
     for requirement in config.requires:
         if requirement not in REQUIREMENTS:
             coverage.problems.append(f"the registry requires {requirement!r}, which local CI cannot provide")
-    if definition.get("container"):
-        coverage.problems.append("the job runs in a container, which local CI does not provide yet")
+    coverage.problems.extend(linux_problems(leg, config))
+    linux = runs_in_linux(leg, config)
     if definition.get("services"):
         coverage.problems.append("the job needs service containers, which local CI does not provide yet")
     coverage.problems.extend(_condition_problems(definition.get("if"), "the job condition"))
@@ -246,8 +310,36 @@ def leg_coverage(cedar_home: Path, repository: str, leg: JobLeg, config: JobConf
         if not isinstance(step, dict):
             coverage.problems.append(f"step {index + 1} is not a mapping")
             continue
-        coverage.problems.extend(step_problems(step, keys[index], config))
+        if never_runs(step, leg, linux):
+            continue
+        coverage.problems.extend(step_problems(step, keys[index], config, leg=leg, linux=linux))
     return coverage
+
+
+def linux_problems(leg: JobLeg, config: JobConfig) -> list[str]:
+    """What keeps local CI from running a leg on Linux the way the workflow and registry ask."""
+    definition = leg.definition
+    own = containers.job_container(definition)
+    if own is not None:
+        if not config.linux:
+            return ["the job runs in a container; the registry's linux entry must say why an arm64 "
+                    "container here answers for GitHub's runner"]
+        problems = []
+        unknown = sorted(set(own) - containers.JOB_CONTAINER_KEYS)
+        if unknown:
+            problems.append(f"the job container sets {', '.join(unknown)}, which local CI does not")
+        if not own.get("image"):
+            problems.append("the job container names no image")
+        problems.extend(_expression_problems(own, "the job container"))
+        return problems
+    if not config.linux:
+        return []
+    label = containers.runs_on(definition, leg.matrix)
+    if label is None:
+        return ["the runner label reads more than the matrix, so local CI cannot tell where it runs"]
+    if label.startswith("ubuntu") and containers.runner_release(label) is None:
+        return [f"local CI has no runner image for {label}"]
+    return []
 
 
 def _publication_job(definition: dict) -> bool:

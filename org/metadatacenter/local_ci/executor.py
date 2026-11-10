@@ -4,7 +4,8 @@ Each job gets a fresh workspace, an environment holding nothing from the shell t
 beyond the tools themselves, and the workflow's own steps in order. Local CI implements the setup
 actions the workflows use (checkout from the local checkouts at exact commits, Java, Node and Python
 setup, caching as a no-op, artifacts handed from one job to the next) and runs every `run:` step
-with the condition, environment and working directory the workflow gives it.
+with the condition, environment and working directory the workflow gives it. A leg that runs on
+Linux runs its steps in a container, as the containers module describes.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import glob
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -24,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from org.metadatacenter.local_ci import containers
+from org.metadatacenter.local_ci.containers import Container, Places
 from org.metadatacenter.local_ci.coverage import LegCoverage, python_interpreter, resolve_ref
 from org.metadatacenter.local_ci.errors import LocalCIError
 from org.metadatacenter.local_ci.expressions import (
@@ -69,6 +73,7 @@ class JobResult:
     steps: list[StepResult] = field(default_factory=list)
     outputs: dict = field(default_factory=dict)
     called: list["JobResult"] = field(default_factory=list)
+    container: dict = field(default_factory=dict)
 
     def as_record(self) -> dict:
         record = {"leg": self.leg, "conclusion": self.conclusion, "seconds": round(self.seconds, 1),
@@ -77,6 +82,8 @@ class JobResult:
                              "seconds": round(step.seconds, 1),
                              **({"detail": step.detail} if step.detail else {})}
                             for step in self.steps]}
+        if self.container:
+            record["container"] = dict(self.container)
         if self.called:
             record["called"] = [child.as_record() for child in self.called]
         return record
@@ -164,17 +171,17 @@ class JobRunner:
 
     # -- contexts ---------------------------------------------------------------------------
 
-    def github_context(self, workspace: Path, job_id: str, workflow_name: str) -> dict:
+    def github_context(self, workspace: str, event_path: str, job_id: str, workflow_name: str) -> dict:
         before = self.parent or "0" * 40
         return {
             "event_name": "push", "ref": "refs/heads/develop", "ref_name": "develop",
             "ref_type": "branch", "sha": self.revision,
             "repository": f"metadatacenter/{self.repository}", "repository_owner": "metadatacenter",
-            "workspace": str(workspace), "run_id": self.run_id, "run_number": "1", "run_attempt": "1",
+            "workspace": workspace, "run_id": self.run_id, "run_number": "1", "run_attempt": "1",
             "server_url": "https://github.com", "api_url": "https://api.github.com",
             "actor": "local-ci", "triggering_actor": "local-ci", "base_ref": "", "head_ref": "",
             "job": job_id, "workflow": workflow_name, "action": "",
-            "event_path": str(workspace.parent / "event.json"),
+            "event_path": event_path,
             "event": {"before": before, "after": self.revision, "ref": "refs/heads/develop",
                       "head_commit": {"id": self.revision},
                       "repository": {"full_name": f"metadatacenter/{self.repository}",
@@ -201,13 +208,19 @@ class JobRunner:
             directory.mkdir(parents=True, exist_ok=True)
         log = _Log(job_root / "job.log")
         started = self.clock()
-        github = self.github_context(workspace, leg.job_id, leg.workflow.name)
-        (job_root / "event.json").write_text(json.dumps(github["event"], indent=2))
+        kind = self._linux_kind(coverage)
+        here = Places(str(workspace), str(temporary), str(meta), str(temporary / "toolcache"),
+                      self.environment.get("HOME", ""))
+        where = containers.places(kind, self.repository) if kind else here
+        event_path = f"{where.commands}/event.json" if kind else str(job_root / "event.json")
+        github = self.github_context(where.workspace, event_path, leg.job_id, leg.workflow.name)
+        (meta / "event.json" if kind else job_root / "event.json").write_text(
+            json.dumps(github["event"], indent=2))
         context = {
             "github": github, "matrix": dict(leg.matrix), "needs": needs, "inputs": inputs or {},
             "secrets": dict(self.secrets), "steps": {}, "env": {},
-            "runner": {"os": "macOS", "arch": "ARM64", "temp": str(temporary),
-                       "tool_cache": str(temporary / "toolcache"), "name": "local-ci"},
+            "runner": {"os": "Linux" if kind else "macOS", "arch": "ARM64", "temp": where.temporary,
+                       "tool_cache": where.tool_cache, "name": "local-ci"},
             "job": {"status": "success"},
             "strategy": {"fail-fast": True, "job-index": 0, "job-total": 1, "max-parallel": 1},
         }
@@ -227,19 +240,26 @@ class JobRunner:
                 result.conclusion = "skipped"
                 log.write(f"== {leg.leg}: skipped by its condition\n")
                 return result
-            job_env = {**document_env, **self._env_values(definition.get("env"), context),
-                       **config.env}
+            spec = containers.job_container(definition) or {}
+            job_env = {**document_env, **self._env_values(spec.get("env"), context),
+                       **self._env_values(definition.get("env"), context), **config.env}
             context["env"] = dict(job_env)
             if "uses" in definition:
                 result.called = self._run_called(coverage, context, job_env, slug)
                 result.conclusion = "success" if all(
                     child.conclusion in ("success", "skipped") for child in result.called) else "failure"
                 return result
+            container = None
             try:
-                self._run_steps(coverage, context, job_env, workspace, temporary, meta, log, result)
+                if kind:
+                    container = self._start_container(coverage, context, kind, meta, slug, log)
+                    result.container = container.record()
+                self._run_steps(coverage, context, job_env, job_root, where, log, result, container)
             finally:
                 if config.cleanup:
-                    self._cleanup(config.cleanup, context, workspace, temporary, meta, log)
+                    self._cleanup(config.cleanup, context, here, log)
+                if container is not None:
+                    container.end("the job finished")
             outputs = definition.get("outputs") or {}
             result.outputs = {name: to_string(interpolate(value, context))
                               for name, value in outputs.items()}
@@ -252,6 +272,32 @@ class JobRunner:
         finally:
             result.seconds = self.clock() - started
             log.close()
+
+    @staticmethod
+    def _linux_kind(coverage: LegCoverage) -> str | None:
+        """'job' for a job's own container, 'runner' for the runner image, None for this machine."""
+        definition = coverage.leg.definition
+        if containers.job_container(definition):
+            return "job"
+        if coverage.config is not None and coverage.config.linux and containers.runner_release(
+                containers.runs_on(definition, coverage.leg.matrix)):
+            return "runner"
+        return None
+
+    def _start_container(self, coverage: LegCoverage, context: dict, kind: str, meta: Path,
+                         slug: str, log) -> Container:
+        """The container a Linux leg runs in, started and ready for its first step."""
+        definition = coverage.leg.definition
+        release = None if kind == "job" else containers.runner_release(
+            containers.runs_on(definition, coverage.leg.matrix))
+        runner_image = containers.ensure_runner_image(release or "24.04", self.environment, log.write)
+        image = containers.image_name(definition, context) if kind == "job" else runner_image
+        name = containers.container_name(self.run_id, slug)
+        log.write(f"== container {image} ({containers.PLATFORM})\n")
+        self.reporter(f"{self.repository} {coverage.leg.leg}: starting {image}")
+        return containers.start(name=name, image=image, kind=kind, repository=self.repository,
+                                commands=meta, maven_repository=self.maven_repository,
+                                runner_image=runner_image, environment=self.environment)
 
     @staticmethod
     def _job_status(name: str, needs: dict) -> bool:
@@ -302,7 +348,8 @@ class JobRunner:
                                               "outputs": child_result.outputs}
         return results
 
-    def _run_steps(self, coverage, context, job_env, workspace, temporary, meta, log, result):
+    def _run_steps(self, coverage, context, job_env, job_root: Path, where: Places, log, result,
+                   container: Container | None = None):
         definition = coverage.leg.definition
         config = coverage.config
         defaults = {**((coverage.leg.workflow.document.get("defaults") or {}).get("run") or {}),
@@ -334,16 +381,19 @@ class JobRunner:
                 continue
             if self.clock() > deadline:
                 raise LocalCIError(f"the job ran past its timeout before {key!r}")
+            if container is not None and container.ended:
+                raise LocalCIError(f"the job's container ended before {key!r}: {container.ended}")
             self.reporter(f"{self.repository} {coverage.leg.leg}: {key}")
             log.write(f"== {key}\n")
             outputs: dict = {}
             try:
                 if "uses" in step:
-                    outputs = self._action(step, context, workspace, temporary, state, log) or {}
+                    outputs = self._action(step, context, job_root, where, state, log,
+                                           container) or {}
                     outcome = "success"
                 else:
-                    outcome, outputs = self._shell(step, context, defaults, workspace, temporary,
-                                                   meta, state, log, deadline)
+                    outcome, outputs = self._shell(step, context, defaults, job_root, where, state,
+                                                   log, deadline, container)
             except LocalCIError as error:
                 log.write(f"   {error}\n")
                 outcome = "failure"
@@ -365,11 +415,11 @@ class JobRunner:
         if state["failed"]:
             result.conclusion = "failure"
 
-    def _cleanup(self, script, context, workspace, temporary, meta, log):
+    def _cleanup(self, script, context, here: Places, log):
         """The registry's cleanup, always, after the steps: what an ephemeral runner discards."""
         log.write(f"== cleanup\n$ {script}\n")
-        environment = self._process_environment(context, {"path": []}, workspace, temporary, meta)
-        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script], cwd=str(workspace),
+        environment = self._process_environment({**context, "env": {}}, {"path": []}, here)
+        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script], cwd=here.workspace,
                                 env=environment, text=True, capture_output=True, check=False)
         log.write((result.stdout or "") + (result.stderr or "") + f"-- exit {result.returncode}\n")
 
@@ -379,55 +429,92 @@ class JobRunner:
             context["steps"][str(step["id"])] = {
                 "outcome": outcome, "conclusion": conclusion or outcome, "outputs": outputs}
 
-    def _process_environment(self, context, state, workspace, temporary, meta) -> dict:
-        environment = dict(self.environment)
+    def _process_environment(self, context, state, where: Places,
+                             container: Container | None = None) -> dict:
+        if container is None:
+            environment = dict(self.environment)
+        else:
+            # Nothing from this machine's environment means anything inside the container, so a
+            # step there starts from the image's own variables, as on GitHub, plus these.
+            environment = {"CI": "true", "LANG": "C.UTF-8", "HOME": container.home,
+                           "PATH": container.path, "RUNNER_TOOL_CACHE": container.tool_cache}
         if state["path"]:
             environment["PATH"] = os.pathsep.join([*reversed(state["path"]), environment["PATH"]])
         environment.update({
-            "GITHUB_WORKSPACE": str(workspace),
+            "GITHUB_WORKSPACE": where.workspace,
             "GITHUB_SHA": self.revision, "GITHUB_REF": "refs/heads/develop",
             "GITHUB_REF_NAME": "develop", "GITHUB_EVENT_NAME": "push",
             "GITHUB_REPOSITORY": f"metadatacenter/{self.repository}",
             "GITHUB_REPOSITORY_OWNER": "metadatacenter", "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_RUN_ID": self.run_id, "GITHUB_RUN_ATTEMPT": "1",
             "GITHUB_EVENT_PATH": context["github"]["event_path"],
-            "GITHUB_STEP_SUMMARY": str(meta / "summary.md"),
-            "RUNNER_OS": "macOS", "RUNNER_ARCH": "ARM64", "RUNNER_TEMP": str(temporary),
-            "TMPDIR": str(temporary),
+            "GITHUB_STEP_SUMMARY": f"{where.commands}/summary.md",
+            "RUNNER_OS": "macOS" if container is None else "Linux", "RUNNER_ARCH": "ARM64",
+            "RUNNER_TEMP": where.temporary,
         })
+        if container is None:
+            # On this machine every leg gets a temporary directory of its own. A container has a
+            # /tmp of its own already.
+            environment["TMPDIR"] = where.temporary
         maven_options = environment.get("MAVEN_OPTS", "")
         environment["MAVEN_OPTS"] = (f"{maven_options} " if maven_options else "") + \
             f"-Dmaven.repo.local={self.maven_repository}"
         environment.update(context["env"])
         return environment
 
-    def _shell(self, step, context, defaults, workspace, temporary, meta, state, log, deadline):
+    def _shell(self, step, context, defaults, job_root: Path, where: Places, state, log, deadline,
+               container: Container | None = None):
         script = to_string(interpolate(step["run"], context))
         directory = step.get("working-directory") or defaults.get("working-directory") or ""
         directory = to_string(interpolate(directory, context)) if directory else ""
-        cwd = (workspace / directory) if directory else workspace
-        if not cwd.is_dir():
+        cwd = posixpath.join(where.workspace, directory) if directory else where.workspace
+        present = container.is_directory(cwd) if container is not None else Path(cwd).is_dir()
+        if not present:
             raise LocalCIError(f"the working directory {directory} does not exist")
+        meta = job_root / "meta"
         shell = step.get("shell") or defaults.get("shell") or "bash"
-        script_path = temporary / f"step-{uuid.uuid4().hex[:8]}.sh"
-        script_path.write_text(script, encoding="utf-8")
-        command = (["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script_path)]
-                   if shell == "bash" else ["sh", "-e", str(script_path)])
-        output_file = meta / f"output-{uuid.uuid4().hex[:8]}"
+        # The script sits beside the file commands, which a container sees mounted from here.
+        script_name = f"step-{uuid.uuid4().hex[:8]}.sh"
+        (meta / script_name).write_text(script, encoding="utf-8")
+        script_path = f"{where.commands}/{script_name}"
+        command = (["bash", "--noprofile", "--norc", "-eo", "pipefail", script_path]
+                   if shell == "bash" else ["sh", "-e", script_path])
+        launch_environment = None
+        output_name = f"output-{uuid.uuid4().hex[:8]}"
+        output_file = meta / output_name
         env_file = meta / "env"
         path_file = meta / "path"
         for path in (output_file, env_file, path_file):
             path.write_text("")
-        environment = self._process_environment(context, state, workspace, temporary, meta)
-        environment.update({"GITHUB_OUTPUT": str(output_file), "GITHUB_ENV": str(env_file),
-                            "GITHUB_PATH": str(path_file)})
+        environment = self._process_environment(context, state, where, container)
+        environment.update({"GITHUB_OUTPUT": f"{where.commands}/{output_name}",
+                            "GITHUB_ENV": f"{where.commands}/env",
+                            "GITHUB_PATH": f"{where.commands}/path"})
+        variables = None
+        if container is not None:
+            variables_name = f"variables-{uuid.uuid4().hex[:8]}"
+            variables = meta / variables_name
+            containers.write_environment(variables, environment)
+            command = container.command(command, cwd=cwd,
+                                        env_file=f"{where.commands}/{variables_name}")
+            launch_environment = container.client_environment
         limit = step.get("timeout-minutes")
         remaining = deadline - self.clock()
         timeout = min(remaining, 60 * float(interpolate(limit, context))) if limit else remaining
-        log.write(f"$ ({cwd.relative_to(workspace) if cwd != workspace else '.'}) {script.strip()}\n")
-        process = self.command_runner(command, cwd=str(cwd), env=environment, stdout=subprocess.PIPE,
-                                      stderr=subprocess.STDOUT, text=True, errors="replace")
-        timer = threading.Timer(max(timeout, 1), process.kill)
+        log.write(f"$ ({directory or '.'}) {script.strip()}\n")
+        process = self.command_runner(command, cwd=cwd if container is None else str(job_root),
+                                      env=environment if container is None else launch_environment,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                      errors="replace")
+
+        def expire():
+            process.kill()
+            if container is not None:
+                # Killing docker exec leaves the step running inside; only ending the container
+                # stops it.
+                container.end("a step ran past its time limit")
+
+        timer = threading.Timer(max(timeout, 1), expire)
         timer.start()
         try:
             for line in process.stdout:
@@ -435,6 +522,8 @@ class JobRunner:
             code = process.wait()
         finally:
             timer.cancel()
+            if variables is not None:
+                variables.unlink(missing_ok=True)
         if remaining <= 0 or (code < 0 and self.clock() >= deadline):
             raise LocalCIError("the step ran past its timeout")
         state["env"].update(_parse_command_file(env_file))
@@ -447,13 +536,17 @@ class JobRunner:
 
     # -- actions ----------------------------------------------------------------------------
 
-    def _action(self, step, context, workspace, temporary, state, log):
+    def _action(self, step, context, job_root: Path, where: Places, state, log,
+                container: Container | None = None):
+        workspace = Path(where.workspace)
         action = str(step["uses"]).split("@", 1)[0].strip()
         if action.startswith("actions/cache"):
             log.write("   the cache is local; nothing to restore or save\n")
             return {"cache-hit": "false"}
         inputs = {name: to_string(value) for name, value in
                   (interpolate(step.get("with") or {}, context) or {}).items()}
+        if container is not None:
+            return self._container_action(action, inputs, job_root, where, state, log, container)
         if action == "actions/checkout":
             return self._checkout(inputs, workspace, log)
         if action == "actions/setup-java":
@@ -475,7 +568,7 @@ class JobRunner:
             interpreter = python_interpreter(version)
             if not interpreter:
                 raise LocalCIError(f"this machine has no Python {version}")
-            venv = temporary / f"python-{version}"
+            venv = Path(where.temporary) / f"python-{version}"
             if not venv.exists():
                 result = subprocess.run([interpreter, "-m", "venv", str(venv)], capture_output=True,
                                         text=True, check=False)
@@ -490,7 +583,126 @@ class JobRunner:
             return self._download(inputs, workspace, log)
         raise LocalCIError(f"local CI does not implement {step['uses']}")
 
-    def _checkout(self, inputs: dict, workspace: Path, log) -> dict:
+    def _container_action(self, action, inputs, job_root: Path, where: Places, state, log,
+                          container: Container) -> dict:
+        """An action for a leg in a container. Checkout and the artifacts are carried out here and
+        copied across; a setup action selects its tool from the container's tool cache."""
+        if action == "actions/checkout":
+            staging = Path(tempfile.mkdtemp(prefix="checkout-", dir=str(job_root / "tmp")))
+            try:
+                destination = posixpath.join(where.workspace, inputs.get("path", "")) \
+                    if inputs.get("path") else where.workspace
+                if container.has(f"{destination}/.git"):
+                    raise LocalCIError(f"{destination} already holds a checkout")
+                outputs = self._checkout(inputs, staging, log, scratch=job_root / "tmp")
+                container.copy_in(staging / inputs["path"] if inputs.get("path") else staging,
+                                  destination)
+                return outputs
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+        if action == "actions/upload-artifact":
+            return self._container_upload(inputs, job_root, where, log, container)
+        if action == "actions/download-artifact":
+            return self._container_download(inputs, where, log, container)
+        if action not in ("actions/setup-java", "actions/setup-node", "actions/setup-python"):
+            raise LocalCIError(f"local CI does not implement {action}")
+        cache = container.tool_cache
+        if action == "actions/setup-java":
+            java_home = f"{cache}/java/17"
+            if not container.has(f"{java_home}/bin/java"):
+                raise LocalCIError(f"the container has no Java 17 at {java_home}")
+            state["path"].append(f"{java_home}/bin")
+            state["env"]["JAVA_HOME"] = java_home
+            return {"path": java_home, "version": "17"}
+        if action == "actions/setup-node":
+            version = inputs.get("node-version", "").strip()
+            if not version and inputs.get("node-version-file"):
+                version = container.read(posixpath.join(where.workspace,
+                                                        inputs["node-version-file"])).strip()
+            wanted = version if version.startswith("v") else f"v{version}"
+            if wanted != REQUIRED_NODE:
+                raise LocalCIError(f"the job asks for Node {version}; local CI runs Node {REQUIRED_NODE}")
+            node = f"{cache}/node/{REQUIRED_NODE[1:]}"
+            if not container.has(f"{node}/bin/node"):
+                raise LocalCIError(f"the container has no Node {REQUIRED_NODE} at {node}")
+            state["path"].append(f"{node}/bin")
+            return {"node-version": REQUIRED_NODE}
+        version = inputs.get("python-version", "").strip()
+        if version not in containers.PYTHONS:
+            raise LocalCIError(f"the runner image has no Python {version}; it carries "
+                               f"{', '.join(containers.PYTHONS)}")
+        # A virtual environment of its own, as on this machine, in the container's own /tmp.
+        venv = f"/tmp/local-ci-python-{version}"
+        created = container.run([f"{cache}/python/{version}/bin/python3", "-m", "venv", venv])
+        if created.returncode:
+            raise LocalCIError(f"could not create a Python {version} environment: "
+                               f"{(created.stderr or created.stdout).strip()}")
+        log.write(f"   Python {version} from the tool cache in {venv}\n")
+        state["path"].append(f"{venv}/bin")
+        return {"python-version": version}
+
+    def _container_upload(self, inputs: dict, job_root: Path, where: Places, log,
+                          container: Container) -> dict:
+        """upload-artifact for a container: copy each pattern's fixed part out, then match here."""
+        patterns = []
+        for line in inputs.get("path", "").splitlines():
+            pattern = line.strip()
+            if not pattern:
+                continue
+            negate = pattern.startswith("!")
+            text = pattern[1:] if negate else pattern
+            if text.startswith("/"):
+                if not text.startswith(where.workspace + "/"):
+                    raise LocalCIError(f"the artifact path {text} is outside the workspace")
+                text = text[len(where.workspace) + 1:]
+            patterns.append((negate, text))
+        prefixes = set()
+        for negate, text in patterns:
+            if not negate:
+                fixed = []
+                for part in text.split("/"):
+                    if any(character in part for character in "*?["):
+                        break
+                    fixed.append(part)
+                prefixes.add("/".join(part for part in fixed if part and part != "."))
+        mirror = Path(tempfile.mkdtemp(prefix="artifact-", dir=str(job_root / "tmp")))
+        try:
+            copied: list[str] = []
+            # Shortest first, so a directory arrives before anything a longer pattern names in it.
+            for prefix in sorted(prefixes, key=len):
+                if any(not done or prefix == done or prefix.startswith(done + "/") for done in copied):
+                    continue
+                if prefix:
+                    present = container.copy_out(posixpath.join(where.workspace, prefix), mirror / prefix)
+                else:
+                    # A pattern that begins with a wildcard can match anywhere in the workspace.
+                    mirror.rmdir()
+                    present = container.copy_out(where.workspace, mirror)
+                    mirror.mkdir(exist_ok=True)
+                if present:
+                    copied.append(prefix)
+            path = "\n".join(("!" if negate else "") + text for negate, text in patterns)
+            return self._upload({**inputs, "path": path}, mirror, log)
+        finally:
+            shutil.rmtree(mirror, ignore_errors=True)
+
+    def _container_download(self, inputs: dict, where: Places, log, container: Container) -> dict:
+        name = inputs.get("name")
+        path = inputs.get("path")
+        destination = (path if path.startswith("/") else posixpath.join(where.workspace, path)) \
+            if path else where.workspace
+        names = [name] if name else sorted(item.name for item in self.artifacts.iterdir()) \
+            if self.artifacts.exists() else []
+        for artifact in names:
+            source = self.artifacts / artifact
+            if not source.is_dir():
+                raise LocalCIError(f"no earlier job kept the artifact {artifact}")
+            target = destination if name else posixpath.join(destination, artifact)
+            container.copy_in(source, target)
+            log.write(f"   restored the artifact {artifact} into {target}\n")
+        return {"download-path": destination}
+
+    def _checkout(self, inputs: dict, workspace: Path, log, scratch: Path | None = None) -> dict:
         repository = inputs.get("repository") or f"metadatacenter/{self.repository}"
         name = repository.split("/", 1)[1] if "/" in repository else repository
         source = self.cedar_home / name
@@ -509,12 +721,17 @@ class JobRunner:
         destination.mkdir(parents=True, exist_ok=True)
         if (destination / ".git").exists():
             raise LocalCIError(f"{destination} already holds a checkout")
-        staging = Path(tempfile.mkdtemp(prefix="checkout-", dir=str(workspace.parent / "tmp")))
+        staging = Path(tempfile.mkdtemp(prefix="checkout-", dir=str(scratch or workspace.parent / "tmp")))
         try:
             git(staging.parent, "clone", "-q", "--no-checkout", "--local", str(source), str(staging / "clone"))
             shutil.move(str(staging / "clone" / ".git"), str(destination / ".git"))
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+        sparse = [line.strip() for line in inputs.get("sparse-checkout", "").splitlines() if line.strip()]
+        if sparse:
+            # As actions/checkout does: cone mode unless the workflow turns it off.
+            cone = inputs.get("sparse-checkout-cone-mode", "true").strip().lower() != "false"
+            git(destination, "sparse-checkout", "set", "--cone" if cone else "--no-cone", *sparse)
         git(destination, "checkout", "-q", "--force", "--detach", revision)
         if name != self.repository or revision != self.revision:
             # The commit under test keeps its own entry; another commit of the same repository, such

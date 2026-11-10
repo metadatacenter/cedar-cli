@@ -4,7 +4,8 @@ The registry lives beside the train configuration, in `cedar-development/ops/loc
 never restates a command a workflow runs. For each job it covers it records only what must differ
 on this machine, with a reason for each difference: a step skipped because it publishes or installs
 Linux packages, a step substituted because its port collides with the local stack, extra
-environment, what the job requires, and which jobs may not run at the same time. A job the registry
+environment, what the job requires, which jobs may not run at the same time, and whether the job's
+Linux legs run in a Linux container. A job the registry
 does not name, or names as uncovered, is one GitHub still answers for.
 """
 from __future__ import annotations
@@ -35,6 +36,7 @@ class JobConfig:
     cleanup: str | None = None
     legs: dict = field(default_factory=dict)
     called: dict = field(default_factory=dict)
+    linux: str | None = None
 
     def for_called(self, job_id: str) -> "JobConfig":
         """The configuration of one job of a reusable workflow this job calls."""
@@ -116,6 +118,10 @@ class Registry:
         for step, replacement in merged.get("substitute", {}).items():
             if not isinstance(replacement, dict) or not replacement.get("run") or not replacement.get("reason"):
                 raise LocalCIError(f"{label} substitutes {step!r} without a run and a reason")
+        linux = merged.get("linux")
+        if linux is not None and (not isinstance(linux, str) or not linux.strip()):
+            raise LocalCIError(f"{label} runs its Linux legs in a container without saying why "
+                               "an arm64 container here answers for GitHub's runner")
         called = {job_id: self._config(nested, f"{label} -> {job_id}")
                   for job_id, nested in merged.get("called", {}).items()}
         return JobConfig(
@@ -129,6 +135,7 @@ class Registry:
             cleanup=merged.get("cleanup"),
             legs=dict(merged.get("legs", {})),
             called=called,
+            linux=linux,
         )
 
 
