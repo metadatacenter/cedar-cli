@@ -141,14 +141,20 @@ def ledger_verdict(cedar_home, repository: str, revision: str, registry_digest: 
 def status_verdict(repository: str, revision: str, context: str, runner=subprocess.run,
                    environment=None) -> LocalVerdict:
     """The newest `cedar/local-ci` status GitHub holds for the commit, for another machine's runs."""
-    result = runner(["gh", "api", f"repos/metadatacenter/{repository}/commits/{revision}/statuses"
-                     "?per_page=100"], text=True, capture_output=True, check=False, env=environment)
-    if result.returncode:
-        return LocalVerdict("none", f"the {context} status is unreadable: "
-                                    f"{(result.stderr or result.stdout).strip()[:120]}")
     try:
-        statuses = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError:
+        result = runner(["gh", "api", f"repos/metadatacenter/{repository}/commits/{revision}/statuses"
+                         "?per_page=100"], text=True, capture_output=True, check=False, env=environment)
+    except OSError as error:
+        return LocalVerdict("none", f"the {context} status is unreadable: {error}")
+    stdout = getattr(result, "stdout", None) or ""
+    if getattr(result, "returncode", 1):
+        detail = (getattr(result, "stderr", None) or stdout).strip()[:120]
+        return LocalVerdict("none", f"the {context} status is unreadable: {detail}")
+    try:
+        statuses = json.loads(stdout or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return LocalVerdict("none", f"the {context} status is malformed")
+    if not isinstance(statuses, list):
         return LocalVerdict("none", f"the {context} status is malformed")
     ours = [status for status in statuses if isinstance(status, dict) and status.get("context") == context]
     if not ours:

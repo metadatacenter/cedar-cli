@@ -3,6 +3,7 @@ import json
 import subprocess
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -63,6 +64,14 @@ def test_conditions_require_success_unless_they_name_a_status():
 def test_interpolation_substitutes_inside_text_and_keeps_whole_values():
     assert interpolate("v=${{ steps.build.outputs.version }}!", CONTEXT) == "v=1.2.3!"
     assert interpolate({"a": ["${{ matrix.os }}"]}, CONTEXT) == {"a": ["macos-latest"]}
+
+
+def test_two_expressions_that_fill_a_value_are_substituted_one_by_one():
+    command = "${{ matrix.command }} ${{ matrix.shard && format('-- --shard={0}/4', matrix.shard) || '' }}"
+    sharded = {**CONTEXT, "matrix": {"command": "npm test", "shard": 2}}
+    whole = {**CONTEXT, "matrix": {"command": "npm test"}}
+    assert interpolate(command, sharded) == "npm test -- --shard=2/4"
+    assert interpolate(command, whole) == "npm test "
 
 
 # Workflows ------------------------------------------------------------------------------------
@@ -236,6 +245,55 @@ def test_a_failing_step_fails_the_job_and_the_record_is_red(home, tmp_path):
     assert answer.state == "red" and "ci.yml:build" in answer.detail
 
 
+SHARDED = textwrap.dedent("""\
+    name: CI
+    on:
+      push:
+        branches: [develop]
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        strategy:
+          matrix:
+            include:
+              - command: COMMAND
+                shard: 1
+              - command: COMMAND
+                shard: 2
+        steps:
+          - name: Keep the workspace to itself
+            run: |
+              echo "${{ matrix.shard }}" > claim
+              sleep 1
+              test "$(cat claim)" = "${{ matrix.shard }}"
+    """).replace("COMMAND", "npm run build:production && npm run test:unit:ci && "
+                  "npm run test:visual:prebuilt && npm run test:visual:prebuilt")
+
+
+def test_legs_that_differ_only_past_a_long_label_run_in_workspaces_of_their_own(home, tmp_path):
+    repository = home / "cedar-sample"
+    (repository / ".github" / "workflows" / "ci.yml").write_text(SHARDED)
+    git(repository, "commit", "-qam", "Shard the build")
+    registry = {**REGISTRY, "repositories": {"cedar-sample": {"jobs": {"ci.yml:build": {}}}}}
+    (home / "cedar-development" / "ops" / "local-ci.json").write_text(json.dumps(registry))
+
+    [outcome] = run(home, ["cedar-sample"], post=False, reporter=lambda line: None,
+                    revisions={"cedar-sample": "HEAD"}, source_environment=_environment(tmp_path))
+
+    assert outcome.state == "passed", outcome.detail
+    record = json.loads(Path(outcome.record_path).read_text())
+    directories = sorted(path.name for path in (Path(record["runDirectory"]) / "jobs").iterdir())
+    assert len(directories) == 2 and all(len(name) <= 120 for name in directories)
+
+
+def test_a_leg_directory_keeps_short_labels_and_shortens_long_ones_distinctly():
+    from org.metadatacenter.local_ci.executor import leg_directory
+    assert leg_directory("ci.yml:build") == "ci.yml-build"
+    long = "consumers.yml:consumer [command=" + "npm run build && " * 8 + "shard={}]"
+    first, second = leg_directory(long.format(1)), leg_directory(long.format(2))
+    assert first != second and len(first) == len(second) == 120
+
+
 def test_an_unregistered_publishing_or_package_installing_step_leaves_the_job_to_github(home):
     registry = Registry({**REGISTRY, "repositories": {"cedar-sample": {"jobs": {
         "ci.yml:build": {}, "ci.yml:check": {}}}}})
@@ -321,6 +379,17 @@ def test_another_machine_s_status_answers_when_this_machine_has_no_record(tmp_pa
     answer = evidence.verdict(tmp_path, "cedar-sample", "c" * 40, runner=gh,
                               environment={"CEDAR_LOCAL_CI_DIR": str(tmp_path / "none")})
     assert answer.green and answer.source == "status"
+
+
+@pytest.mark.parametrize("result", [
+    SimpleNamespace(returncode=0),
+    SimpleNamespace(returncode=1),
+    SimpleNamespace(returncode=0, stdout='{"message": "Not Found"}'),
+])
+def test_an_unreadable_status_answer_is_no_answer_rather_than_a_crash(tmp_path, result):
+    answer = evidence.status_verdict("cedar-sample", "c" * 40, "cedar/local-ci",
+                                     runner=lambda *args, **kwargs: result)
+    assert answer.state == "none"
 
 
 def test_a_record_made_under_another_registry_entry_answers_for_nothing(tmp_path):

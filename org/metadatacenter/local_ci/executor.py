@@ -36,6 +36,20 @@ SAFE_VARIABLES = ("HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "SHELL", "DOCKER_
                   "DOCKER_CONFIG", "SSH_AUTH_SOCK", "TZ")
 SYSTEM_PATH = ("/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/bin", "/bin",
                "/usr/sbin", "/sbin", "/Applications/Docker.app/Contents/Resources/bin")
+LEG_DIRECTORY_LENGTH = 120
+
+
+def leg_directory(label: str) -> str:
+    """The directory one job leg runs in: readable, and distinct for every leg of a run.
+
+    A leg's label spells out its matrix, so legs of one job can differ only near the end of a long
+    label, as shards do. A name that has to be shortened keeps a digest of the whole label.
+    """
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-")
+    if len(slug) <= LEG_DIRECTORY_LENGTH:
+        return slug
+    digest = hashlib.sha256(label.encode("utf-8")).hexdigest()[:12]
+    return f"{slug[:LEG_DIRECTORY_LENGTH - len(digest) - 1].rstrip('-')}-{digest}"
 
 
 @dataclass
@@ -173,10 +187,13 @@ class JobRunner:
             workflow_env: dict | None = None, label: str | None = None) -> JobResult:
         leg = coverage.leg
         config = coverage.config
-        slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", label or leg.leg).strip("-")[:120]
+        slug = leg_directory(label or leg.leg)
         job_root = self.run_directory / "jobs" / slug
-        if job_root.exists():
-            shutil.rmtree(job_root)
+        try:
+            job_root.mkdir(parents=True)
+        except FileExistsError as error:
+            raise LocalCIError(f"two legs of {self.repository} share the directory {slug}; "
+                               "a leg never runs in another leg's workspace") from error
         workspace = job_root / "workspace"
         temporary = job_root / "tmp"
         meta = job_root / "meta"

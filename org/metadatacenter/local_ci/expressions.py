@@ -325,13 +325,24 @@ def uses_status_function(text: str) -> bool:
 _TEMPLATE = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
 
 
+def _whole_expression(text: str) -> str | None:
+    """The expression a value consists of, when it is one `${{ }}` and nothing else.
+
+    `${{ a }} ${{ b }}` also starts with `${{` and ends with `}}`, but it is text holding two
+    expressions, so each is substituted into the text rather than the span between them evaluated.
+    """
+    matches = list(_TEMPLATE.finditer(text))
+    if len(matches) == 1 and matches[0].span() == (0, len(text)):
+        return matches[0].group(1)
+    return None
+
+
 def interpolate(value, context: dict, *, functions: dict[str, Callable] | None = None):
     """A workflow value with every `${{ }}` replaced, recursively through lists and mappings."""
     if isinstance(value, str):
-        whole = _TEMPLATE.fullmatch(value.strip())
-        if whole and value.strip() == value:
-            result = evaluate(whole.group(1), context, functions=functions)
-            return result
+        whole = _whole_expression(value)
+        if whole is not None:
+            return evaluate(whole, context, functions=functions)
         return _TEMPLATE.sub(lambda match: to_string(
             evaluate(match.group(1), context, functions=functions)), value)
     if isinstance(value, list):
@@ -349,9 +360,9 @@ def condition(text, context: dict, status: Callable[[str], bool], *,
     if isinstance(text, bool):
         return text and status("success")
     expression = str(text).strip()
-    whole = _TEMPLATE.fullmatch(expression)
-    if whole:
-        expression = whole.group(1).strip()
+    whole = _whole_expression(expression)
+    if whole is not None:
+        expression = whole.strip()
     elif "${{" in expression:
         raise UnsupportedExpression(f"a condition mixing text and expressions: {text!r}")
     if not uses_status_function(expression):
