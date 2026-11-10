@@ -1,5 +1,6 @@
 """Run the same offline adoption checker used by the frontend CI jobs."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from org.metadatacenter.util.Util import Util
 
 def check_design_tokens(repos=None, strict=False, json_output=False, show_all=False,
                         init_baseline=False, prune_baseline=False, sync_surfaces=False, surface_inventory=None,
-                        source_consumers=()):
+                        source_consumers=(), runtime=False):
     home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
     if not home:
         print('CEDAR_HOME is not set', file=sys.stderr)
@@ -30,7 +31,27 @@ def check_design_tokens(repos=None, strict=False, json_output=False, show_all=Fa
             command.append(flag)
     if surface_inventory:
         command += ['--surface-inventory', str(_from_caller(surface_inventory))]
-    return subprocess.run(command, env=invocation_environment()).returncode
+    if not runtime:
+        return subprocess.run(command, env=invocation_environment()).returncode
+    if init_baseline or prune_baseline or sync_surfaces or surface_inventory:
+        print('--runtime is read-only and cannot be combined with write options', file=sys.stderr)
+        return 2
+    from org.metadatacenter.design_token_runtime import inspect_runtime, print_runtime
+    completed = subprocess.run(command, env=invocation_environment(), capture_output=json_output, text=True)
+    report = inspect_runtime(home, repos)
+    if json_output:
+        try:
+            output = json.loads(completed.stdout)
+        except ValueError:
+            print(completed.stderr or 'Adoption checker returned invalid JSON', file=sys.stderr)
+            return 2
+        output['runtime'] = report
+        print(json.dumps(output, indent=2))
+        if completed.stderr:
+            print(completed.stderr, file=sys.stderr, end='')
+    else:
+        print_runtime(report)
+    return completed.returncode or int(strict and report['state'] != 'current')
 
 
 def _from_caller(path):
