@@ -96,13 +96,30 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
+      # Two tests read sibling frontend checkouts. One compares the frontends' registration
+      # order with their manifests, and the other runs CEE's test gate. Only those files are
+      # fetched.
+      - name: Check out the frontend files the tests read
+        env:
+          CEDAR_HOME: ${{ github.workspace }}
+        run: |
+          frontends=$(cd cedar-cli && python -c 'from org.metadatacenter.config.ReposFactory import ReposFactory
+          print(" ".join(repo.name for repo in ReposFactory.build_repos().get_frontends()))')
+          for repo in $frontends; do
+            git clone --quiet --depth 1 --branch develop --filter=blob:none --sparse \
+              "https://github.com/metadatacenter/$repo.git" "$repo"
+            git -C "$repo" sparse-checkout set --no-cone '/package.json' '/*/package.json' '/scripts/test-gate.mjs'
+          done
+
       # Tests also pack and install local npm fixtures offline. Nothing starts a CEDAR
       # service or publishes a package. Native-controller checks use inspection-only mode.
+      # The build-temp integration test needs the noexec mount of the step after this one,
+      # and runs there.
       - name: Run tests
         working-directory: cedar-cli
         env:
           CEDAR_HOME: ${{ github.workspace }}
-        run: python -m pytest tests -v
+        run: python -m pytest tests -v --ignore=tests/test_build_temp_integration.py
 
       - name: Build with noexec temporary storage
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.10'
