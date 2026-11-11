@@ -101,9 +101,9 @@ def frontends(jobs: Optional[int] = typer.Option(None, min=1, max=16),
 @app.command("e2e")
 def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
         help="Concurrent REST suites and search reads; 1 runs each serially (defaults: REST 2, search 4)."),
-        split_lanes: int = typer.Option(None, min=1, max=4,
-        help="General lanes of split-tier journeys beside its core and identity lanes; "
-             "1 runs the tier sequentially (default: 2)."),
+        split_lanes: int = typer.Option(None, min=1, max=6,
+        help="General lanes of split-tier journeys beside its core lane; "
+             "1 runs the tier sequentially (default: 5)."),
         split_timeout_cap: int = typer.Option(None, min=60, max=7200,
         help="Seconds no split-tier unit may run past, whatever its measured duration; "
              "also the deadline of a unit no report has measured (default: 1200).")):

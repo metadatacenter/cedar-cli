@@ -312,8 +312,8 @@ def run_smoke(
     """
     if rest_workers is not None and (type(rest_workers) is not int or not 1 <= rest_workers <= 4):
         raise ValueError("REST workers must be an integer from 1 to 4")
-    if split_lanes is not None and (type(split_lanes) is not int or not 1 <= split_lanes <= 4):
-        raise ValueError("split lanes must be an integer from 1 to 4")
+    if split_lanes is not None and (type(split_lanes) is not int or not 1 <= split_lanes <= 6):
+        raise ValueError("split lanes must be an integer from 1 to 6")
     if split_timeout_cap is not None and (
             type(split_timeout_cap) is not int
             or not SPLIT_TIMEOUT_CAP_RANGE[0] <= split_timeout_cap <= SPLIT_TIMEOUT_CAP_RANGE[1]):

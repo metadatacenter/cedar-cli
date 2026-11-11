@@ -640,7 +640,7 @@ class RunSmokeTest(unittest.TestCase):
             split = runner.commands("npm", "run", "smoke:workspace:modern:full")[0]
             self.assertFalse(any(arg.startswith("--lanes") for arg in split),
                              "without the option the runner's own default applies")
-        for value in (0, 5, 1.5, True):
+        for value in (0, 7, 1.5, True):
             with self.assertRaises(ValueError):
                 run_smoke(split_lanes=value)
 
