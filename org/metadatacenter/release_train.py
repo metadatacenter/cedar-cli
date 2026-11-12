@@ -150,6 +150,16 @@ from org.metadatacenter.release_support.planning import (
     _verify_public_records,
 )
 
+from org.metadatacenter.release_support.follow_through import (
+    FollowThroughStep,
+    _cli_runner,
+    _git_runner,
+    _refresh_baselines,
+    baseline_count_changes,
+    follow_through_steps,
+    run_follow_through,
+)
+
 from org.metadatacenter.release_support.policy import (
     ABANDONABLE_RELEASE_PHASES,
     ACCEPT_MAIN_ONLY_HELP,
@@ -502,7 +512,9 @@ def _render_next_steps(phase):
         return
     console.print(
         "Next:                every released repository advanced on develop, and the local "
-        "checkouts are behind it. Before the next train:")
+        "checkouts are behind it. cedarcli release follow-through pulls them, returns the "
+        "consumers to the development packages, refreshes the baselines, rebuilds and smokes. "
+        "At the least, before the next train:")
     for command in ("cedarcli git pull", "cedarcli check ci", "cedarcli test e2e"):
         console.print(f"                       {command}", soft_wrap=True)
 
@@ -550,6 +562,47 @@ def resume(
     _render_next_steps(manifest['phase'])
     from org.metadatacenter.release_timings import render_timings, prior_timing_manifest
     render_timings(manifest, console, prior_timing_manifest(state, manifest))
+
+
+@app.command("follow-through")
+def follow_through(
+    start: str = typer.Option(
+        None, "--from", help="Start at this step, after repairing the one that stopped"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List the steps and change nothing"),
+    jobs: int = typer.Option(None, "--jobs", help="Frontend reactor build jobs"),
+    workers: int = typer.Option(None, "--workers", help="Frontend reactor workers per job"),
+):
+    """Finish on this workstation what an accepted release leaves to do.
+
+    Pull every checkout, return the consumers to the development packages, refresh and commit the
+    lock baselines, dispatch the stale contracts, build Java, restart the services, and run the
+    frontend reactor and its smoke, stopping at the first step that fails.
+    """
+    steps = follow_through_steps(jobs, workers)
+    if dry_run:
+        for number, step in enumerate(steps, 1):
+            command = f" (cedarcli {' '.join(step.arguments)})" if step.arguments else ""
+            console.print(f"{number}. {step.name}: {step.summary}{command}", markup=False)
+        return
+    cedar_home = Util.cedar_home or invocation_environment().get("CEDAR_HOME")
+    if not cedar_home:
+        console.print("[red]CEDAR_HOME is not set[/red]")
+        raise typer.Exit(1)
+    try:
+        state = ReleaseState()
+        current = state.read_current()
+        manifest, _ = state.read_current_manifest()
+        if current.get("conclusion") != "accepted" or not manifest.get("acceptance"):
+            raise ReleaseError("the current release is not accepted; cedarcli release status "
+                               "says where it stands")
+        code = run_follow_through(
+            Path(cedar_home), manifest["releaseVersion"], steps, start=start,
+            say=lambda message: console.print(message, markup=False))
+    except ReleaseError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from error
+    if code:
+        raise typer.Exit(code)
 
 
 @app.command("abandon")
