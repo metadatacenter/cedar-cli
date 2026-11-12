@@ -147,6 +147,7 @@ from org.metadatacenter.release_support.packaging import (
 )
 from org.metadatacenter.release_support.planning import (
     ReleasePlanner,
+    _verify_public_records,
 )
 
 from org.metadatacenter.release_support.policy import (
