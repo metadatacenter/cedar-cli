@@ -17,6 +17,7 @@ class ReleaseIntentTest(unittest.TestCase):
 
     def test_failed_release_prerequisite_never_dispatches_even_without_dry_run(self):
         with patch.object(dispatch.BuildTrain,'allocate', return_value='2.9.19-dev.20260923.0622'), \
+             patch.object(dispatch,'_activate_release_toolchain'), \
              patch.object(release_intent,'preflight',side_effect=ValueError('Nexus unavailable')), \
              patch.object(dispatch.subprocess,'run') as run:
             self.assertEqual(1,dispatch.dispatch(release_version='2.9.19',
@@ -50,6 +51,7 @@ class ReleaseIntentTest(unittest.TestCase):
 
     def test_dry_run_checks_release_readiness_without_dispatching(self):
         with patch.object(dispatch.BuildTrain,'allocate', return_value='2.9.19-dev.20260923.0622'), \
+             patch.object(dispatch,'_activate_release_toolchain'), \
              patch.object(release_intent,'preflight',return_value=[]) as check, \
              patch.object(dispatch,'_dry_run',return_value=0) as dry, \
              patch.object(dispatch.subprocess,'run') as run:
@@ -59,3 +61,25 @@ class ReleaseIntentTest(unittest.TestCase):
             self.assertEqual({'example'}, check.call_args.kwargs['accepted_main_only'])
             dry.assert_called_once()
             run.assert_not_called()
+
+    def test_release_prerequisites_run_with_the_release_toolchain(self):
+        # release plan and start put Java 17 and Node 24 first on PATH; the train's release check
+        # must judge the same toolchain, or it refuses a shell the release itself accepts.
+        order = []
+        with patch.object(dispatch.BuildTrain,'allocate', return_value='2.9.19-dev.20260923.0622'), \
+             patch.object(dispatch,'_activate_release_toolchain',
+                          side_effect=lambda: order.append('toolchain')), \
+             patch.object(release_intent,'preflight',
+                          side_effect=lambda *a, **k: order.append('preflight') or []), \
+             patch.object(dispatch,'_dry_run',return_value=0):
+            self.assertEqual(0,dispatch.dispatch(dry_run=True,release_version='2.9.19',
+                next_version='2.9.20-SNAPSHOT',cee_version='2.0.17'))
+        self.assertEqual(['toolchain','preflight'], order)
+
+    def test_activating_the_toolchain_reports_each_substitution(self):
+        with patch('org.metadatacenter.release_support.toolchain.ToolchainResolver.resolve',
+                   return_value=['Node v24.22.1 from /opt/homebrew/opt/node@24/bin']), \
+             patch.object(dispatch._output_component.console,'print') as printed:
+            dispatch._activate_release_toolchain()
+        printed.assert_called_once_with(
+            'Toolchain: Node v24.22.1 from /opt/homebrew/opt/node@24/bin', markup=False)
