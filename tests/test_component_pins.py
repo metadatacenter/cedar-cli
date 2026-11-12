@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from org.metadatacenter import component_pins
@@ -346,6 +347,92 @@ class WorkspaceTest(unittest.TestCase):
         with self.assertRaises(ComponentPinError):
             declared(None)
 
+
+
+    def _log(self, directory):
+        return subprocess.run(["git", "-C", str(directory), "log", "--format=%B%x00"],
+                              capture_output=True, text=True, check=True).stdout.split("\x00")
+
+    def test_committing_amends_its_own_unpushed_commit_and_never_a_pushed_one(self):
+        def move(version):
+            manifest = self.host / "package.json"
+            package = json.loads(manifest.read_text())
+            package["dependencies"]["cedar-embeddable-designer"] = (
+                f"npm:@org.metadatacenter/cedar-embeddable-designer@{version}")
+            manifest.write_text(json.dumps(package))
+            return {"cedar-template-designer": {"files": {"package.json", "package-lock.json"},
+                                                "pins": {"cedar-embeddable-designer": version}}}
+
+        self._push(self.host)
+        component_pins._commit_moves(str(self.root), move("0.1.2-dev.20261112.794e6dd4"))
+        self.assertEqual(2, len([m for m in self._log(self.host) if m.strip()]))
+
+        # A second pass before any push amends the first, so the consumer takes one commit.
+        component_pins._commit_moves(str(self.root), move("0.1.2-dev.20261112.f0d87c8e"))
+        messages = [m for m in self._log(self.host) if m.strip()]
+        self.assertEqual(2, len(messages))
+        self.assertIn("- cedar-embeddable-designer 0.1.2-dev.20261112.f0d87c8e", messages[0])
+        self.assertIn(component_pins.TRAILER, messages[0])
+
+        # Once pushed, the commit is history, and the next move takes a commit of its own.
+        self._push(self.host)
+        component_pins._commit_moves(str(self.root), move("0.1.2-dev.20261113.1cf64640"))
+        self.assertEqual(3, len([m for m in self._log(self.host) if m.strip()]))
+
+
+class PinCommitMessageTest(unittest.TestCase):
+
+    def test_the_subject_names_each_pin_and_the_body_each_version(self):
+        message = component_pins.pin_commit_message({
+            "cedar-model-typescript-library": "1.0.29-dev.20261112.2ce3ffb",
+            "cedar-embeddable-editor": "2.0.35-dev.20261112.d9a9381",
+            "cedar-design-tokens": "0.1.0-dev.20261111.c0dd06d3"})
+        lines = message.splitlines()
+        self.assertEqual("Update the shared token, CEE and model library development pins", lines[0])
+        self.assertIn("- cedar-embeddable-editor 2.0.35-dev.20261112.d9a9381", lines)
+        self.assertEqual(component_pins.TRAILER, lines[-1])
+
+    def test_one_pin_is_named_in_the_singular(self):
+        message = component_pins.pin_commit_message({"cedar-design-tokens": "0.1.0-dev.20261111.c0dd06d3"})
+        self.assertTrue(message.startswith("Update the shared token development pin\n"))
+
+
+class SettleTest(unittest.TestCase):
+    """--settle passes until nothing moves, pushing each component a pass wrote first."""
+
+    def test_a_component_written_in_one_pass_is_pushed_and_awaited_before_the_next(self):
+        cee = lambda moves, blocked=None: SimpleNamespace(
+            repository="cedar-embeddable-editor", moves=moves, follows_head=True, blocked=blocked)
+        plans = iter([
+            [cee(True)],                                  # first pass: CEE's model pin moves
+            [cee(False, "2.0.35-dev.x is not in the registry yet")],  # waiting for CEE's CI
+            [cee(False)],                                 # CI has published
+            [cee(True)],                                  # second pass: CEE's consumers move
+            [cee(False)],                                 # nothing left to move
+        ])
+        applied = iter([
+            ({"cedar-embeddable-editor": {}, "cedar-workspace": {}}, []),
+            ({"cedar-workspace": {}}, []),
+        ])
+        pushes, sleeps = [], []
+        with patch.object(component_pins, "plan", side_effect=lambda *a, **k: next(plans)), \
+             patch.object(component_pins, "_report"), patch.object(component_pins, "console"), \
+             patch.object(component_pins, "_apply", side_effect=lambda *a, **k: next(applied)), \
+             patch.object(component_pins, "_commit_moves", side_effect=lambda home, moved: set(moved)), \
+             patch.object(component_pins, "_push",
+                          side_effect=lambda home, repos: pushes.append(list(repos)) or set(repos)):
+            result = component_pins.advance_component_pins(
+                apply=True, push=True, settle=True, sleep=sleeps.append, clock=lambda: 0)
+
+        self.assertEqual(0, result)
+        self.assertEqual([["cedar-embeddable-editor"], ["cedar-workspace"]], pushes)
+        self.assertEqual(1, len(sleeps))
+
+    def test_settling_needs_push_and_committing_needs_apply(self):
+        with patch.object(component_pins, "console"), patch.object(component_pins, "plan") as planned:
+            self.assertEqual(1, component_pins.advance_component_pins(apply=True, settle=True))
+            self.assertEqual(1, component_pins.advance_component_pins(commit=True))
+            planned.assert_not_called()
 
 
 class InstallRetryTest(unittest.TestCase):
