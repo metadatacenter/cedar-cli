@@ -1348,9 +1348,10 @@ class ReleasePlannerTest(unittest.TestCase):
         self.assertIn("cedar-embeddable-designer.js:CED version",
                       manifest["publicComponents"]["ced"]["promotionProof"]["allowedMetadataChanges"])
 
-    def test_the_cee_record_keeps_its_own_proof_beside_ced_and_cetp(self):
-        # OpenView's distribution check reads the CEE bundle hashes from this record, so a
-        # component's proof in its place stops the release before it publishes anything.
+    def test_the_cee_record_is_the_same_beside_ced_and_cetp(self):
+        # Preparation pins the public CEE tarball and integrity this record names, and OpenView's
+        # distribution check reads its proof, so a component's value in any of its fields stops
+        # the release before it publishes anything.
         alone = self.make_planner().build(
             release_version="2.9.3", next_version="2.9.4-SNAPSHOT",
             train=TRAIN, cee_version=PUBLIC_VERSION)
@@ -1359,7 +1360,7 @@ class ReleasePlannerTest(unittest.TestCase):
             self.make_planner(public_components=fixtures),
             ced=COMPONENT_PUBLIC_VERSION, cetp=COMPONENT_PUBLIC_VERSION)
 
-        self.assertEqual(alone["cee"]["promotionProof"], beside["cee"]["promotionProof"])
+        self.assertEqual(alone["cee"], beside["cee"])
         self.assertIn("publicBundleSha256", beside["cee"]["promotionProof"])
 
     def test_release_wires_the_train_s_model_into_no_independent_component(self):

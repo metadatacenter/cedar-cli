@@ -472,6 +472,28 @@ class ReleasePlanner:
             development_design_tokens_spec=token_spec,
             model_runtime_loader=lambda version: load_model_runtime(self.http, version),
         )
+        # The CED and CETP loop below reuses the names this record is built from, so the record is
+        # complete before that loop runs.
+        cee_record = {
+            "development": {
+                "name": DEV_CEE_NAME,
+                "version": dev_version,
+                "integrity": dev_integrity,
+                "tarball": dev_url,
+                "tarballSha256": dev_tarball_sha256,
+                "revision": planned_cee.get("revision"),
+            },
+            "public": {
+                "name": PUBLIC_CEE_NAME,
+                "version": cee_version,
+                "integrity": public_integrity,
+                "tarball": public_url,
+                "tarballSha256": _sha256(public_tarball),
+                "gitHead": public_record.get("gitHead"),
+            },
+            "promotionProof": cee_proof,
+            "consumers": consumers,
+        }
 
         # Carry the train's shared-component graph through release preparation too.
         # Otherwise replacing CEE alone silently restores old tokens/CED/CETP locks.
@@ -638,24 +660,5 @@ class ReleasePlanner:
             "dockerFrontendDefaults": docker_frontend_defaults,
             "componentWiring": component_wiring,
             "publicComponents": public_components,
-            "cee": {
-                "development": {
-                    "name": DEV_CEE_NAME,
-                    "version": dev_version,
-                    "integrity": dev_integrity,
-                    "tarball": dev_url,
-                    "tarballSha256": dev_tarball_sha256,
-                    "revision": planned_cee.get("revision"),
-                },
-                "public": {
-                    "name": PUBLIC_CEE_NAME,
-                    "version": cee_version,
-                    "integrity": public_integrity,
-                    "tarball": public_url,
-                    "tarballSha256": _sha256(public_tarball),
-                    "gitHead": public_record.get("gitHead"),
-                },
-                "promotionProof": cee_proof,
-                "consumers": consumers,
-            },
+            "cee": cee_record,
         }
