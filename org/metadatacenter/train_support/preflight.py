@@ -7,6 +7,7 @@ from org.metadatacenter.worker.ComponentWorker import (
 )
 from org.metadatacenter.npm_policy import npm_user_config_findings
 from org.metadatacenter.release_support import packaging as _packaging_component
+from org.metadatacenter.train_support import report_wrapper as _report_wrapper_component
 from org.metadatacenter.release_support.errors import ReleaseError
 from org.metadatacenter.util.BuildTrain import BuildTrain
 from org.metadatacenter.util.NexusCredentials import environment_with_nexus_credentials
@@ -414,6 +415,16 @@ def _packaging_preflight():
         raise ValueError(str(error)) from error
 
 
+def _report_wrapper_preflight():
+    """Require the train's Playwright report wrapper to load what each package's config loads."""
+    cedar_home = Util.cedar_home or invocation_environment().get('CEDAR_HOME')
+    if not cedar_home:
+        raise ValueError('CEDAR_HOME is not set')
+    findings = _report_wrapper_component.wrapper_findings(cedar_home)
+    if findings:
+        raise ValueError('; '.join(findings))
+
+
 def _preflight(selected, resume, rehearsal=False):
     source_path = f'trains/{selected}.json'
     try:
@@ -474,6 +485,7 @@ def _preflight(selected, resume, rehearsal=False):
     settle(_component_preflight)
     settle(_npm_configuration_preflight)
     settle(_packaging_preflight)
+    settle(_report_wrapper_preflight)
     if findings and not rehearsal:
         raise ValueError(_preflight_failure(findings, remote_checked=False))
 
