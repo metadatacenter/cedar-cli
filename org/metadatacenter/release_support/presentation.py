@@ -23,6 +23,7 @@ from org.metadatacenter.release_support.output import (
     console,
 )
 from org.metadatacenter.release_support.policy import (
+    PUBLIC_COMPONENTS,
     _development_only_repositories,
 )
 from org.metadatacenter.release_support.preflight import (
@@ -47,6 +48,15 @@ def _render_plan(manifest: dict) -> None:
     )
     console.print(f"CEE payload SHA-256: {cee['promotionProof']['normalizedPayloadSha256']}")
     console.print("CEE executable:      identical after declared release-provenance changes")
+    for component in PUBLIC_COMPONENTS:
+        record = manifest.get("publicComponents", {}).get(component.id)
+        if record is None:
+            continue
+        label = f"{component.label} equivalence:".ljust(21)
+        console.print(
+            f"{label}{record['development']['version']} -> {record['public']['version']}")
+        label = f"{component.label} payload SHA-256:".ljust(21)
+        console.print(f"{label}{record['promotionProof']['normalizedPayloadSha256']}")
 
 
 def _publication_progress(manifest: dict) -> tuple[int, int]:

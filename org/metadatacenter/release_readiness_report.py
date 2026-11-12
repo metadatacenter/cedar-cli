@@ -12,6 +12,7 @@ from org.metadatacenter.release_support.readiness import readiness_findings, _co
 from org.metadatacenter.release_support.transport import HttpClient
 from org.metadatacenter.release_support.packages import _tarball_files, _verify_integrity, _public_release_changelog
 from org.metadatacenter.release_support.planning import ReleasePlanner
+from org.metadatacenter.release_support.policy import PUBLIC_COMPONENTS
 from org.metadatacenter.train_support import preflight, survey, release_intent
 from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.BuildTrain import BuildTrain
@@ -47,8 +48,11 @@ class ReadinessReport:
         record, _ = self.http.read_json(f'https://registry.npmjs.org/{quote(name, safe="")}/{version}')
         content = self.http.read(record['dist']['tarball'])
         _verify_integrity(name, content, record['dist']['integrity'])
+        component = next((item for item in PUBLIC_COMPONENTS if item.public_name == name), None)
         if name == 'cedar-embeddable-editor':
             files = _tarball_files(name, content)
+        elif component is not None:
+            files = _tarball_files(name, content, required_files=component.required_files)
         else:
             try:
                 with tarfile.open(fileobj=io.BytesIO(content), mode='r:gz') as archive:
@@ -77,6 +81,15 @@ class ReadinessReport:
         if not bundles or any(pin not in bundle for bundle in bundles):
             raise ReleaseError('CEE bundle provenance does not confirm the expected model pin')
         return f'CEE {version} declares and embeds model pin {model}; executable equivalence still requires a train'
+
+    def component(self, component, version, model):
+        files = self.package(component.public_name, version)
+        _, declared = _public_release_changelog(
+            f'public {component.label}', files['CHANGELOG.md'], version)
+        if declared != model:
+            raise ReleaseError(f'{component.label} {version} declares model {declared}, expected {model}')
+        return (f'{component.label} {version} declares model {model}; executable equivalence '
+                'still requires a train')
 
     def pins(self):
         frontend, _ = _configuration(self.root)
@@ -116,7 +129,8 @@ class ReadinessReport:
         return {'repositories': revisions}
 
     def run(self, *, version=None, next_version=None, model_version=None, cee_version=None,
-            train=None, packaging=True):
+            train=None, packaging=True, component_versions=None):
+        component_versions = dict(component_versions or {})
         self.check('Workspace', lambda: self.require_clean(readiness_findings(
             self.root, version, next_version, packaging=packaging)), 'cedarcli release readiness (repair the listed files first)')
         if not packaging:
@@ -127,6 +141,16 @@ class ReadinessReport:
                 self.check(label, action, 'Follow ops/NPMJS-RELEASE-RUNBOOK.md, then rerun with --model-version and --cee-version')
             else:
                 self.missing(label, 'Supply --model-version and --cee-version; versions are never inferred')
+        for component in PUBLIC_COMPONENTS:
+            label = f'Public {component.label}/model wiring'
+            component_version = component_versions.get(component.id)
+            if component_version and model_version:
+                self.check(label, lambda component=component, component_version=component_version:
+                           self.component(component, component_version, model_version),
+                           f'Follow ops/NPMJS-RELEASE-RUNBOOK.md, then rerun with {component.option}')
+            else:
+                self.missing(label, f'Supply --model-version and {component.option}; versions are '
+                                    'never inferred')
         self.check('Consumer pins', self.pins, 'cedarcli check components; repair the reported manifest/lock pair')
         source = self.check('Source revisions', lambda: self.sources(train), 'cedarcli git status; cedarcli git pull')
         if source:
@@ -148,10 +172,12 @@ class ReadinessReport:
             self.missing('Release prerequisites', 'Supply --version, --next-version and --cee-version')
         if train and all((version, next_version, cee_version)):
             self.check('Train artifacts/equivalence', lambda: ReleasePlanner().build(
-                release_version=version, next_version=next_version, train=train, cee_version=cee_version),
+                release_version=version, next_version=next_version, train=train, cee_version=cee_version,
+                component_versions=component_versions),
                 'cedarcli publish train-status; repair source issues and create a fresh train if needed')
             if self.rows[-1]['status'] == 'pass':
-                self.rows[-1]['detail'] = 'Train artifact contracts and public CEE equivalence verified'
+                self.rows[-1]['detail'] = ('Train artifact contracts and public CEE, CED and CETP '
+                                           'equivalence verified')
             if source:
                 def aligned():
                     moved, unreadable, _ = survey.releasability_survey(source)

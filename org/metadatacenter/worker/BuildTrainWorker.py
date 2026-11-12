@@ -251,8 +251,8 @@ class BuildTrainWorker:
         return _preflight_component._anonymous_source_readability_preflight(source)
 
     @staticmethod
-    def _preflight(selected, resume):
-        return _preflight_component._preflight(selected, resume)
+    def _preflight(selected, resume, rehearsal=False):
+        return _preflight_component._preflight(selected, resume, rehearsal)
 
     @staticmethod
     def _preflight_failure(findings):

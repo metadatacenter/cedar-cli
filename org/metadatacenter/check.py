@@ -139,6 +139,7 @@ def design_tokens(
         strict: bool = typer.Option(False, "--strict", help="Fail on new style drift, missing or stale baselines, or invalid token pins."),
         json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable adoption report."),
         show_all: bool = typer.Option(False, "--all", help="Include existing findings."),
+        runtime: bool = typer.Option(False, "--runtime", help="Also compare current token sources and consumers with the selected reactor build and artifact hashes; read-only, fails with --strict when stale or missing."),
         init_baseline: bool = typer.Option(False, "--init-baseline", help="Create reviewed debt baselines once; never overwrite."),
         prune_baseline: bool = typer.Option(False, "--prune-baseline", help="Remove resolved debt without increasing allowances."),
         sync_surfaces: bool = typer.Option(False, "--sync-surfaces", help="Refresh generated surface browser contracts."),
@@ -148,7 +149,7 @@ def design_tokens(
     exit_on_failure(check_design_tokens(
         repos=repo, strict=strict, json_output=json_output, show_all=show_all,
         init_baseline=init_baseline, prune_baseline=prune_baseline,
-        sync_surfaces=sync_surfaces, surface_inventory=surface_inventory))
+        sync_surfaces=sync_surfaces, surface_inventory=surface_inventory, runtime=runtime))
 
 
 @app.command("artifact-versioning")

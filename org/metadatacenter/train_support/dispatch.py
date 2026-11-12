@@ -32,7 +32,7 @@ def _resume_command(selected, fallback):
 
 def _dry_run(selected, resume, command):
     try:
-        summary, _source = _preflight_component._preflight(selected, resume)
+        summary, _source = _preflight_component._preflight(selected, resume, rehearsal=True)
     except ValueError as error:
         _output_component.console.print(f'[red]{error}[/red]')
         return 1

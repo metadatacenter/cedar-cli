@@ -163,7 +163,9 @@ def java_conformance_inputs(build_root) -> dict | None:
         root = Path(directory)
         (root / "pom.xml").write_bytes(pom)
         classpath = root / "classpath"
-        subprocess.run(["mvn", "-q", "-f", str(root / "pom.xml"),
+        # The oracle POM checks CEDAR snapshots on every run; a short connect timeout keeps an
+        # unreachable Nexus from adding most of a minute before the cached jars are used.
+        subprocess.run(["mvn", "-q", "-Daether.connector.connectTimeout=3000", "-f", str(root / "pom.xml"),
                         "org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath",
                         f"-Dmdep.outputFile={classpath}"], env=environment, check=True,
                        capture_output=True, text=True, timeout=300)

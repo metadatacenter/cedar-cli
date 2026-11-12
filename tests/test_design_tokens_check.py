@@ -1,4 +1,7 @@
 from contextlib import ExitStack
+from contextlib import redirect_stdout
+import io
+import json
 import os
 import tempfile
 import unittest
@@ -18,7 +21,39 @@ class DesignTokensCommandTest(unittest.TestCase):
         result = CliRunner().invoke(check.app, ['design-tokens', '--strict', '--json', '--repo', 'cedar-embeddable-designer'])
         self.assertEqual(1, result.exit_code)
         run.assert_called_once_with(repos=['cedar-embeddable-designer'], strict=True, json_output=True,
-                                    show_all=False, init_baseline=False, prune_baseline=False, sync_surfaces=False, surface_inventory=None)
+                                    show_all=False, init_baseline=False, prune_baseline=False, sync_surfaces=False, surface_inventory=None, runtime=False)
+
+    @patch('org.metadatacenter.design_tokens.check_design_tokens', return_value=1)
+    def test_runtime_freshness_option_preserves_strict_failure(self, run):
+        result = CliRunner().invoke(check.app, ['design-tokens', '--runtime', '--strict', '--json'])
+        self.assertEqual(1, result.exit_code)
+        self.assertTrue(run.call_args.kwargs['runtime'])
+
+    @patch('org.metadatacenter.design_tokens.subprocess.run')
+    def test_runtime_refuses_write_options_before_invocation(self, run):
+        with tempfile.TemporaryDirectory() as root, patch.object(design_tokens.Util, 'cedar_home', root):
+            path = Path(root) / 'cedar-design-tokens/tools/check_adoption.py'
+            path.parent.mkdir(parents=True)
+            path.touch()
+            self.assertEqual(2, design_tokens.check_design_tokens(runtime=True, sync_surfaces=True))
+            run.assert_not_called()
+
+    @patch('org.metadatacenter.design_token_runtime.inspect_runtime', return_value={'state': 'stale'})
+    @patch('org.metadatacenter.design_tokens.subprocess.run')
+    def test_runtime_json_keeps_source_and_runtime_verdicts_separate(self, run, runtime):
+        with tempfile.TemporaryDirectory() as root, patch.object(design_tokens.Util, 'cedar_home', root):
+            path = Path(root) / 'cedar-design-tokens/tools/check_adoption.py'
+            path.parent.mkdir(parents=True)
+            path.touch()
+            run.return_value.returncode = 0
+            run.return_value.stdout = '{"reports": [], "errors": []}'
+            run.return_value.stderr = ''
+            for strict, expected in [(False, 0), (True, 1)]:
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = design_tokens.check_design_tokens(runtime=True, json_output=True, strict=strict)
+                self.assertEqual(expected, result)
+                self.assertEqual({'reports': [], 'errors': [], 'runtime': {'state': 'stale'}}, json.loads(output.getvalue()))
 
     @patch('org.metadatacenter.design_tokens.check_design_tokens', return_value=0)
     def test_surface_options_reach_shared_checker(self, run):

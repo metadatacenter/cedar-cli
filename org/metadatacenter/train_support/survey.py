@@ -10,6 +10,7 @@ from org.metadatacenter.github_ci import (
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
+    unanswered_workflows,
 )
 from org.metadatacenter.util.Util import Util
 from contextvars import copy_context
@@ -169,6 +170,61 @@ def releasability_survey(source, max_workers=12):
     return moved, unreadable, len(recorded)
 
 
+def _github_verdicts(repository, revision, report):
+    """One verdict per workflow GitHub Actions ran at the commit, or one saying why none answers."""
+    from org.metadatacenter.local_ci.gates import github_failed_to_start
+    try:
+        probe = probe_exact_commit(
+            repository, revision, reporter=report, environment=invocation_environment())
+    except GithubCIProbeError as error:
+        return [_policy_component.SourceCIVerdict(repository, revision, '', 'error', str(error))]
+    ran = develop_runs(probe.runs, revision)
+    runs = finished_runs(ran)
+    if not runs:
+        return [_policy_component.SourceCIVerdict(
+            repository, revision, '', 'missing',
+            f'every CI run for {revision[:8]} was cancelled; rerun it' if ran
+            else f'no CI run for {revision[:8]} after bounded indexing grace')]
+    verdicts = []
+    newest = latest_runs_by_name(ran)
+    for name in unanswered_workflows(ran):
+        record = newest.get(name, {})
+        owner = record.get('repository')
+        verdicts.append(_policy_component.SourceCIVerdict(
+            repository, revision, name, 'missing',
+            f'every {name} run for {revision[:8]} was cancelled; rerun it',
+            run_url(record), str(record.get('id') or ''),
+            owner.get('full_name', '') if isinstance(owner, dict) else ''))
+    for name, record in latest_runs_by_name(runs).items():
+        status = record.get('status')
+        conclusion = record.get('conclusion')
+        owner = record.get('repository')
+        run_repository = owner.get('full_name', '') if isinstance(owner, dict) else ''
+        run_id = str(record.get('id') or '')
+        url = run_url(record)
+        if status != 'completed':
+            verdicts.append(_policy_component.SourceCIVerdict(
+                repository, revision, name, 'pending',
+                f'{name} is {status or "pending"}', url, run_id, run_repository))
+        elif conclusion not in GREEN_CONCLUSIONS and github_failed_to_start(
+                repository, record, environment=invocation_environment()):
+            verdicts.append(_policy_component.SourceCIVerdict(
+                repository, revision, name, 'pending',
+                f'GitHub failed to start {name}, so it never ran the code; rerun it with '
+                f'gh run rerun {run_id} --repo metadatacenter/{repository}, or run '
+                f'cedarcli ci run {repository}', url, run_id, run_repository))
+        elif conclusion not in GREEN_CONCLUSIONS:
+            verdicts.append(_policy_component.SourceCIVerdict(
+                repository, revision, name, 'red',
+                f'{name} concluded {conclusion or "without a result"}',
+                url, run_id, run_repository))
+        else:
+            verdicts.append(_policy_component.SourceCIVerdict(
+                repository, revision, name, 'green',
+                f'{name} concluded {conclusion}', url, run_id, run_repository))
+    return verdicts
+
+
 def source_ci_survey(source=None, reporter=None):
     """One verdict per workflow at each train source repository's exact develop commit.
 
@@ -235,41 +291,27 @@ def source_ci_survey(source=None, reporter=None):
                 repository, revision, '', 'advisory',
                 f'{repository} has no workflow contract; the train gates its outputs.'))
             return verdicts
-        try:
-            probe = probe_exact_commit(
-                repository, revision, reporter=report, environment=invocation_environment())
-        except GithubCIProbeError as error:
-            verdicts.append(_policy_component.SourceCIVerdict(repository, revision, '', 'error', str(error)))
-            return verdicts
-        ran = develop_runs(probe.runs, revision)
-        runs = finished_runs(ran)
-        if not runs:
-            verdicts.append(_policy_component.SourceCIVerdict(
-                repository, revision, '', 'missing',
-                f'every CI run for {revision[:8]} was cancelled; rerun it' if ran
-                else f'no CI run for {revision[:8]} after bounded indexing grace'))
-            return verdicts
-        for name, record in latest_runs_by_name(runs).items():
-            status = record.get('status')
-            conclusion = record.get('conclusion')
-            owner = record.get('repository')
-            run_repository = owner.get('full_name', '') if isinstance(owner, dict) else ''
-            run_id = str(record.get('id') or '')
-            url = run_url(record)
-            if status != 'completed':
-                verdicts.append(_policy_component.SourceCIVerdict(
-                    repository, revision, name, 'pending',
-                    f'{name} is {status or "pending"}', url, run_id, run_repository))
-            elif conclusion not in GREEN_CONCLUSIONS:
-                verdicts.append(_policy_component.SourceCIVerdict(
-                    repository, revision, name, 'red',
-                    f'{name} concluded {conclusion or "without a result"}',
-                    url, run_id, run_repository))
-            else:
-                verdicts.append(_policy_component.SourceCIVerdict(
-                    repository, revision, name, 'green',
-                    f'{name} concluded {conclusion}', url, run_id, run_repository))
-        return verdicts
+        from org.metadatacenter.local_ci.gates import local_answer, published_answer
+        answer = local_answer(cedar_home, repository, revision)
+        if not answer.green:
+            return _github_verdicts(repository, revision, report)
+        passed = _policy_component.SourceCIVerdict(
+            repository, revision, 'local CI', 'green', answer.detail)
+        # A status is the form of the result the train's runner reads. A record on this machine
+        # is one it cannot, so the runner has to find the same answer on GitHub: a posted status,
+        # or green runs of its own.
+        if answer.source != 'ledger' or published_answer(cedar_home, repository, revision).green:
+            return [passed]
+        unsettled = [verdict for verdict in _github_verdicts(repository, revision, report)
+                     if verdict.state != 'green']
+        if not unsettled:
+            return [passed]
+        return [_policy_component.SourceCIVerdict(
+            repository, revision, 'local CI', 'pending',
+            "local CI passed on this machine, but the train's runner reads GitHub, where "
+            + '; '.join(verdict.detail for verdict in unsettled)
+            + f'. Publish the local result with cedarcli ci status --post {repository}',
+            next((verdict.url for verdict in unsettled if verdict.url), ''))]
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(copy_context().run, inspect_repository, repository)
                    for repository in build.get('repositories', [])]

@@ -874,6 +874,55 @@ class PreflightReportTest(unittest.TestCase):
         for remote in (github, active, alignment, readable, source_ci, smoke, targets):
             remote.assert_not_called()
 
+    def test_a_rehearsal_asks_the_remote_phase_after_a_local_finding(self):
+        """A remote finding can take minutes to clear, so a rehearsal names it beside the local one."""
+        with (
+            patch.object(BuildTrain, '_read', side_effect=ValueError(
+                'build-train state does not exist')),
+            patch("org.metadatacenter.train_support.preflight._configuration_summary",
+                         return_value=(43, 'model', 'cee', 7, 3)),
+            patch("org.metadatacenter.train_support.preflight._local_configuration_preflight", side_effect=ValueError(
+                'local train configuration preflight failed: 1 npm lock baseline fails review')),
+            patch("org.metadatacenter.train_support.preflight._github_preflight") as github,
+            patch("org.metadatacenter.train_support.workflow._active_workflow_runs", return_value=[]),
+            patch("org.metadatacenter.train_support.survey._open_work", return_value=[]),
+            patch("org.metadatacenter.train_support.survey._source_alignment", return_value=[]),
+            patch("org.metadatacenter.train_support.preflight._anonymous_source_readability_preflight") as readable,
+            patch("org.metadatacenter.train_support.preflight._source_ci_preflight") as source_ci,
+            patch("org.metadatacenter.train_support.preflight._contract_preflight", side_effect=ValueError(
+                'cross-repository contracts do not cover the heads a train would capture')),
+            patch("org.metadatacenter.train_support.preflight._smoke_gate_preflight", side_effect=ValueError(
+                'no passing whole-stack smoke run covers this source: cedar-x moved')) as smoke,
+            patch("org.metadatacenter.train_support.preflight._component_preflight"),
+            patch("org.metadatacenter.train_support.preflight._npm_configuration_preflight"),
+            patch("org.metadatacenter.train_support.preflight._publication_targets_preflight") as targets,
+        ):
+            with self.assertRaises(ValueError) as refused:
+                BuildTrainWorker._preflight('2.9.9-dev.20260905.1200', None, rehearsal=True)
+
+        message = str(refused.exception)
+        self.assertIn('3 preflight findings', message)
+        self.assertIn('- local train configuration preflight failed', message)
+        self.assertIn('- no passing whole-stack smoke run covers this source', message)
+        self.assertIn('- cross-repository contracts do not cover the heads', message)
+        self.assertNotIn('were not asked', message)
+        for remote in (github, readable, source_ci, smoke, targets):
+            remote.assert_called_once()
+
+    def test_a_dry_run_is_a_rehearsal_and_a_dispatch_is_not(self):
+        with (
+            patch.object(BuildTrain, 'allocate', return_value='2.9.3-dev.20260824.1847'),
+            patch("org.metadatacenter.train_support.preflight._preflight",
+                  side_effect=ValueError('refused')) as preflight,
+        ):
+            rehearsed = self.runner.invoke(publish.app, ['train', '--dry-run'])
+            dispatched = self.runner.invoke(publish.app, ['train'])
+
+        self.assertEqual((1, 1), (rehearsed.exit_code, dispatched.exit_code))
+        rehearsal, dispatch = preflight.call_args_list
+        self.assertEqual({'rehearsal': True}, rehearsal.kwargs)
+        self.assertEqual({}, dispatch.kwargs)
+
     def test_the_remote_phase_reports_every_finding_together(self):
         with (
             patch.object(BuildTrain, '_read', side_effect=ValueError(
@@ -1015,6 +1064,102 @@ class PreflightReportTest(unittest.TestCase):
         advisory = by_repository['cedar-c']
         self.assertEqual('advisory', advisory.state)
         self.assertFalse(advisory.blocks_a_train)
+
+    def _survey_of_a_commit_that_passed_here(self, *, source='ledger', published=False, runs=()):
+        """Survey one repository whose commit local CI passed, and say what was asked of GitHub."""
+        from org.metadatacenter.local_ci.evidence import LocalVerdict
+        sha = 'a' * 40
+
+        def git(root, *arguments):
+            if arguments[0] == 'ls-remote':
+                return 0, f'{sha}\trefs/heads/develop', ''
+            if arguments[0] == 'ls-tree':
+                return 0, '.github/workflows/ci.yml', ''
+            raise AssertionError(arguments)
+
+        runs = tuple({'status': 'completed', 'id': 9 - index, 'event': 'push',
+                      'head_branch': 'develop', 'head_sha': sha, **run}
+                     for index, run in enumerate(runs))
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-a'], workflows=('cedar-a',))
+            with (
+                patch.object(Util, 'cedar_home', directory),
+                patch("org.metadatacenter.train_support.git._git", side_effect=git),
+                patch('org.metadatacenter.local_ci.gates.local_answer', return_value=LocalVerdict(
+                    'green', 'local CI passed on workstation at 2026-11-10 15:00 UTC', source)),
+                patch('org.metadatacenter.local_ci.gates.published_answer', return_value=LocalVerdict(
+                    'green' if published else 'none', 'cedar/local-ci', 'status')) as status,
+                patch('org.metadatacenter.train_support.survey.probe_exact_commit',
+                      return_value=SimpleNamespace(runs=runs)) as probe,
+            ):
+                [verdict] = BuildTrainWorker.source_ci_survey()
+        return verdict, status.call_count, probe.call_count
+
+    def test_a_status_another_machine_posted_needs_nothing_more_of_github(self):
+        verdict, statuses, probes = self._survey_of_a_commit_that_passed_here(source='status')
+
+        self.assertEqual(('green', 'local CI'), (verdict.state, verdict.workflow))
+        self.assertEqual((0, 0), (statuses, probes))
+
+    def test_a_record_here_whose_status_is_posted_is_one_the_runner_can_read(self):
+        verdict, statuses, probes = self._survey_of_a_commit_that_passed_here(published=True)
+
+        self.assertEqual('green', verdict.state)
+        self.assertEqual((1, 0), (statuses, probes))
+
+    def test_a_record_here_passes_unposted_when_github_actions_is_green_too(self):
+        verdict, _statuses, probes = self._survey_of_a_commit_that_passed_here(
+            runs=({'name': 'CI', 'conclusion': 'success'},))
+
+        self.assertEqual(('green', 'local CI'), (verdict.state, verdict.workflow))
+        self.assertEqual(1, probes)
+
+    def test_a_record_here_alone_is_refused_because_the_runner_cannot_read_it(self):
+        """The train's hosted preflight holds no machine's records, so it would refuse this commit."""
+        verdict, _statuses, _probes = self._survey_of_a_commit_that_passed_here(
+            runs=({'name': 'Test', 'conclusion': 'cancelled',
+                   'html_url': 'https://github.example/runs/9'},
+                  {'name': 'Lint', 'conclusion': 'success'}))
+
+        self.assertEqual(('pending', 'https://github.example/runs/9'), (verdict.state, verdict.url))
+        self.assertTrue(verdict.blocks_a_train)
+        self.assertIn("the train's runner reads GitHub", verdict.detail)
+        self.assertIn('every Test run for aaaaaaaa was cancelled', verdict.detail)
+        self.assertIn('cedarcli ci status --post cedar-a', verdict.detail)
+
+    def test_a_cancelled_workflow_is_reported_beside_the_one_that_finished(self):
+        sha = 'a' * 40
+
+        def git(root, *arguments):
+            if arguments[0] == 'ls-remote':
+                return 0, f'{sha}\trefs/heads/develop', ''
+            if arguments[0] == 'ls-tree':
+                return 0, '.github/workflows/ci.yml', ''
+            raise AssertionError(arguments)
+
+        runs = tuple({'status': 'completed', 'event': 'push', 'head_branch': 'develop',
+                      'head_sha': sha, **run} for run in (
+            {'name': 'Test', 'conclusion': 'cancelled', 'id': 8,
+             'html_url': 'https://github.example/runs/8',
+             'repository': {'full_name': 'metadatacenter/cedar-a'}},
+            {'name': 'Lint', 'conclusion': 'success', 'id': 7}))
+        with tempfile.TemporaryDirectory() as directory:
+            self._home(directory, ['cedar-a'], workflows=('cedar-a',))
+            with (
+                patch.object(Util, 'cedar_home', directory),
+                patch("org.metadatacenter.train_support.git._git", side_effect=git),
+                patch('org.metadatacenter.train_support.survey.probe_exact_commit',
+                      return_value=SimpleNamespace(runs=runs)),
+            ):
+                verdicts = BuildTrainWorker.source_ci_survey()
+
+        by_workflow = {verdict.workflow: verdict for verdict in verdicts}
+        self.assertEqual('green', by_workflow['Lint'].state)
+        cancelled = by_workflow['Test']
+        self.assertEqual(('missing', '8', 'https://github.example/runs/8'),
+                         (cancelled.state, cancelled.run_id, cancelled.url))
+        self.assertIn('every Test run for aaaaaaaa was cancelled; rerun it', cancelled.detail)
+        self.assertTrue(cancelled.blocks_a_train)
 
     def test_watch_lines_stay_whole_on_a_narrow_console(self):
         """A log follower greps one report per line; a wrapped heartbeat defeats that."""

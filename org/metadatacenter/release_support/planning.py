@@ -15,6 +15,7 @@ from org.metadatacenter.release_support.hashes import (
 from org.metadatacenter.release_support.packages import (
     _verify_integrity,
     compare_cee_packages,
+    compare_component_packages,
     load_model_runtime,
 )
 from org.metadatacenter.release_support.policy import (
@@ -29,6 +30,7 @@ from org.metadatacenter.release_support.policy import (
     NEXUS_NPM_RETAINED_REGISTRY,
     NPM_RELEASE_SURFACES,
     PUBLIC_CEE_NAME,
+    PUBLIC_COMPONENTS,
     PUBLIC_NPM_REGISTRY,
     SHA256_RE,
     _stable_version_key,
@@ -45,17 +47,17 @@ class ReleasePlanner:
         self.http = http or HttpClient()
         self.state = state or TrainState(self.http)
 
-    def _public_record(self, version: str) -> dict:
+    def _public_record(self, version: str, name: str = PUBLIC_CEE_NAME) -> dict:
         package_url = (
             PUBLIC_NPM_REGISTRY.rstrip("/") + "/"
-            + urllib.parse.quote(PUBLIC_CEE_NAME, safe="")
+            + urllib.parse.quote(name, safe="")
         )
         result = self.http.read_json(package_url)
         assert result is not None
         metadata, _ = result
         record = metadata.get("versions", {}).get(version)
         if not isinstance(record, dict):
-            raise ReleaseError(f"npmjs does not contain {PUBLIC_CEE_NAME}@{version}")
+            raise ReleaseError(f"npmjs does not contain {name}@{version}")
         return record
 
     def _development_config(self, source: dict, filename: str) -> tuple[dict, str, str]:
@@ -331,9 +333,16 @@ class ReleasePlanner:
         next_version: str,
         train: str,
         cee_version: str,
+        component_versions: dict[str, str] | None = None,
     ) -> dict:
         _validate_stable_version(release_version, "release version")
         _validate_stable_version(cee_version, "CEE version")
+        component_versions = dict(component_versions or {})
+        known = {component.id: component for component in PUBLIC_COMPONENTS}
+        for identifier, version in component_versions.items():
+            if identifier not in known:
+                raise ReleaseError(f"no public component is called {identifier!r}")
+            _validate_stable_version(version, f"{known[identifier].label} version")
         if not NEXT_VERSION_RE.fullmatch(next_version or ""):
             raise ReleaseError(
                 f"invalid next development version {next_version!r}; expected MAJOR.MINOR.PATCH-SNAPSHOT"
@@ -454,7 +463,7 @@ class ReleasePlanner:
         if len(token_components) > 1:
             raise ReleaseError('Train repeats the CEE design-token component')
         token_spec = token_components[0]['version'] if token_components else None
-        proof = compare_cee_packages(
+        cee_proof = compare_cee_packages(
             dev_tarball,
             dev_version,
             public_tarball,
@@ -463,6 +472,28 @@ class ReleasePlanner:
             development_design_tokens_spec=token_spec,
             model_runtime_loader=lambda version: load_model_runtime(self.http, version),
         )
+        # The CED and CETP loop below reuses the names this record is built from, so the record is
+        # complete before that loop runs.
+        cee_record = {
+            "development": {
+                "name": DEV_CEE_NAME,
+                "version": dev_version,
+                "integrity": dev_integrity,
+                "tarball": dev_url,
+                "tarballSha256": dev_tarball_sha256,
+                "revision": planned_cee.get("revision"),
+            },
+            "public": {
+                "name": PUBLIC_CEE_NAME,
+                "version": cee_version,
+                "integrity": public_integrity,
+                "tarball": public_url,
+                "tarballSha256": _sha256(public_tarball),
+                "gitHead": public_record.get("gitHead"),
+            },
+            "promotionProof": cee_proof,
+            "consumers": consumers,
+        }
 
         # Carry the train's shared-component graph through release preparation too.
         # Otherwise replacing CEE alone silently restores old tokens/CED/CETP locks.
@@ -475,7 +506,7 @@ class ReleasePlanner:
             raise ReleaseError(
                 f"train {train} did not retain its shared components in {retained_registry}; "
                 "a release lockfile would pin tarballs Nexus deletes, so build a new train")
-        def retained_copy(published: dict) -> dict:
+        def retained_payload(published: dict) -> tuple[dict, bytes]:
             if source.get('repositories', {}).get(published['repository']) != published['revision']:
                 raise ReleaseError('Shared component revision disagrees with train source')
             identity = f"{published['name']}@{published['version']}"
@@ -496,10 +527,78 @@ class ReleasePlanner:
             _verify_integrity(published['name'], payload, retained['integrity'])
             if _sha256(payload) != retained['tarballSha256']:
                 raise ReleaseError('Train component tarball hash mismatch')
-            return {**retained, 'registry': retained_registry}
+            return {**retained, 'registry': retained_registry}, payload
+
+        def retained_copy(published: dict) -> dict:
+            return retained_payload(published)[0]
+
+        # CED and CETP release to npmjs on versions of their own. The release pins the public
+        # package the operator named, once it is proved a promotion of the one the train tested.
+        public_components = {}
+        by_repository = {component.repository: component for component in PUBLIC_COMPONENTS}
+        planned_repositories = set()
+        for planned in npm_plan.get('components', []):
+            component = by_repository.get(planned.get('repository'))
+            if component is None:
+                continue
+            planned_repositories.add(component.repository)
+            version = component_versions.get(component.id)
+            if version is None:
+                raise ReleaseError(
+                    f"train {train} tested {component.label} {planned['version']}; name the "
+                    f"public npmjs version published from that source with {component.option}")
+            if planned.get('name') != component.development_name:
+                raise ReleaseError(
+                    f"train {train} names {component.label} {planned.get('name')!r}, "
+                    f"expected {component.development_name}")
+            development, dev_tarball = retained_payload(planned)
+            identity = f"{component.public_name}@{version}"
+            public = self._public_record(version, component.public_name)
+            public_url, public_integrity = self._distribution(identity, public)
+            public_tarball = self.http.read(public_url)
+            assert public_tarball is not None
+            _verify_integrity(identity, public_tarball, public_integrity)
+            proof = compare_component_packages(
+                component, dev_tarball, planned['version'], public_tarball, version,
+                model_runtime_loader=lambda model_version: load_model_runtime(
+                    self.http, model_version),
+            )
+            package = {
+                "name": component.public_name,
+                "version": version,
+                "integrity": public_integrity,
+                "tarball": public_url,
+                "tarballSha256": _sha256(public_tarball),
+                "registry": PUBLIC_NPM_REGISTRY,
+            }
+            public_components[component.id] = {
+                "repository": component.repository,
+                "development": {
+                    key: development.get(key)
+                    for key in ("name", "version", "integrity", "tarball", "tarballSha256",
+                                "revision")
+                },
+                "public": {**package, "gitHead": public.get("gitHead")},
+                "promotionProof": proof,
+                "consumers": [
+                    consumer['repository'] for consumer in planned['consumers']
+                    if consumer['repository'] in consumer_repositories
+                ],
+            }
+        for identifier in sorted(component_versions):
+            if known[identifier].repository not in planned_repositories:
+                raise ReleaseError(
+                    f"train {train} built no {known[identifier].label}, so "
+                    f"{known[identifier].option} names nothing it tested")
 
         for component in npm_plan.get('components', []):
-            package = retained_copy(component)
+            public_component = by_repository.get(component.get('repository'))
+            if public_component is not None:
+                package = {key: value
+                           for key, value in public_components[public_component.id]["public"].items()
+                           if key != "gitHead"}
+            else:
+                package = retained_copy(component)
             for consumer in component['consumers']:
                 if consumer['repository'] in consumer_repositories:
                     component_wiring.append({**consumer, 'package': package})
@@ -560,24 +659,6 @@ class ReleasePlanner:
             "publicationPlan": publication_plan,
             "dockerFrontendDefaults": docker_frontend_defaults,
             "componentWiring": component_wiring,
-            "cee": {
-                "development": {
-                    "name": DEV_CEE_NAME,
-                    "version": dev_version,
-                    "integrity": dev_integrity,
-                    "tarball": dev_url,
-                    "tarballSha256": dev_tarball_sha256,
-                    "revision": planned_cee.get("revision"),
-                },
-                "public": {
-                    "name": PUBLIC_CEE_NAME,
-                    "version": cee_version,
-                    "integrity": public_integrity,
-                    "tarball": public_url,
-                    "tarballSha256": _sha256(public_tarball),
-                    "gitHead": public_record.get("gitHead"),
-                },
-                "promotionProof": proof,
-                "consumers": consumers,
-            },
+            "publicComponents": public_components,
+            "cee": cee_record,
         }

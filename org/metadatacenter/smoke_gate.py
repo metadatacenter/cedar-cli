@@ -36,6 +36,7 @@ import subprocess
 import time
 import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
@@ -308,12 +309,13 @@ def run_smoke(
 
     The stack is judged before anything runs, and a refusal writes no record: an unhealthy or stale
     stack is a reason to stop, not evidence about the source. Every tier runs even when an earlier
-    one fails, so one command yields one complete answer.
+    one fails, so one command yields one complete answer. The REST tier runs beside the others and
+    writes its output to a file beside its report; the browser, split and search tiers run in turn.
     """
     if rest_workers is not None and (type(rest_workers) is not int or not 1 <= rest_workers <= 4):
         raise ValueError("REST workers must be an integer from 1 to 4")
-    if split_lanes is not None and (type(split_lanes) is not int or not 1 <= split_lanes <= 4):
-        raise ValueError("split lanes must be an integer from 1 to 4")
+    if split_lanes is not None and (type(split_lanes) is not int or not 1 <= split_lanes <= 6):
+        raise ValueError("split lanes must be an integer from 1 to 6")
     if split_timeout_cap is not None and (
             type(split_timeout_cap) is not int
             or not SPLIT_TIMEOUT_CAP_RANGE[0] <= split_timeout_cap <= SPLIT_TIMEOUT_CAP_RANGE[1]):
@@ -388,13 +390,13 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
     if split_timeout_cap is not None:
         commands["split"].append(f"--timeout-cap={split_timeout_cap}")
 
-    started = clock()
-    tiers = {}
-    for tier in TIERS:
-        console.print(f"[bold]{tier} smoke[/bold]: {' '.join(commands[tier])}")
+    # The REST tier's output goes to a file beside its report, since it runs beside the others.
+    rest_log = rest_report.with_suffix(".log")
+
+    def run(tier, **streams) -> dict:
         tier_started = clock()
         try:
-            result = runner(commands[tier], cwd=str(e2e), env=environment, check=False)
+            result = runner(commands[tier], cwd=str(e2e), env=environment, check=False, **streams)
             code = result.returncode
         except OSError as error:
             console.print(f"[red]could not run the {tier} smoke: {error}[/red]")
@@ -407,6 +409,7 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
             "finishedAt": _stamp(clock()),
         }
         if tier == "rest":
+            record["log"] = str(rest_log)
             record.update(_rest_details(rest_report, e2e / "rest" / "expected-checks.json"))
             if not record["evidenceValid"]:
                 record["verdict"] = "FAIL"
@@ -416,9 +419,26 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
             record.update(_search_details(search_report))
             if not record["evidenceValid"]:
                 record["verdict"] = "FAIL"
-        tiers[tier] = record
         colour = "green" if record["verdict"] == "PASS" else "red"
-        console.print(f"[{colour}]{tier} smoke: {record['verdict']}[/{colour}]")
+        where = f"  (output in {rest_log})" if tier == "rest" and record["verdict"] != "PASS" else ""
+        console.print(f"[{colour}]{tier} smoke: {record['verdict']}[/{colour}]{where}")
+        return record
+
+    # The REST tier runs beside the browser, split and search tiers. Its sign-ins and theirs take
+    # one machine-wide authentication lock, and its fixtures are its own. The split and search
+    # tiers hold the split tier's lock, so they still run one after the other.
+    started = clock()
+    results = {}
+    with rest_log.open("w", encoding="utf-8") as log, ThreadPoolExecutor(max_workers=1) as background:
+        console.print(f"[bold]rest smoke[/bold], beside the other tiers: {' '.join(commands['rest'])}")
+        console.print(f"  output in {rest_log}")
+        rest = background.submit(run, "rest", stdout=log, stderr=subprocess.STDOUT)
+        for tier in TIERS:
+            if tier != "rest":
+                console.print(f"[bold]{tier} smoke[/bold]: {' '.join(commands[tier])}")
+                results[tier] = run(tier)
+        results["rest"] = rest.result()
+    tiers = {tier: results[tier] for tier in TIERS}
 
     finished = clock()
     verdict = "PASS" if all(t["verdict"] == "PASS" for t in tiers.values()) else "FAIL"

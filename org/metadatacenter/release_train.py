@@ -115,8 +115,10 @@ from org.metadatacenter.release_support.packages import (
     _bundle_pairs,
     _canonicalize_minified_renames,
     _normalize_bundle_provenance,
+    _normalize_license_identity,
     _normalize_package_metadata,
     _normalized_bundle_manifest,
+    _normalized_component_manifest,
     _one_match,
     _public_release_changelog,
     _read_package_json,
@@ -126,6 +128,7 @@ from org.metadatacenter.release_support.packages import (
     _verify_bundle,
     _verify_integrity,
     compare_cee_packages,
+    compare_component_packages,
 )
 
 from org.metadatacenter.release_support.readiness import (
@@ -173,6 +176,8 @@ from org.metadatacenter.release_support.policy import (
     NEXT_DEVELOPMENT_VERSION_FILES,
     NEXT_VERSION_RE,
     NEXUS_AUTHENTICATED_ENDPOINT,
+    PUBLIC_COMPONENTS,
+    PublicComponent,
     NEXUS_HOST,
     NEXUS_NPM_REGISTRY,
     NEXUS_REPOSITORY_PROBE,
@@ -282,13 +287,21 @@ def _build_or_exit(
     next_version: str,
     from_train: str,
     cee_version: str,
+    ced_version: str | None = None,
+    cetp_version: str | None = None,
 ) -> dict:
+    component_versions = {
+        identifier: version
+        for identifier, version in (("ced", ced_version), ("cetp", cetp_version))
+        if version
+    }
     try:
         return ReleasePlanner().build(
             release_version=release_version,
             next_version=next_version,
             train=from_train,
             cee_version=cee_version,
+            component_versions=component_versions,
         )
     except ReleaseError as error:
         console.print(f"[red]{error}[/red]")
@@ -346,6 +359,8 @@ def readiness(
     full: bool = typer.Option(False, "--full", help="Report packages, pins, exact-source CI, smoke and train eligibility together"),
     model_version: str = typer.Option(None, "--model-version", help="Expected public TypeScript model version"),
     cee_version: str = typer.Option(None, "--cee-version", help="Expected public CEE version"),
+    ced_version: str = typer.Option(None, "--ced-version", help="Expected public CED version"),
+    cetp_version: str = typer.Option(None, "--cetp-version", help="Expected public CETP version"),
     from_train: str = typer.Option(None, "--from-train", help="Completed train whose artifacts and source should be checked"),
     release_version: str = typer.Option(
         None, "--version", help="Intended CEDAR release version, to check the arithmetic"),
@@ -370,14 +385,16 @@ def readiness(
         from org.metadatacenter.release_readiness_report import ReadinessReport
         rows = ReadinessReport(cedar_home).run(version=release_version, next_version=next_version,
             model_version=model_version, cee_version=cee_version, train=from_train,
-            packaging=not skip_packaging)
+            packaging=not skip_packaging,
+            component_versions={identifier: version for identifier, version in
+                                (("ced", ced_version), ("cetp", cetp_version)) if version})
         for row in rows:
             console.print(f"{row['status'].upper()} — {row['check']}: {row['detail']}", markup=False)
             if row['next']:
                 console.print(f"  Next: {row['next']}", markup=False)
         console.print('Readiness is advisory; release plan/start still enforce every release gate.')
         raise typer.Exit(0 if all(row['status'] == 'pass' for row in rows) else 1)
-    if model_version or cee_version or from_train:
+    if model_version or cee_version or ced_version or cetp_version or from_train:
         console.print('Package and train options require --full.')
         raise typer.Exit(1)
     try:
@@ -405,6 +422,8 @@ def plan(
     next_version: str = typer.Option(..., "--next-version", help="Explicit next SNAPSHOT version"),
     from_train: str = typer.Option(..., "--from-train", help="Completed development build train"),
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
+    ced_version: str = typer.Option(..., "--ced-version", help="Exact public npmjs CED version"),
+    cetp_version: str = typer.Option(..., "--cetp-version", help="Exact public npmjs CETP version"),
     accept_red_develop: list[str] = typer.Option(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
     accept_main_only: list[str] = typer.Option(
@@ -412,7 +431,8 @@ def plan(
 ):
     """Settle every release precondition without changing release state."""
     _activate_toolchain()
-    manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
+    manifest = _build_or_exit(
+        release_version, next_version, from_train, cee_version, ced_version, cetp_version)
     _render_plan(manifest)
     _release_gate_or_exit(
         manifest,
@@ -428,6 +448,8 @@ def start(
     next_version: str = typer.Option(..., "--next-version", help="Explicit next SNAPSHOT version"),
     from_train: str = typer.Option(..., "--from-train", help="Completed development build train"),
     cee_version: str = typer.Option(..., "--cee-version", help="Exact public npmjs CEE version"),
+    ced_version: str = typer.Option(..., "--ced-version", help="Exact public npmjs CED version"),
+    cetp_version: str = typer.Option(..., "--cetp-version", help="Exact public npmjs CETP version"),
     accept_red_develop: list[str] = typer.Option(
         None, "--accept-red-develop", help=ACCEPT_RED_DEVELOP_HELP),
     accept_main_only: list[str] = typer.Option(
@@ -443,7 +465,8 @@ def start(
     try:
         with state.exclusive():
             _activate_toolchain()
-            manifest = _build_or_exit(release_version, next_version, from_train, cee_version)
+            manifest = _build_or_exit(
+                release_version, next_version, from_train, cee_version, ced_version, cetp_version)
             manifest["buildConcurrency"] = {"jobs": jobs, "workers": workers, "mavenThreads": maven_threads}
             accepted_red_develop = _parse_accepted_red_develop(accept_red_develop)
             accepted_main_only = {value.strip() for value in (accept_main_only or []) if value.strip()}
@@ -595,3 +618,10 @@ def timings(compare: str = typer.Option(None, "--compare", help="Compare with a 
     except (ReleaseError, OSError, ValueError) as error:
         console.print(str(error), markup=False)
         raise typer.Exit(1) from error
+
+
+from org.metadatacenter import npm_release  # noqa: E402  (registered after the platform commands)
+
+app.add_typer(
+    npm_release.app, name="npm",
+    help="Publish the model library, CEE, CED and CETP to public npmjs through a resumable route")

@@ -12,6 +12,7 @@ from org.metadatacenter.github_ci import (
     latest_runs_by_name,
     probe_exact_commit,
     run_url,
+    unanswered_workflows,
 )
 from org.metadatacenter.npm_policy import (
     npm_user_config_findings,
@@ -930,6 +931,13 @@ class ReleasePreflight:
                     f"{repository} has no CI workflow contract; release validation builds it",
                 ))
                 continue
+            from org.metadatacenter.local_ci.gates import (
+                cedar_home_from, github_failed_to_start, local_answer)
+            answer = local_answer(cedar_home_from(self.environment), repository, source,
+                                  environment=self.environment, runner=self.command_runner)
+            if answer.green:
+                console.print(f"  ci: {repository} {source[:8]}: {answer.detail}", markup=False)
+                continue
             try:
                 probe = probe_exact_commit(
                     repository,
@@ -957,6 +965,13 @@ class ReleasePreflight:
                     "rerun the cancelled run" if ran else "",
                 ))
                 continue
+            for name in unanswered_workflows(ran):
+                findings.append(PreflightFinding(
+                    "ci", "fail",
+                    f"{repository}: every {name} run for the train source {source[:8]} was "
+                    "cancelled",
+                    "rerun the cancelled run",
+                ))
             for name, record in latest_runs_by_name(runs).items():
                 conclusion = record.get("conclusion")
                 status = record.get("status")
@@ -972,6 +987,16 @@ class ReleasePreflight:
                     ))
                     continue
                 if conclusion in GREEN_CONCLUSIONS:
+                    continue
+                if github_failed_to_start(repository, record, runner=self.command_runner,
+                                          environment=self.environment):
+                    findings.append(PreflightFinding(
+                        "ci", "fail",
+                        f"GitHub failed to start {repository} {name} for {source[:8]}, so the run "
+                        f"never tested the code{where}",
+                        f"rerun it with gh run rerun {run_id} --repo metadatacenter/{repository}, "
+                        f"or run cedarcli ci run {repository} --revision {repository}={source}",
+                    ))
                     continue
                 if self.accepted_red_develop.get(repository) == run_id:
                     findings.append(PreflightFinding(

@@ -9,6 +9,7 @@ from org.metadatacenter import (
     build, cert, check, dev, docker, env, git, mode, native, prod, publish,
     release_train, repo, test_processes,
 )
+from org.metadatacenter.local_ci import cli as local_ci
 from org.metadatacenter.worker.CheatWorker import CheatWorker
 from org.metadatacenter.util.CliResult import exit_on_failure
 
@@ -39,6 +40,7 @@ def create_app():
     app.add_typer(env.app, name="env", help="Inspect the effective CEDAR environment safely...")
     app.add_typer(release_train.app, name="release", help="Create a CEDAR release...")
     app.add_typer(check.app, name="check", help="Check repository and version consistency...")
+    app.add_typer(local_ci.app, name="ci", help="Run repositories' CI locally and record it as evidence...")
     app.add_typer(docker.app, name="docker", help="Docker related operations...")
     app.add_typer(native.app, name="native", help="Inspect and manage headless native applications...")
     app.add_typer(dev.app, name="dev", help="Development related operations...")

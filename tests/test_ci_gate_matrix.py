@@ -9,7 +9,9 @@ The answer is the rule the gates agree on: a run that succeeded, was skipped or 
 commit through, and any other conclusion, a run not yet completed, and a commit with no run at all
 hold it back. A cancelled run answers nothing, since cancelling is something done to a workflow
 and says nothing about the code: the newest run of the same workflow that finished answers in its
-place, and a commit whose only run was cancelled is held back as one with no run is.
+place, and a commit whose only run was cancelled is held back as one with no run is. Each workflow
+answers for itself, so one whose every run was cancelled holds the commit back whatever another
+workflow concluded there.
 """
 
 import json
@@ -180,14 +182,22 @@ class CIGateEventMatrixTest(CIGateMatrixTest):
          [('push', 'develop', 'cancelled'), ('push', 'develop', 'failure')], 'blocks'),
         ('a cancelled dispatch after a push that succeeded',
          [('workflow_dispatch', 'develop', 'cancelled'), ('push', 'develop', 'success')], 'passes'),
+        ('a cancelled workflow beside another that succeeded',
+         [('push', 'develop', 'cancelled', 'Test'), ('push', 'develop', 'success', 'Lint')],
+         'blocks'),
+        ('a cancelled workflow that was rerun and succeeded, beside another that succeeded',
+         [('push', 'develop', 'cancelled', 'Test'), ('workflow_dispatch', 'develop', 'success', 'Test'),
+          ('push', 'develop', 'success', 'Lint')], 'passes'),
     ]
 
     def _runs(self, case):
-        return tuple({'name': 'CI', 'status': 'completed', 'conclusion': conclusion, 'id': 7 - index,
-                      'event': event, 'head_branch': branch, 'head_sha': REVISION,
+        """One run per entry, newest first; an entry names its workflow, or it is CI."""
+        return tuple({'name': (entry[3:] or ('CI',))[0], 'status': 'completed',
+                      'conclusion': entry[2], 'id': 7 - index,
+                      'event': entry[0], 'head_branch': entry[1], 'head_sha': REVISION,
                       'html_url': f'https://github.example/runs/{7 - index}',
                       'repository': {'full_name': 'metadatacenter/cedar-a'}}
-                     for index, (event, branch, conclusion) in enumerate(case))
+                     for index, entry in enumerate(case))
 
     def test_every_gate_answers_every_ci_state_by_one_rule(self):
         differences = {}

@@ -51,6 +51,15 @@ class DesignTokensRegistrationTest(unittest.TestCase):
             self.assertLess(tokens, names.index(consumer),
                             f"cedar-design-tokens must be registered before {consumer}")
 
+    def test_the_platform_release_writes_no_repository_the_registry_keeps_out_of_it(self):
+        # The release planner keeps its own list of repositories it leaves alone. A repository the
+        # registry marks skip_from_release but the planner still writes takes an empty release
+        # commit, a merge and a tag on every release, as the design tokens did until 2026-11-09.
+        from org.metadatacenter.release_support.policy import INDEPENDENT_RELEASE_REPOSITORIES
+        repos = ReposFactory.build_repos()
+        skipped = {name for name, repo in repos.map.items() if repo.skip_from_release}
+        self.assertEqual(skipped, INDEPENDENT_RELEASE_REPOSITORIES)
+
 
 if __name__ == "__main__":
     unittest.main()

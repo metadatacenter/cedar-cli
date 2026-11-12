@@ -32,6 +32,11 @@ class DevelopmentVerificationTest(unittest.TestCase):
         self.acceptance = Mock()
         self.acceptance._next_development_can_seed_train.return_value = [{'check':'baselines'}]
         self.runner = Mock(return_value=SimpleNamespace(returncode=0))
+        # These cases are about GitHub's runs. This machine's local CI registry and records must
+        # not answer for their fabricated commits, whatever CEDAR_HOME the suite runs under.
+        no_local_ci = patch('org.metadatacenter.local_ci.gates.cedar_home_from', return_value=None)
+        no_local_ci.start()
+        self.addCleanup(no_local_ci.stop)
 
     def repository(self, repo):
         path = self.root / repo / '.github/workflows'

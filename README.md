@@ -189,7 +189,8 @@ demo inputs change (or no passing evidence exists). Explicit checks and CEE rele
 checks always run. Trains keep all three demos in their verification inventory.
 
 `cedarcli test e2e --rest-workers 4` runs up to four independent REST smoke suites
-concurrently, followed by the browser, split and full artifact-search smoke tiers. The same option
+concurrently, beside the browser, split and full artifact-search smoke tiers, which run in turn.
+The REST tier's output goes to a log file beside its report. The same option
 bounds independent search reads; defaults are two REST suites and four search reads.
 `--rest-workers 1` runs both pools serially. Global-state suites and permission transitions stay exclusive,
 all check-inventory and cleanup gates remain required, and the REST report includes
@@ -205,12 +206,12 @@ and incomplete cleanup fail the gate. See
 `cedar-development/ops/BACKEND-RUNBOOK.md`, under the default test environment, for its coverage,
 scope, cleanup ledger and declared gaps.
 
-The split tier runs three kinds of lane at the same time. The core lane first runs the Workspace
-smoke's inline chain, the identity lane alone runs the journeys and scripts that sign the second
-user in or log out, one at a time, and the general lanes run the rest. The lanes take their work
-from one queue, longest first, so the core and identity lanes take a share of the general work
-once their own is done. `--split-lanes N`, from two to four, sets the number of general lanes, and
-the default is two. `--split-lanes 1` runs the tier sequentially, one script after another.
+The split tier runs two kinds of lane at the same time. The core lane first runs the Workspace
+smoke's inline chain, and the general lanes run the rest, including the journeys and scripts that
+sign a user in or log out. Every sign-in takes one machine-wide lock, so no two happen at once. The
+lanes take their work from one queue, longest first, so the core lane takes a share of the general
+work once its own is done. `--split-lanes N`, from two to six, sets the number of general lanes,
+and the default is five. `--split-lanes 1` runs the tier sequentially, one script after another.
 
 Every journey and script in the split tier has a deadline: three times its newest measured
 duration plus 30 seconds, at least 60 seconds and at most a cap. One that overruns is killed with

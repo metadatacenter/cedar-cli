@@ -1,7 +1,9 @@
 import datetime as dt
 import json
 import os
+import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -598,7 +600,10 @@ class RunSmokeTest(unittest.TestCase):
             npm_calls = [(args, kwargs) for args, kwargs in runner.calls if args[0] == "npm"]
             self.assertEqual(4, len(npm_calls))
             self.assertTrue(all(kwargs["cwd"] == e2e for _, kwargs in npm_calls))
-            rest, browser, split, search = (args for args, _ in npm_calls)
+            # The REST tier runs on a thread of its own, so its call may come before or after the browser's.
+            rest, browser, split, search = (runner.commands("npm", "run", script)[0]
+                                            for script in ("smoke:rest", "smoke", "smoke:workspace:modern:full",
+                                                           "smoke:search"))
             self.assertEqual(["npm", "run", "smoke:rest", "--"], rest[:4])
             self.assertTrue(rest[4].startswith("--report="))
             self.assertEqual(["npm", "run", "smoke"], browser)
@@ -608,6 +613,38 @@ class RunSmokeTest(unittest.TestCase):
 
             self.assertEqual(["npm", "run", "smoke:search", "--"], search[:4])
             self.assertTrue(search[4].startswith("--report="))
+
+    def test_the_rest_tier_runs_beside_the_others_and_writes_its_output_beside_its_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            browser_started = threading.Event()
+            write_report = rest_runner()
+            seen = {}
+
+            def rest(args, kwargs):
+                seen["beside"] = browser_started.wait(timeout=10)
+                kwargs["stdout"].write("rest output\n")
+                return write_report(args, kwargs)
+
+            def browser(_args, _kwargs):
+                browser_started.set()
+                return FakeResult(0)
+
+            runner = runner_for(home, rest=rest, browser=browser)
+            self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+
+            self.assertTrue(seen["beside"], "the REST tier waited for the browser tier instead of running beside it")
+            reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
+            rest_record = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["rest"]
+            self.assertEqual(str(Path(rest_record["report"]).with_suffix(".log")), rest_record["log"])
+            self.assertEqual("rest output\n", Path(rest_record["log"]).read_text(encoding="utf-8"))
+            streams = {args[2]: kwargs for args, kwargs in runner.calls if args[0] == "npm"}
+            self.assertIs(subprocess.STDOUT, streams["smoke:rest"]["stderr"])
+            for script in ("smoke", "smoke:workspace:modern:full", "smoke:search"):
+                self.assertNotIn("stdout", streams[script])
+            # The split and search tiers hold the split tier's lock, so they keep their order.
+            self.assertEqual(["smoke", "smoke:workspace:modern:full", "smoke:search"],
+                             [args[2] for args, _ in runner.calls if args[0] == "npm" and args[2] != "smoke:rest"])
 
     def test_rest_worker_budget_applies_to_rest_suites_and_search_reads(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -640,7 +677,7 @@ class RunSmokeTest(unittest.TestCase):
             split = runner.commands("npm", "run", "smoke:workspace:modern:full")[0]
             self.assertFalse(any(arg.startswith("--lanes") for arg in split),
                              "without the option the runner's own default applies")
-        for value in (0, 5, 1.5, True):
+        for value in (0, 7, 1.5, True):
             with self.assertRaises(ValueError):
                 run_smoke(split_lanes=value)
 

@@ -4,6 +4,7 @@ from org.metadatacenter.util.InvocationContext import invocation_environment, pr
 from org.metadatacenter.util.SubprocessDiagnostics import describe_subprocess_failure
 from pathlib import Path, PurePosixPath
 import datetime as dt
+import json
 import os
 import subprocess
 import sys
@@ -189,6 +190,47 @@ class ReleaseAcceptance:
         ))
         return checks
 
+    def _consumers_pin_the_proven_components(self, manifest: dict) -> list[dict]:
+        """Each released consumer of CED or CETP installs the public package the plan proved."""
+        components = manifest.get("publicComponents") or {}
+        if not components:
+            return []
+        root = Path(manifest["versionPreparation"]["release"]["workspace"])
+        integrated = {
+            item.get("repository")
+            for item in manifest.get("remoteIntegration", {}).get("completedTasks", {}).values()
+        }
+        checks = []
+        for identifier, record in sorted(components.items()):
+            public = record["public"]
+            wiring = [consumer for consumer in manifest.get("componentWiring", [])
+                      if consumer.get("package", {}).get("name") == public["name"]]
+            if not wiring:
+                raise ReleaseError(f"no consumer was wired to the public {public['name']}")
+            for consumer in wiring:
+                repository = consumer["repository"]
+                if repository not in integrated:
+                    raise ReleaseError(
+                        f"{repository} was never integrated, so its {public['name']} pin is unproven")
+                lock_path = root / repository / consumer["lock"]
+                try:
+                    lock = json.loads(lock_path.read_bytes())
+                except (OSError, json.JSONDecodeError) as error:
+                    raise ReleaseError(f"cannot read {lock_path}: {error}") from error
+                installed = lock.get("packages", {}).get(
+                    f"node_modules/{consumer['dependency']}", {})
+                if any(installed.get(field) != public[key] for field, key in (
+                        ("version", "version"), ("resolved", "tarball"),
+                        ("integrity", "integrity"))):
+                    raise ReleaseError(
+                        f"{lock_path} does not install the proven public "
+                        f"{public['name']}@{public['version']}")
+            checks.append(self._check(
+                f"{identifier}-pin",
+                f"{len(wiring)} consumer(s) pin the proven public {public['name']} "
+                f"{public['version']}"))
+        return checks
+
     def _run_development_validator(self, manifest: dict) -> str:
         workspace = Path(
             manifest.get("versionPreparation", {})
@@ -253,6 +295,7 @@ class ReleaseAcceptance:
         checks.extend(self._remote_state_still_holds(manifest))
         checks.extend(self._published_artifacts_still_hold(manifest))
         checks.extend(self._consumers_pin_the_proven_cee(manifest))
+        checks.extend(self._consumers_pin_the_proven_components(manifest))
         checks.extend(self._next_development_can_seed_train(manifest))
         return {
             "acceptedAt": dt.datetime.now(dt.timezone.utc).isoformat(),

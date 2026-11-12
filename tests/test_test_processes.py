@@ -50,7 +50,7 @@ class TestProcessCommandsTest(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         smoke.assert_called_once_with(rest_workers=None, split_lanes=None, split_timeout_cap=None)
         smoke.reset_mock()
-        for value in ("0", "5", "invalid"):
+        for value in ("0", "7", "invalid"):
             result = self.runner.invoke(test_processes.app, ["e2e", "--split-lanes", value])
             self.assertEqual(2, result.exit_code, result.output)
         smoke.assert_not_called()

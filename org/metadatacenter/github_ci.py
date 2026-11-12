@@ -148,12 +148,33 @@ def finished_runs(runs: list[dict]) -> list[dict]:
     """The runs that reached a result, leaving out those somebody cancelled.
 
     A cancelled run says something about the workflow, never about the code, so it answers
-    nothing: the newest run of the same workflow that finished answers in its place. A commit whose
-    every run was cancelled has no answer, and a gate holds it back as it holds back a commit with
-    no run at all, until somebody reruns it.
+    nothing: the newest run of the same workflow that finished answers in its place. A workflow
+    whose every run was cancelled has no answer. `unanswered_workflows` names it, and a gate holds
+    the commit back as it holds back a commit with no run at all, until somebody reruns it.
     """
     return [run for run in runs
             if not (run.get("status") == "completed" and run.get("conclusion") == "cancelled")]
+
+
+def _workflow_name(record: dict) -> str:
+    return record.get("name") or str(record.get("workflow_id") or "CI")
+
+
+def unanswered_workflows(runs: tuple[dict, ...] | list[dict]) -> list[str]:
+    """The workflows at a commit whose every run was cancelled.
+
+    Each workflow answers for itself. Only a finished run of the same workflow replaces a cancelled
+    one, so a commit whose test workflow was cancelled is not passed by the lint workflow that
+    finished beside it.
+    """
+    records = [run for run in runs if isinstance(run, dict)]
+    answered = {_workflow_name(run) for run in finished_runs(records)}
+    names = []
+    for run in records:
+        name = _workflow_name(run)
+        if name not in answered and name not in names:
+            names.append(name)
+    return names
 
 
 def latest_runs_by_name(runs: tuple[dict, ...] | list[dict]) -> dict[str, dict]:
@@ -161,9 +182,48 @@ def latest_runs_by_name(runs: tuple[dict, ...] | list[dict]) -> dict[str, dict]:
     for record in runs:
         if not isinstance(record, dict):
             continue
-        name = record.get("name") or str(record.get("workflow_id") or "CI")
-        latest.setdefault(name, record)
+        latest.setdefault(_workflow_name(record), record)
     return latest
+
+
+LOCAL_CI_STATUS_CONTEXT = "cedar/local-ci"
+
+
+def newest_commit_status(repository: str, revision: str, context: str, *, runner=None,
+                         environment=None) -> tuple[dict | None, str]:
+    """The newest commit status GitHub holds under one context, or the reason it holds none."""
+    runner = runner or subprocess.run
+    try:
+        result = runner(["gh", "api", f"repos/metadatacenter/{repository}/commits/{revision}/statuses"
+                         "?per_page=100"], text=True, capture_output=True, check=False, env=environment)
+    except OSError as error:
+        return None, f"the {context} status is unreadable: {error}"
+    stdout = getattr(result, "stdout", None) or ""
+    if getattr(result, "returncode", 1):
+        detail = (getattr(result, "stderr", None) or stdout).strip()[:120]
+        return None, f"the {context} status is unreadable: {detail}"
+    try:
+        statuses = json.loads(stdout or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return None, f"the {context} status is malformed"
+    if not isinstance(statuses, list):
+        return None, f"the {context} status is malformed"
+    ours = [status for status in statuses if isinstance(status, dict) and status.get("context") == context]
+    if not ours:
+        return None, f"no {context} status on {revision[:8]}"
+    return max(ours, key=lambda status: status.get("updated_at") or status.get("created_at") or ""), ""
+
+
+def local_ci_passed(repository: str, revision: str, context: str = LOCAL_CI_STATUS_CONTEXT, *,
+                    runner=None, environment=None) -> bool:
+    """Whether a machine that ran local CI at the commit published a passing result.
+
+    A local CI run is recorded on the machine that made it. The commit status it posts is the only
+    form of that evidence another machine can read, the train's runner among them.
+    """
+    newest, _reason = newest_commit_status(repository, revision, context, runner=runner,
+                                           environment=environment)
+    return newest is not None and newest.get("state") == "success"
 
 
 def run_url(record: dict) -> str:

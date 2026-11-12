@@ -42,7 +42,6 @@ class ReposFactory:
         repos.add_repo(Repo("cedar-microservice-libraries", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
         repos.add_repo(Repo("cedar-admin-tool", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
         repos.add_repo(Repo("cedar-cadsr-tools", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
-        repos.add_repo(Repo("cedar-model-library-roundtrip", RepoType.JAVA, [V.POM_OWN, V.POM_PARENT]))
 
         # Keep a readable producer-first inventory. The scheduler derives dependency edges, and
         # every development build resolves current-source local packages. Narrow plans include
@@ -205,8 +204,6 @@ class ReposFactory:
         content_distribution = Repo("cedar-content-distribution", RepoType.ANGULAR,
                                       [V.PACKAGE_OWN, V.PACKAGE_LOCK_OWN, V.PACKAGE_LOCK_PACKAGES_OWN], is_frontend=True)
         repos.add_repo(content_distribution)
-
-        repos.add_repo(Repo("cedar-model-typescript-library-python", RepoType.PYTHON, []))
 
         repos.add_repo(Repo("cedar-mkdocs", RepoType.MKDOCS, []))
 
