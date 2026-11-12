@@ -463,7 +463,7 @@ class ReleasePlanner:
         if len(token_components) > 1:
             raise ReleaseError('Train repeats the CEE design-token component')
         token_spec = token_components[0]['version'] if token_components else None
-        proof = compare_cee_packages(
+        cee_proof = compare_cee_packages(
             dev_tarball,
             dev_version,
             public_tarball,
@@ -655,7 +655,7 @@ class ReleasePlanner:
                     "tarballSha256": _sha256(public_tarball),
                     "gitHead": public_record.get("gitHead"),
                 },
-                "promotionProof": proof,
+                "promotionProof": cee_proof,
                 "consumers": consumers,
             },
         }
