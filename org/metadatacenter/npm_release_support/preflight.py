@@ -179,11 +179,17 @@ class NpmReleasePreflight:
         is, because the platform release proves the public package against its train's by cutting
         the new entry out again. Notes left there would then read as unreleased above the release
         that shipped them, so they belong in the run's notes, and the section goes first.
+
+        Only the section that opens the changelog counts. The route writes below that one alone,
+        and a section under an earlier release, as CEE's holds under 2.0.17, stays below the
+        entry.
         """
         if not changelog.is_file():
             return []
-        match = re.search(r"^## \[Unreleased\][^\n]*\n(.*?)(?=^## \[|\Z)", changelog.read_text(),
-                          re.MULTILINE | re.DOTALL)
+        text = changelog.read_text()
+        first = re.search(r"^## \[", text, re.MULTILINE)
+        match = first and re.match(r"## \[Unreleased\][^\n]*\n(.*?)(?=^## \[|\Z)", text[first.start():],
+                                   re.MULTILINE | re.DOTALL)
         if not match or not match.group(1).strip():
             return []
         return [f"{label} {changelog.name} holds notes under ## [Unreleased], which would stay above "
