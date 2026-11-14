@@ -456,6 +456,11 @@ class ReleasePlanner:
         _verify_integrity(
             f"{PUBLIC_CEE_NAME}@{cee_version}", public_tarball, public_integrity
         )
+        # What each public package's download was, by name, independent of the records built from
+        # it, so the finished manifest can be checked against it.
+        fetched = {PUBLIC_CEE_NAME: {
+            "version": cee_version, "tarball": public_url, "integrity": public_integrity,
+            "tarballSha256": _sha256(public_tarball)}}
         token_components = [component for component in npm_plan.get('components', [])
                             if component['name'] == '@org.metadatacenter/cedar-design-tokens'
                             and any(consumer['repository'] == 'cedar-embeddable-editor'
@@ -558,6 +563,9 @@ class ReleasePlanner:
             public_tarball = self.http.read(public_url)
             assert public_tarball is not None
             _verify_integrity(identity, public_tarball, public_integrity)
+            fetched[component.public_name] = {
+                "version": version, "tarball": public_url, "integrity": public_integrity,
+                "tarballSha256": _sha256(public_tarball)}
             proof = compare_component_packages(
                 component, dev_tarball, planned['version'], public_tarball, version,
                 model_runtime_loader=lambda model_version: load_model_runtime(
@@ -622,7 +630,7 @@ class ReleasePlanner:
             package = retained_copy(model)
             component_wiring.extend({**consumer, 'package': package} for consumer in model_consumers)
 
-        return {
+        manifest = {
             "schemaVersion": 1,
             "developmentVerificationPolicy": 1,
             "frontendSurfaces": copy.deepcopy([
@@ -662,3 +670,47 @@ class ReleasePlanner:
             "publicComponents": public_components,
             "cee": cee_record,
         }
+        _verify_public_records(manifest, fetched)
+        return manifest
+
+
+def _verify_public_records(manifest: dict, fetched: dict[str, dict]) -> None:
+    """Refuse a manifest whose public CEE, CED or CETP record holds another package's values.
+
+    Each record must name the tarball, integrity and SHA-256 its own package downloaded as, and a
+    proof of its own bundles, and no two proofs may be one. Release 2.9.35's plan recorded CED's
+    proof and then CED's tarball as CEE's, and only the release's later phases noticed.
+    """
+    records = [("CEE", PUBLIC_CEE_NAME, manifest["cee"])]
+    for component in PUBLIC_COMPONENTS:
+        record = manifest.get("publicComponents", {}).get(component.id)
+        if record is not None:
+            records.append((component.label, component.public_name, record))
+    digests = {}
+    for label, name, record in records:
+        public = record["public"]
+        expected = fetched.get(name)
+        if public.get("name") != name or expected is None:
+            raise ReleaseError(f"the plan's {label} record names {public.get('name')!r}, not {name}")
+        for field in ("version", "tarball", "integrity", "tarballSha256"):
+            if public.get(field) != expected[field]:
+                raise ReleaseError(
+                    f"the plan's {label} record holds another package's {field}: "
+                    f"{public.get(field)!r}, where {name}@{expected['version']} has "
+                    f"{expected[field]!r}")
+        bundle = f"{name}.js"
+        if bundle not in record["promotionProof"].get("provenBundles", {}):
+            raise ReleaseError(f"the plan's {label} proof does not prove {bundle}")
+        digest = record["promotionProof"].get("normalizedPayloadSha256")
+        if digest in digests:
+            raise ReleaseError(f"the plan's {label} and {digests[digest]} proofs are one proof")
+        digests[digest] = label
+    for consumer in manifest.get("componentWiring", []):
+        package = consumer.get("package", {})
+        expected = fetched.get(package.get("name"))
+        if expected is not None and any(package.get(field) != expected[field]
+                                        for field in ("tarball", "integrity")):
+            raise ReleaseError(
+                f"{consumer.get('repository')} is wired to another package's "
+                f"{package.get('name')} tarball")
+

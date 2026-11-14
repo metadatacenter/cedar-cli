@@ -1,4 +1,4 @@
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import json
 import os
 from pathlib import Path
@@ -75,7 +75,9 @@ class DemoCommandsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home, \
                 patch.object(Util, 'cedar_home', home), \
                 patch.object(cee_demos, 'require_build_node'), \
+                patch.object(cee_demos.WorkerPool, 'shared') as pool, \
                 patch.object(cee_demos.subprocess, 'run') as run:
+            pool.return_value.lease.return_value = nullcontext(4)
             run.return_value.returncode = 0
             self.assertEqual(0, cee_demos.run_demos(Path(home) / 'cee.tgz', if_changed=True))
             command = run.call_args.args[0]
@@ -84,6 +86,9 @@ class DemoCommandsTest(unittest.TestCase):
                 self.assertTrue(any(str(Path(home) / name) in arg for arg in command))
             self.assertIn('PATH', run.call_args.kwargs['env'])
             self.assertEqual('true', run.call_args.kwargs['env']['NPM_CONFIG_STRICT_ALLOW_SCRIPTS'])
+            pool.assert_called_once_with(Path(home).resolve())
+            self.assertEqual('4', run.call_args.kwargs['env']['CEDAR_TEST_WORKERS'])
+            self.assertEqual('4', run.call_args.kwargs['env']['NG_BUILD_MAX_WORKERS'])
 
 
 if __name__ == '__main__':

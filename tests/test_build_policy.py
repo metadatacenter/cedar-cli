@@ -189,7 +189,7 @@ class BuildPolicyTest(unittest.TestCase):
                 browser = commands.index('npm --prefix ../browser test')
                 compiled = commands.index('npm run build')
                 self.assertLess(commands.index('npm --prefix ../browser ci'), compiled)
-                self.assertLess(commands.index('../browser/node_modules/.bin/playwright install --with-deps chromium'), browser)
+                self.assertLess(commands.index('../browser/node_modules/.bin/playwright install --with-deps chromium firefox webkit'), browser)
                 self.assertLess(commands.index('npm test -- --watch=false'), compiled)
                 self.assertLess(compiled, browser)
 
@@ -202,7 +202,7 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertLess(workspace.index('npm test'), workspace.index('npm run build'))
         self.assertLess(workspace.index('npm run build'), workspace.index('npm run test:visual'))
         designer = self.commands(plan, 'cedar-embeddable-designer')
-        self.assertLess(designer.index('./browser/node_modules/.bin/playwright install --with-deps chromium webkit'),
+        self.assertLess(designer.index('./browser/node_modules/.bin/playwright install --with-deps chromium firefox webkit'),
                         designer.index('npm run test:ci'))
 
     def test_retired_typescript_roundtrip_is_not_registered(self):

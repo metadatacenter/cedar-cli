@@ -180,14 +180,25 @@ def components(
                  "because an npm version once taken cannot be republished."),
         component: str = typer.Option(
             None, "--component",
-            help="Act on one declared component by id rather than all of them.")):
+            help="Act on one declared component by id rather than all of them."),
+        commit: bool = typer.Option(
+            False, "--commit",
+            help="Commit each repository's pin moves, with a message naming each one. A later "
+                 "pass amends this command's own unpushed commit."),
+        push: bool = typer.Option(
+            False, "--push", help="Commit, then push each repository the run committed."),
+        settle: bool = typer.Option(
+            False, "--settle",
+            help="With --push, pass again until nothing moves: push each component a pass "
+                 "wrote and wait for CI to publish what its consumers follow.")):
     """Publish registry packages and update consumers' checked-in dependencies.
 
     For a local snapshot build, use cedarcli build frontends. It uses current working-tree
     components without waiting for commits, CI publication or registry pin updates.
-    This command leaves manifest and lockfile changes for review; nothing is committed.
+    Without --commit or --push, manifest and lockfile changes are left for review.
     """
-    exit_on_failure(advance_component_pins(apply=apply, only=component))
+    exit_on_failure(advance_component_pins(apply=apply, only=component, commit=commit,
+                                           push=push, settle=settle))
 
 
 @app.command("all")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from pathlib import Path
 
 from org.metadatacenter.npm_policy import npm_user_config_findings
@@ -137,6 +138,9 @@ class NpmReleasePreflight:
             findings.append(f"{label} already has an open pull request from develop to main "
                             f"(#{open_rows[0]['number']}); merge or close it first")
 
+        if definition.changelog:
+            findings += self._unreleased_notes(repository / definition.changelog, label, package.package)
+
         identity = f"{definition.public_name}@{package.version}"
         if tools.npm_view(identity, PUBLIC_REGISTRY):
             findings.append(f"{identity} is already on npmjs, and npm versions are immutable")
@@ -166,6 +170,31 @@ class NpmReleasePreflight:
                     "give --dev-model-version naming a published one")
         findings += self._locked_nexus_packages(repository, definition, label)
         return record, findings
+
+    @staticmethod
+    def _unreleased_notes(changelog: Path, label: str, package: str) -> list[str]:
+        """Refuse a changelog whose Unreleased section still holds notes.
+
+        The route writes the release entry below `## [Unreleased]` and leaves that section as it
+        is, because the platform release proves the public package against its train's by cutting
+        the new entry out again. Notes left there would then read as unreleased above the release
+        that shipped them, so they belong in the run's notes, and the section goes first.
+
+        Only the section that opens the changelog counts. The route writes below that one alone,
+        and a section under an earlier release, as CEE's holds under 2.0.17, stays below the
+        entry.
+        """
+        if not changelog.is_file():
+            return []
+        text = changelog.read_text()
+        first = re.search(r"^## \[", text, re.MULTILINE)
+        match = first and re.match(r"## \[Unreleased\][^\n]*\n(.*?)(?=^## \[|\Z)", text[first.start():],
+                                   re.MULTILINE | re.DOTALL)
+        if not match or not match.group(1).strip():
+            return []
+        return [f"{label} {changelog.name} holds notes under ## [Unreleased], which would stay above "
+                f"the release entry; move them into --notes {package}=<file> and remove the "
+                "section on develop first"]
 
     def _locked_nexus_packages(self, repository: Path, definition, label: str) -> list[str]:
         """Refuse a lock naming a Nexus package Nexus no longer serves.

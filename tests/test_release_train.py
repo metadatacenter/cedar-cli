@@ -25,6 +25,7 @@ from org.metadatacenter.release_support import integration, lifecycle, preflight
 from org.metadatacenter.release_support import publication
 from org.metadatacenter.release_support.publication import _extract_source_archive
 from org.metadatacenter.release_support.scheduling import build_edges
+from org.metadatacenter.release_support.planning import _verify_public_records
 from org.metadatacenter.release_support.policy import (
     NEXUS_NPM_REGISTRY,
     NEXUS_NPM_RETAINED_REGISTRY,
@@ -1362,6 +1363,35 @@ class ReleasePlannerTest(unittest.TestCase):
 
         self.assertEqual(alone["cee"], beside["cee"])
         self.assertIn("publicBundleSha256", beside["cee"]["promotionProof"])
+
+    def test_a_record_holding_another_package_s_values_is_refused(self):
+        fixtures = [public_component_fixture("ced"), public_component_fixture("cetp")]
+        manifest = self.build_with_components(
+            self.make_planner(public_components=fixtures),
+            ced=COMPONENT_PUBLIC_VERSION, cetp=COMPONENT_PUBLIC_VERSION)
+        records = {"cedar-embeddable-editor": manifest["cee"]["public"],
+                   **{record["public"]["name"]: record["public"]
+                      for record in manifest["publicComponents"].values()}}
+        fetched = {name: {field: public[field]
+                          for field in ("version", "tarball", "integrity", "tarballSha256")}
+                   for name, public in records.items()}
+        _verify_public_records(manifest, fetched)
+        ced = manifest["publicComponents"]["ced"]
+
+        cases = {
+            "another package's tarball": lambda m: m["cee"]["public"].update(
+                {key: ced["public"][key] for key in ("tarball", "integrity", "tarballSha256")}),
+            "does not prove cedar-embeddable-editor.js": lambda m: m["cee"].update(
+                promotionProof=ced["promotionProof"]),
+            "are one proof": lambda m: m["publicComponents"]["cetp"]["promotionProof"].update(
+                normalizedPayloadSha256=ced["promotionProof"]["normalizedPayloadSha256"]),
+        }
+        for message, corrupt in cases.items():
+            with self.subTest(message):
+                changed = copy.deepcopy(manifest)
+                corrupt(changed)
+                with self.assertRaisesRegex(ReleaseError, message):
+                    _verify_public_records(changed, fetched)
 
     def test_release_wires_the_train_s_model_into_no_independent_component(self):
         manifest = self.build_with_components(

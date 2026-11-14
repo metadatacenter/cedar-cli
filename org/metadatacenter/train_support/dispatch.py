@@ -100,6 +100,17 @@ def _dry_run(selected, resume, command):
     return 0
 
 
+def _activate_release_toolchain():
+    """Give the release prerequisites the Java and Node `release plan` and `start` would use.
+
+    Those commands put Java 17 and Node 24 first on PATH themselves. Without this the train's
+    release check refused a shell offering Node 26, which the release the train backs accepts.
+    """
+    from org.metadatacenter.release_support.toolchain import ToolchainResolver
+    for note in ToolchainResolver(invocation_environment()).resolve():
+        _output_component.console.print(f'Toolchain: {note}', markup=False)
+
+
 def dispatch(resume=None, dry_run=False, release_version=None, next_version=None, cee_version=None, accept_main_only=None):
     from org.metadatacenter.train_support.release_intent import validate_intent, preflight
     try:
@@ -119,6 +130,7 @@ def dispatch(resume=None, dry_run=False, release_version=None, next_version=None
         try:
             validate_intent(release_version, next_version, cee_version, selected)
             source = BuildTrain._read(f'trains/{selected}.json') if resume else None
+            _activate_release_toolchain()
             findings = preflight(intent, source=source, accepted_main_only=set(accept_main_only or []))
             for finding in findings:
                 if finding.severity == 'warn':

@@ -706,6 +706,49 @@ def test_preflight_refuses_a_published_or_older_version_and_an_unreleased_model(
         assert any("cedar-model-typescript-library@1.0.99 is not on npmjs" in finding for finding in findings)
 
 
+def test_preflight_refuses_notes_left_under_unreleased(world, tmp_path):
+    # The route leaves ## [Unreleased] above the entry it writes, so notes there would read as
+    # unreleased after the release that shipped them. CED and CETP 0.1.1 each needed them moved.
+    files = _cee_files()
+    files["CHANGELOG.md"] = files["CHANGELOG.md"].replace(
+        "## [2.0.33]", "## [Unreleased]\n\n### Fixed\n\n- A fix.\n\n## [2.0.33]")
+    _make_repository(world.home, world.origins, PACKAGES["cee"], files)
+    notes = _notes(tmp_path)
+    request = parse_run_request(["cee@2.0.34"], ["cee@2.0.35"], "1.0.28", None, [f"cee={notes}"])
+    world.registry["cedar-model-typescript-library@1.0.28"] = _tarball_of("cedar-model-typescript-library", "1.0.28", tmp_path)
+
+    _, findings = NpmReleasePreflight(world.home, world)._package(request.packages[0], request)
+    assert findings == ["cedar-embeddable-editor CHANGELOG.md holds notes under ## [Unreleased], which "
+                        "would stay above the release entry; move them into --notes cee=<file> and "
+                        "remove the section on develop first"]
+
+
+def test_preflight_accepts_unreleased_notes_below_a_released_entry(world, tmp_path):
+    # CEE's changelog holds such a section under 2.0.17. The route writes above the newest
+    # release, so the section stays below the entry and the remedy would rewrite history.
+    files = _cee_files()
+    files["CHANGELOG.md"] += "\n## [Unreleased]\n\n### Added\n\n- Shipped long ago.\n\n## [2.0.32] - 2026-11-06\n\n- Older.\n"
+    _make_repository(world.home, world.origins, PACKAGES["cee"], files)
+    notes = _notes(tmp_path)
+    request = parse_run_request(["cee@2.0.34"], ["cee@2.0.35"], "1.0.28", None, [f"cee={notes}"])
+    world.registry["cedar-model-typescript-library@1.0.28"] = _tarball_of("cedar-model-typescript-library", "1.0.28", tmp_path)
+
+    _, findings = NpmReleasePreflight(world.home, world)._package(request.packages[0], request)
+    assert findings == []
+
+
+def test_preflight_accepts_an_empty_unreleased_section(world, tmp_path):
+    files = _cee_files()
+    files["CHANGELOG.md"] = files["CHANGELOG.md"].replace("## [2.0.33]", "## [Unreleased]\n\n## [2.0.33]")
+    _make_repository(world.home, world.origins, PACKAGES["cee"], files)
+    notes = _notes(tmp_path)
+    request = parse_run_request(["cee@2.0.34"], ["cee@2.0.35"], "1.0.28", None, [f"cee={notes}"])
+    world.registry["cedar-model-typescript-library@1.0.28"] = _tarball_of("cedar-model-typescript-library", "1.0.28", tmp_path)
+
+    _, findings = NpmReleasePreflight(world.home, world)._package(request.packages[0], request)
+    assert findings == []
+
+
 def test_preflight_refuses_a_dirty_tree_and_a_diverged_main(world, tmp_path):
     checkout = _make_repository(world.home, world.origins, PACKAGES["model"], _model_files())
     git(checkout, "checkout", "main")

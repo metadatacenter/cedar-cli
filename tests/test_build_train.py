@@ -28,7 +28,7 @@ class Response(io.BytesIO):
 class BuildTrainTest(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
-        for target in ('_packaging_preflight', '_contract_preflight'):
+        for target in ('_packaging_preflight', '_report_wrapper_preflight', '_contract_preflight'):
             probe = patch('org.metadatacenter.train_support.preflight.' + target)
             probe.start()
             self.addCleanup(probe.stop)
@@ -780,6 +780,7 @@ class PreflightReportTest(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
         for target in ('org.metadatacenter.train_support.preflight._packaging_preflight',
+                       'org.metadatacenter.train_support.preflight._report_wrapper_preflight',
                        'org.metadatacenter.train_support.reporting._contracts_component.contract_survey'):
             probe = patch(target, return_value=[])
             probe.start()

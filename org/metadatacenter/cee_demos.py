@@ -8,6 +8,7 @@ from org.metadatacenter.npm_policy import STRICT_INSTALL_ENVIRONMENT
 from org.metadatacenter.util.InvocationContext import current_context, invocation_environment
 from org.metadatacenter.util.NodeBuildCheck import require_build_node
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.util.worker_pool import WorkerPool
 
 
 def run_demos(package=None, *, if_changed=False):
@@ -37,9 +38,11 @@ def run_demos(package=None, *, if_changed=False):
     environment = dict(invocation_environment())
     environment['npm_config_cache'] = str(home / '.cedar/cee-demos/npm-cache')
     environment.update(STRICT_INSTALL_ENVIRONMENT)
-    workers = str(current_context().settings.build_workers)
-    environment.update({name: workers for name in ('CEDAR_TEST_WORKERS', 'NG_BUILD_MAX_WORKERS', 'VITEST_MAX_WORKERS')})
-    return subprocess.run(command, env=environment).returncode
+    # The demo runner divides this allocation between parallel framework builds and then
+    # gives it to one browser matrix. Other reactor sessions share the same host pool.
+    with WorkerPool.shared(home).lease(current_context().settings.build_workers) as workers:
+        environment.update({name: str(workers) for name in ('CEDAR_TEST_WORKERS', 'NG_BUILD_MAX_WORKERS', 'VITEST_MAX_WORKERS')})
+        return subprocess.run(command, env=environment).returncode
 
 
 def check_selection(selection):

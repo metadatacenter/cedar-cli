@@ -9,7 +9,9 @@ Its publication restrictions are not prerequisites for a local snapshot build.
 For that registry workflow, derive the
 component's development version from its pushed develop head, build and publish the package that
 version names, and repoint every declared consumer's manifest, lock and served bundles onto it.
-Nothing is committed. The diffs are source changes and belong to whoever reviews them.
+By default nothing is committed, and the diffs belong to whoever reviews them. `--commit` commits
+each repository's pin moves with a message naming each one, `--push` pushes them, and `--settle`
+repeats the passes a release's aftermath needs until nothing moves.
 
 The version is written into the component's manifest only while its package builds, and the
 manifest is restored afterwards. A committed stamp would itself be a new head, and the next run
@@ -28,6 +30,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -59,6 +62,26 @@ CI_SHA_LENGTH = 7
 
 # The name every CEE consumer knows the editor by, public or development.
 CEE_DEPENDENCY = "cedar-embeddable-editor"
+
+# A release's aftermath settles in two passes. More than this means something keeps moving.
+MAX_PASSES = 4
+
+# How long --settle waits for a component's CI to publish its pushed head, and how often it asks.
+WAIT_MINUTES = 30
+WAIT_POLL_SECONDS = 60
+
+# The trailer that marks a commit this command made, so a later pass may amend it before it is
+# pushed rather than stacking a second commit on it.
+TRAILER = "Pins-moved-by: cedarcli publish components"
+
+# How a commit message names the packages it moves.
+PIN_NAMES = {
+    "cedar-model-typescript-library": "model library",
+    "cedar-embeddable-editor": "CEE",
+    "cedar-embeddable-designer": "CED",
+    "cedar-embeddable-term-picker": "CETP",
+    "cedar-design-tokens": "shared token",
+}
 
 
 class ComponentPinError(Exception):
@@ -118,30 +141,83 @@ class ComponentPlan:
         return self.publishes or any(consumer.moves for consumer in self.consumers)
 
 
-def advance_component_pins(apply=False, only=None):
+def advance_component_pins(apply=False, only=None, commit=False, push=False, settle=False,
+                           wait_minutes=WAIT_MINUTES, sleep=time.sleep, clock=time.monotonic):
     """Report what would move, and under --apply move it.
 
     Reporting is the default because publishing is irreversible: an npm version, once taken, cannot
     be republished, so the plan is worth reading before it is carried out.
-    """
-    try:
-        plans = plan(Util.cedar_home, only=only)
-    except ComponentPinError as error:
-        console.print(f"[red]{error}[/red]")
-        return 1
 
-    _report(plans, apply)
-    if not any(item.moves for item in plans):
-        return 0
-    if not apply:
-        console.print("\nNothing has been changed. Re-run with --apply to publish and repoint.")
-        return 0
+    A component whose own pins move in a pass has a new head that no package holds yet, so its
+    consumers can follow it only in a later pass. After a release that takes two passes, with
+    CEE's CI publishing in between. `settle` runs them: it pushes each component the pass wrote,
+    waits for CI to publish what it follows, and passes again until nothing moves. Consumers'
+    commits stay local until the last pass, which amends its pin moves into them, so each
+    consumer takes one commit.
+    """
+    commit = commit or push
+    if (commit or settle) and not apply:
+        console.print("[red]--commit, --push and --settle act on what --apply writes; add --apply.[/red]")
+        return 1
+    if settle and not push:
+        console.print("[red]--settle waits for CI to publish pushed heads, so it needs --push.[/red]")
+        return 1
+    committed, pushed = set(), set()
+    applied = False
     try:
-        _apply(Util.cedar_home, plans)
+        for passed in range(1, MAX_PASSES + 1):
+            plans = plan(Util.cedar_home, only=only)
+            _report(plans, apply)
+            if not any(item.moves for item in plans):
+                break
+            if not apply:
+                console.print("\nNothing has been changed. Re-run with --apply to publish and repoint.")
+                return 0
+            moved, deferred = _apply(Util.cedar_home, plans)
+            applied = True
+            if commit:
+                committed |= _commit_moves(Util.cedar_home, moved)
+            components = {item.repository for item in plans} & set(moved)
+            if not settle or not (deferred or components):
+                break
+            # A component this pass wrote has a head no package holds. Push it, so its CI publishes
+            # or the next pass publishes it, then pass again.
+            pushed |= _push(Util.cedar_home, sorted(components & committed))
+            _wait_for_ci(Util.cedar_home, components, only, wait_minutes, sleep, clock)
+        else:
+            raise ComponentPinError(f"pins still moved after {MAX_PASSES} passes; read the plan")
+        if push:
+            pushed |= _push(Util.cedar_home, sorted(committed - pushed))
     except ComponentPinError as error:
         console.print(f"[red]{error}[/red]")
         return 1
+    if applied and not commit:
+        console.print("\nNothing is committed. Review each repository's diff, then commit and push it.")
+    elif push and committed:
+        console.print(f"\nCommitted and pushed: {', '.join(sorted(committed))}.")
+    elif committed:
+        console.print(f"\nCommitted, not pushed: {', '.join(sorted(committed))}.")
     return 0
+
+
+def _wait_for_ci(cedar_home, components, only, wait_minutes, sleep, clock):
+    """Wait until CI has published a package for each followed component's pushed head."""
+    deadline = clock() + wait_minutes * 60
+    announced = None
+    while True:
+        waiting = [item for item in plan(cedar_home, only=only)
+                   if item.repository in components and item.follows_head and item.blocked]
+        if not waiting:
+            return
+        if clock() >= deadline:
+            raise ComponentPinError(
+                "CI has not published after "
+                f"{wait_minutes} minutes: " + "; ".join(item.blocked for item in waiting))
+        reasons = tuple(item.blocked for item in waiting)
+        if reasons != announced:
+            console.print("Waiting for CI: " + "; ".join(reasons))
+            announced = reasons
+        sleep(WAIT_POLL_SECONDS)
 
 
 # Planning
@@ -460,6 +536,8 @@ def _apply(cedar_home, plans, run=None):
         and (Path(cedar_home) / ".reactor/runtime.json").is_file()
     )
     written = set()
+    moved = {}
+    deferred = []
     for item in plans:
         if not item.moves:
             continue
@@ -467,6 +545,7 @@ def _apply(cedar_home, plans, run=None):
             # Its head does not hold the pins this run just gave it, so no package names them.
             console.print(f"[yellow]{item.repository}[/yellow] moved in this run, so no package "
                           "holds what it now declares: commit and push it, then run this again.")
+            deferred.append(item)
             continue
         directory = Path(cedar_home) / item.repository
         if item.publishes:
@@ -477,6 +556,9 @@ def _apply(cedar_home, plans, run=None):
                 continue
             console.print(f"  {consumer.repository}: {consumer.dependency} → {item.target}")
             written.add(consumer.repository)
+            record = moved.setdefault(consumer.repository, {"files": set(), "pins": {}})
+            record["files"].update(path for path in (consumer.manifest, consumer.lock) if path)
+            record["pins"][item.package.rsplit("/", 1)[-1]] = item.target
             consumer_directory = Path(cedar_home) / consumer.repository
             _repoint(consumer_directory / consumer.manifest, consumer.dependency,
                      item.package, item.target)
@@ -488,7 +570,74 @@ def _apply(cedar_home, plans, run=None):
                 run(consumer_directory, list(consumer.restage))
     if preserve_runtime:
         console.print("Active development reactor preserved; pins updated without replacing installed or served bundles.")
-    console.print("\nNothing is committed. Review each repository's diff, then commit and push it.")
+    return moved, deferred
+
+
+def pin_commit_message(pins):
+    """A message naming each pin a commit moves, in the words the history already uses."""
+    names = []
+    for package in sorted(pins):
+        name = PIN_NAMES.get(package, package)
+        if name not in names:
+            names.append(name)
+    listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    noun = "pin" if len(pins) == 1 else "pins"
+    lines = [f"Update the {listed} development {noun}", "",
+             "Moves each pin to the development package built from that component's",
+             "current develop head.", ""]
+    lines += [f"- {package} {pins[package]}" for package in sorted(pins)]
+    return "\n".join(lines + ["", TRAILER, ""])
+
+
+def _git_checked(directory, arguments):
+    completed = subprocess.run(["git", "-C", str(directory)] + arguments, capture_output=True,
+                               text=True, check=False, env=invocation_environment())
+    if completed.returncode:
+        raise ComponentPinError(
+            f"git {' '.join(arguments[:2])} failed in {Path(directory).name}: "
+            f"{(completed.stderr or completed.stdout).strip()}")
+    return completed.stdout.strip()
+
+
+def _own_unpushed_commit(directory):
+    """The pins an unpushed commit this command made already moved, or None for any other HEAD."""
+    body = _git(directory, ["log", "-1", "--format=%B"]) or ""
+    if TRAILER not in body or _git(directory, ["branch", "-r", "--contains", "HEAD"]):
+        return None
+    return dict(line[2:].rsplit(" ", 1) for line in body.splitlines()
+                if line.startswith("- ") and " " in line[2:])
+
+
+def _commit_moves(cedar_home, moved):
+    """Commit each repository's pin moves, amending this command's own unpushed commit."""
+    committed = set()
+    for repository, record in sorted(moved.items()):
+        directory = Path(cedar_home) / repository
+        files = sorted(path for path in record["files"]
+                       if (directory / path).is_file()
+                       and _git(directory, ["status", "--porcelain=v1", "--", path]))
+        if not files:
+            continue
+        earlier = _own_unpushed_commit(directory)
+        pins = {**(earlier or {}), **record["pins"]}
+        amend = ["--amend"] if earlier is not None else []
+        _git_checked(directory, ["commit", "--quiet", *amend, "-m", pin_commit_message(pins),
+                                 "--", *files])
+        committed.add(repository)
+    return committed
+
+
+def _push(cedar_home, repositories):
+    """Push develop in each repository, which must be on develop."""
+    pushed = set()
+    for repository in repositories:
+        directory = Path(cedar_home) / repository
+        branch = _git(directory, ["rev-parse", "--abbrev-ref", "HEAD"])
+        if branch != "develop":
+            raise ComponentPinError(f"{repository} is on {branch or 'no branch'}, not develop; nothing pushed")
+        _git_checked(directory, ["push", "--quiet", "origin", "develop"])
+        pushed.add(repository)
+    return pushed
 
 
 def _publish(directory, item, run):
