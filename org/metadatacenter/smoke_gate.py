@@ -707,7 +707,8 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
     reports.mkdir(parents=True, exist_ok=True)
     # Each attempt owns its evidence, even when the tested source heads have not changed.
     rest_report = reports / f"rest-smoke-{digest}-{uuid.uuid4().hex}.json"
-    split_report = reports / f"split-smoke-{digest}.json"
+    # A run that crashes before writing its report must not show an earlier attempt's details.
+    split_report = reports / f"split-smoke-{digest}-{uuid.uuid4().hex}.json"
     # A refused or killed run must never inherit an earlier search verdict at the same source heads.
     search_report = reports / f"search-smoke-{digest}-{uuid.uuid4().hex}.json"
     commands = {

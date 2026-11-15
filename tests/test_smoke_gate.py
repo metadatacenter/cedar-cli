@@ -643,7 +643,7 @@ class RunSmokeTest(unittest.TestCase):
             self.assertEqual(["npm", "run", "smoke"], browser)
             self.assertEqual(["npm", "run", "smoke:workspace:modern:full", "--"], split[:4])
             self.assertTrue(split[4].startswith("--report="))
-            self.assertTrue(split[4].endswith(f"split-smoke-{sources_digest(HEADS)}.json"))
+            self.assertRegex(split[4], rf"split-smoke-{sources_digest(HEADS)}-[0-9a-f]{{32}}\.json$")
 
             self.assertEqual(["npm", "run", "smoke:search", "--"], search[:4])
             self.assertTrue(search[4].startswith("--report="))
@@ -1483,3 +1483,28 @@ class ExpectedCeeVersionTest(unittest.TestCase):
 
     def test_a_record_without_a_cee_head_expects_no_version(self):
         self.assertEqual((None, None), smoke_gate.expected_cee_version("/home", HEADS, runner=FakeRunner()))
+
+
+class SplitReportPathTest(unittest.TestCase):
+    """Each attempt writes its split report to a path of its own."""
+
+    def setUp(self):
+        which = patch("org.metadatacenter.smoke_gate.shutil.which", return_value="/usr/bin/npm")
+        which.start()
+        self.addCleanup(which.stop)
+
+    def test_a_crashed_split_attempt_does_not_inherit_an_earlier_report(self):
+        crashed = FakeResult(1)
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            run_smoke(home, runner=runner_for(home), clock=clock(), environment={"PATH": "/usr/bin"})
+            first = json.loads((smoke_gate.reports_dir(home) / "latest.json").read_text())["tiers"]["split"]
+            self.assertEqual("PASS", first["runnerVerdict"])
+
+            run_smoke(home, runner=runner_for(home, split=lambda _args, _kwargs: crashed), clock=clock(),
+                      environment={"PATH": "/usr/bin"})
+            second = json.loads((smoke_gate.reports_dir(home) / "latest.json").read_text())["tiers"]["split"]
+
+        self.assertNotEqual(first["report"], second["report"])
+        self.assertNotIn("runnerVerdict", second)
+        self.assertIn("reportError", second)
