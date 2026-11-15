@@ -153,7 +153,8 @@ class OperatorEvidenceTest(unittest.TestCase):
                  patch(module + '.reactor.resolve', return_value=[]), \
                  patch(module + '.reactor.prepare_checks', return_value=[]), \
                  patch(module + '.isolated_frontend_workspace', isolated), \
-                 patch(module + '.materialize_frontend_workspace'), \
+                 patch(module + '.materialize_frontend_workspace', return_value=(Path(directory), [])), \
+                 patch(module + '.reactor_evidence.require_copy'), \
                  patch.object(executor, '_execute_commands', side_effect=fail):
                 self.assertEqual(7, executor.execute_shell_command_list(task, Mock(), False))
             retained = next((home / '.cedar/build-reports/failures').iterdir())

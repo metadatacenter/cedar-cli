@@ -393,7 +393,8 @@ class BuildPolicyTest(unittest.TestCase):
             stack.enter_context(patch(module + ".Util.get_wd", return_value="/tmp/source"))
             stack.enter_context(patch(module + ".is_frontend_build", return_value=False))
             stack.enter_context(patch(module + ".reactor_evidence.begin"))
-            stack.enter_context(patch(module + ".materialize_frontend_workspace"))
+            stack.enter_context(patch(module + ".materialize_frontend_workspace", return_value=(Path('/tmp'), [])))
+            stack.enter_context(patch(module + ".reactor_evidence.require_copy"))
             stack.enter_context(patch(module + ".reactor.resolve", return_value=[]))
             stack.enter_context(patch(module + ".reactor.prepare_checks", return_value=[]))
             stack.enter_context(patch(module + ".isolated_frontend_workspace", return_value=
@@ -441,7 +442,8 @@ class BuildPolicyTest(unittest.TestCase):
             stack.enter_context(patch(module + '.Util.get_wd', return_value='/tmp/source/frontend-src'))
             stack.enter_context(patch(module + '.is_frontend_build', return_value=False))
             stack.enter_context(patch(module + '.reactor_evidence.begin'))
-            stack.enter_context(patch(module + '.materialize_frontend_workspace'))
+            stack.enter_context(patch(module + '.materialize_frontend_workspace', return_value=(Path('/tmp'), [])))
+            stack.enter_context(patch(module + '.reactor_evidence.require_copy'))
             stack.enter_context(patch(module + '.reactor.resolve', return_value=[]))
             stack.enter_context(patch(module + '.reactor.prepare_checks', return_value=[]))
             stack.enter_context(patch(module + '.isolated_frontend_workspace', return_value=
