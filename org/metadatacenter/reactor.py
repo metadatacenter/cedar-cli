@@ -444,12 +444,48 @@ def resolve(build_root, cedar_home) -> list[str]:
     return notes
 
 
+JAVA_DEFAULTS_CORE = 'src/main/java/org/metadatacenter/artifacts/model/core'
+
+
+def java_defaults_sources(cedar_home):
+    """The Java declarations read by the TypeScript defaults parity check."""
+    root = Path(cedar_home) / 'cedar-artifact-library' / JAVA_DEFAULTS_CORE
+    files = {path.relative_to(root).as_posix(): path.read_bytes()
+             for path in sorted(root.rglob('*.java'))}
+    if not files:
+        raise ReactorError(f'Java defaults verification requires sources under {root}')
+    digest = hashlib.sha256()
+    for name, content in files.items():
+        digest.update(name.encode() + b'\0' + hashlib.sha256(content).digest())
+    return files, digest.hexdigest()
+
+
+def verify_check_sources(checks, cedar_home):
+    for item in checks:
+        if item.get('kind') == 'java-defaults-source':
+            if java_defaults_sources(cedar_home)[1] != item['sha256']:
+                raise ReactorError('Java defaults sources changed during frontend verification')
+
+
 def prepare_checks(repo, build_root, cedar_home, environment, commands):
     """Bind verification to the isolated inputs built by this reactor."""
     if repo.name == "cedar-model-typescript-library":
         # pretest enumerates the vendored corpus relative to cwd. Its readers must
         # use that same corpus, never an unrelated or absent host sibling checkout.
         environment["CEDAR_HOME"] = str(build_root)
+        # The corpus is vendored; the defaults check also reads the Java implementation.
+        # Snapshot those bytes beside the corpus instead of redirecting its readers to the host.
+        files, digest = java_defaults_sources(cedar_home)
+        target = Path(build_root) / 'cedar-artifact-library' / JAVA_DEFAULTS_CORE
+        if target.exists():
+            import shutil
+            shutil.rmtree(target)
+        for name, content in files.items():
+            path = target / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        return [{'kind': 'java-defaults-source', 'repository': 'cedar-artifact-library',
+                 'path': JAVA_DEFAULTS_CORE, 'sha256': digest}]
     if repo.name != 'cedar-embeddable-designer' or 'npm run test:ci' not in commands:
         return []
     available, pending = _state(cedar_home)

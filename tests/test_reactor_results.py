@@ -67,6 +67,11 @@ class FingerprintTest(unittest.TestCase):
         with patch.object(reactor_results, "tooling", return_value={**TOOLING, "node": "v24.20.0"}):
             self.assertNotEqual(baseline, self.key())
 
+    def test_java_defaults_source_changes_invalidate_reuse(self):
+        check = {'kind': 'java-defaults-source', 'repository': 'cedar-artifact-library',
+                 'path': reactor.JAVA_DEFAULTS_CORE, 'sha256': 'a' * 64}
+        self.assertNotEqual(self.key(checks=[check]), self.key(checks=[{**check, 'sha256': 'b' * 64}]))
+
     def test_environment_changes_invalidate_but_scheduling_does_not(self):
         with patch.object(reactor_results, 'invocation_environment', return_value={'NODE_OPTIONS': '--a', 'CEDAR_TEST_WORKERS': '2'}):
             baseline = self.key()

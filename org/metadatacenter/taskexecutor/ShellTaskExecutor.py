@@ -114,8 +114,9 @@ class ShellTaskExecutor(TaskExecutor):
                         pool = worker_pool()
                         if pool is not None:
                             environment[POOL_VARIABLE] = str(pool.directory)
-                        checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
-                                                        environment, commands_to_execute)
+                        prepared_checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
+                                                                 environment, commands_to_execute)
+                        checks = prepared_checks
                         ready_after = parameter("package_ready_after")
                         result = None
                         if parameter("reuse_passing_result") is True and identity is not None:
@@ -138,12 +139,15 @@ class ShellTaskExecutor(TaskExecutor):
                         reactor.resolve(isolated_cwd, cedar_home)
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
+                        if checks != prepared_checks:
+                            raise reactor.ReactorError('Verification inputs changed while preparing the frontend build')
                         reactor_stages.configure(environment, repo, result, cedar_home)
                         task_config = reactor_tasks.configure(environment, repo, result, cedar_home, cwd, isolated_cwd)
                         code = self._execute_packaged_commands(
                             task, repo, commands_to_execute, isolated_cwd, job_progress,
                             environment, ready_after, cedar_home, identity,
                         )
+                        reactor.verify_check_sources(checks, cedar_home)
                         # A concurrent checkout edit invalidates all newly recorded stage evidence,
                         # including successful stages of an otherwise failed build.
                         if task_config and reactor_evidence.source_identity(cwd) == identity:

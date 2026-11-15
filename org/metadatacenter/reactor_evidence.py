@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from org.metadatacenter.reactor import ReactorError, store_root
+from org.metadatacenter.reactor import ReactorError, store_root, verify_check_sources
 
 _build = ContextVar('frontend_build_evidence', default=None)
 _inputs = ContextVar('frontend_build_inputs', default=None)
@@ -165,6 +165,7 @@ def finish(home, packages):
     for source, record in records.items():
         if source_identity(source) != record['source']:
             raise ReactorError(f'Frontend source changed during reactor: {source}')
+        verify_check_sources(record['testDependencies'], home)
     value = {'schemaVersion': 1, 'packages': packages,
              'repositories': {str(Path(source).relative_to(Path(home).resolve())): record
                               for source, record in records.items()}}

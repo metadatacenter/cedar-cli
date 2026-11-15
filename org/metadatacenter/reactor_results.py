@@ -208,8 +208,7 @@ def fingerprint(repo, build_root, identity, commands, ready_after, checks, cedar
             "commands": list(commands),
             "packageReadyAfter": ready_after,
             "resolved": resolved_packages(build_root),
-            "integration": [{key: item[key] for key in ("variable", "package", "sha256", "bundleSha256")}
-                            for item in checks],
+            "integration": list(checks),
             "tooling": tooling(cedar_home),
             "environment": environment_inputs(),
             "trace": invocation_environment().get("CEDAR_TEST_TRACE", "retry"),

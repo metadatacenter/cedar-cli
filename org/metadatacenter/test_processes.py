@@ -15,6 +15,22 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
+@app.command("ui-review")
+def ui_review(
+        plan: bool = typer.Option(False, help="Show the Designer pilot's states and review contract."),
+        output: Optional[Path] = typer.Option(None, help="New evidence directory, or existing run for --review."),
+        review: Optional[Path] = typer.Option(None, help="Validate an independent review JSON against a captured run."),
+        seal_review: bool = typer.Option(False, help="Freeze review.json before giving calibration cases to the reviewer."),
+        diagnostic: bool = typer.Option(False, help="Inspect a stale runtime for diagnosis; acceptance stays incomplete.")):
+    """Capture the assembled Designer and validate an independent, evidence-backed UI review."""
+    from org.metadatacenter.ui_review import run_review
+    try:
+        raise typer.Exit(run_review(plan=plan, output=output, review=review, seal_review=seal_review, diagnostic=diagnostic))
+    except (ValueError, OSError, KeyError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("frontend-performance")
 def frontend_performance(
         samples: int = typer.Option(5, min=1, max=30, help="Repetitions per page/profile, each with cold and warm cache."),

@@ -19,10 +19,26 @@ class VerificationEnvironmentTest(unittest.TestCase):
     def test_model_reads_its_vendored_corpus_even_on_a_server(self):
         environment = {"CEDAR_HOME": "/srv/cedar", "CEDAR_PROFILE": "server"}
         repo = SimpleNamespace(name="cedar-model-typescript-library")
-        result = reactor.prepare_checks(repo, Path("/tmp/isolated/model"),
-                                        "/srv/cedar", environment, ["npm run test:coverage"])
-        self.assertEqual([], result)
-        self.assertEqual("/tmp/isolated/model", environment["CEDAR_HOME"])
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            source = home / 'cedar-artifact-library' / reactor.JAVA_DEFAULTS_CORE / 'Field.java'
+            source.parent.mkdir(parents=True)
+            source.write_text('sealed interface Field permits TextField {}')
+            isolated = home / 'isolated/model'
+            corpus = isolated / 'cedar-artifact-library/src/test/resources/example.json'
+            corpus.parent.mkdir(parents=True)
+            corpus.write_text('vendored corpus')
+            result = reactor.prepare_checks(repo, isolated, home, environment, ['npm run test:coverage'])
+            self.assertEqual(str(isolated), environment['CEDAR_HOME'])
+            self.assertEqual('vendored corpus', corpus.read_text())
+            self.assertEqual(source.read_bytes(), (isolated / 'cedar-artifact-library' /
+                             reactor.JAVA_DEFAULTS_CORE / 'Field.java').read_bytes())
+            reactor.verify_check_sources(result, home)
+            source.write_text('sealed interface Field permits TextField, NumericField {}')
+            with self.assertRaisesRegex(reactor.ReactorError, 'sources changed'):
+                reactor.verify_check_sources(result, home)
+            updated = reactor.prepare_checks(repo, isolated, home, environment, [])
+            self.assertNotEqual(result[0]['sha256'], updated[0]['sha256'])
         self.assertEqual("server", environment["CEDAR_PROFILE"])
 
 
