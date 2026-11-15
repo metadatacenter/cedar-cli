@@ -53,6 +53,11 @@ HEADS = {"cedar-a": "a" * 40, "cedar-b": "b" * 40}
 REST_CHECKS = ["runner\x1fpreflight\x1fclean", "folders\x1ffolders\x1fcreated",
                "freeze\x1ffreeze\x1fpin", "runner\x1fpostflight\x1fclean"]
 
+# The one skip the fixtures' inventory allows, with the one reason it may be skipped for.
+SKIP_REASON = "the local terminology store does not serve DOID"
+ALLOWED_SKIPS = {"version": 1, "skips": [
+    {"suite": "freeze", "section": "freeze", "name": "pin", "reason": SKIP_REASON}]}
+
 HEALTHY_TSV = (
     "service\tpid\tport\tlistener\thealth\tbinary\tlog_errors\n"
     "resource\t101\t9007\tup\thealthy\tcurrent\t0\n"
@@ -70,6 +75,7 @@ def fake_home(directory, repositories=HEADS):
     (ops / "e2e" / "rest").mkdir()
     (ops / "e2e" / "rest" / "expected-checks.json").write_text(
         json.dumps({"version": 1, "checks": REST_CHECKS}), encoding="utf-8")
+    (ops / "e2e" / "rest" / "allowed-skips.json").write_text(json.dumps(ALLOWED_SKIPS), encoding="utf-8")
     (ops / "cedar-services.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     (ops / "build-train.json").write_text(json.dumps({
         "organization": "metadatacenter",
@@ -109,7 +115,8 @@ def rest_payload():
         "selectedSuites": ["folders", "freeze"], "inventoryMatched": True,
         "counts": {"passed": 3, "failed": 0, "skipped": 1, "total": 4},
         "checks": [dict(zip(("suite", "section", "name"), key.split("\x1f")),
-                        status="skipped" if key.startswith("freeze\x1f") else "passed") for key in REST_CHECKS],
+                        **({"status": "skipped", "reason": SKIP_REASON} if key.startswith("freeze\x1f")
+                           else {"status": "passed"})) for key in REST_CHECKS],
     }
 
 
@@ -1255,3 +1262,56 @@ class DeployedSourceTest(unittest.TestCase):
                 record = json.loads((smoke_gate.reports_dir(home) / "latest.json").read_text())
                 self.assertEqual(["cedar-b"], record["dirty"])
                 self.assertEqual("f" * 64, record["frontendBuild"])
+
+
+class AllowedSkipTest(unittest.TestCase):
+    """A skipped REST check counts only when the committed allowlist names it with its reason."""
+
+    def _details(self, home, payload):
+        report = home / "rest.json"
+        report.write_text(json.dumps(payload), encoding="utf-8")
+        inventory = home / "cedar-development" / "ops" / "e2e" / "rest" / "expected-checks.json"
+        return smoke_gate._rest_details(report, inventory)
+
+    def test_an_allowed_skip_with_its_reason_is_valid_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            details = self._details(fake_home(directory), rest_payload())
+
+        self.assertTrue(details["evidenceValid"], details.get("reportError"))
+        self.assertEqual([], details["unallowedSkips"])
+
+    def test_a_skip_the_allowlist_does_not_name_fails_the_evidence(self):
+        payload = rest_payload()
+        folders = next(check for check in payload["checks"] if check["suite"] == "folders")
+        folders.update(status="skipped", reason="the deployment has no folders")
+        payload["counts"].update(passed=2, skipped=2)
+        with tempfile.TemporaryDirectory() as directory:
+            details = self._details(fake_home(directory), payload)
+
+        self.assertFalse(details["evidenceValid"])
+        self.assertEqual(["folders\x1ffolders\x1fcreated"], details["unallowedSkips"])
+        self.assertIn("rest/allowed-skips.json does not allow", details["reportError"])
+
+    def test_an_allowed_check_skipped_for_another_reason_fails_the_evidence(self):
+        payload = rest_payload()
+        next(check for check in payload["checks"] if check["suite"] == "freeze")["reason"] = "the search did not answer"
+        with tempfile.TemporaryDirectory() as directory:
+            details = self._details(fake_home(directory), payload)
+
+        self.assertFalse(details["evidenceValid"])
+        self.assertEqual(["freeze\x1ffreeze\x1fpin"], details["unallowedSkips"])
+
+    def test_a_missing_allowlist_fails_the_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            (home / "cedar-development" / "ops" / "e2e" / "rest" / "allowed-skips.json").unlink()
+            details = self._details(home, rest_payload())
+
+        self.assertFalse(details["evidenceValid"])
+        self.assertIn("allowed-skips.json", details["reportError"])
+
+    def test_the_gate_names_unallowed_skips(self):
+        record = report_for()
+        record["tiers"]["rest"].update(unallowedSkips=["folders\x1ffolders\x1fcreated"])
+        self.assertEqual(["the REST smoke skipped 1 check(s) that rest/allowed-skips.json does not allow"],
+                         evaluate(record, HEADS))

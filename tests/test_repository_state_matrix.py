@@ -41,7 +41,8 @@ from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.GitWorker import GitWorker
-from tests.test_smoke_gate import REST_CHECKS, rest_payload, search_payload, write_frontend_build
+from tests.test_smoke_gate import (ALLOWED_SKIPS, REST_CHECKS, rest_payload, search_payload,
+                                   write_frontend_build)
 
 SUBJECT = "cedar-subject"
 OTHER = "cedar-other"
@@ -69,6 +70,7 @@ class Estate:
         (ops / "e2e" / "rest").mkdir()
         (ops / "e2e" / "rest" / "expected-checks.json").write_text(
             json.dumps({"version": 1, "checks": REST_CHECKS}), encoding="utf-8")
+        (ops / "e2e" / "rest" / "allowed-skips.json").write_text(json.dumps(ALLOWED_SKIPS), encoding="utf-8")
         (ops / "build-train.json").write_text(json.dumps({"repositories": list(REPOSITORIES)}),
                                               encoding="utf-8")
         for name in REPOSITORIES:

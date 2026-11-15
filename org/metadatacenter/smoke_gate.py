@@ -633,12 +633,38 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
     return 0 if verdict == "PASS" else 1
 
 
-def _rest_details(rest_report: Path, inventory_path: Path) -> dict:
-    """Require complete REST evidence, independently of the subprocess exit code."""
+def allowed_skips(path: Path) -> set[tuple[str, str, str, str]]:
+    """The skipped REST checks the committed allowlist accepts, each with the one reason it names.
+
+    A skipped check proves nothing about the deployment, and its identity is the same as a passed
+    one's, so the inventory comparison cannot tell them apart. Only a skip this file names, for the
+    reason it names, is evidence of a run that did what it could.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entries = payload.get("skips") if isinstance(payload, dict) and payload.get("version") == 1 else None
+    if not isinstance(entries, list):
+        raise ValueError(f"invalid committed REST skip allowlist: {path}")
+    allowed = set()
+    for entry in entries:
+        values = tuple(entry.get(key) for key in ("suite", "section", "name", "reason")) \
+            if isinstance(entry, dict) else ()
+        if len(values) != 4 or not all(isinstance(value, str) and value for value in values):
+            raise ValueError(f"invalid committed REST skip allowlist: {path}")
+        allowed.add(values)
+    return allowed
+
+
+def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path | None = None) -> dict:
+    """Require complete REST evidence, independently of the subprocess exit code.
+
+    A skipped check counts only when the committed allowlist beside the inventory names it with the
+    reason the run recorded.
+    """
     details = {"report": str(rest_report), "evidenceValid": False}
     try:
         payload = json.loads(rest_report.read_text(encoding="utf-8"))
         inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        allowed = allowed_skips(allowlist_path or inventory_path.with_name("allowed-skips.json"))
         if not isinstance(payload, dict):
             raise ValueError("REST evidence is not an object")
         expected = inventory["checks"]
@@ -655,6 +681,9 @@ def _rest_details(rest_report: Path, inventory_path: Path) -> dict:
         # Compare sequences, preserving multiplicity: a repeated check label is not a set member.
         matched = actual == expected and payload.get("inventoryMatched") is True
         statuses = Counter(check["status"] for check in checks)
+        unallowed = ["\x1f".join(check[key] for key in ("suite", "section", "name")) for check in checks
+                     if check["status"] == "skipped"
+                     and (check["suite"], check["section"], check["name"], check.get("reason")) not in allowed]
         counts = payload["counts"]
         counts_valid = (isinstance(counts, dict)
                         and all(type(counts.get(key)) is int and counts[key] >= 0
@@ -669,10 +698,14 @@ def _rest_details(rest_report: Path, inventory_path: Path) -> dict:
                  and payload.get("interrupted") is False
                  and isinstance(payload.get("runId"), str) and bool(payload["runId"].strip())
                  and started.tzinfo is not None and finished.tzinfo is not None and finished >= started
-                 and payload.get("selectedSuites") == suites and matched and counts_valid)
+                 and payload.get("selectedSuites") == suites and matched and counts_valid and not unallowed)
         details.update({"runId": payload.get("runId"), "runnerVerdict": payload.get("verdict"),
-                        "counts": counts, "inventoryMatched": matched, "evidenceValid": valid})
-        if not valid:
+                        "counts": counts, "inventoryMatched": matched, "evidenceValid": valid,
+                        "unallowedSkips": unallowed})
+        if unallowed:
+            details["reportError"] = (f"{len(unallowed)} REST check(s) skipped that rest/allowed-skips.json does not "
+                                      f"allow with the reason given, such as {unallowed[0].replace(chr(31), ' / ')}")
+        elif not valid:
             details["reportError"] = "REST evidence is incomplete, failed, or does not cover the committed inventory"
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         details["reportError"] = str(error)
@@ -880,6 +913,9 @@ def evaluate(report: Mapping, expected: Mapping[str, str]) -> list[str]:
                             f"{record.get('finishedAt', when)}")
         elif tier == "rest" and record.get("inventoryMatched") is False:
             findings.append("the REST smoke ran a different check inventory than the committed one")
+        elif tier == "rest" and record.get("unallowedSkips"):
+            findings.append(f"the REST smoke skipped {len(record['unallowedSkips'])} check(s) that "
+                            "rest/allowed-skips.json does not allow")
         elif tier == "rest" and record.get("evidenceValid") is not True:
             findings.append("the REST smoke has no validated complete check evidence")
         elif tier == "search" and record.get("evidenceValid") is not True:
