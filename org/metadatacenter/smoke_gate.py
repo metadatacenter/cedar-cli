@@ -33,6 +33,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -297,6 +298,88 @@ def _library_jars(root: Path, version: str | None) -> list[Path]:
     return sorted(jars)
 
 
+# Where cedar-parent's build stamp puts each module's commit: META-INF/cedar/<artifactId>.git.properties.
+STAMPS = "META-INF/cedar/"
+STAMP_SUFFIX = ".git.properties"
+
+
+def jar_stamps(jar: Path) -> dict[str, dict[str, str]]:
+    """The build stamps a jar carries, by module, each with its commit, dirtiness and origin.
+
+    cedar-parent stamps every module at a path of its own, so a shaded server jar holds the stamp of
+    each CEDAR module it embeds. Raises OSError or zipfile.BadZipFile for a jar that cannot be read.
+    """
+    stamps: dict[str, dict[str, str]] = {}
+    with zipfile.ZipFile(jar) as archive:
+        for entry in archive.infolist():
+            name = entry.filename
+            if not (name.startswith(STAMPS) and name.endswith(STAMP_SUFFIX)):
+                continue
+            properties = {}
+            for line in archive.read(entry).decode("utf-8", "replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith(("#", "!")):
+                    continue
+                key, _, value = line.partition("=")
+                # java.util.Properties escapes ':' and '=' in values, as in https\://github.com.
+                properties[key.strip()] = re.sub(r"\\(.)", r"\1", value.strip())
+            stamps[name[len(STAMPS):-len(STAMP_SUFFIX)]] = properties
+    return stamps
+
+
+def stamp_source(properties: Mapping[str, str]) -> tuple[str | None, str | None]:
+    """The repository and commit a stamp names, from its origin's last path segment and its commit."""
+    origin = properties.get("git.remote.origin.url", "").rstrip("/")
+    repository = re.split(r"[/:]", origin)[-1].removesuffix(".git") if origin else None
+    commit = properties.get("git.commit.id") or None
+    return repository or None, commit
+
+
+def stamp_findings(name: str, jar: Path, own: str, head_of) -> list[str]:
+    """Why a jar's stamps do not show it was built from the develop heads, or nothing when they do.
+
+    ``own`` is the repository the jar must carry a stamp of, and ``head_of`` answers the develop head
+    of a repository checked out here, or None. Every stamp of a repository checked out here must name
+    its head.
+    """
+    try:
+        stamps = jar_stamps(jar)
+    except (OSError, zipfile.BadZipFile) as error:
+        return [f"{name} was built into a jar that cannot be read: {error}"]
+    findings, sources = [], set()
+    for module, properties in sorted(stamps.items()):
+        repository, commit = stamp_source(properties)
+        if repository is None or commit is None:
+            findings.append(f"{name} was built with a stamp of {module} that names no repository or commit")
+            continue
+        sources.add(repository)
+        head = head_of(repository)
+        if head is not None and commit != head:
+            findings.append(f"{name} was built from {repository} {commit[:8]}, not develop {head[:8]}")
+    if own not in sources:
+        findings.append(f"{name} was built without a stamp of {own}, so nothing says which commit it holds; "
+                        "rebuild it with the current cedar-parent")
+    return list(dict.fromkeys(findings))
+
+
+def stamped_dirty(cedar_home, services) -> list[str]:
+    """The repositories whose stamps in the deployed server jars say the build saw uncommitted changes."""
+    dirty = set()
+    for service in services:
+        jar = application_jar(cedar_home, service)
+        if jar is None:
+            continue
+        try:
+            stamps = jar_stamps(jar)
+        except (OSError, zipfile.BadZipFile):
+            continue
+        for properties in stamps.values():
+            repository, _commit = stamp_source(properties)
+            if repository and properties.get("git.dirty") == "true":
+                dirty.add(repository)
+    return sorted(dirty)
+
+
 def library_builds(cedar_home, arrival) -> tuple[dict[str, dict[str, int]], list[str]]:
     """The classes of each Java library's latest local build, and why any cannot stand for its head.
 
@@ -317,10 +400,10 @@ def library_builds(cedar_home, arrival) -> tuple[dict[str, dict[str, int]], list
             findings.append(f"{library} was built nowhere on this machine, so nothing shows the servers "
                             f"embed develop {head[1][:8]}")
             continue
-        stale = [jar for jar in jars if jar.stat().st_mtime < head[0]]
-        if stale:
-            findings.append(f"{library} was built before its source: {stale[0].name} predates "
-                            f"{library} develop {head[1][:8]}")
+        behind = [finding for jar in jars
+                  for finding in stamp_findings(library, jar, library, lambda repository: head[1] if repository == library else None)]
+        if behind:
+            findings.append(behind[0])
             continue
         classes: dict[str, int] = {}
         try:
@@ -410,12 +493,8 @@ def source_currency_findings(cedar_home, services, runner=subprocess.run) -> lis
     for service, jar in jars.items():
         repository = f"cedar-{service}-server"
         built = jar.stat().st_mtime
-        own = arrival(repository)
-        if own is not None and built < own[0]:
-            findings.append(
-                f"{service} was built before its source: its jar predates {repository} "
-                f"develop {own[1][:8]}"
-            )
+        findings.extend(stamp_findings(service, jar, repository,
+                                       lambda source: (arrival(source) or (None, None))[1]))
         if parent is not None and built < parent[0]:
             findings.append(f"{service} was built before {JAVA_PARENT} develop {parent[1][:8]}, which "
                             "sets the versions it builds against")
@@ -610,7 +689,8 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         console.print("[red]cannot read native stack status[/red]")
         return 1
     tree_dirty = list(dirty)
-    dirty = sorted(set(dirty) | set(built_dirty))
+    # A jar whose stamps say its build saw uncommitted changes holds code no commit does.
+    dirty = sorted(set(dirty) | set(built_dirty) | (set(stamped_dirty(home, processes)) & set(heads)))
     if dirty:
         console.print(
             "[yellow]Uncommitted changes in: " + ", ".join(dirty)

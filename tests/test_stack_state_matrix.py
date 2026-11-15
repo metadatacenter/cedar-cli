@@ -23,6 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from tests.test_smoke_gate import stamped_jar
 from org.metadatacenter import smoke_gate
 from org.metadatacenter.util.InvocationContext import InvocationContext, use_context
 from org.metadatacenter.util.Util import Util
@@ -62,7 +63,9 @@ class StackStateMatrix(unittest.TestCase):
                          "commit", "--allow-empty", "-m", "source"]):
             subprocess.run(["git", *command], cwd=repository, check=True, capture_output=True)
         self.jar = target / f"cedar-resource-server-application-{VERSION}.jar"
-        self.jar.write_text("jar", encoding="utf-8")
+        self.head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repository, check=True,
+                                   capture_output=True, text=True).stdout.strip()
+        stamped_jar(self.jar, {"cedar-resource-server-application": ("cedar-resource-server", self.head)}, {})
         # Built after its source, unless a state says otherwise.
         later = time.time() + 3600
         os.utime(self.jar, (later, later))
@@ -89,6 +92,8 @@ class StackStateMatrix(unittest.TestCase):
     def check(self, state: str) -> None:
         row, refuses, warns = STATES[state]
         if state == "jar older than its source":
+            # Built from the commit before, as its stamp says.
+            stamped_jar(self.jar, {"cedar-resource-server-application": ("cedar-resource-server", "0" * 40)}, {})
             os.utime(self.jar, (0, 0))
         with use_context(InvocationContext(environment={**os.environ, "CEDAR_VERSION": VERSION})):
             refusals = self.gate(row)
