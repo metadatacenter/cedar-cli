@@ -41,7 +41,7 @@ from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.GitWorker import GitWorker
-from tests.test_smoke_gate import REST_CHECKS, rest_payload, search_payload
+from tests.test_smoke_gate import REST_CHECKS, rest_payload, search_payload, write_frontend_build
 
 SUBJECT = "cedar-subject"
 OTHER = "cedar-other"
@@ -240,7 +240,13 @@ class RepositoryStateMatrix(unittest.TestCase):
         return estate
 
     def record(self, estate: Estate) -> dict | None:
-        """Run `cedarcli test e2e` against the estate, and return what it recorded, if anything."""
+        """Run `cedarcli test e2e` against the estate, and return what it recorded, if anything.
+
+        The frontends are taken to serve a reactor build of every develop head the estate holds, so
+        what the gates decide turns on the checkouts alone.
+        """
+        heads, _dirty, _problems = smoke_gate.develop_heads(estate.home, REPOSITORIES)
+        write_frontend_build(estate.home, heads)
         reports = smoke_gate.reports_dir(estate.home)
         with patch.object(smoke_gate.console, "print"), \
                 patch.object(smoke_gate.shutil, "which", return_value="/usr/bin/npm"):

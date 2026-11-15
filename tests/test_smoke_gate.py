@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -77,7 +78,19 @@ def fake_home(directory, repositories=HEADS):
     }), encoding="utf-8")
     for repository in repositories:
         (home / repository / ".git").mkdir(parents=True)
+    write_frontend_build(home, repositories)
     return home
+
+
+def write_frontend_build(home, sources, dirty=()):
+    """Record a frontend reactor deployment built from the given heads."""
+    store = Path(home) / ".reactor"
+    (store / "builds").mkdir(parents=True, exist_ok=True)
+    build = "f" * 64
+    (store / "runtime.json").write_text(json.dumps({"build": build, "packages": {}}), encoding="utf-8")
+    (store / "builds" / f"{build}.json").write_text(json.dumps({"schemaVersion": 1, "packages": {}, "repositories": {
+        repository: {"source": {"revision": head, "dirty": repository in dirty, "sourceSha256": "0" * 64}}
+        for repository, head in dict(sources).items()}}), encoding="utf-8")
 
 
 def rev_parse(heads):
@@ -1085,3 +1098,160 @@ class SourceCurrencyTest(unittest.TestCase):
 
             self.assertEqual(1, code)
             self.assertEqual([], runner.commands("npm"))
+
+
+class DeployedSourceTest(unittest.TestCase):
+    """What the stack runs must have been built from the heads the record names."""
+
+    def setUp(self):
+        version = patch.dict(os.environ, {"CEDAR_VERSION": "2.9.10-SNAPSHOT"})
+        version.start()
+        self.addCleanup(version.stop)
+
+    @staticmethod
+    def _jar(path, classes, epoch):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, body in classes.items():
+                archive.writestr(name, body)
+        os.utime(path, (epoch, epoch))
+        return path
+
+    def _stack(self, home, *, library_classes, server_classes, library_epoch=3_000, server_epoch=4_000):
+        for repository in ("cedar-resource-server", "cedar-model-validation-library"):
+            (home / repository / ".git").mkdir(parents=True, exist_ok=True)
+        self._jar(home / "cedar-model-validation-library" / "target"
+                  / "cedar-model-validation-library-2.9.10-SNAPSHOT.jar", library_classes, library_epoch)
+        self._jar(home / "cedar-resource-server" / "cedar-resource-server-application" / "target"
+                  / "cedar-resource-server-application-2.9.10-SNAPSHOT.jar", server_classes, server_epoch)
+
+    @staticmethod
+    def _git(commits, moved=None):
+        """Answer `git log` and `git reflog` per repository: commit epoch and, optionally, arrival epoch."""
+        def log(_args, kwargs):
+            epoch = commits.get(Path(kwargs["cwd"]).name)
+            return FakeResult(stdout=f"{epoch} {'c' * 40}") if epoch else FakeResult(128)
+
+        def reflog(_args, kwargs):
+            epoch = (moved or {}).get(Path(kwargs["cwd"]).name)
+            return FakeResult(stdout=f"develop@{{{epoch}}}") if epoch else FakeResult(stdout="")
+        return FakeRunner([(["git", "log"], log), (["git", "reflog"], reflog)])
+
+    def test_a_server_embedding_the_latest_library_build_is_current(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            classes = {"org/metadatacenter/model/validation/Validator.class": b"v2"}
+            self._stack(home, library_classes=classes, server_classes={**classes, "Main.class": b"m"})
+            runner = self._git({"cedar-resource-server": 2_000, "cedar-model-validation-library": 2_000})
+
+            self.assertEqual([], smoke_gate.source_currency_findings(home, ["resource"], runner=runner))
+
+    def test_a_library_commit_after_its_build_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            classes = {"org/metadatacenter/model/validation/Validator.class": b"v1"}
+            self._stack(home, library_classes=classes, server_classes=classes)
+            runner = self._git({"cedar-resource-server": 2_000, "cedar-model-validation-library": 3_500})
+
+            findings = smoke_gate.source_currency_findings(home, ["resource"], runner=runner)
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("cedar-model-validation-library was built before its source", findings[0])
+
+    def test_a_server_built_against_another_library_build_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            name = "org/metadatacenter/model/validation/Validator.class"
+            self._stack(home, library_classes={name: b"rebuilt"}, server_classes={name: b"older snapshot"})
+            runner = self._git({"cedar-resource-server": 2_000, "cedar-model-validation-library": 2_000})
+
+            findings = smoke_gate.source_currency_findings(home, ["resource"], runner=runner)
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("resource was built before its libraries' latest build", findings[0])
+        self.assertIn("cedar-model-validation-library in which 1 of 1 classes differ", findings[0])
+
+    def test_a_commit_pulled_after_the_build_is_reported_though_it_was_made_before(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            classes = {"org/metadatacenter/model/validation/Validator.class": b"v1"}
+            self._stack(home, library_classes=classes, server_classes=classes, server_epoch=4_000)
+            runner = self._git({"cedar-resource-server": 2_000, "cedar-model-validation-library": 2_000},
+                               moved={"cedar-resource-server": 5_000})
+
+            findings = smoke_gate.source_currency_findings(home, ["resource"], runner=runner)
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("resource was built before its source", findings[0])
+
+    def test_a_parent_commit_after_the_build_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            classes = {"org/metadatacenter/model/validation/Validator.class": b"v1"}
+            self._stack(home, library_classes=classes, server_classes=classes)
+            (home / "cedar-parent" / ".git").mkdir(parents=True)
+            runner = self._git({"cedar-resource-server": 2_000, "cedar-model-validation-library": 2_000,
+                                "cedar-parent": 4_500})
+
+            findings = smoke_gate.source_currency_findings(home, ["resource"], runner=runner)
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("resource was built before cedar-parent develop", findings[0])
+
+    def test_a_library_never_built_here_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self._stack(home, library_classes={}, server_classes={"Main.class": b"m"})
+            for jar in (home / "cedar-model-validation-library" / "target").glob("*.jar"):
+                jar.unlink()
+            runner = self._git({"cedar-resource-server": 2_000, "cedar-model-validation-library": 2_000})
+
+            findings = smoke_gate.source_currency_findings(home, ["resource"], runner=runner)
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("cedar-model-validation-library was built nowhere on this machine", findings[0])
+
+    def test_frontends_built_from_another_commit_or_dirty_are_named(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            write_frontend_build(home, {"cedar-a": "a" * 40, "cedar-b": "0" * 40, "cedar-c": "c" * 40},
+                                 dirty={"cedar-c"})
+
+            findings, dirty, build = smoke_gate.frontend_sources(
+                home, {"cedar-a": "a" * 40, "cedar-b": "b" * 40, "cedar-c": "c" * 40})
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("cedar-b built from 00000000, not develop bbbbbbbb", findings[0])
+        self.assertEqual(["cedar-c"], dirty)
+        self.assertEqual("f" * 64, build)
+
+    def test_no_frontend_deployment_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            findings, dirty, build = smoke_gate.frontend_sources(Path(directory), HEADS)
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("no frontend reactor deployment records", findings[0])
+        self.assertIsNone(build)
+
+    def test_a_run_refuses_frontends_built_from_other_heads_and_records_a_dirty_build(self):
+        with patch("org.metadatacenter.smoke_gate.shutil.which", return_value="/usr/bin/npm"):
+            with tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                write_frontend_build(home, {"cedar-a": "a" * 40, "cedar-b": "0" * 40})
+                runner = runner_for(home)
+
+                code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+                self.assertEqual(1, code)
+                self.assertEqual([], runner.commands("npm"))
+
+            with tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                write_frontend_build(home, HEADS, dirty={"cedar-b"})
+                runner = runner_for(home)
+
+                run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+                record = json.loads((smoke_gate.reports_dir(home) / "latest.json").read_text())
+                self.assertEqual(["cedar-b"], record["dirty"])
+                self.assertEqual("f" * 64, record["frontendBuild"])

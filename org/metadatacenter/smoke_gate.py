@@ -15,12 +15,14 @@ latest file, because a train is released hours or days after it is dispatched an
 on in between: a rerun after a documentation commit must not erase the evidence the release still
 needs.
 
-The record must also answer for the jars. The controller's own `current` column establishes that
-no process predates its jar, which is a narrower question than it looks: a jar can itself predate
-the commit the record names, and every row reads `current` while it does. A run therefore refuses
-to start while any service is stale or unhealthy, and equally while any deployed jar was written
-before its repository's develop head, because the evidence would otherwise certify code the stack
-is not running.
+The record must also answer for what the stack runs. The controller's own `current` column
+establishes that no process predates its jar, which is a narrower question than it looks: a jar can
+itself predate the commit the record names, and every row reads `current` while it does. A run
+therefore refuses to start while any service is stale or unhealthy, while any deployed jar was
+written before its own repository's head, its parent's or a library's reached this machine, while a
+server jar embeds a build of a library other than that library's latest, and while the frontend
+reactor's deployed build was made from commits other than the heads the record would name. The
+evidence would otherwise certify code the stack is not running.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ import shutil
 import subprocess
 import time
 import uuid
+import zipfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -195,6 +198,119 @@ def stack_findings(cedar_home, runner=subprocess.run) -> list[str]:
     return findings
 
 
+# The Java repositories whose classes the server jars embed, and the parent whose managed versions
+# every server builds against. A commit to any of them reaches the stack only through a rebuild of
+# the servers, which their own repositories' heads do not show.
+JAVA_LIBRARIES = ("cedar-artifact-library", "cedar-config-library", "cedar-core-library",
+                  "cedar-microservice-libraries", "cedar-model-library", "cedar-model-validation-library")
+JAVA_PARENT = "cedar-parent"
+
+
+def head_arrival(cedar_home, repository: str, runner=subprocess.run) -> tuple[float, str] | None:
+    """When the local develop branch took its current commit, and that commit, or None.
+
+    A commit's own date says when it was made, which can be long before it reached this machine: a
+    commit made elsewhere before a build and pulled after it would pass a comparison with that date.
+    The reflog records when the branch moved here, so the later of the two is the moment a build
+    must follow. A branch without a reflog falls back to the commit's date.
+    """
+    root = _home(cedar_home) / repository
+    if not (root / ".git").exists():
+        return None
+    code, head, _detail = _capture(
+        runner, ["git", "log", "-1", "--format=%ct %H", "refs/heads/develop"], cwd=root)
+    if code != 0 or not head.strip():
+        return None
+    committed, _, revision = head.strip().partition(" ")
+    try:
+        arrived = float(int(committed))
+    except ValueError:
+        return None
+    code, moved, _detail = _capture(
+        runner, ["git", "reflog", "show", "-1", "--date=unix", "--format=%gd", "refs/heads/develop"], cwd=root)
+    stamp = moved.strip().rpartition("@{")[2].rstrip("}") if code == 0 else ""
+    if stamp.isdigit():
+        arrived = max(arrived, float(stamp))
+    return arrived, revision
+
+
+def _library_jars(root: Path, version: str | None) -> list[Path]:
+    """The jars a library's local build wrote, without sources, javadoc, tests or shading inputs."""
+    jars = []
+    for directory, subdirectories, files in os.walk(root):
+        subdirectories[:] = [name for name in subdirectories if name not in {".git", "node_modules", "src"}]
+        if os.path.basename(directory) != "target":
+            continue
+        subdirectories[:] = []
+        for name in files:
+            if (name.endswith(".jar") and not name.startswith("original-")
+                    and not name.endswith(("-sources.jar", "-javadoc.jar", "-tests.jar"))
+                    and (not version or name.endswith(f"-{version}.jar"))):
+                jars.append(Path(directory) / name)
+    return sorted(jars)
+
+
+def library_builds(cedar_home, arrival) -> tuple[dict[str, dict[str, int]], list[str]]:
+    """The classes of each Java library's latest local build, and why any cannot stand for its head.
+
+    ``arrival`` answers ``head_arrival`` for a repository. A library whose build predates its head
+    cannot hold it, and one never built here leaves the servers embedding whatever snapshot the
+    build resolved, which no record can name.
+    """
+    home = _home(cedar_home)
+    version = invocation_environment().get("CEDAR_VERSION")
+    builds: dict[str, dict[str, int]] = {}
+    findings: list[str] = []
+    for library in JAVA_LIBRARIES:
+        head = arrival(library)
+        if head is None:
+            continue
+        jars = _library_jars(home / library, version)
+        if not jars:
+            findings.append(f"{library} was built nowhere on this machine, so nothing shows the servers "
+                            f"embed develop {head[1][:8]}")
+            continue
+        stale = [jar for jar in jars if jar.stat().st_mtime < head[0]]
+        if stale:
+            findings.append(f"{library} was built before its source: {stale[0].name} predates "
+                            f"{library} develop {head[1][:8]}")
+            continue
+        classes: dict[str, int] = {}
+        try:
+            for jar in jars:
+                with zipfile.ZipFile(jar) as archive:
+                    classes.update({entry.filename: entry.CRC for entry in archive.infolist()
+                                    if entry.filename.endswith(".class")})
+        except (OSError, zipfile.BadZipFile) as error:
+            findings.append(f"{library} was built into a jar that cannot be read: {error}")
+            continue
+        builds[library] = classes
+    return builds, findings
+
+
+def embedded_library_findings(service: str, jar: Path, libraries: Mapping[str, Mapping[str, int]]) -> list[str]:
+    """Which libraries a server jar embeds in a build other than their latest local one.
+
+    A server jar holds its libraries' classes byte for byte, so a class whose checksum differs from
+    the library's own build shows the server was built against another build of it, typically an
+    older snapshot. A library none of whose classes the jar holds is one the server does not use.
+    """
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            served = {entry.filename: entry.CRC for entry in archive.infolist()}
+    except (OSError, zipfile.BadZipFile) as error:
+        return [f"{service} was built into a jar that cannot be read: {error}"]
+    findings = []
+    for library, classes in libraries.items():
+        shared = [name for name in classes if name in served]
+        differing = [name for name in shared if served[name] != classes[name]]
+        if differing:
+            findings.append(f"{service} was built before its libraries' latest build: it embeds a build of "
+                            f"{library} in which {len(differing)} of {len(shared)} classes differ, such as "
+                            f"{differing[0]}")
+    return findings
+
+
 def application_jar(cedar_home, service: str) -> Path | None:
     """The jar the controller would run for a microservice, or None when it has not been built.
 
@@ -220,34 +336,81 @@ def source_currency_findings(cedar_home, services, runner=subprocess.run) -> lis
 
     The controller's `current` column compares a process with its jar, which answers whether a
     redeploy happened, not whether the jar holds the commit the record names. A jar written
-    before its repository's develop head cannot contain that head, and a run recorded against
-    it certifies code the stack is not running. That is the failure this module's own note
-    called the operator's discipline; it is cheap enough to ask.
+    before its repository's develop head reached this machine cannot contain that head, and a
+    run recorded against it certifies code the stack is not running. The same holds for the
+    parent whose versions the servers build against and for every library whose classes they
+    embed. A library is held to its head through its own build, and each server jar must embed
+    that build's classes unchanged.
     """
-    findings = []
+    arrivals: dict[str, tuple[float, str] | None] = {}
+
+    def arrival(repository):
+        if repository not in arrivals:
+            arrivals[repository] = head_arrival(cedar_home, repository, runner)
+        return arrivals[repository]
+
+    jars = {}
     for service in services:
-        repository = f"cedar-{service}-server"
-        root = _home(cedar_home) / repository
-        if not (root / ".git").exists():
+        if not (_home(cedar_home) / f"cedar-{service}-server" / ".git").exists():
             continue
         jar = application_jar(cedar_home, service)
-        if jar is None:
-            continue
-        code, head, _detail = _capture(
-            runner, ["git", "log", "-1", "--format=%ct %H", "refs/heads/develop"], cwd=root)
-        if code != 0 or not head.strip():
-            continue
-        committed, _, revision = head.strip().partition(" ")
-        try:
-            committed_at = int(committed)
-        except ValueError:
-            continue
-        if jar.stat().st_mtime < committed_at:
+        if jar is not None:
+            jars[service] = jar
+    if not jars:
+        return []
+    libraries, findings = library_builds(cedar_home, arrival)
+    parent = arrival(JAVA_PARENT)
+    for service, jar in jars.items():
+        repository = f"cedar-{service}-server"
+        built = jar.stat().st_mtime
+        own = arrival(repository)
+        if own is not None and built < own[0]:
             findings.append(
                 f"{service} was built before its source: its jar predates {repository} "
-                f"develop {revision[:8]}"
+                f"develop {own[1][:8]}"
             )
+        if parent is not None and built < parent[0]:
+            findings.append(f"{service} was built before {JAVA_PARENT} develop {parent[1][:8]}, which "
+                            "sets the versions it builds against")
+        if libraries:
+            findings.extend(embedded_library_findings(service, jar, libraries))
     return findings
+
+
+def frontend_sources(cedar_home, heads: Mapping[str, str]) -> tuple[list[str], list[str], str | None]:
+    """Which recorded heads the served frontends were not built from, and which they were built dirty.
+
+    The frontend reactor records the commit of every repository it built, and whether the tree held
+    uncommitted changes, and restarts the frontends with that build. A head the build did not take
+    is code no frontend serves. Uncommitted edits are valid inputs to a development build, so a
+    dirty build is not a reason to stop; the repository is recorded as dirty instead, which the
+    gate refuses for a train or a release. Returns the findings, the dirty repositories and the
+    build's digest.
+    """
+    from org.metadatacenter.reactor import store_root
+    root = store_root(_home(cedar_home))
+    try:
+        runtime = json.loads((root / "runtime.json").read_text(encoding="utf-8"))
+        build = runtime["build"]
+        repositories = json.loads((root / "builds" / f"{build}.json").read_text(encoding="utf-8"))["repositories"]
+        if not isinstance(repositories, dict):
+            raise TypeError("the build names no repositories")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return ([f"no frontend reactor deployment records which commits the frontends serve ({error}); "
+                 "run cedarcli build frontends"], [], None)
+    findings, dirty = [], []
+    for path, record in sorted(repositories.items()):
+        repository = Path(path).parts[0]
+        if repository not in heads:
+            continue
+        source = record.get("source") if isinstance(record, dict) else None
+        revision = source.get("revision") if isinstance(source, dict) else None
+        if not isinstance(revision, str) or revision != heads[repository]:
+            findings.append(f"the frontends serve {path} built from {str(revision)[:8]}, not develop "
+                            f"{heads[repository][:8]}; run cedarcli build frontends")
+        elif source.get("dirty") is not False:
+            dirty.append(repository)
+    return findings, sorted(set(dirty)), build
 
 
 def _now() -> dt.datetime:
@@ -357,6 +520,13 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         for problem in head_problems:
             console.print(f"  - {problem}", markup=False)
         return 1
+    frontend_problems, built_dirty, frontend_build = frontend_sources(home, heads)
+    if frontend_problems:
+        console.print("[red]The frontends cannot stand for the source heads:[/red]")
+        for problem in frontend_problems:
+            console.print(f"  - {problem}", markup=False)
+        return 1
+    dirty = sorted(set(dirty) | set(built_dirty))
     if dirty:
         console.print(
             "[yellow]Uncommitted changes in: " + ", ".join(dirty)
@@ -451,6 +621,7 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         "sourcesDigest": digest,
         "sources": dict(sorted(heads.items())),
         "dirty": sorted(dirty),
+        "frontendBuild": frontend_build,
         "tiers": tiers,
     }
     payload = json.dumps(report, indent=2) + "\n"
