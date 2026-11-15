@@ -68,6 +68,35 @@ HEALTHY_TSV = (
 )
 
 
+# The browser scripts' committed steps, and the split tier's committed journey scenarios.
+BROWSER_STEPS = {"version": 1, "scripts": {"login-smoke-test": ["login", "seed"],
+                                            "metadata-first-save-smoke": ["first-save"]}}
+JOURNEY_SCENARIOS = {"tab-isolation": [{"id": "tabs", "promise": "each tab keeps its own draft"}]}
+
+
+def browser_runner(exit_code=0, steps=None):
+    """The browser tier: each script writes the steps it completed where the gate asks."""
+    def answer(_args, kwargs):
+        directory = Path(kwargs["env"]["CEDAR_BROWSER_SMOKE_REPORTS"])
+        directory.mkdir(parents=True, exist_ok=True)
+        for script, expected in BROWSER_STEPS["scripts"].items():
+            completed = (steps or {}).get(script, expected)
+            (directory / f"{script}.json").write_text(json.dumps({
+                "schemaVersion": 1, "script": script, "verdict": "PASS" if exit_code == 0 else "FAIL",
+                "steps": completed, "failedStep": None}), encoding="utf-8")
+        return FakeResult(exit_code)
+    return answer
+
+
+def _drop_scenarios(result, args):
+    """Rewrite the split report the fake runner wrote, as if its one journey ran no scenario."""
+    report = Path(next(a for a in args if a.startswith("--report=")).split("=", 1)[1])
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["journeyResults"][0]["scenarios"] = []
+    report.write_text(json.dumps(payload), encoding="utf-8")
+    return result
+
+
 def fake_home(directory, repositories=HEADS):
     home = Path(directory)
     ops = home / "cedar-development" / "ops"
@@ -77,6 +106,8 @@ def fake_home(directory, repositories=HEADS):
     (ops / "e2e" / "rest" / "expected-checks.json").write_text(
         json.dumps({"version": 1, "checks": REST_CHECKS}), encoding="utf-8")
     (ops / "e2e" / "rest" / "allowed-skips.json").write_text(json.dumps(ALLOWED_SKIPS), encoding="utf-8")
+    (ops / "e2e" / "browser-steps.json").write_text(json.dumps(BROWSER_STEPS), encoding="utf-8")
+    (ops / "e2e" / "journey-scenarios.json").write_text(json.dumps(JOURNEY_SCENARIOS), encoding="utf-8")
     (ops / "cedar-services.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     (ops / "build-train.json").write_text(json.dumps({
         "organization": "metadatacenter",
@@ -156,23 +187,34 @@ def rest_runner(verdict="PASS", inventory_matched=True, exit_code=0, payload=Non
     return answer
 
 
+def split_payload(verdict="PASS", exit_code=0, failing_script=None, failing_step=None):
+    """A split tier report: the runner's details and the evidence that it ran its inventory."""
+    return {
+        "schemaVersion": 1, "verdict": verdict,
+        "failingScript": failing_script, "failingStep": failing_step,
+        "failure": "locator.click: Timeout 25000ms exceeded." if failing_step else None,
+        "scripts": [{"name": "modern-workspace", "command": ["node", "modern-workspace-smoke.mjs"],
+                     "exitCode": exit_code, "seconds": 371.4}],
+        "notRun": ["ced-host"] if exit_code else [],
+        "inventoryMode": "verified", "failures": [], "checks": 12,
+        "units": [{"name": "modern-workspace", "kind": "chain", "outcome": "pass" if exit_code == 0 else "fail"},
+                  {"name": "tab-isolation", "kind": "journey", "outcome": "pass"}],
+        "journeyResults": [{"name": "tab-isolation", "journeyKey": "tab-isolation", "outcome": "pass",
+                            "scenarios": [{"id": "tabs", "promise": "each tab keeps its own draft"}]}],
+        "machine": {"start": {"load": [3.1, 2.9, 2.5], "swap": None},
+                    "end": {"load": [4.0, 3.2, 2.6], "swap": None}},
+        "steps": [{"script": "modern-workspace", "step": name, "seconds": seconds}
+                  for name, seconds in (("login", 1.2), ("metadata", 41.0), ("sharing", 30.5),
+                                        ("ownership", 12.0), ("save-status", 15.1), ("delete", 9.9))],
+    }
+
+
 def split_runner(verdict="PASS", exit_code=0, failing_script=None, failing_step=None):
     def answer(args, _kwargs):
         report = next(a for a in args if a.startswith("--report=")).split("=", 1)[1]
         Path(report).parent.mkdir(parents=True, exist_ok=True)
-        Path(report).write_text(json.dumps({
-            "schemaVersion": 1, "verdict": verdict,
-            "failingScript": failing_script, "failingStep": failing_step,
-            "failure": "locator.click: Timeout 25000ms exceeded." if failing_step else None,
-            "scripts": [{"name": "modern-workspace", "command": ["node", "modern-workspace-smoke.mjs"],
-                         "exitCode": exit_code, "seconds": 371.4}],
-            "notRun": ["ced-host"] if exit_code else [],
-            "machine": {"start": {"load": [3.1, 2.9, 2.5], "swap": None},
-                        "end": {"load": [4.0, 3.2, 2.6], "swap": None}},
-            "steps": [{"script": "modern-workspace", "step": name, "seconds": seconds}
-                      for name, seconds in (("login", 1.2), ("metadata", 41.0), ("sharing", 30.5),
-                                            ("ownership", 12.0), ("save-status", 15.1), ("delete", 9.9))],
-        }), encoding="utf-8")
+        Path(report).write_text(json.dumps(split_payload(verdict, exit_code, failing_script, failing_step)),
+                                encoding="utf-8")
         return FakeResult(exit_code)
     return answer
 
@@ -294,7 +336,7 @@ def search_runner(payload=None, exit_code=0):
     return answer
 
 
-def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, browser=FakeResult(0),
+def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, browser=None,
                split=None, search=None):
     controller = str(home / "cedar-development" / "ops" / "cedar-services.sh")
 
@@ -308,7 +350,7 @@ def runner_for(home, *, tsv=HEALTHY_TSV, heads=HEADS, dirty=(), rest=None, brows
         (("git", "status"), status),
         (("npm", "run", "smoke:rest"), rest or rest_runner()),
         (("npm", "run", "smoke:workspace:modern:full"), split or split_runner()),
-        (("npm", "run", "smoke"), browser),
+        (("npm", "run", "smoke"), browser or browser_runner()),
         (("npm", "run", "smoke:search"), search or search_runner()),
     ])
 
@@ -333,8 +375,8 @@ def report_for(heads=HEADS, **overrides):
         "tiers": {
             "rest": {"verdict": "PASS", "inventoryMatched": True, "evidenceValid": True,
                      "finishedAt": "2026-09-07T10:01:30+00:00"},
-            "browser": {"verdict": "PASS", "finishedAt": "2026-09-07T10:02:30+00:00"},
-            "split": {"verdict": "PASS", "finishedAt": "2026-09-07T10:03:30+00:00"},
+            "browser": {"verdict": "PASS", "evidenceValid": True, "finishedAt": "2026-09-07T10:02:30+00:00"},
+            "split": {"verdict": "PASS", "evidenceValid": True, "finishedAt": "2026-09-07T10:03:30+00:00"},
             "search": {"verdict": "PASS", "evidenceValid": True},
         },
     }
@@ -529,18 +571,37 @@ class RunSmokeTest(unittest.TestCase):
             self.assertEqual(["metadata", "sharing", "save-status", "ownership", "delete"],
                              [step["step"] for step in split["slowestSteps"]])
 
-    def test_a_split_run_without_a_report_keeps_its_exit_code_as_the_verdict(self):
+    def test_a_split_run_without_a_report_fails_for_want_of_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)
             runner = runner_for(home, split=FakeResult(0))
 
             code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
 
-            self.assertEqual(0, code)
+            self.assertEqual(1, code)
             reports = home / "cedar-development" / "ops" / "e2e" / "reports" / "smoke-gate"
             split = json.loads((reports / "latest.json").read_text(encoding="utf-8"))["tiers"]["split"]
-            self.assertEqual("PASS", split["verdict"])
+            self.assertEqual("FAIL", split["verdict"])
             self.assertIn("reportError", split)
+            self.assertFalse(split["evidenceValid"])
+
+    def test_browser_and_split_tiers_must_report_every_step_and_scenario_their_inventories_name(self):
+        cases = {
+            "browser": dict(browser=browser_runner(steps={"login-smoke-test": ["login"]})),
+            "split": dict(split=lambda args, kwargs: _drop_scenarios(split_runner()(args, kwargs), args)),
+        }
+        for tier, overrides in cases.items():
+            with self.subTest(tier=tier), tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                runner = runner_for(home, **overrides)
+
+                code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+                self.assertEqual(1, code)
+                report = read_report(home, HEADS)
+                self.assertEqual("FAIL", report["tiers"][tier]["verdict"])
+                self.assertFalse(report["tiers"][tier]["evidenceValid"])
+                self.assertIn(f"the {tier} smoke", " ".join(evaluate(report, HEADS)))
 
     def test_the_split_record_names_every_failing_lane_and_its_step(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -670,8 +731,9 @@ class RunSmokeTest(unittest.TestCase):
                 kwargs["stdout"].write("rest output\n")
                 return write_report(args, kwargs)
 
-            def browser(_args, _kwargs):
+            def browser(args, kwargs):
                 browser_started.set()
+                browser_runner()(args, kwargs)
                 return FakeResult(0)
 
             runner = runner_for(home, rest=rest, browser=browser)

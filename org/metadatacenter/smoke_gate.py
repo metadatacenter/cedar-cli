@@ -976,6 +976,9 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
     split_report = reports / f"split-smoke-{digest}-{uuid.uuid4().hex}.json"
     # A refused or killed run must never inherit an earlier search verdict at the same source heads.
     search_report = reports / f"search-smoke-{digest}-{uuid.uuid4().hex}.json"
+    # Each browser script writes the steps it completed here, for comparison with the inventory.
+    browser_reports = reports / f"browser-smoke-{digest}-{uuid.uuid4().hex}"
+    tier_environment = {"browser": {"CEDAR_BROWSER_SMOKE_REPORTS": str(browser_reports)}}
     commands = {
         "rest": ["npm", "run", "smoke:rest", "--", f"--report={rest_report}"],
         "browser": ["npm", "run", "smoke"],
@@ -996,7 +999,8 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
     def run(tier, **streams) -> dict:
         tier_started = clock()
         try:
-            result = runner(commands[tier], cwd=str(e2e), env=environment, check=False, **streams)
+            result = runner(commands[tier], cwd=str(e2e), env={**environment, **tier_environment.get(tier, {})},
+                            check=False, **streams)
             code = result.returncode
         except OSError as error:
             console.print(f"[red]could not run the {tier} smoke: {error}[/red]")
@@ -1015,8 +1019,12 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
                 record["verdict"] = "FAIL"
         if tier == "browser":
             record["expectedCeeVersion"] = cee_version
+            record.update(_browser_details(browser_reports, e2e / "browser-steps.json"))
         if tier == "split":
             record.update(_split_details(split_report, code))
+            record.update(_split_evidence(split_report, e2e / "journey-scenarios.json", code))
+        if tier in ("browser", "split") and not record["evidenceValid"]:
+            record["verdict"] = "FAIL"
         if tier == "search":
             record.update(_search_details(search_report))
             if not record["evidenceValid"]:
@@ -1150,6 +1158,92 @@ def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path 
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         details["reportError"] = str(error)
     return details
+
+
+def _browser_details(directory: Path, inventory_path: Path) -> dict:
+    """Require every browser script to report each step the committed inventory names, in order.
+
+    An exit code says nothing about which checks a script made, so a script that stopped checking
+    halfway and exited 0 passed. Each script now writes the steps it completed, and the record
+    holds the run to browser-steps.json.
+    """
+    details = {"reports": str(directory), "evidenceValid": False}
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        scripts = inventory.get("scripts") if isinstance(inventory, dict) and inventory.get("version") == 1 else None
+        if (not isinstance(scripts, dict) or not scripts
+                or not all(isinstance(steps, list) and steps and all(isinstance(step, str) and step for step in steps)
+                           for steps in scripts.values())):
+            raise ValueError(f"invalid committed browser step inventory: {inventory_path}")
+        reported, problems = {}, []
+        for script, expected in scripts.items():
+            try:
+                payload = json.loads((directory / f"{script}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                problems.append(f"{script} wrote no readable step report ({error})")
+                continue
+            steps = payload.get("steps") if isinstance(payload, dict) else None
+            reported[script] = {"verdict": payload.get("verdict") if isinstance(payload, dict) else None,
+                                "steps": len(steps) if isinstance(steps, list) else None,
+                                "failedStep": payload.get("failedStep") if isinstance(payload, dict) else None}
+            if payload.get("schemaVersion") != 1 or payload.get("script") != script or payload.get("verdict") != "PASS":
+                problems.append(f"{script} reported {payload.get('verdict')!r}"
+                                + (f" in step {payload['failedStep']}" if payload.get("failedStep") else ""))
+            elif steps != expected:
+                missing = [step for step in expected if step not in (steps or [])]
+                problems.append(f"{script} completed other steps than browser-steps.json names"
+                                + (f", without {missing[0]}" if missing else ""))
+        details.update({"scripts": reported, "evidenceValid": not problems})
+        if problems:
+            details["reportError"] = "; ".join(problems)
+    except (OSError, ValueError, AttributeError, TypeError) as error:
+        details["reportError"] = str(error)
+    return details
+
+
+def _split_evidence(split_report: Path, inventory_path: Path, exit_code: int | None = None) -> dict:
+    """Require the split tier to have run every unit and every committed journey scenario.
+
+    The tier runner's verdict and exit code say that nothing it ran failed, not that it ran what it
+    should: every unit must have passed, nothing may be left unrun, and the journeys must have run
+    exactly the scenarios journey-scenarios.json commits, each journey at least once.
+    """
+    evidence = {"evidenceValid": False}
+    if exit_code == SPLIT_LOCK_REFUSED:
+        return evidence
+    try:
+        payload = json.loads(split_report.read_text(encoding="utf-8"))
+        committed = json.loads(inventory_path.read_text(encoding="utf-8"))
+        if not isinstance(committed, dict) or not committed:
+            raise ValueError(f"invalid committed journey inventory: {inventory_path}")
+        expected = {key: sorted(scenario["id"] for scenario in scenarios) for key, scenarios in committed.items()}
+        units, journeys = payload["units"], payload["journeyResults"]
+        ran: dict[str, list[list[str]]] = {}
+        for journey in journeys:
+            if journey.get("outcome") == "pass":
+                ran.setdefault(journey.get("journeyKey"), []).append(
+                    sorted(scenario["id"] for scenario in journey.get("scenarios") or []))
+        unmatched = sorted(key for key in expected
+                           if not ran.get(key) or any(ids != expected[key] for ids in ran[key]))
+        unexpected = sorted(str(key) for key in ran if key not in expected)
+        problems = []
+        if payload.get("verdict") != "PASS" or payload.get("inventoryMode") != "verified":
+            problems.append(f"the split runner reported {payload.get('verdict')!r} in "
+                            f"{payload.get('inventoryMode')!r} inventory mode")
+        if payload.get("notRun") != [] or payload.get("failures") != []:
+            problems.append("the split runner left units unrun or failed")
+        if not isinstance(units, list) or not units or any(unit.get("outcome") != "pass" for unit in units):
+            problems.append("not every split unit passed")
+        if unmatched or unexpected:
+            problems.append("the journeys ran other scenarios than journey-scenarios.json commits, such as "
+                            + (unmatched or unexpected)[0])
+        evidence.update({"evidenceValid": not problems, "inventoryMatched": not (unmatched or unexpected),
+                         "journeys": len(ran)})
+        if problems:
+            evidence["evidenceError"] = "; ".join(problems)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        evidence["evidenceError"] = str(error)
+    return evidence
 
 
 def _search_details(path: Path) -> dict:
@@ -1363,6 +1457,8 @@ def evaluate(report: Mapping, expected: Mapping[str, str]) -> list[str]:
             findings.append("the REST smoke has no validated complete check evidence")
         elif tier == "search" and record.get("evidenceValid") is not True:
             findings.append("the search smoke has no complete matrix and cleanup evidence")
+        elif tier in ("browser", "split") and record.get("evidenceValid") is not True:
+            findings.append(f"the {tier} smoke has no evidence that it ran every step its inventory names")
     return findings
 
 
