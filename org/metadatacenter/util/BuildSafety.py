@@ -471,14 +471,10 @@ def copy_frontend_source(checkout: Path, copy_root: Path, *, versioned=True) -> 
                         ignore=frontend_copy_ignore(checkout))
         return []
     from org.metadatacenter.reactor_evidence import source_paths
-    excluded = frontend_copy_ignore(checkout)
     copied = []
     for raw in source_paths(checkout):
         relative = Path(os.fsdecode(raw))
         origin = checkout / relative
-        if any(name in excluded(str(checkout / Path(*relative.parts[:index])), [name])
-               for index, name in enumerate(relative.parts)):
-            continue
         copied.append(raw)
         target = copy_root / relative
         if origin.is_symlink():

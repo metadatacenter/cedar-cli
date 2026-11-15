@@ -23,9 +23,20 @@ class Selection(dict):
 
 def source_paths(source):
     """Tracked/untracked source plus ignored local tool configuration, from a repository root."""
+    from org.metadatacenter.util.BuildSafety import frontend_copy_ignore
     source = Path(source)
-    paths = set(subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z',
-                '--cached', '--others', '--exclude-standard']).split(b'\0')) - {b''}
+    def listed(*args):
+        return set(subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z',
+                   *args]).split(b'\0')) - {b''}
+    # Tracked assets are inputs even beneath a directory conventionally used for dependencies.
+    # Untracked installed dependencies and staging outputs are neither hashed nor copied.
+    paths = listed('--cached')
+    excluded = frontend_copy_ignore(source)
+    for raw in listed('--others', '--exclude-standard'):
+        parts = Path(os.fsdecode(raw)).parts
+        if not any(name in excluded(str(source / Path(*parts[:index])), [name])
+                   for index, name in enumerate(parts)):
+            paths.add(raw)
     # Ignored local configuration is still an input to npm/build tools.
     directories = [source, *(p for p in source.iterdir() if p.is_dir() and p.name not in
                    {'.git', 'node_modules', '.angular', 'dist', 'dist-npm', '.venv'})]
