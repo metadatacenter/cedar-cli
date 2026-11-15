@@ -402,7 +402,7 @@ def isolated_frontend_workspace(source: Path, *, manifests_only=False):
                             target.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(origin, target)
             else:
-                shutil.copytree(checkout, copy_root, symlinks=True, ignore=frontend_copy_ignore(checkout))
+                copy_frontend_source(checkout, copy_root, versioned=before_root is not None)
             existing_path = environment.get("PATH", "")
             local_binaries = str(build_root / "node_modules" / ".bin")
             environment.update({
@@ -440,17 +440,56 @@ def require_no_frontend_runtime_collision(source: Path) -> None:
 
 
 def materialize_frontend_workspace(source: Path, build_root: Path):
-    """Only a cache miss needs a complete copy. Re-resolve copied manifests afterwards."""
+    """Only a cache miss needs a complete copy. Re-resolve copied manifests afterwards.
+
+    Returns the copy's root and the repository-relative paths copied into it, which are the paths
+    the reactor's source identity fingerprints.
+    """
     source = source.resolve()
-    checkout = repository_root(source) or source
+    versioned = repository_root(source)
+    checkout = versioned or source
     relative = source.relative_to(checkout)
     copy_root = build_root
     for _part in relative.parts:
         copy_root = copy_root.parent
     if copy_root.resolve() == checkout.resolve() or copy_root.resolve().is_relative_to(checkout.resolve()):
         raise BuildSafetyError('frontend materialization requires a separate disposable workspace')
-    shutil.copytree(checkout, copy_root, symlinks=True, dirs_exist_ok=True,
-                    ignore=frontend_copy_ignore(checkout))
+    return copy_root, copy_frontend_source(checkout, copy_root, versioned=versioned is not None)
+
+
+def copy_frontend_source(checkout: Path, copy_root: Path, *, versioned=True) -> list[bytes]:
+    """Copy into `copy_root` exactly the files the reactor's source identity fingerprints.
+
+    Those are the tracked files, the untracked files Git does not ignore, and the ignored local
+    tool configuration the identity also hashes. Any other ignored file, such as a dist/ an earlier
+    local build left, is no input the identity can name, so it stays out of the copy rather than
+    reaching the build unhashed. A tree outside Git has no identity and is copied whole. Returns the
+    copied paths, relative to the checkout.
+    """
+    if not versioned:
+        shutil.copytree(checkout, copy_root, symlinks=True, dirs_exist_ok=True,
+                        ignore=frontend_copy_ignore(checkout))
+        return []
+    from org.metadatacenter.reactor_evidence import source_paths
+    excluded = frontend_copy_ignore(checkout)
+    copied = []
+    for raw in source_paths(checkout):
+        relative = Path(os.fsdecode(raw))
+        origin = checkout / relative
+        if any(name in excluded(str(checkout / Path(*relative.parts[:index])), [name])
+               for index, name in enumerate(relative.parts)):
+            continue
+        copied.append(raw)
+        target = copy_root / relative
+        if origin.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            os.symlink(os.readlink(origin), target)
+        elif origin.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(origin, target)
+    return copied
 
 
 def frontend_copy_ignore(checkout):

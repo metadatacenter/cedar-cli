@@ -127,6 +127,30 @@ class BuildSafetyTest(unittest.TestCase):
             with self.assertRaises(BuildSafetyError):
                 materialize_frontend_workspace(repo, repo)
 
+    def test_a_build_copy_holds_exactly_the_files_the_source_identity_hashes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.repository(Path(directory))
+            (repo / '.gitignore').write_text('dist/\n.env\n', encoding='utf-8')
+            (repo / 'package.json').write_text('{"name":"example"}')
+            (repo / 'dist').mkdir()
+            (repo / 'dist/stale.js').write_text('an earlier local build')
+            (repo / '.env').write_text('LOCAL=1\n')
+            (repo / 'untracked.txt').write_text('new source\n')
+            (repo / 'link.txt').symlink_to('source.txt')
+            with patch('org.metadatacenter.util.BuildSafety.frontend_runtime_collisions', return_value=[]):
+                with isolated_frontend_workspace(repo, manifests_only=True) as (workspace, _, _collisions):
+                    copy_root, copied = materialize_frontend_workspace(repo, workspace)
+                    self.assertEqual(workspace, copy_root)
+                    self.assertFalse((workspace / 'dist').exists(),
+                                     'an ignored build output is no input the identity names')
+                    self.assertEqual('LOCAL=1\n', (workspace / '.env').read_text())
+                    self.assertEqual('new source\n', (workspace / 'untracked.txt').read_text())
+                    self.assertEqual('source.txt', os.readlink(workspace / 'link.txt'))
+                    self.assertEqual(
+                        sorted(['.gitignore', '.env', 'link.txt', 'package.json', 'source.txt', 'untracked.txt']),
+                        sorted(os.fsdecode(path) for path in copied))
+                    self.assertNotIn(b'dist/stale.js', copied)
+
     def test_workspace_copy_does_not_keep_historical_staged_bundles(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = self.repository(Path(directory))
