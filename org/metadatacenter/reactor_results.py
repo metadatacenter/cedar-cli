@@ -179,7 +179,11 @@ def java_conformance_inputs(build_root) -> dict | None:
 
 
 def environment_inputs():
-    # Only behavior-affecting inputs; worker allocations and disposable paths are scheduling.
+    # Only behavior-affecting inputs; worker allocations and disposable paths are scheduling. A
+    # surface's tests read variables of their own: CEE's carried-answers fuzz takes its iteration
+    # count and seed from CARRY_*, the term picker's guards read CETP_*, and CED's browser suite
+    # selects its picker specs by PICKER_BUNDLE. A shell that weakens one of them must not record
+    # a pass that a default run would later reuse.
     excluded = {'CEDAR_HOME', 'CEDAR_CLI_CALLER_DIR', 'CEDAR_BUILD_WORKSPACE_ROOT', 'CEDAR_BUILD_DIAGNOSTIC_LOG',
                 'CEDAR_BUILD_TMPDIR', 'CEDAR_TEST_WORKERS', 'CEDAR_WORKER_POOL',
                 'CEDAR_TASK_CACHE_CONFIG', 'CEDAR_STAGE_CACHE', 'CEDAR_STAGE_CACHE_MODULE',
@@ -187,7 +191,8 @@ def environment_inputs():
     return {key: hashlib.sha256(value.encode()).hexdigest()
             for key, value in invocation_environment().items()
             if (key.startswith(('NODE_', 'CEDAR_', 'CEF_', 'CED_', 'CEE_', 'WORKSPACE_',
-                                'PLAYWRIGHT_', 'VITE_', 'NG_', 'npm_config_', 'NPM_CONFIG_'))
+                                'PLAYWRIGHT_', 'VITE_', 'NG_', 'npm_config_', 'NPM_CONFIG_',
+                                'CARRY_', 'CETP_', 'PICKER_'))
                 or key in {'TZ', 'LANG', 'LC_ALL', 'CI', 'BROWSERSLIST_ENV', 'BROWSERSLIST', 'NODE_ENV'})
             and key not in excluded and not key.startswith('NODE_REPL_')}
 

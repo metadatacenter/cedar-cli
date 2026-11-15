@@ -75,6 +75,16 @@ class FingerprintTest(unittest.TestCase):
         with patch.object(reactor_results, 'invocation_environment', return_value={'NODE_OPTIONS': '--b', 'CEDAR_TEST_WORKERS': '12'}):
             self.assertNotEqual(baseline, self.key())
 
+    def test_variables_that_weaken_a_surface_suite_invalidate(self):
+        # CEE's carried-answers fuzz, the term picker's guards and CED's picker specs read these.
+        for variable, value in (('CARRY_FUZZ_RUNS', '1'), ('CARRY_FUZZ_RUN', '7'),
+                                ('CETP_I18N_ROOT', '/elsewhere'), ('PICKER_BUNDLE', '/tmp/picker.js')):
+            with self.subTest(variable=variable):
+                with patch.object(reactor_results, 'invocation_environment', return_value={}):
+                    baseline = self.key()
+                with patch.object(reactor_results, 'invocation_environment', return_value={variable: value}):
+                    self.assertNotEqual(baseline, self.key())
+
     def test_launch_directory_and_interactive_node_metadata_do_not_invalidate(self):
         with patch.object(reactor_results, 'invocation_environment', return_value={}):
             baseline = self.key()
