@@ -82,6 +82,28 @@ class PublishTest(unittest.TestCase):
         with tarfile.open(new) as archive:
             self.assertEqual(b"// rebuilt", archive.extractfile("package/cedar-embeddable-designer.js").read())
 
+    def test_a_package_built_from_a_recorded_source_names_it_and_leaves_the_output_alone(self):
+        staged = self._staged()
+        before = (staged / "package.json").read_bytes()
+        source = {"revision": "a" * 40, "dirty": True, "sourceSha256": "b" * 64}
+        reactor.publish(self._repo(), self.build, self.home, source=source)
+        with tarfile.open(reactor._available(self.home)[self._repo().name]) as archive:
+            packed = json.loads(archive.extractfile("package/package.json").read())
+            self.assertEqual(b"// bundle", archive.extractfile("package/cedar-embeddable-designer.js").read())
+        self.assertEqual({"sourceCommit": "a" * 40, "sourceDirty": True, "sourceSha256": "b" * 64},
+                         packed[reactor.BUILD_STAMP])
+        self.assertEqual("0.1.0", packed["version"])
+        self.assertEqual(before, (staged / "package.json").read_bytes())
+
+    def test_a_source_identity_without_a_commit_stores_nothing(self):
+        self._staged()
+        for source in ({"revision": "HEAD", "dirty": False, "sourceSha256": "b" * 64},
+                       {"revision": "a" * 40, "dirty": "no", "sourceSha256": "b" * 64},
+                       {"revision": "a" * 40, "dirty": False}):
+            with self.subTest(source=source), self.assertRaisesRegex(reactor.ReactorError, "source identity"):
+                reactor.publish(self._repo(), self.build, self.home, source=source)
+        self.assertFalse((self.home / reactor.STORE / "refs" / "cedar-embeddable-designer.json").exists())
+
     def test_a_repository_that_publishes_nothing_stores_nothing(self):
         self.assertIsNone(reactor.publish(self._repo(path=None), self.build, self.home))
         self.assertFalse((self.home / reactor.STORE).exists())

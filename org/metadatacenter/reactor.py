@@ -36,6 +36,7 @@ from contextvars import ContextVar
 import hashlib
 import json
 import os
+import shutil
 import re
 import tempfile
 import tarfile
@@ -208,7 +209,27 @@ def session_for_plan(cedar_home, plan):
     return session(cedar_home, {repo.name for repo in repos if repo.published_package_path}, source_only=True)
 
 
-def publish(repo, build_root, cedar_home, environment=None, *, provisional=False) -> str | None:
+# The key under which a stored package's package.json names the source it was built from.
+BUILD_STAMP = "cedarBuildInfo"
+
+
+def stamp(package: dict, source) -> dict:
+    """The package manifest with the build stamp of `source`, the identity the reactor recorded.
+
+    The copy the reactor builds in has no Git directory, so the package cannot learn its commit
+    itself. The stamp names the commit, whether the tree held uncommitted changes, and the digest
+    of the content built, since a later build of identical content reuses this package under
+    another commit.
+    """
+    revision, dirty, content = (source.get(key) for key in ("revision", "dirty", "sourceSha256"))
+    if (not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision)
+            or not isinstance(dirty, bool)
+            or not isinstance(content, str) or not re.fullmatch(r"[0-9a-f]{64}", content)):
+        raise ValueError("the build's source identity names no commit, dirty state and content digest")
+    return {**package, BUILD_STAMP: {"sourceCommit": revision, "sourceDirty": dirty, "sourceSha256": content}}
+
+
+def publish(repo, build_root, cedar_home, environment=None, *, provisional=False, source=None) -> str | None:
     """Pack verified output and atomically advertise its immutable artifact.
 
     Declaring a package makes storage part of build success. Never accept absent output,
@@ -218,15 +239,20 @@ def publish(repo, build_root, cedar_home, environment=None, *, provisional=False
     advertises nothing; outside a reactor build it does nothing. The call after the checks must
     then pack the same bytes. Either way a package is advertised only once every producer it
     resolved from this build has been.
+
+    `source` is the identity the build recorded for the repository. When it is given, the package
+    is packed from a copy whose package.json carries its stamp, so every host that installs the
+    package can say which commit it serves; the build output itself is left as the checks read it.
     """
     if not repo.published_package_path:
         return None
     build = _build(cedar_home)
     if provisional and build is None:
         return None
-    source = (Path(build_root) / repo.published_package_path).resolve()
+    stamped_by = source
+    output = (Path(build_root) / repo.published_package_path).resolve()
     try:
-        package = json.loads((source / "package.json").read_text(encoding="utf-8"))
+        package = json.loads((output / "package.json").read_text(encoding="utf-8"))
         name = unscoped(package.get("name") or "")
         if name != repo.name or not isinstance(package.get("version"), str) or not package["version"]:
             raise ValueError(f"expected named, versioned package for {repo.name}")
@@ -236,8 +262,14 @@ def publish(repo, build_root, cedar_home, environment=None, *, provisional=False
         (store / "refs").mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="pack-", dir=store) as temporary:
             scratch = Path(temporary)
+            if stamped_by is not None:
+                copy = scratch / "package"
+                shutil.copytree(output, copy, symlinks=True)
+                (copy / "package.json").write_text(
+                    json.dumps(stamp(package, stamped_by), indent=2) + "\n", encoding="utf-8")
+                output = copy
             packed, inspection = pack_and_inspect(
-                source, scratch, environment=environment, cache=scratch / "cache")
+                output, scratch / "packed", environment=environment, cache=scratch / "cache")
             digest = inspection.sha256
             destination = artifacts / f"{digest}.tgz"
             # An exclusive link makes a complete artifact visible in one operation. The

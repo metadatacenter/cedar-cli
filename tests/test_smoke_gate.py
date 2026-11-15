@@ -1,4 +1,5 @@
 import datetime as dt
+import hashlib
 import json
 import os
 import subprocess
@@ -102,15 +103,24 @@ def stamped_jar(path, stamps, classes, dirty=()):
     return path
 
 
-def write_frontend_build(home, sources, dirty=()):
-    """Record a frontend reactor deployment built from the given heads."""
+def write_frontend_build(home, sources, dirty=(), packages=(), applications=()):
+    """Record a frontend reactor deployment built from the given heads.
+
+    `packages` names the repositories that stored a package, and `applications` the hosts the
+    frontend inventory lists.
+    """
     store = Path(home) / ".reactor"
     (store / "builds").mkdir(parents=True, exist_ok=True)
     build = "f" * 64
-    (store / "runtime.json").write_text(json.dumps({"build": build, "packages": {}}), encoding="utf-8")
-    (store / "builds" / f"{build}.json").write_text(json.dumps({"schemaVersion": 1, "packages": {}, "repositories": {
+    selected = {name: "9" * 64 for name in packages}
+    (store / "runtime.json").write_text(json.dumps({"build": build, "packages": selected}), encoding="utf-8")
+    (store / "builds" / f"{build}.json").write_text(json.dumps({"schemaVersion": 1, "packages": selected, "repositories": {
         repository: {"source": {"revision": head, "dirty": repository in dirty, "sourceSha256": "0" * 64}}
         for repository, head in dict(sources).items()}}), encoding="utf-8")
+    inventory = Path(home) / "cedar-development" / "ops" / "frontend-train.json"
+    inventory.parent.mkdir(parents=True, exist_ok=True)
+    inventory.write_text(json.dumps({"frontends": [{"repository": name} for name in applications]}),
+                         encoding="utf-8")
 
 
 def rev_parse(heads):
@@ -1508,3 +1518,220 @@ class SplitReportPathTest(unittest.TestCase):
         self.assertNotEqual(first["report"], second["report"])
         self.assertNotIn("runnerVerdict", second)
         self.assertIn("reportError", second)
+
+
+class ServedBundleTest(unittest.TestCase):
+    """What each frontend serves must carry the stamp of the source the reactor's record names."""
+
+    SOURCES = {"cedar-workspace": "a" * 40, "cedar-embeddable-editor": "e" * 40,
+               "cedar-template-designer": "d" * 40}
+
+    @staticmethod
+    def _package(root, key, name, commit, content="5" * 64, files=None):
+        directory = root / "node_modules" / key
+        directory.mkdir(parents=True, exist_ok=True)
+        package = {"name": f"@org.metadatacenter/{name}", "version": "1.0.0"}
+        if commit is not None:
+            package["cedarBuildInfo"] = {"sourceCommit": commit, "sourceDirty": False, "sourceSha256": content}
+        (directory / "package.json").write_text(json.dumps(package), encoding="utf-8")
+        for file, body in (files or {}).items():
+            (directory / file).write_bytes(body)
+        return directory
+
+    @staticmethod
+    def _build_info(root, application, commit, dirty=False):
+        info = {"application": application, "version": "1.0.0", "versionModifier": "", "sourceCommit": commit,
+                "sourceDirty": dirty, "bundleSha256": smoke_gate.served_tree_sha256(root)}
+        (root / "app" / "config").mkdir(parents=True, exist_ok=True)
+        (root / "app" / "config" / "build-info.json").write_text(json.dumps(info), encoding="utf-8")
+
+    def _workspace(self, home, *, stamp="e" * 40, served=b"// cee", info=True):
+        """A Workspace serving a copy of the CEE bundle it installed, and recording its own build."""
+        root = home / "cedar-workspace"
+        root.mkdir(parents=True)
+        (root / "package.json").write_text(json.dumps({"name": "cedar-workspace", "dependencies": {
+            "cedar-embeddable-editor": "npm:@org.metadatacenter/cedar-embeddable-editor@1.0.0"}}), encoding="utf-8")
+        self._package(root, "cedar-embeddable-editor", "cedar-embeddable-editor", stamp,
+                      files={"cedar-embeddable-editor.js": b"// cee"})
+        copy = root / "app" / "third_party_components" / "cedar-embeddable-editor"
+        copy.mkdir(parents=True)
+        (copy / "cedar-embeddable-editor.js").write_bytes(served)
+        (root / "app" / "index.html").write_text("<html></html>", encoding="utf-8")
+        if info:
+            self._build_info(root, "cedar-workspace", self.SOURCES["cedar-workspace"])
+        write_frontend_build(home, self.SOURCES, packages=["cedar-embeddable-editor"],
+                             applications=["cedar-workspace"])
+        return root
+
+    def _findings(self, home):
+        findings, dirty, _build = smoke_gate.frontend_sources(home, self.SOURCES)
+        return findings, dirty
+
+    def test_a_host_serving_stamped_packages_and_its_recorded_build_has_no_findings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self._workspace(home)
+            self.assertEqual(([], []), self._findings(home))
+
+    def test_an_installed_package_without_a_stamp_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self._workspace(home, stamp=None)
+            findings, _dirty = self._findings(home)
+        self.assertEqual(1, len(findings))
+        self.assertIn("cedar-workspace serves cedar-embeddable-editor from a package with no build stamp", findings[0])
+
+    def test_a_package_built_from_another_commit_is_refused_unless_its_content_is_the_recorded_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            root = self._workspace(home, stamp="1" * 40)
+            findings, _dirty = self._findings(home)
+            self.assertEqual(1, len(findings))
+            self.assertIn("built from 11111111, not the reactor's eeeeeeee", findings[0])
+            # The reactor reused a package built under another commit from identical content.
+            self._package(root, "cedar-embeddable-editor", "cedar-embeddable-editor", "1" * 40, content="0" * 64)
+            self.assertEqual([], self._findings(home)[0])
+            self._package(root, "cedar-embeddable-editor", "cedar-embeddable-editor", "1" * 40, content="2" * 64)
+            self.assertEqual(1, len(self._findings(home)[0]))
+
+    def test_a_served_copy_that_is_not_the_installed_bundle_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self._workspace(home, served=b"// an earlier cee")
+            findings, _dirty = self._findings(home)
+        self.assertEqual(1, len(findings))
+        self.assertIn("serves a cedar-embeddable-editor.js that is not the one in its installed", findings[0])
+
+    def test_a_host_build_identity_must_exist_name_develop_and_describe_the_served_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            root = self._workspace(home, info=False)
+            self.assertIn("serves no readable build identity at /config/build-info.json", self._findings(home)[0][0])
+            self._build_info(root, "cedar-workspace", "0" * 40)
+            self.assertIn("serves a build of 00000000, not develop aaaaaaaa", self._findings(home)[0][0])
+            self._build_info(root, "cedar-workspace", self.SOURCES["cedar-workspace"], dirty=True)
+            self.assertEqual(([], ["cedar-workspace"]), self._findings(home))
+            (root / "app" / "index.html").write_text("<html>edited</html>", encoding="utf-8")
+            self.assertIn("does not describe the tree it serves", self._findings(home)[0][0])
+
+    def test_the_served_tree_digest_is_the_one_the_build_identity_writer_records(self):
+        # write-native-frontend-build-info.mjs hashes "<sha256>  <path>\n" per file, sorted by path bytes.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app" / "config").mkdir(parents=True)
+            (root / "app" / "b.js").write_bytes(b"b")
+            (root / "app" / "a b.js").write_bytes(b"a")
+            (root / "app" / "config" / "build-info.json").write_text("{}", encoding="utf-8")
+            manifest = (f"{hashlib.sha256(b'a').hexdigest()}  app/a b.js\n"
+                        f"{hashlib.sha256(b'b').hexdigest()}  app/b.js\n")
+            self.assertEqual(hashlib.sha256(manifest.encode()).hexdigest(), smoke_gate.served_tree_sha256(root))
+
+    def test_a_designer_must_serve_its_installed_components_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            root = home / "cedar-template-designer"
+            root.mkdir(parents=True)
+            (root / "package.json").write_text(json.dumps({"name": "cedar-template-designer", "dependencies": {
+                "cedar-embeddable-editor": "npm:@org.metadatacenter/cedar-embeddable-editor@1.0.0"}}), encoding="utf-8")
+            self._package(root, "cedar-embeddable-editor", "cedar-embeddable-editor", "e" * 40,
+                          files={"integration.mjs": b"// module"})
+            components = root / "app" / "components"
+            components.mkdir(parents=True)
+            (components / "cedar-editors.js").write_bytes(b"// editors")
+            entry = {"source": "package", "bundle": "integration.mjs",
+                     "sha256": hashlib.sha256(b"// module").hexdigest(),
+                     "delivery": {"file": "cedar-editors.js", "sha256": hashlib.sha256(b"// editors").hexdigest()}}
+            (components / "manifest.json").write_text(json.dumps({"cedar-embeddable-editor": entry}), encoding="utf-8")
+            self._build_info(root, "cedar-template-designer", self.SOURCES["cedar-template-designer"])
+            write_frontend_build(home, self.SOURCES, packages=["cedar-embeddable-editor"],
+                                 applications=["cedar-template-designer"])
+            self.assertEqual(([], []), self._findings(home))
+
+            (components / "cedar-editors.js").write_bytes(b"// other editors")
+            self._build_info(root, "cedar-template-designer", self.SOURCES["cedar-template-designer"])
+            findings = self._findings(home)[0]
+            self.assertEqual(1, len(findings))
+            self.assertIn("serves cedar-embeddable-editor bytes other than its installed package's", findings[0])
+
+            (components / "manifest.json").write_text(json.dumps(
+                {"cedar-embeddable-editor": {"source": "local-override", "sha256": "0" * 64}}), encoding="utf-8")
+            self._build_info(root, "cedar-template-designer", self.SOURCES["cedar-template-designer"])
+            self.assertIn("from a local override", self._findings(home)[0][0])
+
+    def test_a_frontend_inventory_that_cannot_be_read_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self._workspace(home)
+            (home / "cedar-development" / "ops" / "frontend-train.json").unlink()
+            self.assertIn("frontend inventory cannot be read", self._findings(home)[0][0])
+
+
+class KeycloakListenerTest(unittest.TestCase):
+    """Keycloak loads the event listener from a jar copied outside every controller row."""
+
+    HEAD = "c" * 40
+
+    def _home(self, directory, *, commit=HEAD, installed=True, jar_epoch=2_000_000_000):
+        home = Path(directory)
+        (home / "cedar-keycloak-event-listener" / ".git").mkdir(parents=True)
+        jar = home / "keycloak" / "providers" / "cedar-keycloak-event-listener.jar"
+        if installed:
+            stamped_jar(jar, {} if commit is None else {
+                "cedar-keycloak-event-listener": ("cedar-keycloak-event-listener", commit)}, {"A.class": b"a"})
+            os.utime(jar, (jar_epoch, jar_epoch))
+        else:
+            jar.parent.mkdir(parents=True)
+        return home
+
+    def _runner(self, started="Mon May 18 05:33:20 2033"):
+        return FakeRunner([(["git", "rev-parse"], FakeResult(stdout=self.HEAD)),
+                           (["lsof"], FakeResult(stdout="4242\n")),
+                           (["env", "LC_ALL=C", "ps"], FakeResult(stdout=started))])
+
+    def _findings(self, home, runner=None):
+        with patch.dict(os.environ, {"CEDAR_KEYCLOAK_HOME": str(home / "keycloak")}):
+            return smoke_gate.keycloak_listener_findings(home, runner or self._runner())
+
+    def test_a_listener_stamped_with_develop_and_loaded_after_install_is_current(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual([], self._findings(self._home(directory)))
+
+    def test_a_listener_from_another_commit_or_without_a_stamp_is_refused(self):
+        for commit, expected in (("0" * 40, "built from cedar-keycloak-event-listener 00000000, not develop cccccccc"),
+                                 (None, "built without a stamp of cedar-keycloak-event-listener")):
+            with self.subTest(commit=commit), tempfile.TemporaryDirectory() as directory:
+                findings = self._findings(self._home(directory, commit=commit))
+                self.assertEqual(1, len(findings))
+                self.assertIn(expected, findings[0])
+                self.assertIn("cedarcli dev copy-keycloak-listener", findings[0])
+
+    def test_a_keycloak_started_before_the_jar_was_installed_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            findings = self._findings(self._home(directory), self._runner(started="Thu Jan  1 00:00:00 2015"))
+        self.assertEqual(["keycloak started before its cedar-keycloak-event-listener.jar was installed, so it runs "
+                          "an earlier listener; restart Keycloak"], findings)
+
+    def test_no_installed_listener_is_refused_and_no_checkout_is_not_judged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertIn("holds no cedar-keycloak-event-listener.jar",
+                          self._findings(self._home(directory, installed=False))[0])
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual([], self._findings(Path(directory)))
+
+
+class RunningCliTest(unittest.TestCase):
+    def test_the_gate_must_run_from_the_cli_checkout_it_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            module = home / "cedar-cli" / "org" / "metadatacenter" / "smoke_gate.py"
+            module.parent.mkdir(parents=True)
+            module.write_text("", encoding="utf-8")
+            heads = {"cedar-cli": "a" * 40}
+            self.assertEqual([], smoke_gate.running_cli_findings(home, heads, module))
+            elsewhere = home / "worktree" / "cedar-cli" / "org" / "metadatacenter" / "smoke_gate.py"
+            elsewhere.parent.mkdir(parents=True)
+            elsewhere.write_text("", encoding="utf-8")
+            findings = smoke_gate.running_cli_findings(home, heads, elsewhere)
+            self.assertEqual(1, len(findings))
+            self.assertIn("not the cedar-cli checkout", findings[0])
+            self.assertEqual([], smoke_gate.running_cli_findings(home, {}, elsewhere))

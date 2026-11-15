@@ -141,7 +141,7 @@ class ShellTaskExecutor(TaskExecutor):
                         task_config = reactor_tasks.configure(environment, repo, result, cedar_home, cwd, isolated_cwd)
                         code = self._execute_packaged_commands(
                             task, repo, commands_to_execute, isolated_cwd, job_progress,
-                            environment, ready_after, cedar_home,
+                            environment, ready_after, cedar_home, identity,
                         )
                         # A concurrent checkout edit invalidates all newly recorded stage evidence,
                         # including successful stages of an otherwise failed build.
@@ -152,7 +152,7 @@ class ShellTaskExecutor(TaskExecutor):
                                 job_progress.print(f"Task cache: could not retain completed stages: {error}", markup=False)
                         if code == 0:
                             evidence = reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
-                            stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
+                            stored = reactor.publish(repo, isolated_cwd, cedar_home, environment, source=identity)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)
                             if result is not None and not (Path(isolated_cwd) / '.cedar-cache-unstable').exists():
@@ -195,7 +195,7 @@ class ShellTaskExecutor(TaskExecutor):
         return key, inputs, reactor_results.lookup(cedar_home, key, repo)
 
     def _execute_packaged_commands(self, task, repo, commands, build_root, job_progress, environment,
-                                   ready_after, cedar_home):
+                                   ready_after, cedar_home, identity=None):
         """Run a reactor build's commands, offering its package once the first `ready_after` pass.
 
         A surface with a package phase stores its package provisionally at that point and tells the
@@ -207,7 +207,8 @@ class ShellTaskExecutor(TaskExecutor):
         code = self._execute_commands(
             task, repo, commands[:ready_after], str(build_root), job_progress, environment)
         if code == 0:
-            stored = reactor.publish(repo, build_root, cedar_home, environment, provisional=True)
+            stored = reactor.publish(repo, build_root, cedar_home, environment, provisional=True,
+                                     source=identity)
             if stored:
                 job_progress.print(
                     f"Reactor: packaged {stored} for this build's consumers; its checks continue",

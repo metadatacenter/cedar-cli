@@ -20,9 +20,11 @@ establishes that no process predates its jar, which is a narrower question than 
 itself predate the commit the record names, and every row reads `current` while it does. A run
 therefore refuses to start while any service is stale or unhealthy, while any deployed jar was
 written before its own repository's head, its parent's or a library's reached this machine, while a
-server jar embeds a build of a library other than that library's latest, and while the frontend
-reactor's deployed build was made from commits other than the heads the record would name. The
-evidence would otherwise certify code the stack is not running.
+server jar embeds a build of a library other than that library's latest, while the frontend
+reactor's deployed build was made from commits other than the heads the record would name, while a
+frontend serves a package, a copy or a tree whose stamp does not name them, and while Keycloak runs
+an event listener other than develop's. The evidence would otherwise certify code the stack is not
+running.
 """
 
 from __future__ import annotations
@@ -158,6 +160,26 @@ def develop_heads(
     return heads, dirty, problems
 
 
+CLI = "cedar-cli"
+
+
+def running_cli_findings(cedar_home, heads: Mapping[str, str], module: Path | None = None) -> list[str]:
+    """Why the CLI running this gate is not the cedar-cli checkout whose head the record names.
+
+    cedar-cli and cedar-development are never built or deployed: the gate and the tiers run
+    straight from their checkouts, so their heads and working trees are what ran. That holds only
+    when this module is the checkout's own, not a worktree or another copy of the CLI.
+    """
+    if CLI not in heads:
+        return []
+    running = (module or Path(__file__)).resolve()
+    checkout = (_home(cedar_home) / CLI).resolve()
+    if checkout in running.parents:
+        return []
+    return [f"the gate runs from {running.parent}, not the {CLI} checkout at {checkout} whose head "
+            "the record would name; run cedarcli from that checkout"]
+
+
 def native_processes(cedar_home, runner=subprocess.run) -> dict[str, str] | None:
     """The process serving each managed service, from the controller, or None when it cannot say."""
     code, output, _detail = _capture(runner, [str(_home(cedar_home) / CONTROLLER), "status-tsv"])
@@ -243,6 +265,55 @@ def stack_findings(cedar_home, runner=subprocess.run) -> list[str]:
         [row["service"] for row in rows if row["binary"] in {"current", "STALE"}],
         runner=runner,
     ))
+    findings.extend(keycloak_listener_findings(cedar_home, runner))
+    return findings
+
+
+KEYCLOAK_LISTENER = "cedar-keycloak-event-listener"
+# The port the controller's infrastructure table gives Keycloak.
+KEYCLOAK_PORT = 8080
+
+
+def keycloak_started(runner=subprocess.run) -> float | None:
+    """When the process listening on Keycloak's port started, or None when that cannot be read."""
+    code, pids, _detail = _capture(runner, ["lsof", "-nP", f"-iTCP:{KEYCLOAK_PORT}", "-sTCP:LISTEN", "-t"])
+    pid = pids.split()[0] if code == 0 and pids.split() else ""
+    if not pid.isdigit():
+        return None
+    code, started, _detail = _capture(runner, ["env", "LC_ALL=C", "ps", "-o", "lstart=", "-p", pid])
+    try:
+        return time.mktime(time.strptime(started.strip(), "%a %b %d %H:%M:%S %Y")) if code == 0 else None
+    except ValueError:
+        return None
+
+
+def keycloak_listener_findings(cedar_home, runner=subprocess.run) -> list[str]:
+    """Why Keycloak cannot be shown to run the event listener develop holds, or nothing when it can.
+
+    The listener is built by Maven but deployed by copying its jar into Keycloak's providers
+    directory, so no controller row and no jar date speaks for it. The jar carries cedar-parent's
+    stamp, and Keycloak loads its providers when it starts, so the deployed jar must name the
+    develop head and the process must have started after the jar was installed.
+    """
+    home = _home(cedar_home)
+    if not (home / KEYCLOAK_LISTENER / ".git").exists():
+        return []
+    code, head, _detail = _capture(runner, ["git", "rev-parse", "refs/heads/develop"], cwd=home / KEYCLOAK_LISTENER)
+    if code != 0 or not head:
+        return []  # develop_heads names a repository with no develop branch.
+    keycloak = Path(invocation_environment().get("CEDAR_KEYCLOAK_HOME") or home / "keycloak")
+    jar = keycloak / "providers" / f"{KEYCLOAK_LISTENER}.jar"
+    if not jar.is_file():
+        return [f"Keycloak's providers directory holds no {jar.name}; run cedarcli dev copy-keycloak-listener "
+                "and restart Keycloak"]
+    remedy = "; run cedarcli build java, cedarcli dev copy-keycloak-listener and restart Keycloak"
+    findings = [finding + remedy for finding in stamp_findings(
+        "keycloak's event listener", jar, KEYCLOAK_LISTENER,
+        lambda repository: head if repository == KEYCLOAK_LISTENER else None)]
+    started = keycloak_started(runner)
+    if started is not None and started < jar.stat().st_mtime:
+        findings.append(f"keycloak started before its {jar.name} was installed, so it runs an earlier listener; "
+                        "restart Keycloak")
     return findings
 
 
@@ -561,7 +632,200 @@ def frontend_sources(cedar_home, heads: Mapping[str, str]) -> tuple[list[str], l
                             f"{heads[repository][:8]}; run cedarcli build frontends")
         elif source.get("dirty") is not False:
             dirty.append(repository)
-    return findings, sorted(set(dirty)), build
+    served, served_dirty = served_bundle_findings(cedar_home, heads, repositories, runtime.get("packages") or {})
+    return findings + served, sorted(set(dirty) | set(served_dirty)), build
+
+
+FRONTEND_TRAIN = Path("cedar-development") / "ops" / "frontend-train.json"
+# A host that keeps its own copy of a component's bundle serves that copy, not the installed
+# package, so each copy must equal the file of the package whose stamp is read.
+SERVED_COPIES = {
+    "cedar-embeddable-editor": ("app/third_party_components/cedar-embeddable-editor",
+                                ("cedar-embeddable-editor.js", "cedar-embeddable-editor.host-fonts.js")),
+}
+# The Template Designer serves its components from app/components and names their bytes beside them.
+COMPONENT_MANIFEST = Path("app") / "components" / "manifest.json"
+# The hosts whose development start records what it built, as their server payloads do.
+BUILD_INFO_HOSTS = ("cedar-workspace", "cedar-template-designer")
+BUILD_INFO = Path("app") / "config" / "build-info.json"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def served_tree_sha256(root: Path) -> str:
+    """The digest a host's build identity records as bundleSha256: its app/ tree, less the record.
+
+    The same manifest write-native-frontend-build-info.mjs and the hosts' development starts hash:
+    one line of file digest and repository-relative path per file, in byte order of the paths.
+    A symbolic link is read as the file it names.
+    """
+    app = root / "app"
+    excluded = root / BUILD_INFO
+    entries = []
+    for directory, subdirectories, files in os.walk(app):
+        linked = [name for name in subdirectories if (Path(directory) / name).is_symlink()]
+        subdirectories[:] = [name for name in subdirectories if name not in linked]
+        for name in files + linked:
+            path = Path(directory) / name
+            if path != excluded:
+                entries.append((path.relative_to(root).as_posix().encode("utf-8"), path))
+    manifest = "".join(f"{_sha256(path)}  {relative.decode('utf-8')}\n" for relative, path in sorted(entries))
+    return hashlib.sha256(manifest.encode("utf-8")).hexdigest()
+
+
+def package_stamp_finding(host: str, name: str, installed: Path, source: Mapping) -> str | None:
+    """Why a host's installed package does not show it was built from the source the reactor recorded.
+
+    The reactor stamps every package it stores with the commit, dirty state and content digest of
+    the source it built. A package reused for identical content keeps the stamp of the build that
+    made it, so a matching content digest stands for the recorded commit.
+    """
+    from org.metadatacenter.reactor import BUILD_STAMP
+    try:
+        package = json.loads((installed / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return f"{host} has no readable {name} package installed ({error}); run cedarcli build frontends"
+    stamp = package.get(BUILD_STAMP) if isinstance(package, dict) else None
+    commit = stamp.get("sourceCommit") if isinstance(stamp, dict) else None
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return (f"{host} serves {name} from a package with no build stamp, so nothing says which commit "
+                "it holds; run cedarcli build frontends")
+    revision = source.get("revision")
+    if commit == revision or (stamp.get("sourceSha256") is not None
+                              and stamp.get("sourceSha256") == source.get("sourceSha256")):
+        return None
+    return (f"{host} serves {name} built from {commit[:8]}, not the reactor's {str(revision)[:8]}; "
+            "run cedarcli build frontends")
+
+
+def served_copy_findings(host: str, root: Path, installed: Mapping[str, Path]) -> list[str]:
+    """Which component copies a host serves from its own tree differ from the package it installed."""
+    findings = []
+    for name, (directory, files) in SERVED_COPIES.items():
+        if name not in installed:
+            continue
+        for file in files:
+            served = root / directory / file
+            if not served.exists():
+                continue
+            try:
+                equal = served.read_bytes() == (installed[name] / file).read_bytes()
+            except OSError:
+                equal = False
+            if not equal:
+                findings.append(f"{host} serves a {file} that is not the one in its installed {name} package; "
+                                "run cedarcli build frontends")
+    return findings
+
+
+def component_manifest_findings(host: str, root: Path, installed: Mapping[str, Path]) -> list[str]:
+    """Why the components a host's manifest names are not the bytes it serves or the packages it installed."""
+    path = root / COMPONENT_MANIFEST
+    if not path.is_file():
+        return []
+    try:
+        served = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(served, dict):
+            raise ValueError("it is not an object")
+    except (OSError, ValueError) as error:
+        return [f"{host}'s served component manifest cannot be read: {error}"]
+    findings = []
+    for name, entry in sorted(served.items()):
+        if not isinstance(entry, dict) or entry.get("source") != "package":
+            findings.append(f"{host} serves {name} from a local override, which no build stamp identifies")
+            continue
+        if name not in installed:
+            continue
+        try:
+            packaged = _sha256(installed[name] / str(entry.get("bundle")))
+            delivery = entry.get("delivery")
+            if isinstance(delivery, dict):
+                delivered = _sha256(root / COMPONENT_MANIFEST.parent / str(delivery.get("file"))) == delivery.get("sha256")
+            else:
+                delivered = _sha256(root / COMPONENT_MANIFEST.parent / f"{name}.js") == entry.get("sha256")
+        except OSError:
+            packaged, delivered = None, False
+        if packaged != entry.get("sha256") or not delivered:
+            findings.append(f"{host} serves {name} bytes other than its installed package's; "
+                            "run cedarcli build frontends")
+    return findings
+
+
+def build_info_findings(host: str, root: Path, head: str) -> tuple[list[str], bool]:
+    """Why a host's recorded build identity does not stand for develop, and whether it was built dirty."""
+    try:
+        info = json.loads((root / BUILD_INFO).read_text(encoding="utf-8"))
+        if not isinstance(info, dict):
+            raise ValueError("it is not an object")
+    except (OSError, ValueError) as error:
+        return [f"{host} serves no readable build identity at /{BUILD_INFO.relative_to('app').as_posix()} "
+                f"({error}); restart it with cedarcli build frontends"], False
+    commit, dirty = info.get("sourceCommit"), info.get("sourceDirty")
+    if info.get("application") != host or not isinstance(dirty, bool):
+        return [f"{host}'s build identity names {info.get('application')!r} and no dirty state; "
+                "restart it with cedarcli build frontends"], False
+    if commit != head:
+        return [f"{host} serves a build of {str(commit)[:8]}, not develop {head[:8]}; "
+                "restart it with cedarcli build frontends"], dirty
+    try:
+        current = served_tree_sha256(root)
+    except OSError as error:
+        return [f"{host}'s served tree cannot be read: {error}"], dirty
+    if info.get("bundleSha256") != current:
+        return [f"{host}'s build identity does not describe the tree it serves, which changed after the "
+                "build; restart it with cedarcli build frontends"], dirty
+    return [], dirty
+
+
+def served_bundle_findings(cedar_home, heads, repositories, packages) -> tuple[list[str], list[str]]:
+    """Why what each frontend serves is not what the reactor's build record says it built.
+
+    The record names the commit of every repository the reactor built, but a host serves the
+    packages installed in its checkout and the tree its start built there. Each installed package
+    must carry the stamp of the source the record names, each copy a host serves of a component
+    must be that package's bytes, and a host that records its own build identity must name its
+    develop head and the tree it serves. Returns the findings and the hosts built dirty.
+    """
+    from org.metadatacenter.reactor import DEPENDENCY_SECTIONS, dependency_name
+    home = _home(cedar_home)
+    try:
+        applications = {frontend["repository"] for frontend in
+                        json.loads((home / FRONTEND_TRAIN).read_text(encoding="utf-8"))["frontends"]}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return [f"the frontend inventory cannot be read, so nothing shows what the frontends serve ({error})"], []
+    findings, dirty = [], []
+    for path in sorted(repositories):
+        repository = Path(path).parts[0]
+        if repository not in applications or repository not in heads:
+            continue
+        root = home / path
+        try:
+            manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            findings.append(f"{path} has no readable package.json ({error})")
+            continue
+        installed = {}
+        for section in DEPENDENCY_SECTIONS:
+            declared = manifest.get(section) if isinstance(manifest, dict) else None
+            for key, requested in (declared.items() if isinstance(declared, dict) else ()):
+                name = dependency_name(key, requested)
+                if name in packages and isinstance(repositories.get(name), dict):
+                    installed[name] = root / "node_modules" / key
+        for name, directory in sorted(installed.items()):
+            source = repositories[name].get("source")
+            finding = package_stamp_finding(path, name, directory, source if isinstance(source, dict) else {})
+            if finding:
+                findings.append(finding)
+        findings.extend(served_copy_findings(path, root, installed))
+        findings.extend(component_manifest_findings(path, root, installed))
+        if path in BUILD_INFO_HOSTS:
+            problems, built_dirty = build_info_findings(path, root, heads[repository])
+            findings.extend(problems)
+            if built_dirty:
+                dirty.append(repository)
+    return findings, sorted(set(dirty))
 
 
 def _now() -> dt.datetime:
@@ -666,6 +930,7 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
 
     repositories = train_repositories(home)
     heads, dirty, head_problems = develop_heads(home, repositories, runner)
+    head_problems += running_cli_findings(home, heads)
     if head_problems:
         console.print("[red]Source heads cannot be recorded:[/red]")
         for problem in head_problems:
