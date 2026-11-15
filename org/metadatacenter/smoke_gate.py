@@ -424,6 +424,31 @@ def source_currency_findings(cedar_home, services, runner=subprocess.run) -> lis
     return findings
 
 
+CEE = "cedar-embeddable-editor"
+
+
+def expected_cee_version(cedar_home, heads: Mapping[str, str], runner=subprocess.run) -> tuple[str | None, str | None]:
+    """The CEE version the browser tier must find on screen, and why it cannot be read, if it cannot.
+
+    The editor shows the version its package declares. Read at the recorded CEE head, it is the one
+    every host the browser tier drives must render, so the tier fails when any of them serves
+    another editor. A record that names no CEE head expects none.
+    """
+    head = heads.get(CEE)
+    if head is None:
+        return None, None
+    code, text, detail = _capture(runner, ["git", "show", f"{head}:package.json"], cwd=_home(cedar_home) / CEE)
+    try:
+        if code != 0:
+            raise ValueError(detail.splitlines()[-1] if detail else f"git show exited {code}")
+        version = json.loads(text)["version"]
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("the package declares no version")
+    except (ValueError, KeyError, TypeError) as error:
+        return None, f"cannot read the version {CEE} declares at {head[:8]}: {error}"
+    return version.strip(), None
+
+
 def frontend_sources(cedar_home, heads: Mapping[str, str]) -> tuple[list[str], list[str], str | None]:
     """Which recorded heads the served frontends were not built from, and which they were built dirty.
 
@@ -573,6 +598,13 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         for problem in frontend_problems:
             console.print(f"  - {problem}", markup=False)
         return 1
+    cee_version, cee_problem = expected_cee_version(home, heads, runner)
+    if cee_problem:
+        console.print(f"[red]{cee_problem}[/red]", markup=False)
+        return 1
+    if cee_version:
+        # login-smoke-test.mjs compares every editor it renders with this version.
+        environment["CEDAR_EXPECT_CEE_VERSION"] = cee_version
     processes = native_processes(home, runner)
     if processes is None:
         console.print("[red]cannot read native stack status[/red]")
@@ -635,6 +667,8 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
             record.update(_rest_details(rest_report, e2e / "rest" / "expected-checks.json"))
             if not record["evidenceValid"]:
                 record["verdict"] = "FAIL"
+        if tier == "browser":
+            record["expectedCeeVersion"] = cee_version
         if tier == "split":
             record.update(_split_details(split_report, code))
         if tier == "search":

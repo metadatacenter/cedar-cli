@@ -1403,3 +1403,45 @@ class ChangesDuringRunTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("the frontends were redeployed with another reactor build while the tiers ran",
                       record["changedDuringRun"])
+
+
+class ExpectedCeeVersionTest(unittest.TestCase):
+    """The browser tier is told which CEE the recorded head declares, and fails on any other."""
+
+    HEADS = {**HEADS, "cedar-embeddable-editor": "e" * 40}
+
+    def setUp(self):
+        which = patch("org.metadatacenter.smoke_gate.shutil.which", return_value="/usr/bin/npm")
+        which.start()
+        self.addCleanup(which.stop)
+
+    def _runner(self, home, package):
+        runner = runner_for(home, heads=self.HEADS)
+        runner.answers.insert(0, (("git", "show", "e" * 40 + ":package.json"), package))
+        return runner
+
+    def test_the_browser_tier_is_given_the_version_the_head_declares(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory, self.HEADS)
+            runner = self._runner(home, FakeResult(stdout=json.dumps({"version": "2.0.36-dev.1"})))
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(0, code)
+            browser = next(kwargs for args, kwargs in runner.calls if args == ["npm", "run", "smoke"])
+            self.assertEqual("2.0.36-dev.1", browser["env"]["CEDAR_EXPECT_CEE_VERSION"])
+            record = json.loads((smoke_gate.reports_dir(home) / "latest.json").read_text())
+            self.assertEqual("2.0.36-dev.1", record["tiers"]["browser"]["expectedCeeVersion"])
+
+    def test_an_unreadable_cee_version_stops_the_run_before_any_tier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory, self.HEADS)
+            runner = self._runner(home, FakeResult(128, stderr="fatal: path 'package.json' does not exist"))
+
+            code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+
+            self.assertEqual(1, code)
+            self.assertEqual([], runner.commands("npm"))
+
+    def test_a_record_without_a_cee_head_expects_no_version(self):
+        self.assertEqual((None, None), smoke_gate.expected_cee_version("/home", HEADS, runner=FakeRunner()))
