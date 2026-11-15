@@ -349,7 +349,8 @@ class ExecutorReuseTest(unittest.TestCase):
                 patch(m + ".Util.cedar_home", "/tmp/cedar-reuse-fixture"), \
                 patch(m + ".isolated_frontend_workspace",
                       return_value=contextlib.nullcontext((Path("/tmp"), {}, []))), \
-                patch(m + ".materialize_frontend_workspace") as materialize, \
+                patch(m + ".materialize_frontend_workspace", return_value=(Path("/tmp"), [])) as materialize, \
+                patch(m + ".reactor_evidence.require_copy") as copied, \
                 patch(m + ".reactor_tasks.configure", return_value=None), \
                 patch(m + ".reactor_evidence.begin", return_value={"sourceSha256": "s" * 64}), \
                 patch(m + ".reactor_evidence.record") as record, \
@@ -364,7 +365,7 @@ class ExecutorReuseTest(unittest.TestCase):
                 patch.object(executor, "_execute_packaged_commands", return_value=code) as commands:
             result = executor.execute_shell_command_list(task, Mock(), False)
         return SimpleNamespace(code=result, record=record, publish=publish, reused=reused,
-                               key=key, save=save, commands=commands, materialize=materialize)
+                               key=key, save=save, commands=commands, materialize=materialize, copied=copied)
 
     def test_a_matching_result_stands_for_running_the_commands(self):
         run = self.run_task({"fingerprint": "k" * 64, "package": "p" * 64, "passedAt": "2026-10-14T00:00:00Z"})
@@ -381,9 +382,32 @@ class ExecutorReuseTest(unittest.TestCase):
         self.assertEqual(0, run.code)
         run.commands.assert_called_once()
         run.materialize.assert_called_once()
+        run.copied.assert_called_once_with("/tmp", Path("/tmp"), [], {"sourceSha256": "s" * 64})
         run.publish.assert_called_once()
         run.save.assert_called_once()
         self.assertEqual("p" * 64, run.save.call_args.args[3])
+
+    def test_a_copy_that_is_not_the_recorded_source_builds_nothing(self):
+        from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
+        # The executor turns the refusal into a failed task before any command runs.
+        parameters = {"isolated_frontend_build": True, "reuse_passing_result": False}
+        repo = producer()
+        task = SimpleNamespace(node_id=1, repo=repo, command_list=["npm ci"], parameters=parameters,
+                               get_parameter=parameters.get)
+        executor = ShellTaskExecutor()
+        m = self.MODULE
+        with patch(m + ".require_build_node"), patch(m + ".Util.get_wd", return_value="/tmp"), \
+                patch(m + ".Util.cedar_home", "/tmp/cedar-reuse-fixture"), \
+                patch(m + ".isolated_frontend_workspace",
+                      return_value=contextlib.nullcontext((Path("/tmp"), {}, []))), \
+                patch(m + ".materialize_frontend_workspace", return_value=(Path("/tmp"), [])), \
+                patch(m + ".reactor_evidence.require_copy", side_effect=reactor.ReactorError("copied")), \
+                patch(m + ".reactor_evidence.begin", return_value={"sourceSha256": "s" * 64}), \
+                patch.object(reactor, "resolve", return_value=[]), \
+                patch.object(reactor, "prepare_checks", return_value=[]), \
+                patch.object(executor, "_execute_packaged_commands", return_value=0) as commands:
+            self.assertEqual(1, executor.execute_shell_command_list(task, Mock(), False))
+        commands.assert_not_called()
 
     def test_a_failure_records_nothing(self):
         run = self.run_task(None, code=1)

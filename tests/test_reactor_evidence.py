@@ -93,6 +93,25 @@ class EvidenceTest(unittest.TestCase):
         config.write_text('FEATURE=two')
         self.assertNotEqual(before['sourceSha256'], evidence.source_identity(self.repo)['sourceSha256'])
 
+    def test_an_edit_reverted_after_the_copy_is_caught_by_the_copy_itself(self):
+        from org.metadatacenter.util.BuildSafety import materialize_frontend_workspace
+        source = self.repo / 'source.ts'
+        source.write_text('original')
+        identity = evidence.source_identity(self.repo)
+        copy = self.home / 'copy' / 'consumer'
+        copy.mkdir(parents=True)
+        root, paths = materialize_frontend_workspace(self.repo, copy)
+        evidence.require_copy(self.repo, root, paths, identity)
+
+        # An edit lands, is copied, and is reverted before the checkout is looked at again.
+        source.write_text('edited')
+        root, paths = materialize_frontend_workspace(self.repo, copy)
+        source.write_text('original')
+        self.assertEqual(identity, evidence.source_identity(self.repo),
+                         'the checkout alone shows nothing, so only the copy can')
+        with self.assertRaisesRegex(reactor.ReactorError, 'changed while it was copied'):
+            evidence.require_copy(self.repo, root, paths, identity)
+
     def test_change_before_a_later_task_is_rejected(self):
         plan = SimpleNamespace(tasks=[SimpleNamespace(tasks=[], repo=object(),
                                parameters={'isolated_frontend_build': True})])

@@ -133,7 +133,8 @@ class ShellTaskExecutor(TaskExecutor):
                                 f"{reused['passedAt']} ({key[:12]}); reusing it", markup=False)
                             outcome['exitCode'] = 0
                             return 0
-                        materialize_frontend_workspace(Path(cwd), Path(isolated_cwd))
+                        copy_root, copied = materialize_frontend_workspace(Path(cwd), Path(isolated_cwd))
+                        reactor_evidence.require_copy(cwd, copy_root, copied, identity)
                         reactor.resolve(isolated_cwd, cedar_home)
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)

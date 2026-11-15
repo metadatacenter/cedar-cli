@@ -36,18 +36,14 @@ def source_paths(source):
     return sorted(paths)
 
 
-def source_identity(source, *, include=None):
-    """Fingerprint the copied repository, including a nested app's sibling tests and locks."""
-    source = Path(source)
-    def git(*args):
-        return subprocess.check_output(['git', '-C', str(source), *args])
-    source = Path(git('rev-parse', '--show-toplevel').decode().strip())
-    paths = source_paths(source)
+def paths_digest(root, paths, *, include=None):
+    """The fingerprint of the given repository-relative paths under `root`, in the given order."""
+    root = Path(root)
     digest = hashlib.sha256()
     for raw in paths:
         if include is not None and not include(os.fsdecode(raw)):
             continue
-        path = source / os.fsdecode(raw)
+        path = root / os.fsdecode(raw)
         digest.update(raw + b'\0')
         if path.is_symlink():
             digest.update(b'link\0' + os.fsencode(os.readlink(path)))
@@ -58,9 +54,32 @@ def source_identity(source, *, include=None):
             digest.update(hashlib.sha256(path.read_bytes()).digest())
         else:
             digest.update(b'deleted')
+    return digest.hexdigest()
+
+
+def source_identity(source, *, include=None):
+    """Fingerprint the copied repository, including a nested app's sibling tests and locks."""
+    source = Path(source)
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(source), *args])
+    source = Path(git('rev-parse', '--show-toplevel').decode().strip())
     return {'revision': git('rev-parse', 'HEAD').decode().strip(),
-            'sourceSha256': digest.hexdigest(),
+            'sourceSha256': paths_digest(source, source_paths(source), include=include),
             'dirty': bool(git('status', '--porcelain', '--untracked-files=normal').strip())}
+
+
+def require_copy(source, copy_root, paths, identity):
+    """Refuse a build copy whose files are not the source the task recorded.
+
+    The checkout is compared with its recorded identity before a task and after it, which misses
+    an edit made after the first look and reverted before the last: the copy would hold the edit
+    and the record would name the original. The copy is fingerprinted the moment it is made,
+    over the paths it took, so what is built is exactly what is recorded.
+    """
+    if identity is None:
+        return
+    if paths_digest(copy_root, paths) != identity['sourceSha256']:
+        raise ReactorError(f'Frontend source changed while it was copied for its build: {source}')
 
 
 @contextlib.contextmanager
