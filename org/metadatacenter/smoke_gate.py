@@ -157,6 +157,53 @@ def develop_heads(
     return heads, dirty, problems
 
 
+def native_processes(cedar_home, runner=subprocess.run) -> dict[str, str] | None:
+    """The process serving each managed service, from the controller, or None when it cannot say."""
+    code, output, _detail = _capture(runner, [str(_home(cedar_home) / CONTROLLER), "status-tsv"])
+    if code != 0:
+        return None
+    try:
+        return {row["service"]: row["pid"] for row in ServerWorker.parse_native_status(output.splitlines())}
+    except ValueError:
+        return None
+
+
+def changes_during_run(cedar_home, repositories, runner, *, heads, dirty, processes, frontend_build) -> list[str]:
+    """What moved while the tiers ran, which a record would otherwise attribute to the heads it names.
+
+    The stack is judged once before the tiers start, and a run takes long enough for another session
+    to commit, to edit a tree an `ng serve` frontend compiles from, or to restart a service, none of
+    which waits for the local-stack lock. A head that moved, a clean tree that gained changes, a
+    service served by another process, a service that went stale or behind its source, and another
+    frontend build each mean some tiers ran other code than the record names. A repository that was
+    already dirty is recorded as dirty, which the gate refuses whatever happened to it.
+    """
+    changes = []
+    after, after_dirty, problems = develop_heads(cedar_home, repositories, runner)
+    changes.extend(f"after the run: {problem}" for problem in problems)
+    for name in sorted(set(heads) | set(after)):
+        if heads.get(name) != after.get(name):
+            changes.append(f"{name} moved from {str(heads.get(name))[:8]} to {str(after.get(name))[:8]} "
+                           "while the tiers ran")
+    changes.extend(f"{name} gained uncommitted changes while the tiers ran"
+                   for name in sorted(set(after_dirty) - set(dirty)))
+    now = native_processes(cedar_home, runner)
+    if now is None:
+        changes.append("the native stack's status cannot be read after the run")
+    else:
+        for service in sorted(set(processes) | set(now)):
+            if processes.get(service) != now.get(service):
+                changes.append(f"{service} was served by another process after the run "
+                               f"(pid {processes.get(service) or 'none'}, then {now.get(service) or 'none'})")
+    warming = tuple(f" is {state}" for state in WARMING_HEALTH)
+    changes.extend(f"after the run: {finding}" for finding in stack_findings(cedar_home, runner)
+                   if not finding.endswith(warming))
+    _problems, _built_dirty, build = frontend_sources(cedar_home, heads)
+    if build != frontend_build:
+        changes.append("the frontends were redeployed with another reactor build while the tiers ran")
+    return changes
+
+
 def stack_findings(cedar_home, runner=subprocess.run) -> list[str]:
     """Why the running stack cannot stand for its source, or nothing when it can.
 
@@ -526,6 +573,11 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         for problem in frontend_problems:
             console.print(f"  - {problem}", markup=False)
         return 1
+    processes = native_processes(home, runner)
+    if processes is None:
+        console.print("[red]cannot read native stack status[/red]")
+        return 1
+    tree_dirty = list(dirty)
     dirty = sorted(set(dirty) | set(built_dirty))
     if dirty:
         console.print(
@@ -610,8 +662,15 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         results["rest"] = rest.result()
     tiers = {tier: results[tier] for tier in TIERS}
 
+    # Judged again now that every tier has finished, since nothing stopped the stack moving meanwhile.
+    changes = changes_during_run(home, repositories, runner, heads=heads, dirty=tree_dirty,
+                                 processes=processes, frontend_build=frontend_build)
+    if changes:
+        console.print("[red]The stack or its sources changed while the tiers ran:[/red]")
+        for change in changes:
+            console.print(f"  - {change}", markup=False)
     finished = clock()
-    verdict = "PASS" if all(t["verdict"] == "PASS" for t in tiers.values()) else "FAIL"
+    verdict = "PASS" if all(t["verdict"] == "PASS" for t in tiers.values()) and not changes else "FAIL"
     report = {
         "schemaVersion": SCHEMA_VERSION,
         "verdict": verdict,
@@ -622,6 +681,7 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         "sources": dict(sorted(heads.items())),
         "dirty": sorted(dirty),
         "frontendBuild": frontend_build,
+        "changedDuringRun": changes,
         "tiers": tiers,
     }
     payload = json.dumps(report, indent=2) + "\n"
@@ -898,6 +958,9 @@ def evaluate(report: Mapping, expected: Mapping[str, str]) -> list[str]:
                 f"the smoke run at {when} tested other commits of {len(moved)} repositories "
                 f"({_names(moved)})")
 
+    if report.get("changedDuringRun"):
+        findings.append(f"the stack or its sources changed while the smoke run at {when} ran: "
+                        + "; ".join(report["changedDuringRun"][:SUMMARY_LIMIT]))
     dirty = [name for name in report.get("dirty") or [] if name in expected]
     if dirty:
         findings.append(f"{_names(dirty)} had uncommitted changes when the smoke ran")

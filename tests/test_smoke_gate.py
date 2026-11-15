@@ -1315,3 +1315,91 @@ class AllowedSkipTest(unittest.TestCase):
         record["tiers"]["rest"].update(unallowedSkips=["folders\x1ffolders\x1fcreated"])
         self.assertEqual(["the REST smoke skipped 1 check(s) that rest/allowed-skips.json does not allow"],
                          evaluate(record, HEADS))
+
+
+class ChangesDuringRunTest(unittest.TestCase):
+    """What moves while the tiers run turns the record into a failure that names it."""
+
+    def setUp(self):
+        which = patch("org.metadatacenter.smoke_gate.shutil.which", return_value="/usr/bin/npm")
+        which.start()
+        self.addCleanup(which.stop)
+
+    @staticmethod
+    def _after_tiers(runner, before, after):
+        """Answer one way until a tier has run and another way after it."""
+        def answer(args, kwargs):
+            value = after if runner.commands("npm") else before
+            return value(args, kwargs) if callable(value) else value
+        return answer
+
+    def _run(self, directory, change):
+        home = fake_home(directory)
+        runner = runner_for(home)
+        change(home, runner)
+        code = run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"})
+        return code, json.loads((smoke_gate.reports_dir(home) / "latest.json").read_text())
+
+    def test_an_undisturbed_run_records_no_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            code, record = self._run(directory, lambda home, runner: None)
+
+        self.assertEqual(0, code)
+        self.assertEqual([], record["changedDuringRun"])
+        self.assertEqual([], evaluate(record, HEADS))
+
+    def test_a_head_that_moves_while_the_tiers_run_fails_the_record(self):
+        moved = {**HEADS, "cedar-b": "c" * 40}
+
+        def change(home, runner):
+            runner.answers.insert(0, (("git", "rev-parse"),
+                                      self._after_tiers(runner, rev_parse(HEADS), rev_parse(moved))))
+        with tempfile.TemporaryDirectory() as directory:
+            code, record = self._run(directory, change)
+
+        self.assertEqual(1, code)
+        self.assertEqual("FAIL", record["verdict"])
+        self.assertIn("cedar-b moved from bbbbbbbb to cccccccc while the tiers ran", record["changedDuringRun"])
+        self.assertTrue(any("changed while the smoke run" in finding for finding in evaluate(record, HEADS)))
+
+    def test_a_service_restarted_while_the_tiers_run_fails_the_record(self):
+        restarted = HEALTHY_TSV.replace("resource\t101", "resource\t999")
+
+        def change(home, runner):
+            controller = str(home / "cedar-development" / "ops" / "cedar-services.sh")
+            runner.answers.insert(0, ((controller, "status-tsv"), self._after_tiers(
+                runner, FakeResult(stdout=HEALTHY_TSV), FakeResult(stdout=restarted))))
+        with tempfile.TemporaryDirectory() as directory:
+            code, record = self._run(directory, change)
+
+        self.assertEqual(1, code)
+        self.assertIn("resource was served by another process after the run (pid 101, then 999)",
+                      record["changedDuringRun"])
+
+    def test_a_clean_tree_edited_while_the_tiers_run_fails_the_record(self):
+        def change(home, runner):
+            runner.answers.insert(0, (("git", "status"), self._after_tiers(
+                runner, FakeResult(stdout=""), FakeResult(stdout=" M src/app.ts"))))
+        with tempfile.TemporaryDirectory() as directory:
+            code, record = self._run(directory, change)
+
+        self.assertEqual(1, code)
+        self.assertIn("cedar-a gained uncommitted changes while the tiers ran", record["changedDuringRun"])
+
+    def test_a_frontend_redeployed_while_the_tiers_run_fails_the_record(self):
+        def change(home, runner):
+            original = runner.answers[[prefix for prefix, _ in runner.answers].index(("npm", "run", "smoke"))][1]
+
+            def redeploy(args, kwargs):
+                store = home / ".reactor"
+                (store / "builds" / ("e" * 64 + ".json")).write_text(
+                    (store / "builds" / ("f" * 64 + ".json")).read_text())
+                (store / "runtime.json").write_text(json.dumps({"build": "e" * 64, "packages": {}}))
+                return original(args, kwargs) if callable(original) else original
+            runner.answers.insert(0, (("npm", "run", "smoke"), redeploy))
+        with tempfile.TemporaryDirectory() as directory:
+            code, record = self._run(directory, change)
+
+        self.assertEqual(1, code)
+        self.assertIn("the frontends were redeployed with another reactor build while the tiers ran",
+                      record["changedDuringRun"])
