@@ -81,6 +81,13 @@ class Registry:
     def entry(self, repository: str) -> dict | None:
         return self.document.get("repositories", {}).get(repository)
 
+    def branch(self, repository: str) -> str:
+        """The branch whose pushes local CI answers for: develop, unless the entry names another.
+
+        The MCP servers under mcp/ develop on main.
+        """
+        return str((self.entry(repository) or {}).get("branch") or "develop")
+
     def digest(self, repository: str) -> str:
         """A fingerprint of everything the registry says about one repository.
 
@@ -137,6 +144,12 @@ class Registry:
             called=called,
             linux=linux,
         )
+
+
+def github_name(repository: str) -> str:
+    """The repository's name on GitHub. A checkout under a directory, as mcp/cedar-cee-mcp is,
+    is metadatacenter/cedar-cee-mcp there."""
+    return Path(repository).name
 
 
 def _profile_names(raw: dict) -> list[str]:

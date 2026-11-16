@@ -23,6 +23,7 @@ from pathlib import Path
 
 from org.metadatacenter.github_ci import newest_commit_status
 from org.metadatacenter.local_ci.errors import LocalCIError
+from org.metadatacenter.local_ci.registry import github_name
 
 SCHEMA_VERSION = 1
 
@@ -82,7 +83,7 @@ def post_status(record: dict, context: str, runner=subprocess.run, environment=N
     """Publish the verdict on the commit, where pull requests and other machines can read it."""
     state = "success" if record.get("conclusion") == "success" else "failure"
     command = ["gh", "api", "--method", "POST",
-               f"repos/metadatacenter/{record['repository']}/statuses/{record['revision']}",
+               f"repos/metadatacenter/{github_name(record['repository'])}/statuses/{record['revision']}",
                "-f", f"state={state}", "-f", f"context={context}",
                "-f", f"description={status_description(record)}"]
     result = runner(command, text=True, capture_output=True, check=False, env=environment)
@@ -142,7 +143,7 @@ def ledger_verdict(cedar_home, repository: str, revision: str, registry_digest: 
 def status_verdict(repository: str, revision: str, context: str, runner=subprocess.run,
                    environment=None) -> LocalVerdict:
     """The newest `cedar/local-ci` status GitHub holds for the commit, for another machine's runs."""
-    newest, reason = newest_commit_status(repository, revision, context, runner=runner,
+    newest, reason = newest_commit_status(github_name(repository), revision, context, runner=runner,
                                           environment=environment)
     if newest is None:
         return LocalVerdict("none", reason)

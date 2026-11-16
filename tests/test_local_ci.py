@@ -550,3 +550,66 @@ def test_only_the_opensearch_jobs_run_one_at_a_time():
 
     assert exclusions["maven"] is None and exclusions["maven-tests"] is None
     assert exclusions["opensearch"] == "opensearch-container"
+
+
+# Repositories on another branch, under a directory ---------------------------------------------
+
+ON_MAIN = textwrap.dedent("""\
+    name: CI
+    on:
+      push:
+        branches: [main]
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - name: Read what GitHub would say
+            run: |
+              test "$GITHUB_REF" = refs/heads/main
+              test "$GITHUB_REPOSITORY" = metadatacenter/cedar-sample-mcp
+              test "${{ github.ref_name }}" = main
+              test -f README.md
+    """)
+
+
+def test_a_repository_under_mcp_runs_its_main_head_as_a_push_to_main(home, tmp_path):
+    """The MCP servers sit under $CEDAR_HOME/mcp, develop on main, and are named alone on GitHub."""
+    repository = home / "mcp" / "cedar-sample-mcp"
+    (repository / ".github" / "workflows").mkdir(parents=True)
+    (repository / ".github" / "workflows" / "ci.yml").write_text(ON_MAIN)
+    (repository / "README.md").write_text("sample\n")
+    git(repository, "init", "-q", "-b", "main")
+    git(repository, "config", "user.email", "ci@example.org")
+    git(repository, "config", "user.name", "CI")
+    git(repository, "add", "-A")
+    git(repository, "commit", "-q", "-m", "Initial")
+    origin = tmp_path / "mcp-origin.git"
+    git(tmp_path, "clone", "-q", "--bare", str(repository), str(origin))
+    git(repository, "remote", "add", "origin", str(origin))
+    registry = {**REGISTRY, "repositories": {"mcp/cedar-sample-mcp": {
+        "branch": "main", "jobs": {"ci.yml:test": {}}}}}
+    (home / "cedar-development" / "ops" / "local-ci.json").write_text(json.dumps(registry))
+
+    assert Registry(registry).branch("mcp/cedar-sample-mcp") == "main"
+    assert Registry(REGISTRY).branch("cedar-sample") == "develop"
+    [outcome] = run(home, ["mcp/cedar-sample-mcp"], post=False, reporter=lambda line: None,
+                    source_environment=_environment(tmp_path))
+
+    assert outcome.state == "passed", (outcome.detail, outcome.reasons)
+    assert outcome.revision == git(repository, "rev-parse", "HEAD")
+    record = json.loads(Path(outcome.record_path).read_text())
+    assert Path(record["runDirectory"]).parent == tmp_path / "local-ci" / "runs"
+
+
+def test_a_status_is_posted_on_the_repository_github_names():
+    from org.metadatacenter.local_ci.evidence import post_status
+    commands = []
+
+    def runner(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    post_status({"repository": "mcp/cedar-sample-mcp", "revision": "a" * 40, "conclusion": "success",
+                 "jobs": []}, "cedar/local-ci", runner=runner)
+    assert commands[0][4] == f"repos/metadatacenter/cedar-sample-mcp/statuses/{'a' * 40}"

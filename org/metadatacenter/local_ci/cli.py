@@ -93,8 +93,9 @@ def coverage_command(
         names = list(repositories or registry.repositories())
         drift = False
         for name in names:
-            commit = resolve_revision(cedar_home, name, revisions.get(name))
-            coverage = repository_coverage(cedar_home, name, commit, registry)
+            branch = registry.branch(name)
+            commit = resolve_revision(cedar_home, name, revisions.get(name), branch)
+            coverage = repository_coverage(cedar_home, name, commit, registry, branch=branch)
             if not coverage.runs_ci and not coverage.problems:
                 typer.echo(f"NO CI     {name} {commit[:8]}")
                 continue
@@ -131,7 +132,7 @@ def status_command(
     try:
         registry = load_registry(cedar_home)
         for name in list(repositories or registry.repositories()):
-            commit = resolve_revision(cedar_home, name, None)
+            commit = resolve_revision(cedar_home, name, None, registry.branch(name))
             answer = verdict(cedar_home, name, commit, registry=registry)
             typer.echo(f"{answer.state.upper():6} {name} {commit[:8]}  {answer.detail}")
             if post and publish_record(cedar_home, name, commit, registry):
