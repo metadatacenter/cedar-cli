@@ -1203,11 +1203,30 @@ def dropped_rest_checks(cedar_home, inventory_path: Path, runner=subprocess.run)
     return dropped, None
 
 
+# The MCP server whose built jar the REST tier's mcp suite runs from its working tree.
+REST_MCP = "cedar-artifact-rest-mcp"
+
+
+def mcp_source_problem(sources) -> str | None:
+    """Why the REST report cannot say which MCP commit its mcp suite ran, or None when it can.
+
+    The MCP servers are outside the train, so only the REST report records their heads. A jar built
+    from a tree with uncommitted changes holds code no commit does.
+    """
+    entry = sources.get(REST_MCP) if isinstance(sources, dict) else None
+    if not isinstance(entry, dict) or not isinstance(entry.get("head"), str) \
+            or not re.fullmatch(r"[0-9a-f]{40}", entry["head"]) or not isinstance(entry.get("dirty"), bool):
+        return f"the REST report records no commit of {REST_MCP}, whose jar its mcp suite ran"
+    if entry["dirty"]:
+        return f"{REST_MCP} had uncommitted changes when its jar ran in the REST tier's mcp suite"
+    return None
+
+
 def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path | None = None) -> dict:
     """Require complete REST evidence, independently of the subprocess exit code.
 
     A skipped check counts only when the committed allowlist beside the inventory names it with the
-    reason the run recorded.
+    reason the run recorded. The report must also name the commit of the MCP server the mcp suite ran.
     """
     details = {"report": str(rest_report), "evidenceValid": False}
     try:
@@ -1243,17 +1262,21 @@ def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path 
                         and set(statuses) <= {"passed", "skipped"})
         started = dt.datetime.fromisoformat(payload["startedAt"].replace("Z", "+00:00"))
         finished = dt.datetime.fromisoformat(payload["finishedAt"].replace("Z", "+00:00"))
+        mcp_problem = mcp_source_problem(payload.get("mcpSources"))
         valid = (payload.get("schemaVersion") == 1 and payload.get("verdict") == "PASS"
                  and payload.get("interrupted") is False
                  and isinstance(payload.get("runId"), str) and bool(payload["runId"].strip())
                  and started.tzinfo is not None and finished.tzinfo is not None and finished >= started
-                 and payload.get("selectedSuites") == suites and matched and counts_valid and not unallowed)
+                 and payload.get("selectedSuites") == suites and matched and counts_valid and not unallowed
+                 and mcp_problem is None)
         details.update({"runId": payload.get("runId"), "runnerVerdict": payload.get("verdict"),
                         "counts": counts, "inventoryMatched": matched, "evidenceValid": valid,
-                        "unallowedSkips": unallowed})
+                        "unallowedSkips": unallowed, "mcpSources": payload.get("mcpSources")})
         if unallowed:
             details["reportError"] = (f"{len(unallowed)} REST check(s) skipped that rest/allowed-skips.json does not "
                                       f"allow with the reason given, such as {unallowed[0].replace(chr(31), ' / ')}")
+        elif mcp_problem:
+            details["reportError"] = mcp_problem
         elif not valid:
             details["reportError"] = "REST evidence is incomplete, failed, or does not cover the committed inventory"
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:

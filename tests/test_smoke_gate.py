@@ -168,6 +168,8 @@ def rest_payload():
         "schemaVersion": 1, "runId": "2026-09-07T10-00-00", "verdict": "PASS", "interrupted": False,
         "startedAt": "2026-09-07T10:00:00Z", "finishedAt": "2026-09-07T10:01:00Z",
         "selectedSuites": ["folders", "freeze"], "inventoryMatched": True,
+        "mcpSources": {"cedar-artifact-rest-mcp": {"head": "c" * 40, "dirty": False},
+                       "bioportal-term-mcp": {"head": "d" * 40, "dirty": True}},
         "counts": {"passed": 3, "failed": 0, "skipped": 1, "total": 4},
         "checks": [dict(zip(("suite", "section", "name"), key.split("\x1f")),
                         **({"status": "skipped", "reason": SKIP_REASON} if key.startswith("freeze\x1f")
@@ -422,6 +424,9 @@ class RunSmokeTest(unittest.TestCase):
             "cleanup failure": lambda r: r["counts"].update(failed=1, total=5),
             "malformed checks": lambda r: r.update(checks=None),
             "backwards timestamps": lambda r: r.update(finishedAt="2026-09-06T10:00:00Z"),
+            "no MCP sources": lambda r: r.pop("mcpSources"),
+            "no REST MCP commit": lambda r: r["mcpSources"]["cedar-artifact-rest-mcp"].update(head=None),
+            "a dirty REST MCP": lambda r: r["mcpSources"]["cedar-artifact-rest-mcp"].update(dirty=True),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
