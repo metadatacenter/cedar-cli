@@ -493,6 +493,28 @@ class RunSmokeTest(unittest.TestCase):
                 self.assertFalse(rest["evidenceValid"])
                 self.assertIn("cannot compare the REST inventory", rest["reportError"])
 
+    def test_rest_tier_runs_within_a_wall_clock_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home)
+            self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+            budgets = {tuple(args[:3]): kwargs.get("timeout") for args, kwargs in runner.calls if args[:2] == ["npm", "run"]}
+            self.assertEqual(smoke_gate.REST_BUDGET_SECONDS, budgets[("npm", "run", "smoke:rest")])
+            self.assertFalse(read_report(home, HEADS)["tiers"]["rest"]["timedOut"])
+
+    def test_rest_tier_that_overruns_its_budget_fails(self):
+        def stalled(args, kwargs):
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            runner = runner_for(home, rest=stalled)
+            self.assertEqual(1, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+            rest = read_report(home, HEADS)["tiers"]["rest"]
+            self.assertEqual("FAIL", rest["verdict"])
+            self.assertEqual(124, rest["exitCode"])
+            self.assertTrue(rest["timedOut"])
+            self.assertEqual(4, len(runner.commands("npm", "run")))
+
     def test_rest_rerun_cannot_reuse_an_older_passing_report(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)

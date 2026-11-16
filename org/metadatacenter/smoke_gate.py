@@ -67,6 +67,9 @@ SUMMARY_LIMIT = 5
 SPLIT_LOCK_REFUSED = 75
 # The bounds of the split tier's cap on any one unit's deadline, in seconds, as split-tier.mjs takes it.
 SPLIT_TIMEOUT_CAP_RANGE = (60, 7200)
+# The REST tier's wall-clock budget. Its runner stops itself after 1,200 seconds and tears down, and
+# each request it makes times out; this is the backstop for a runner that does neither.
+REST_BUDGET_SECONDS = 1800
 
 
 class SmokeGateError(ValueError):
@@ -998,10 +1001,16 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
 
     def run(tier, **streams) -> dict:
         tier_started = clock()
+        budget = {"timeout": REST_BUDGET_SECONDS} if tier == "rest" else {}
+        timed_out = False
         try:
             result = runner(commands[tier], cwd=str(e2e), env={**environment, **tier_environment.get(tier, {})},
-                            check=False, **streams)
+                            check=False, **streams, **budget)
             code = result.returncode
+        except subprocess.TimeoutExpired:
+            console.print(f"[red]the {tier} smoke did not finish within {REST_BUDGET_SECONDS} s[/red]")
+            code = 124
+            timed_out = True
         except OSError as error:
             console.print(f"[red]could not run the {tier} smoke: {error}[/red]")
             code = 127
@@ -1014,6 +1023,8 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         }
         if tier == "rest":
             record["log"] = str(rest_log)
+            record["budgetSeconds"] = REST_BUDGET_SECONDS
+            record["timedOut"] = timed_out
             inventory = e2e / "rest" / "expected-checks.json"
             record.update(_rest_details(rest_report, inventory))
             dropped, unanswered = dropped_rest_checks(home, inventory, runner)
