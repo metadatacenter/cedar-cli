@@ -44,12 +44,20 @@ def package_ready():
         notify()
 
 
-def record_timing(repo, command, started, code, stages=()):
+def record_timing(repo, command, started, code, stages=(), test_summary=()):
+    """Record one command's time and result in the build report.
+
+    `test_summary` holds the lines of a Maven command's output that say which tests ran and failed,
+    so a failed build's report names its cause without the console transcript.
+    """
     records = _timings.get()
     if records is not None:
-        records.append({'repository': repo, 'command': command,
-                        'seconds': round(time.monotonic() - started, 3), 'exitCode': code,
-                        'stages': list(stages)})
+        record = {'repository': repo, 'command': command,
+                  'seconds': round(time.monotonic() - started, 3), 'exitCode': code,
+                  'stages': list(stages)}
+        if test_summary:
+            record['testSummary'] = list(test_summary)
+        records.append(record)
 
 
 def record_dropped_optional_dependencies(repo, command, packages):

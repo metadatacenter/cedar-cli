@@ -519,7 +519,7 @@ class BuildPolicyTest(unittest.TestCase):
             report = copy / 'browser/test-results/failure.txt'
             report.parent.mkdir(parents=True)
             report.write_text('browser failure')
-            environment = {'CEDAR_BUILD_WORKSPACE_ROOT': str(copy)}
+            environment = {'CEDAR_BUILD_WORKSPACE_ROOT': str(copy), 'TMPDIR': str(home / 'tmp')}
             stack.enter_context(use_context(InvocationContext(environment={**os.environ, 'CEDAR_HOME': directory})))
             stack.enter_context(patch(module + '.Util.get_wd', return_value='/tmp/source/frontend-src'))
             stack.enter_context(patch(module + '.is_frontend_build', return_value=False))

@@ -19,6 +19,7 @@ from org.metadatacenter.build_scheduler import (
     worker_pool,
 )
 from org.metadatacenter.util.worker_pool import POOL_VARIABLE, runs_gate, wanted
+from org.metadatacenter.util.MavenTestSummary import MavenTestSummary
 from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
@@ -50,6 +51,12 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(('127.0.0.1', 0))
         return probe.getsockname()[1]
+
+
+def build_scope(environment):
+    """The private directory an isolated build was given, the parent of the TMPDIR it set, or None."""
+    temporary = (environment or {}).get('TMPDIR')
+    return Path(temporary).parent if temporary else None
 
 
 class ShellTaskExecutor(TaskExecutor):
@@ -86,6 +93,7 @@ class ShellTaskExecutor(TaskExecutor):
                                 environment.get('CEDAR_BUILD_WORKSPACE_ROOT', isolated_cwd),
                                 Util.cedar_home, job_progress.print,
                                 npm_logs=npm_install.log_directory(environment),
+                                scope=build_scope(environment),
                             ) as outcome:
                         diagnostic_root = Path(environment.get('CEDAR_BUILD_WORKSPACE_ROOT', isolated_cwd))
                         environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(diagnostic_root / COMMAND_LOG)
@@ -331,7 +339,10 @@ class ShellTaskExecutor(TaskExecutor):
 
         stages = []
         allocations = {}
+        summary = MavenTestSummary() if is_maven_command(command) else None
         def report(line):
+            if summary is not None:
+                summary.add(line)
             allocation = re.fullmatch(r"\[gate\] allocation ([\w-]+): (\d+) workers, ([\d.]+)s queued", line)
             if allocation:
                 allocations[allocation[1]] = {"workers": int(allocation[2]), "queuedSeconds": float(allocation[3])}
@@ -365,7 +376,8 @@ class ShellTaskExecutor(TaskExecutor):
                 env=environment, on_line=logged_report,
             )
         return_code = stdout_parts.returncode
-        record_timing(repo.name, command, started, return_code, stages)
+        record_timing(repo.name, command, started, return_code, stages,
+                      summary.lines if summary is not None else ())
         description = describe_subprocess_failure(return_code)
         if return_code < 0 and not stdout_parts:
             description += "; the process produced no diagnostic output of its own"

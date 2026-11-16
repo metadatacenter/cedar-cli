@@ -48,12 +48,26 @@ class NpmDebugLogRetentionTest(unittest.TestCase):
             (work/'coverage'/'summary.json').write_text('x' * 64)
             (logs/'2026-10-05T02_48_57_158Z-debug-0.log').write_text('21 verbose reify failed optional dependency\n')
             (logs/'linked.log').symlink_to(work/'coverage'/'summary.json')
-            bundle = retain_failure(work, home, npm_logs=logs, limit=60)
+            bundle = retain_failure(work, home, npm_logs=logs, limit=60, scope=home)
             files = json.loads((bundle/'manifest.json').read_text())
             self.assertEqual(['npm-logs/2026-10-05T02_48_57_158Z-debug-0.log'], files['files'])
             self.assertEqual(['coverage/summary.json'], files['omittedForSize'])
             self.assertIn('failed optional dependency',
                           (bundle/'npm-logs'/'2026-10-05T02_48_57_158Z-debug-0.log').read_text())
+
+    def test_only_a_workspace_inside_the_builds_own_directory_is_swept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory); build = home/'build-1'; shared = home/'tmp'
+            for root in (build/'copy', shared):
+                (root/'surefire-reports').mkdir(parents=True)
+                (root/'surefire-reports'/'TEST-other.xml').write_text('<testsuite/>')
+            own = json.loads((retain_failure(build/'copy', home, scope=build)/'manifest.json').read_text())
+            # A workspace outside the build's own directory, such as /tmp, holds other sessions' files.
+            other = json.loads((retain_failure(shared, home, scope=build)/'manifest.json').read_text())
+            unscoped = json.loads((retain_failure(shared, home)/'manifest.json').read_text())
+        self.assertEqual((True, ['surefire-reports/TEST-other.xml']), (own['workspaceSwept'], own['files']))
+        self.assertEqual((False, []), (other['workspaceSwept'], other['files']))
+        self.assertEqual((False, []), (unscoped['workspaceSwept'], unscoped['files']))
 
     def test_an_absent_log_directory_changes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
