@@ -15,7 +15,8 @@ import shutil
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
+from org.metadatacenter.util.BuildSafety import EmbeddedMongoProcess
 
 import typer
 from typer.testing import CliRunner
@@ -2868,7 +2869,7 @@ class ReleaseBuildValidationTest(unittest.TestCase):
 
             before.assert_called_once_with("release Maven task release:maven:parent")
             after.assert_called_once_with(
-                "completion of release Maven task release:maven:parent")
+                "completion of release Maven task release:maven:parent", scratch=ANY)
 
     def test_quiet_build_keeps_raw_output_in_its_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -4883,17 +4884,27 @@ class ReleasePreflightTest(unittest.TestCase):
         })
         self.assertEqual([], self._preflight(commands=commands).check_toolchain())
 
-    def test_embedded_mongo_process_blocks_release_before_building(self):
-        process = SimpleNamespace(
-            describe=lambda: "PID 42 (/Users/test/.embedmongo/5.0/mongod; "
-            "listening on 127.0.0.1:42317)")
-        with patch.object(preflight, "embedded_mongo_processes", return_value=[process]):
+    def test_orphaned_embedded_mongo_blocks_release_before_building(self):
+        mongod = Path("/Users/test/.embedmongo/5.0/mongod")
+        orphan = EmbeddedMongoProcess(42, mongod, ("127.0.0.1:42317",), 1)
+        live = EmbeddedMongoProcess(43, mongod, (), 5120)
+        with patch.object(preflight, "embedded_mongo_processes", return_value=[orphan, live]):
             findings = self._preflight().check_embedded_test_processes()
 
-        self.assertEqual(1, len(findings))
+        self.assertEqual(2, len(findings))
         self.assertTrue(findings[0].fatal)
         self.assertIn("PID 42", findings[0].message)
+        self.assertNotIn("PID 43", findings[0].message)
         self.assertIn("cedarcli test cleanup", findings[0].remedy)
+        self.assertFalse(findings[1].fatal)
+        self.assertIn("PID 43", findings[1].message)
+
+    def test_a_running_tests_mongod_does_not_block_a_release(self):
+        live = EmbeddedMongoProcess(43, Path("/Users/test/.embedmongo/5.0/mongod"), (), 5120)
+        with patch.object(preflight, "embedded_mongo_processes", return_value=[live]):
+            findings = self._preflight().check_embedded_test_processes()
+
+        self.assertEqual([False], [finding.fatal for finding in findings])
 
     def test_node_other_than_the_release_pin_is_refused(self):
         commands = FakeCommands({

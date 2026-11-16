@@ -489,7 +489,8 @@ class BuildPolicyTest(unittest.TestCase):
         before.assert_called_once_with(
             "test-bearing Maven task for cedar-example")
         after.assert_called_once_with(
-            "completion of test-bearing Maven task for cedar-example")
+            "completion of test-bearing Maven task for cedar-example",
+            scratch=Path(child_env['TMPDIR']).parent)
 
     def test_a_failing_task_halts_the_plan_nonzero(self):
         """

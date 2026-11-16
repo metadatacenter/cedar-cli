@@ -254,7 +254,7 @@ class ShellTaskExecutor(TaskExecutor):
                             markup=False)
                 workspace = (executable_build_workspace(command_environment, java=True)
                              if is_maven_command(command) else nullcontext((None, command_environment)))
-                with workspace as (_, child_environment):
+                with workspace as (scratch, child_environment):
                     if npm_logs and npm_install.is_install(command):
                         return_code = self._execute_npm_install(
                             task, repo, command, cwd, job_progress, child_environment, npm_logs)
@@ -262,9 +262,10 @@ class ShellTaskExecutor(TaskExecutor):
                         output, return_code = self.execute_shell_command(
                             task, repo, command, cwd, job_progress, environment=child_environment,
                         )
-                    if guarded_maven:
+                    if guarded_maven and scratch is not None:
                         wait_for_no_embedded_mongo_processes(
-                            f"completion of test-bearing Maven task for {repo.name}")
+                            f"completion of test-bearing Maven task for {repo.name}",
+                            scratch=scratch)
             if return_code == 0 and cache:
                 try:
                     task_cache.save(cache, command, log='\n'.join(output))

@@ -149,7 +149,7 @@ def search(plan: bool = typer.Option(False, help="Print the offline corpus and e
 
 @app.command("status")
 def status():
-    """List embedded MongoDB processes that can interfere with backend tests."""
+    """List embedded MongoDB processes, saying which are orphaned and which a running test owns."""
     processes = embedded_mongo_processes()
     if not processes:
         console.print("No embedded Mongo test processes are running.")
@@ -159,11 +159,25 @@ def status():
 
 
 @app.command("cleanup")
-def cleanup():
-    """Terminate only mongods whose executable is inside .embedmongo."""
-    processes = embedded_mongo_processes()
+def cleanup(
+        all_processes: bool = typer.Option(
+            False, "--all",
+            help="Also stop mongods that running tests own, in this session or another.")):
+    """Terminate orphaned mongods whose executable is inside .embedmongo.
+
+    An orphan's test JVM has died, so nothing else will stop it. A mongod with a live parent
+    belongs to a test that is still running, and stopping it fails that test, so it is stopped
+    only under --all.
+    """
+    inventory = embedded_mongo_processes()
+    processes = [process for process in inventory if all_processes or process.orphaned]
+    skipped = [process for process in inventory if process not in processes]
+    for process in skipped:
+        console.print(f"Leaving {process.describe()}, which a running test owns; --all stops it",
+                      markup=False)
     if not processes:
-        console.print("No embedded Mongo test processes are running.")
+        console.print("No orphaned embedded Mongo test processes are running."
+                      if skipped else "No embedded Mongo test processes are running.")
         return
     for process in processes:
         console.print(f"Stopping {process.describe()}", markup=False)
@@ -171,9 +185,10 @@ def cleanup():
             os.kill(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+    stopping = {process.pid for process in processes}
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        remaining = embedded_mongo_processes()
+        remaining = [process for process in embedded_mongo_processes() if process.pid in stopping]
         if not remaining:
             console.print(f"Stopped {len(processes)} embedded Mongo test process(es).")
             return
