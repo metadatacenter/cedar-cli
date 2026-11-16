@@ -131,6 +131,7 @@ class ReactorTokenGateTest(unittest.TestCase):
     def test_build_all_checks_only_when_it_verifies(self):
         with patch.object(build, 'check_design_tokens', return_value=0) as gate, \
                 patch.object(build, 'execute_build', return_value={}), \
+                patch.object(build, 'report_coverage'), \
                 patch.object(cee_demos, 'check_selection'):
             self.assertEqual(0, self.runner.invoke(build.app, ['all']).exit_code)
             self.assertEqual(True, gate.call_args.kwargs['strict'])
