@@ -13,6 +13,7 @@
     "cedar-group-server/cedar-group-server-application": {"lines": {"repository": 93.6, "any": 93.6}, "branches": {"repository": 78.6, "any": 78.6}},
     "cedar-keycloak-event-listener": {"lines": {"repository": 97.6, "any": 97.6}, "branches": {"repository": 81.2, "any": 81.2}},
     "cedar-messaging-server/cedar-messaging-server-application": {"lines": {"repository": 98.9, "any": 98.9}, "branches": {"repository": 97.5, "any": 97.5}},
+    "cedar-messaging-server/cedar-messaging-server-core": {"lines": {"repository": 84.5, "any": 84.5}, "branches": {"repository": 71.4, "any": 71.4}},
     "cedar-microservice-libraries/cedar-auth-operations-keycloak-library": {"lines": {"repository": 96.7, "any": 96.7}, "branches": {"repository": 87.5, "any": 87.5}},
     "cedar-microservice-libraries/cedar-auth-operations-library": {"lines": {"repository": 100.0, "any": 100.0}, "branches": {"repository": 90.0, "any": 90.0}},
     "cedar-microservice-libraries/cedar-cache-operations-library": {"lines": {"repository": 67.3, "any": 90.0}, "branches": {"repository": 56.9, "any": 81.9}},

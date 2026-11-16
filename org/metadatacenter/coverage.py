@@ -81,6 +81,24 @@ def execution_data(checkouts, started: float):
                   if execution.stat().st_mtime >= started and execution.stat().st_size > 0)
 
 
+def untested_modules(checkouts, started: float, reported):
+    """Modules the build compiled that wrote no coverage report, each with its CEDAR class files.
+
+    A module without tests writes no report, yet other modules' tests may run its code, and leaving
+    it out would drop its lines from every total. Only classes under org.metadatacenter count, as
+    the JaCoCo agent instruments only those.
+    """
+    found = {}
+    for target in target_directories(checkouts):
+        module, classes = target.parent, target / 'classes' / 'org' / 'metadatacenter'
+        if module in reported or not classes.is_dir():
+            continue
+        class_files = sorted(path for path in classes.rglob('*.class') if path.stat().st_mtime >= started)
+        if class_files:
+            found[module] = class_files
+    return found
+
+
 def read_report(report_xml: Path):
     """The classes a report analysed, as class files, and its own line and branch counters.
 
@@ -166,17 +184,20 @@ def merged_figures(modules, executions, java: Path, classpath):
     return figures
 
 
-def measure(reports, executions, home: Path, repository: Path, java: Path):
-    """Own-test, repository-test and any-test figures for every module that wrote a report.
+def measure(reports, executions, home: Path, repository: Path, java: Path, untested=None):
+    """Own-test, repository-test and any-test figures for every module that wrote a report, and for
+    each module in `untested` ({module directory: class files}), which has no tests of its own.
 
     A module that ran Failsafe suites has two reports on the same classes; the Surefire one supplies
-    its own-test figure.
+    its own-test figure. An untested module's own-test figure is zero of the lines the analysis finds.
     """
     modules = {}
     for report in sorted(reports, key=lambda path: path.parent.name != 'jacoco'):
         module = report.parents[3]
         if module not in modules:
             modules[module] = read_report(report.parent / 'jacoco.xml')
+    for module, classes in (untested or {}).items():
+        modules.setdefault(module, (classes, None, None))
     any_test = merged_figures({module: (repository_of(module, home), classes)
                                for module, (classes, _, _) in modules.items()},
                               [(repository_of(execution, home), execution) for execution in executions],
@@ -184,6 +205,8 @@ def measure(reports, executions, home: Path, repository: Path, java: Path):
     measured = {}
     for module, (_, own_lines, own_branches) in modules.items():
         covered_lines, lines, covered_branches, branches, repository_lines, repository_branches = any_test[module]
+        if own_lines is None:
+            own_lines, own_branches = (0, lines), (0, branches)
         if (lines, branches) != (own_lines[1], own_branches[1]):
             raise CoverageUnavailable(f"{module} changed after its report was written")
         measured[module] = {'lines': own_lines + (covered_lines, repository_lines),
@@ -354,7 +377,8 @@ def report(checkouts, started: float, home: Path, repository: Path, java, *, gat
     console.print(f"JaCoCo wrote {len(reports)} coverage {noun} under the tested modules' "
                   "target/site directories.", soft_wrap=True)
     try:
-        measured = measure(reports, execution_data(checkouts, started), home, repository, java())
+        untested = untested_modules(checkouts, started, {report.parents[3] for report in reports})
+        measured = measure(reports, execution_data(checkouts, started), home, repository, java(), untested)
     except (ModeError, CoverageUnavailable) as reason:
         console.print(f"No merged coverage figure, because {reason}.", style="yellow", soft_wrap=True,
                       markup=False, highlight=False)

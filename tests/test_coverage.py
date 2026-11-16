@@ -144,6 +144,35 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(["cedar-x", "cedar-y"], [entry["repository"] for entry in summary["repositories"]])
         self.assertEqual(["cedar-x/app", "cedar-y"], [entry["module"] for entry in summary["modules"]])
 
+    def test_a_module_without_tests_is_found_by_its_compiled_classes(self):
+        self.module_report("cedar-m/application")
+        dao = write(self.home / "cedar-m/core/target/classes/org/metadatacenter/messaging/dao/MessageDAO.class")
+        write(self.home / "cedar-m/core/target/classes/org/metadatacenter/messaging/Old.class")
+        write(self.home / "cedar-m/core/target/classes/com/other/Vendored.class")
+        write(self.home / "cedar-m/tests-only/target/classes/logback-test.xml")
+        started = time.time() - 10
+        os.utime(self.home / "cedar-m/core/target/classes/org/metadatacenter/messaging/Old.class",
+                 (started - 60, started - 60))
+
+        found = coverage.untested_modules({self.home / "cedar-m"}, started, {self.home / "cedar-m/application"})
+
+        self.assertEqual({self.home / "cedar-m/core": [dao]}, found)
+
+    def test_a_module_without_tests_is_reported_at_zero_own_coverage(self):
+        tested = self.module_report("cedar-m/application")
+        core = self.home / "cedar-m" / "core"
+        any_test = {self.home / "cedar-m" / "application": (4, 10, 1, 4, 4, 1), core: (288, 341, 20, 28, 288, 20)}
+        with patch.object(coverage, "merged_figures", return_value=any_test) as merged, \
+                patch.object(coverage, "jacoco_classpath", return_value=[]):
+            measured = coverage.measure({tested}, [], self.home, self.home, Path("java"),
+                                        {core: [core / "target/classes/Dao.class"]})
+            summary = coverage.summarize(measured, self.home)
+
+        self.assertEqual(("cedar-m", [core / "target/classes/Dao.class"]), merged.call_args.args[0][core])
+        self.assertEqual({"lines": (0, 341, 288, 288), "branches": (0, 28, 20, 20)}, measured[core])
+        self.assertEqual({"total": 351, "ownCovered": 4, "repositoryCovered": 292, "anyCovered": 292,
+                          "ownPercent": 1.1, "repositoryPercent": 83.2, "anyPercent": 83.2}, summary["lines"])
+
     def test_a_module_whose_classes_changed_after_its_report_is_not_misreported(self):
         report = self.module_report("cedar-x/app")
         with patch.object(coverage, "merged_figures", return_value={self.home / "cedar-x/app": (9, 12, 3, 4, 9, 3)}), \
@@ -176,6 +205,19 @@ class CoverageTest(unittest.TestCase):
             f"module's own tests (1,000 lines in 1 module). Per module: {written[0]}",
         ], lines)
         self.assertEqual(68.7, json.loads(written[0].read_text())["repositories"][0]["lines"]["anyPercent"])
+
+    def test_a_build_measures_the_modules_that_wrote_no_report_beside_those_that_did(self):
+        core = self.home / "cedar-x" / "core"
+        reports = {self.home / "cedar-x/target/site/jacoco/index.html"}
+        with patch.object(coverage, "coverage_reports", return_value=reports), \
+                patch.object(coverage, "execution_data", return_value=[]), \
+                patch.object(coverage, "untested_modules", return_value={core: []}) as untested, \
+                patch.object(coverage, "measure", side_effect=coverage.CoverageUnavailable("stop")) as measure, \
+                patch.object(coverage, "console", Console(file=StringIO())):
+            coverage.report({self.home / "cedar-x"}, 5, self.home, self.home, lambda: Path("java"))
+
+        self.assertEqual(({self.home / "cedar-x"}, 5, {self.home / "cedar-x"}), untested.call_args.args)
+        self.assertEqual({core: []}, measure.call_args.args[5])
 
     def test_a_build_that_cannot_measure_says_why_and_writes_nothing(self):
         lines = self.run_report(error=coverage.CoverageUnavailable("the local repository lacks asm-9.10.1.jar"))
