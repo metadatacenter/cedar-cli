@@ -1,7 +1,21 @@
+import shlex
+from pathlib import Path
+
 from org.metadatacenter.model.Plan import Plan
 from org.metadatacenter.model.TaskType import TaskType
 from org.metadatacenter.planner.Planner import Planner
 from org.metadatacenter.util.GlobalContext import GlobalContext
+from org.metadatacenter.util.Util import Util
+
+# The artifact library's checks of the shared corpus in cedar-test-artifacts, run as its CI runs them.
+# The first holds the corpus's committed fixtures to what the library's writers produce, the second
+# writes every corpus artifact as JSON both directly and through YAML, and the third holds the record
+# of the YAML keys the reader reads, which the TypeScript library compares its own with.
+CORPUS_VERIFIERS = (
+    'org.metadatacenter.artifacts.model.CorpusFixtureVerifier',
+    'org.metadatacenter.artifacts.model.CorpusYamlTripVerifier',
+    'org.metadatacenter.artifacts.model.reader.CorpusYamlKeyVerifier',
+)
 
 
 class BuildPlanner(Planner):
@@ -24,6 +38,28 @@ class BuildPlanner(Planner):
             TaskType.BUILD,
             GlobalContext.repos.get_libraries()
         )
+
+    @staticmethod
+    def corpus_verifiers(plan: Plan):
+        """Run the artifact library's corpus verifiers against $CEDAR_HOME/cedar-test-artifacts.
+
+        They are programs rather than tests, so the library's Maven build never runs them, and a
+        writer change that leaves the shared corpus stale would otherwise pass the local build and
+        fail the library's CI after the push. A missing corpus fails the task rather than skipping
+        it, so a green build always means the verifiers ran.
+        """
+        from org.metadatacenter.model.PlanTask import PlanTask
+        library = next(repo for repo in GlobalContext.repos.get_list_top() if repo.name == 'cedar-artifact-library')
+        corpus = shlex.quote(str(Path(Util.cedar_home) / 'cedar-test-artifacts'))
+        task = PlanTask("Verify the shared corpus", TaskType.SHELL, library)
+        task.command_list = [
+            f'test -d {corpus} || {{ echo "The shared corpus {corpus} is missing; '
+            f'clone metadatacenter/cedar-test-artifacts there." >&2; exit 1; }}',
+            *(f'./mvnw --batch-mode --no-transfer-progress test-compile exec:java '
+              f'-Dexec.classpathScope=test -Dexec.mainClass={verifier} -Dexec.args={corpus}'
+              for verifier in CORPUS_VERIFIERS),
+        ]
+        plan.add_task_as_task_no_expand(task)
 
     @staticmethod
     def project(plan: Plan):

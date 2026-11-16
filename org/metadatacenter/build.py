@@ -348,6 +348,8 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
     plan = Plan("Build java")
     BuildPlanner.parent(plan)
     BuildPlanner.libraries(plan)
+    if tests:
+        BuildPlanner.corpus_verifiers(plan)
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     execute_java_build(plan, dry_run, dump_plan, coverage_gate=True)
@@ -452,6 +454,8 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     plan = Plan("Build all")
     BuildPlanner.parent(plan)
     BuildPlanner.libraries(plan)
+    if tests:
+        BuildPlanner.corpus_verifiers(plan)
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)

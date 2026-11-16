@@ -106,6 +106,45 @@ class BuildPolicyTest(unittest.TestCase):
                             for command in maven_commands))
 
     @patch.object(build.plan_executor, "execute")
+    def test_full_java_builds_run_the_corpus_verifiers_after_the_libraries(self, execute):
+        for command in ("java", "all"):
+            result = self.runner.invoke(build.app, [command, "--dry-run"])
+            self.assertEqual(0, result.exit_code, result.output)
+            plan = execute.call_args.args[0]
+            names = [task.name for task in plan.tasks]
+            self.assertEqual(names.index("Build libraries") + 1, names.index("Verify the shared corpus"))
+            self.assertEqual(names.index("Build project") - 1, names.index("Verify the shared corpus"))
+            verification = plan.tasks[names.index("Verify the shared corpus")]
+            self.assertEqual("cedar-artifact-library", verification.repo.name)
+            corpus = str(Path(Util.cedar_home) / "cedar-test-artifacts")
+            # A missing corpus fails the task rather than skipping the verifiers.
+            self.assertTrue(verification.command_list[0].startswith(f"test -d {corpus} ||"))
+            self.assertIn("exit 1", verification.command_list[0])
+            self.assertEqual(
+                ["CorpusFixtureVerifier", "CorpusYamlTripVerifier", "CorpusYamlKeyVerifier"],
+                [re.search(r"-Dexec\.mainClass=\S+\.(\w+) ", c)[1] for c in verification.command_list[1:]])
+            self.assertTrue(all(c.endswith(f"-Dexec.args={corpus}") and "-Dexec.classpathScope=test" in c
+                                for c in verification.command_list[1:]))
+
+            result = self.runner.invoke(build.app, [command, "--skip-tests", "--dry-run"])
+            self.assertEqual(0, result.exit_code, result.output)
+            self.assertNotIn("Verify the shared corpus", [task.name for task in execute.call_args.args[0].tasks])
+
+    def test_the_corpus_check_fails_when_the_corpus_is_absent(self):
+        import subprocess
+        from org.metadatacenter.planner.BuildPlanner import BuildPlanner
+        with tempfile.TemporaryDirectory() as home, patch.object(Util, "cedar_home", home):
+            plan = Plan("Build java")
+            BuildPlanner.corpus_verifiers(plan)
+            guard = plan.tasks[0].command_list[0]
+            missing = subprocess.run(["/bin/sh", "-c", guard], capture_output=True, text=True)
+            (Path(home) / "cedar-test-artifacts").mkdir()
+            present = subprocess.run(["/bin/sh", "-c", guard], capture_output=True, text=True)
+        self.assertEqual(1, missing.returncode)
+        self.assertIn("cedar-test-artifacts is missing", missing.stderr)
+        self.assertEqual(0, present.returncode, present.stderr)
+
+    @patch.object(build.plan_executor, "execute")
     def test_all_skip_tests_keeps_builds_but_omits_frontend_verification(self, execute):
         for skipped in (False, True):
             args = ["all", "--dry-run"] + (["--skip-tests"] if skipped else [])
