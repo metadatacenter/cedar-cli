@@ -1,7 +1,10 @@
 """`cedarcli ci run`: run repositories' CI at exact commits and record the result."""
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 import datetime as dt
+import fcntl
+import os
 import platform
 import re
 import subprocess
@@ -26,6 +29,27 @@ _LOCKS_GUARD = threading.Lock()
 def _lock(name: str) -> threading.Lock:
     with _LOCKS_GUARD:
         return _LOCKS.setdefault(name, threading.Lock())
+
+
+@contextmanager
+def exclusive(cedar_home: Path, names):
+    """Hold each named exclusion against this run's other repositories and against other processes.
+
+    A profile names an exclusion when its jobs share something one run at a time can use, such as
+    the OpenSearch container's name and port. A thread lock alone held only within one
+    `cedarcli ci run`, so a second run in another session removed the container under the first.
+    The file lock under $CEDAR_HOME/.cedar/locks is released when its descriptor closes, also when
+    the process dies holding it.
+    """
+    with ExitStack() as held:
+        for name in sorted(set(names)):
+            held.enter_context(_lock(name))
+            path = Path(cedar_home) / ".cedar" / "locks" / f"local-ci-{name}.lock"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            held.callback(os.close, descriptor)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
 
 
 @dataclass
@@ -184,16 +208,9 @@ def run_repository(cedar_home: Path, repository: str, revision: str, coverage: R
         parent=parents[0] if parents else None, run_directory=run_directory, environment=clean,
         secrets=secrets, maven_repository=evidence.root(source_environment) / "maven" / "repository",
         reporter=reporter)
-    exclusive = sorted({leg.config.exclusive for leg in coverage.legs
-                        if leg.config and leg.config.exclusive})
-    locks = [_lock(name) for name in exclusive]
-    for lock in locks:
-        lock.acquire()
-    try:
+    exclusions = {leg.config.exclusive for leg in coverage.legs if leg.config and leg.config.exclusive}
+    with exclusive(cedar_home, exclusions):
         finished = _run_legs(job_runner, coverage.legs, repository, reporter, parallel)
-    finally:
-        for lock in reversed(locks):
-            lock.release()
     failed = [result.leg for result in finished if result.conclusion == "failure"]
     record = {
         "schemaVersion": evidence.SCHEMA_VERSION,

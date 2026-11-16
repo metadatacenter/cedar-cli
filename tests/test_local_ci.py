@@ -515,3 +515,38 @@ def test_the_release_preflight_accepts_local_ci_without_asking_github(home, tmp_
         _shutil.which = original
     assert findings == []
     assert not any(call[:2] == ["gh", "api"] and "actions/runs" in " ".join(call) for call in calls)
+
+
+# Exclusions ---------------------------------------------------------------------------------------
+
+
+def _try_lock(path: Path) -> int:
+    """Whether another process can take the file lock now: 0 when it can, 1 when it is held."""
+    script = textwrap.dedent(f"""
+        import fcntl, os, sys
+        descriptor = os.open({str(path)!r}, os.O_CREAT | os.O_RDWR)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit(1)
+    """)
+    return subprocess.run(["python3", "-c", script], check=False).returncode
+
+
+def test_an_exclusion_holds_against_another_process(tmp_path):
+    from org.metadatacenter.local_ci.run import exclusive
+    path = tmp_path / ".cedar" / "locks" / "local-ci-opensearch-container.lock"
+
+    with exclusive(tmp_path, {"opensearch-container"}):
+        assert _try_lock(path) == 1
+    assert _try_lock(path) == 0
+
+
+def test_only_the_opensearch_jobs_run_one_at_a_time():
+    """Java test servers and embedded stores take OS-assigned ports; the OpenSearch container does not."""
+    registry = json.loads((Path(__file__).resolve().parents[2] / "cedar-development" / "ops" /
+                           "local-ci.json").read_text())
+    exclusions = {name: profile.get("exclusive") for name, profile in registry["profiles"].items()}
+
+    assert exclusions["maven"] is None and exclusions["maven-tests"] is None
+    assert exclusions["opensearch"] == "opensearch-container"
