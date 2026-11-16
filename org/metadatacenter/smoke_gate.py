@@ -1014,7 +1014,16 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         }
         if tier == "rest":
             record["log"] = str(rest_log)
-            record.update(_rest_details(rest_report, e2e / "rest" / "expected-checks.json"))
+            inventory = e2e / "rest" / "expected-checks.json"
+            record.update(_rest_details(rest_report, inventory))
+            dropped, unanswered = dropped_rest_checks(home, inventory, runner)
+            record["droppedChecks"] = dropped
+            if dropped or unanswered:
+                record["evidenceValid"] = False
+                record["reportError"] = unanswered or (
+                    f"the REST inventory has lost {len(dropped)} check(s) the last passing run executed, "
+                    f"and rest/retired-checks.json names no reason for them, such as "
+                    f"{dropped[0].replace(chr(31), ' / ')}")
             if not record["evidenceValid"]:
                 record["verdict"] = "FAIL"
         if tier == "browser":
@@ -1100,6 +1109,87 @@ def allowed_skips(path: Path) -> set[tuple[str, str, str, str]]:
             raise ValueError(f"invalid committed REST skip allowlist: {path}")
         allowed.add(values)
     return allowed
+
+
+# The repository whose inventory the REST tier runs, and the inventory's path inside it.
+REST_INVENTORY = (E2E / "rest" / "expected-checks.json").relative_to("cedar-development")
+RECORD_NAME = re.compile(r"^[0-9a-f]{16}\.json$")
+
+
+def retired_checks(path: Path) -> set[str]:
+    """The REST check identities the committed list retires, each of which must carry a reason."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entries = payload.get("checks") if isinstance(payload, dict) and payload.get("version") == 1 else None
+    if not isinstance(entries, list):
+        raise ValueError(f"invalid committed list of retired REST checks: {path}")
+    retired = set()
+    for entry in entries:
+        values = tuple(entry.get(key) for key in ("suite", "section", "name", "reason")) \
+            if isinstance(entry, dict) else ()
+        if len(values) != 4 or not all(isinstance(value, str) and value.strip() for value in values):
+            raise ValueError(f"invalid committed list of retired REST checks: {path}")
+        retired.add("\x1f".join(values[:3]))
+    return retired
+
+
+def last_passing_development_head(reports: Path) -> tuple[str, str] | None:
+    """The cedar-development head of the latest passing record with clean REST evidence, and when it finished."""
+    latest = None
+    for path in reports.glob("*.json"):
+        if not RECORD_NAME.match(path.name):
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict) or record.get("verdict") != "PASS":
+            continue
+        rest = (record.get("tiers") or {}).get("rest")
+        head = (record.get("sources") or {}).get("cedar-development")
+        finished = record.get("finishedAt")
+        if (not isinstance(rest, dict) or rest.get("evidenceValid") is not True
+                or "cedar-development" in (record.get("dirty") or [])
+                or not isinstance(head, str) or not isinstance(finished, str)):
+            continue
+        if latest is None or finished > latest[1]:
+            latest = (head, finished)
+    return latest
+
+
+def dropped_rest_checks(cedar_home, inventory_path: Path, runner=subprocess.run) -> tuple[list[str], str | None]:
+    """Checks the last passing run executed that the inventory has lost without being retired.
+
+    Identities are names, so a commit can delete a failing check with its inventory entry and every
+    later run will match the shorter inventory. The last passing run's inventory, read from the commit
+    it tested, is the memory that comparison lacks. Returns the unretired identities, and a reason
+    when the comparison could not be made.
+    """
+    home = _home(cedar_home)
+    previous = last_passing_development_head(reports_dir(home))
+    if previous is None:
+        return [], None
+    head, finished = previous
+    code, out, err = _capture(runner, ["git", "show", f"{head}:{REST_INVENTORY.as_posix()}"],
+                              cwd=home / "cedar-development")
+    try:
+        if code != 0:
+            raise ValueError(err.strip() or f"git show exited {code}")
+        before = json.loads(out)["checks"]
+        now = json.loads(inventory_path.read_text(encoding="utf-8"))["checks"]
+        retired = retired_checks(inventory_path.with_name("retired-checks.json"))
+        if not isinstance(before, list) or not isinstance(now, list):
+            raise ValueError("an inventory's checks are not a list")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return [], (f"cannot compare the REST inventory with the one the passing run at {finished} "
+                    f"tested at cedar-development {head[:8]}: {error}")
+    remaining = Counter(now)
+    dropped = []
+    for identity in before:
+        if remaining[identity] > 0:
+            remaining[identity] -= 1
+        elif identity not in retired:
+            dropped.append(identity)
+    return dropped, None
 
 
 def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path | None = None) -> dict:
@@ -1450,6 +1540,9 @@ def evaluate(report: Mapping, expected: Mapping[str, str]) -> list[str]:
                             f"{record.get('finishedAt', when)}")
         elif tier == "rest" and record.get("inventoryMatched") is False:
             findings.append("the REST smoke ran a different check inventory than the committed one")
+        elif tier == "rest" and record.get("droppedChecks"):
+            findings.append(f"the REST inventory dropped {len(record['droppedChecks'])} check(s) the last passing "
+                            "run executed without naming them in rest/retired-checks.json")
         elif tier == "rest" and record.get("unallowedSkips"):
             findings.append(f"the REST smoke skipped {len(record['unallowedSkips'])} check(s) that "
                             "rest/allowed-skips.json does not allow")

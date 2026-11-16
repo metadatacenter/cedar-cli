@@ -443,6 +443,56 @@ class RunSmokeTest(unittest.TestCase):
             inventory.write_text(json.dumps({"version": 1, "checks": REST_CHECKS + ["new\x1fnew\x1fnew"]}))
             self.assertEqual(1, run_smoke(home, runner=runner_for(home), clock=clock(), environment={"PATH": "/usr/bin"}))
 
+    def _with_previous_pass(self, directory, previous_checks, retired=None):
+        """A home whose last passing record tested cedar-development at a commit holding previous_checks."""
+        heads = {**HEADS, "cedar-development": "d" * 40}
+        home = fake_home(directory, heads)
+        rest = home / smoke_gate.E2E / "rest"
+        if retired is not None:
+            (rest / "retired-checks.json").write_text(json.dumps({"version": 1, "checks": retired}), encoding="utf-8")
+        reports = smoke_gate.reports_dir(home)
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / "0123456789abcdef.json").write_text(json.dumps(report_for(
+            {**heads, "cedar-development": "e" * 40}, finishedAt="2026-09-01T10:00:00+00:00")), encoding="utf-8")
+        runner = runner_for(home, heads=heads)
+        runner.answers.insert(0, (("git", "show"), FakeResult(stdout=json.dumps(
+            {"version": 1, "checks": previous_checks}))))
+        return home, heads, runner
+
+    def test_rest_inventory_cannot_lose_a_check_its_last_pass_ran_without_retiring_it(self):
+        dropped = "folders\x1ffolders\x1fdeleted"
+        with tempfile.TemporaryDirectory() as directory:
+            home, heads, runner = self._with_previous_pass(directory, REST_CHECKS + [dropped], retired=[])
+            self.assertEqual(1, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+            rest = read_report(home, heads)["tiers"]["rest"]
+            self.assertEqual([dropped], rest["droppedChecks"])
+            self.assertFalse(rest["evidenceValid"])
+            self.assertIn("folders / folders / deleted", rest["reportError"])
+            self.assertEqual([["git", "show", f"{'e' * 40}:ops/e2e/rest/expected-checks.json"]],
+                             runner.commands("git", "show"))
+
+    def test_rest_inventory_may_lose_a_check_the_retired_list_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, heads, runner = self._with_previous_pass(
+                directory, REST_CHECKS + ["folders\x1ffolders\x1fdeleted", REST_CHECKS[1]],
+                retired=[{"suite": "folders", "section": "folders", "name": "deleted", "reason": "merged"},
+                         {"suite": "folders", "section": "folders", "name": "created", "reason": "one repetition"}])
+            self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+            self.assertEqual([], read_report(home, heads)["tiers"]["rest"]["droppedChecks"])
+
+    def test_rest_inventory_comparison_fails_closed_when_it_cannot_be_made(self):
+        cases = {
+            "no retired list": dict(retired=None),
+            "a retired check without a reason": dict(retired=[{"suite": "a", "section": "b", "name": "c", "reason": ""}]),
+        }
+        for name, case in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                home, heads, runner = self._with_previous_pass(directory, REST_CHECKS, **case)
+                self.assertEqual(1, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+                rest = read_report(home, heads)["tiers"]["rest"]
+                self.assertFalse(rest["evidenceValid"])
+                self.assertIn("cannot compare the REST inventory", rest["reportError"])
+
     def test_rest_rerun_cannot_reuse_an_older_passing_report(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)
