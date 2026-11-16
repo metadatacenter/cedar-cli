@@ -98,31 +98,38 @@ def _local_name(element):
     return element.tag.rsplit('}', 1)[-1]
 
 
-def maven_modules(checkout: Path):
-    """The modules a checkout's POM builds by default, as directories.
+def maven_modules(checkout: Path, profiles=()):
+    """The modules a checkout's POM builds with these profiles active, as directories.
 
-    Only the project's own <modules> count: a profile's modules are built only when it is active,
-    and a commented-out module is not built at all, which is why the POM is parsed rather than
-    searched.
+    The project's own <modules> count, and those of each named profile: a profile's modules are
+    built only when it is active, and a commented-out module is not built at all, which is why the
+    POM is parsed rather than searched.
     """
     try:
         project = ElementTree.parse(checkout / 'pom.xml').getroot()
     except (OSError, ElementTree.ParseError):
         return []
+    owners = [project] + [profile for section in project if _local_name(section) == 'profiles'
+                          for profile in section if _local_name(profile) == 'profile'
+                          and any(_local_name(child) == 'id' and (child.text or '').strip() in profiles
+                                  for child in profile)]
     return [(checkout / module.text.strip()).resolve()
-            for modules in project if _local_name(modules) == 'modules'
+            for owner in owners
+            for modules in owner if _local_name(modules) == 'modules'
             for module in modules if _local_name(module) == 'module' and (module.text or '').strip()]
 
 
-def aggregated_checkouts(checkout: Path, home: Path):
+def aggregated_checkouts(checkout: Path, home: Path, profiles=()):
     """The other checkouts an aggregator builds through `../` modules, followed transitively.
 
     cedar-project, for one, compiles cedar-artifact-server and every other server from their own
-    checkouts, and cedar-microservice-libraries among them aggregates further.
+    checkouts, and cedar-microservice-libraries among them aggregates further. The profiles apply
+    to the aggregator itself, as a command line's -P does.
     """
     found, pending = set(), [checkout]
     while pending:
-        for module in maven_modules(pending.pop()):
+        current = pending.pop()
+        for module in maven_modules(current, profiles if current == checkout else ()):
             try:
                 member = home / module.relative_to(home).parts[0]
             except (ValueError, IndexError):
@@ -144,18 +151,21 @@ def build_input_roots(plan):
     """
     home = Path(Util.cedar_home).resolve()
     roots = {home / 'cedar-cli', home / 'cedar-development'}
+    profiles = {}
     def visit(task):
         repo = getattr(task, 'repo', None)
         if repo is not None:
             while getattr(repo, 'parent_repo', None) is not None:
                 repo = repo.parent_repo
             roots.add(home / repo.name)
+            active = (getattr(task, 'parameters', None) or {}).get('maven_profiles', ())
+            profiles.setdefault((home / repo.name).resolve(), set()).update(active)
         for child in task.tasks:
             visit(child)
     visit(plan)
     roots = {root.resolve() for root in roots}
     for root in list(roots):
-        roots |= aggregated_checkouts(root, home)
+        roots |= aggregated_checkouts(root, home, tuple(profiles.get(root, ())))
     return roots
 
 
@@ -347,10 +357,13 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build java")
     BuildPlanner.parent(plan)
-    BuildPlanner.libraries(plan)
+    try:
+        BuildPlanner.libraries_and_project(plan)
+    except PlanError as error:
+        console.print(str(error), markup=False, soft_wrap=True)
+        raise typer.Exit(1) from error
     if tests:
         BuildPlanner.corpus_verifiers(plan)
-    BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     execute_java_build(plan, dry_run, dump_plan, coverage_gate=True)
 
@@ -453,10 +466,13 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
     BuildPlanner.parent(plan)
-    BuildPlanner.libraries(plan)
+    try:
+        BuildPlanner.libraries_and_project(plan)
+    except PlanError as error:
+        console.print(str(error), markup=False, soft_wrap=True)
+        raise typer.Exit(1) from error
     if tests:
         BuildPlanner.corpus_verifiers(plan)
-    BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
     selection = execute_java_build(plan, dry_run, dump_plan, coverage_gate=True)
