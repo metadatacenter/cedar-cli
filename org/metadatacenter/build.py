@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from org.metadatacenter import maven, reactor, reactor_evidence
-from org.metadatacenter.coverage import report_coverage
+from org.metadatacenter.coverage import CoverageRegression, report_coverage
 from org.metadatacenter.design_tokens import check_design_tokens
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
@@ -191,11 +191,28 @@ def capture_build_state(home: Path, frontends: bool):
     return state
 
 
-def execute_java_build(plan: Plan, dry_run: bool, dump_plan: bool):
+def execute_java_build(plan: Plan, dry_run: bool, dump_plan: bool, *, coverage_gate=False):
+    """Run a Java build and report its coverage.
+
+    `coverage_gate` holds the repository and any-test figures to their recorded values. Only a plan
+    that builds every Java reactor may set it, since a narrower build's execution data credits a
+    module with only the tests that build ran.
+    """
     started = time.time()
     selection = execute_build(plan, dry_run, dump_plan)
     if not GlobalContext.should_skip_tests() and not dry_run and not dump_plan:
-        report_coverage(started)
+        try:
+            report_coverage(started, gate=coverage_gate)
+        except CoverageRegression as regression:
+            console.print("Coverage gate failed. Each figure below is a module's coverage by its "
+                          "repository's tests or by any test, against its value in "
+                          "cedar-cli/assets/coverage/recorded.json:", soft_wrap=True)
+            for reason in regression.reasons:
+                console.print(f"  {reason}", markup=False, soft_wrap=True)
+            console.print("Restore the tests that covered it. If the fall is intended, record the new "
+                          "figures with `cedarcli build record-coverage --apply` and commit them.",
+                          soft_wrap=True)
+            raise typer.Exit(1) from regression
     return selection
 
 
@@ -333,7 +350,7 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.libraries(plan)
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
-    execute_java_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan, coverage_gate=True)
 
 
 @app.command("frontends")
@@ -438,10 +455,52 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     BuildPlanner.project(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
-    selection = execute_java_build(plan, dry_run, dump_plan)
+    selection = execute_java_build(plan, dry_run, dump_plan, coverage_gate=True)
     if tests and not dry_run and not dump_plan:
         from org.metadatacenter.cee_demos import check_selection
         check_selection(selection)
+
+
+@app.command("record-coverage")
+def record_coverage(
+    record: Optional[Path] = typer.Option(
+        None, help="Coverage record to take the figures from; default the newest under .cedar/coverage"),
+    apply: bool = typer.Option(False, "--apply", help="Write the recorded figures; default only previews"),
+):
+    """Record each module's repository and any-test coverage, which `cedarcli build java` then holds.
+
+    Take the figures from the record of a full `cedarcli build java`: a narrower build credits a
+    module with only the tests it ran. Review the changes and commit
+    cedar-cli/assets/coverage/recorded.json.
+    """
+    from org.metadatacenter.coverage import (
+        CoverageUnavailable, read_recorded, recorded_figures, write_recorded)
+    if record is None:
+        records = sorted((Path(Util.cedar_home) / '.cedar' / 'coverage').glob('*Z.json'))
+        if not records:
+            console.print('No coverage record under .cedar/coverage; run `cedarcli build java` first.')
+            raise typer.Exit(1)
+        record = records[-1]
+    try:
+        figures = recorded_figures(json.loads(record.read_text()), record.name)
+    except (OSError, ValueError, KeyError) as error:
+        console.print(f"{record} is not a coverage record: {error}", markup=False)
+        raise typer.Exit(1) from error
+    try:
+        previous = read_recorded()
+    except CoverageUnavailable:
+        previous = {}
+    for module in sorted(set(previous) | set(figures['modules'])):
+        before, after = previous.get(module), figures['modules'].get(module)
+        if before != after:
+            console.print(f"{module}: {before or 'not recorded'} -> {after or 'removed'}",
+                          markup=False, soft_wrap=True)
+    console.print(f"{len(figures['modules'])} modules in {record.name}.", markup=False)
+    if not apply:
+        console.print('Preview only; add --apply to write the recorded figures.')
+        return
+    write_recorded(figures)
+    console.print("Wrote cedar-cli/assets/coverage/recorded.json; review and commit it.", markup=False)
 
 
 @app.command("diagnostics")
