@@ -35,8 +35,12 @@ _STARTS = {name: re.compile(pattern) for name, pattern in STARTS.items()}
 # A unit test may hold a mocked OpenSearch client; only a constructed one talks to the engine.
 _MOCKED_SEARCH_CLIENT = re.compile(r'mock\((RestHighLevelClient|OpenSearchClient)|@Mock\s+\w*Client')
 
-_TAG = re.compile(r'@Tag\(\s*"' + INTEGRATION_TAG + r'"\s*\)')
-_TEST_METHOD = re.compile(r'@(Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b')
+# An annotation may be written by its simple name or fully qualified, as
+# `@org.junit.jupiter.params.ParameterizedTest`, so either form counts.
+_QUALIFIER = r'(?:[\w$]+\.)*'
+_TAG = re.compile(r'@' + _QUALIFIER + r'Tag\(\s*"' + INTEGRATION_TAG + r'"\s*\)')
+_TEST_METHOD = re.compile(
+    r'@' + _QUALIFIER + r'(Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b')
 _DECLARATION = re.compile(
     r'^(?:public\s+|protected\s+)?((?:abstract\s+|final\s+)*)class\s+(\w+)'
     r'(?:<[^>{]*>)?(?:\s+extends\s+([\w.]+))?', re.M)
