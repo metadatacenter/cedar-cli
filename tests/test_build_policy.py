@@ -378,6 +378,12 @@ class BuildPolicyTest(unittest.TestCase):
 
         self.assertIn(home / "cedar-profile-only", roots)
 
+    @staticmethod
+    def maven_with_libraries():
+        from org.metadatacenter.taskfactory.BuildShellTaskFactory import BuildShellTaskFactory
+        return BuildShellTaskFactory.maven_command().replace(
+            "./mvnw clean install", "./mvnw clean install -Plibraries", 1)
+
     @patch.object(build.plan_executor, "execute")
     def test_full_java_builds_take_the_libraries_and_the_servers_in_one_reactor(self, execute):
         for command in ("java", "all"):
@@ -385,7 +391,8 @@ class BuildPolicyTest(unittest.TestCase):
             self.assertEqual(0, result.exit_code, result.output)
             plan = execute.call_args.args[0]
             self.assertNotIn("Build libraries", [task.name for task in plan.tasks])
-            self.assertEqual(["./mvnw clean install -Plibraries -T 16"],
+            maven = self.maven_with_libraries()
+            self.assertEqual([maven],
                              [c for c in self.commands(plan, "cedar-project") if c.startswith("./mvnw")])
             self.assertEqual([], [c for c in self.commands(plan) if "-Plibraries" in c
                                   and c not in self.commands(plan, "cedar-project")])
@@ -393,7 +400,7 @@ class BuildPolicyTest(unittest.TestCase):
             merged = next(task for task in plan.tasks if task.name == "Build libraries and project")
             self.assertEqual(["libraries"], merged.parameters["maven_profiles"])
         result = self.runner.invoke(build.app, ["java", "--skip-tests", "--dry-run"])
-        self.assertEqual(["./mvnw clean install -Plibraries -T 16 -DskipTests"],
+        self.assertEqual([self.maven_with_libraries() + " -DskipTests"],
                          [c for c in self.commands(execute.call_args.args[0], "cedar-project")
                           if c.startswith("./mvnw")])
 
