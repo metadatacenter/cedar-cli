@@ -34,6 +34,19 @@ def _within(path, scope):
         return False
 
 
+def _evidence_priority(relative):
+    """Keep named failures before scratch recordings from every completed browser test."""
+    if relative == Path(COMMAND_LOG):
+        return 0
+    if any(part.startswith('.playwright-artifacts-') for part in relative.parts):
+        return 4
+    if {'test-results', 'surefire-reports', 'failsafe-reports'}.intersection(relative.parts):
+        return 1
+    if 'coverage' in relative.parts:
+        return 3
+    return 2
+
+
 def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None, scope=None):
     """Copy a failed build's evidence out of its workspace before the workspace is deleted.
 
@@ -67,6 +80,7 @@ def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None, sco
 
     for source in _npm_debug_logs(npm_logs):
         keep(source, Path(NPM_LOGS) / source.name)
+    candidates = []
     for directory, children, files in os.walk(workspace, followlinks=False) if swept else ():
         root = Path(directory)
         children[:] = sorted(name for name in children
@@ -79,7 +93,12 @@ def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None, sco
             if not (REPORT_DIRECTORIES.intersection(relative.parts)
                     or (relative == Path('.') and name == COMMAND_LOG)):
                 continue
-            keep(source, source.relative_to(workspace))
+            candidates.append(source.relative_to(workspace))
+    # Playwright scratch directories sort before the named failing-test directories.
+    # With tracing enabled they can exhaust the entire budget before a failure's
+    # screenshot, error context or trace is visited. Retain those reports first.
+    for relative in sorted(candidates, key=lambda path: (_evidence_priority(path), path.as_posix())):
+        keep(workspace / relative, relative)
     (destination / 'manifest.json').write_text(json.dumps({
         'kind': 'cedar-failed-build-diagnostics', 'createdAt': datetime.now(timezone.utc).isoformat(),
         'workspace': str(workspace), 'workspaceSwept': swept, 'bytes': total, 'limitBytes': limit,
