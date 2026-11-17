@@ -397,6 +397,20 @@ class SourcesDigestTest(unittest.TestCase):
 
 
 class RunSmokeTest(unittest.TestCase):
+    def test_invalid_preflight_signals_wait_for_rest_completion(self):
+        from concurrent.futures import Future
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preflight.json"
+            for payload in ("{", "[]", '{"schemaVersion":1,"preflightComplete":false}',
+                            '{"schemaVersion":2,"preflightComplete":true,"runId":"run"}'):
+                with self.subTest(payload=payload):
+                    path.write_text(payload, encoding="utf-8")
+                    rest = Future()
+                    with patch.object(smoke_gate.time, "sleep", side_effect=lambda _: rest.set_result(None)) as wait:
+                        smoke_gate._wait_for_rest_preflight(rest, path)
+                    wait.assert_called_once()
+                    self.assertTrue(rest.done())
+
     """One command runs every tier and records what they ran against."""
 
     def setUp(self):
@@ -804,6 +818,11 @@ class RunSmokeTest(unittest.TestCase):
             seen = {}
 
             def rest(args, kwargs):
+                self.assertFalse(browser_started.wait(timeout=0.05),
+                                 "browser fixtures started before the REST preflight completed")
+                Path(kwargs["env"]["CEDAR_REST_PREFLIGHT_REPORT"]).write_text(json.dumps({
+                    "schemaVersion": 1, "runId": "2026-11-17T19-00-00", "preflightComplete": True,
+                }), encoding="utf-8")
                 seen["beside"] = browser_started.wait(timeout=10)
                 kwargs["stdout"].write("rest output\n")
                 return write_report(args, kwargs)

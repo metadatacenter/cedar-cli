@@ -76,6 +76,24 @@ class SmokeGateError(ValueError):
     """The gate could not be answered from what is recorded."""
 
 
+def _wait_for_rest_preflight(rest, path):
+    """Do not let browser fixtures enter REST's initial clean-stack inventory.
+
+    An older or failed runner without this signal safely runs to completion first;
+    its existing subprocess deadline still bounds that wait. Each attempt owns a
+    fresh signal path, so an earlier run can never release this barrier.
+    """
+    while not rest.done():
+        try:
+            signal = json.loads(path.read_text(encoding="utf-8"))
+            if (signal.get("schemaVersion") == 1 and signal.get("preflightComplete") is True
+                    and isinstance(signal.get("runId"), str) and signal["runId"]):
+                return
+        except (OSError, ValueError, AttributeError):
+            pass
+        time.sleep(0.02)
+
+
 def _home(cedar_home) -> Path:
     if not cedar_home:
         raise SmokeGateError("CEDAR_HOME is not set")
@@ -981,7 +999,11 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
     search_report = reports / f"search-smoke-{digest}-{uuid.uuid4().hex}.json"
     # Each browser script writes the steps it completed here, for comparison with the inventory.
     browser_reports = reports / f"browser-smoke-{digest}-{uuid.uuid4().hex}"
-    tier_environment = {"browser": {"CEDAR_BROWSER_SMOKE_REPORTS": str(browser_reports)}}
+    rest_preflight = rest_report.with_suffix(".preflight.json")
+    tier_environment = {
+        "rest": {"CEDAR_REST_PREFLIGHT_REPORT": str(rest_preflight)},
+        "browser": {"CEDAR_BROWSER_SMOKE_REPORTS": str(browser_reports)},
+    }
     commands = {
         "rest": ["npm", "run", "smoke:rest", "--", f"--report={rest_report}"],
         "browser": ["npm", "run", "smoke"],
@@ -1055,14 +1077,16 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         return record
 
     # The REST tier runs beside the browser, split and search tiers. Its sign-ins and theirs take
-    # one machine-wide authentication lock, and its fixtures are its own. The split and search
-    # tiers hold the split tier's lock, so they still run one after the other.
+    # one machine-wide authentication lock, and its fixtures are its own. Finish its initial
+    # clean-stack inventory before browser fixtures exist. The split and search tiers hold
+    # the split tier's lock, so they still run one after the other.
     started = clock()
     results = {}
     with rest_log.open("w", encoding="utf-8") as log, ThreadPoolExecutor(max_workers=1) as background:
         console.print(f"[bold]rest smoke[/bold], beside the other tiers: {' '.join(commands['rest'])}")
         console.print(f"  output in {rest_log}")
         rest = background.submit(run, "rest", stdout=log, stderr=subprocess.STDOUT)
+        _wait_for_rest_preflight(rest, rest_preflight)
         for tier in TIERS:
             if tier != "rest":
                 console.print(f"[bold]{tier} smoke[/bold]: {' '.join(commands[tier])}")
