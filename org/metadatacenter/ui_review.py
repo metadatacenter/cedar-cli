@@ -25,11 +25,12 @@ def runtime_evidence(home):
             'stale': stale, 'current': not stale, 'metadataOnlyChanges': metadata_only}
 
 
-def applications(root, env=None):
-    """The applications the review catalog defines; the catalog is the only list."""
+def catalog(root, env=None):
+    """The applications and browser profiles the review catalog defines; the catalog is the only list."""
     output = subprocess.run(
         ['node', '--input-type=module', '-e',
-         "import {APPS} from './ui-review/catalog.mjs'; console.log(JSON.stringify(APPS))"],
+         "import {APPS, PROFILES} from './ui-review/catalog.mjs'; "
+         "console.log(JSON.stringify({applications: APPS, profiles: Object.keys(PROFILES)}))"],
         cwd=root, env=env, check=True, capture_output=True, text=True).stdout
     return json.loads(output)
 
@@ -51,12 +52,16 @@ def _invoke(command, *, cwd, env):
         return 130
 
 
-def run_review(*, plan=False, output=None, review=None, seal_review=False, diagnostic=False, app="designer"):
+def run_review(*, plan=False, output=None, review=None, seal_review=False, diagnostic=False, app="designer",
+               profile="chromium"):
     home = Path(Util.cedar_home).resolve()
     root = home / 'cedar-development/ops/e2e'
     environment = dict(invocation_environment())
-    if app != 'all' and app not in applications(root, environment):
+    known = catalog(root, environment)
+    if app != 'all' and app not in known['applications']:
         raise ValueError("Unknown UI review application: " + app)
+    if profile not in known['profiles']:
+        raise ValueError("Unknown UI review browser profile: " + profile)
     caller = Path(environment.get('CEDAR_CLI_CALLER_DIR', Path.cwd()))
     def absolute(value):
         path = Path(value)
@@ -84,4 +89,4 @@ def run_review(*, plan=False, output=None, review=None, seal_review=False, diagn
     directory = absolute(output) if output else home / '.cedar/reports/ui-review' / str(uuid.uuid4())
     directory.mkdir(parents=True, exist_ok=False)
     (directory / 'provenance.json').write_text(json.dumps(evidence, indent=2) + '\n')
-    return _invoke(command + [f'--output={directory}', '--capture'], cwd=root, env=environment)
+    return _invoke(command + [f'--output={directory}', '--capture', f'--profile={profile}'], cwd=root, env=environment)

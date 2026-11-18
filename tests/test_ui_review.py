@@ -8,14 +8,15 @@ from org.metadatacenter import ui_review, test_processes
 
 
 APPS = ['designer', 'workspace', 'metadata-editor']
-CATALOG_APPLICATIONS = ui_review.applications
+PROFILES = ['chromium', 'webkit-touch']
+CATALOG = ui_review.catalog
 
 
 class UIReviewTest(unittest.TestCase):
     def setUp(self):
-        catalog = patch.object(ui_review, 'applications', return_value=APPS)
-        self.applications = catalog.start()
-        self.addCleanup(catalog.stop)
+        known = patch.object(ui_review, 'catalog', return_value={'applications': APPS, 'profiles': PROFILES})
+        self.catalog = known.start()
+        self.addCleanup(known.stop)
 
     @patch.object(ui_review, '_invoke', return_value=0)
     @patch.object(ui_review, 'runtime_evidence')
@@ -99,9 +100,9 @@ class UIReviewTest(unittest.TestCase):
         self.assertEqual(process.wait.call_args.kwargs, {'timeout': 60})
 
     @patch.object(ui_review.subprocess, 'run')
-    def test_application_list_comes_from_the_review_catalog(self, run):
-        run.return_value = Mock(stdout='["designer", "workspace", "metadata-editor", "openview"]\n')
-        self.assertEqual(CATALOG_APPLICATIONS('/tmp/e2e', {'A': 'B'})[-1], 'openview')
+    def test_applications_and_profiles_come_from_the_review_catalog(self, run):
+        run.return_value = Mock(stdout='{"applications": ["designer", "openview"], "profiles": ["chromium", "webkit-touch"]}\n')
+        self.assertEqual(CATALOG('/tmp/e2e', {'A': 'B'}), {'applications': ['designer', 'openview'], 'profiles': ['chromium', 'webkit-touch']})
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ['node', '--input-type=module', '-e'])
         self.assertIn("./ui-review/catalog.mjs", command[3])
@@ -111,7 +112,18 @@ class UIReviewTest(unittest.TestCase):
     @patch.object(ui_review, '_invoke', return_value=0)
     @patch.object(ui_review, 'invocation_environment', return_value={})
     def test_an_application_the_catalog_adds_needs_no_cli_change(self, environment, run):
-        self.applications.return_value = APPS + ['openview']
+        self.catalog.return_value = {'applications': APPS + ['openview'], 'profiles': PROFILES}
         with patch.object(ui_review.Util, 'cedar_home', '/tmp/cedar'):
             self.assertEqual(ui_review.run_review(app='openview', plan=True), 0)
         self.assertIn('--app=openview', run.call_args.args[0])
+
+    @patch.object(ui_review, '_invoke', return_value=0)
+    @patch.object(ui_review, 'runtime_evidence', return_value={'current': True, 'stale': []})
+    @patch.object(ui_review, 'invocation_environment', return_value={})
+    def test_capture_forwards_a_catalog_profile_and_refuses_others_before_writing(self, environment, evidence, run):
+        with tempfile.TemporaryDirectory() as parent, patch.object(ui_review.Util, 'cedar_home', '/tmp/cedar'):
+            with self.assertRaisesRegex(ValueError, 'Unknown UI review browser profile'):
+                ui_review.run_review(output=Path(parent) / 'refused', profile='firefox-touch')
+            self.assertFalse((Path(parent) / 'refused').exists())
+            self.assertEqual(ui_review.run_review(output=Path(parent) / 'touch', profile='webkit-touch'), 0)
+        self.assertIn('--profile=webkit-touch', run.call_args.args[0])

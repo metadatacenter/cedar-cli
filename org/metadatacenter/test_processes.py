@@ -22,11 +22,12 @@ def ui_review(
         output: Optional[Path] = typer.Option(None, help="New evidence directory, or existing run for --review."),
         review: Optional[Path] = typer.Option(None, help="Review JSON, or parent directory containing APP/review.json with --app all."),
         seal_review: bool = typer.Option(False, help="Freeze review.json before giving calibration cases to the reviewer."),
-        diagnostic: bool = typer.Option(False, help="Inspect a stale runtime for diagnosis; acceptance stays incomplete.")):
+        diagnostic: bool = typer.Option(False, help="Inspect a stale runtime for diagnosis; acceptance stays incomplete."),
+        profile: str = typer.Option("chromium", "--profile", help="Browser profile for a capture, from the review catalog (see --plan); the default drives Chromium with a mouse.")):
     """Capture assembled applications and validate independent, evidence-backed UI reviews."""
     from org.metadatacenter.ui_review import run_review
     try:
-        raise typer.Exit(run_review(plan=plan, output=output, review=review, seal_review=seal_review, diagnostic=diagnostic, app=app))
+        raise typer.Exit(run_review(plan=plan, output=output, review=review, seal_review=seal_review, diagnostic=diagnostic, app=app, profile=profile))
     except (ValueError, OSError, KeyError) as error:
         console.print(str(error), markup=False)
         raise typer.Exit(2) from error
