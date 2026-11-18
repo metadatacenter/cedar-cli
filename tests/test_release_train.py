@@ -2360,7 +2360,6 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 "bin/cedar-images-base.sh": (
                     f"export IMAGE_VERSION={source_version}\n"
                     f"export CEDAR_MAVEN_VERSION={source_version}\n"
-                    f"export CEDAR_APPLICATION_VERSION={source_version}\n"
                     "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
                     "export CEDAR_WORKSPACE_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
                     "export CEDAR_OPENVIEW_CEE_NPM_VERSION=2.0.2-dev.202608010000.gold\n"
@@ -2540,9 +2539,7 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             next_docker_versions = (
                 next_workspace / "cedar-docker-build" / "bin" / "cedar-images-base.sh"
             ).read_text()
-            for variable in (
-                "IMAGE_VERSION", "CEDAR_MAVEN_VERSION", "CEDAR_APPLICATION_VERSION",
-            ):
+            for variable in ("IMAGE_VERSION", "CEDAR_MAVEN_VERSION"):
                 self.assertIn(f"export {variable}=2.9.3", release_docker_versions)
                 self.assertIn(f"export {variable}=2.9.4-SNAPSHOT", next_docker_versions)
             self.assertIn(
@@ -5316,7 +5313,6 @@ class ReleasePreflightTest(unittest.TestCase):
             script = (
                 "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
                 "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
-                "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n"
                 "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
             )
             commands = FakeCommands({
@@ -6714,8 +6710,7 @@ class DockerDefaultStampingTest(unittest.TestCase):
         (root / "bin").mkdir()
         (root / "bin" / "cedar-images-base.sh").write_text(
             "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
-            "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
-            "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n" + extra,
+            "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n" + extra,
             encoding="utf-8",
         )
         return root

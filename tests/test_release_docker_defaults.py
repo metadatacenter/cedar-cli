@@ -27,13 +27,14 @@ class DockerCompatibilityDefaultsTest(unittest.TestCase):
             base = root / 'bin/cedar-images-base.sh'
             base.parent.mkdir()
             base.write_text(''.join(f'export {key}=2.9.33-SNAPSHOT\n' for key in
-                                   ('IMAGE_VERSION', 'CEDAR_MAVEN_VERSION', 'CEDAR_APPLICATION_VERSION'))
+                                   ('IMAGE_VERSION', 'CEDAR_MAVEN_VERSION'))
                             + 'export CEDAR_WORKSPACE_NPM_VERSION=2.9.32\n'
                             + 'export CEDAR_OPENVIEW_CEE_NPM_VERSION=2.0.32\n'
                             + 'export CEDAR_NPM_REGISTRY=https://nexus.bmir.stanford.edu/repository/npm-cedar-releases\n')
             ReleaseVersionPreparer._stamp_docker_build(root, '2.9.33-SNAPSHOT', '2.9.34-SNAPSHOT', {})
             text = base.read_text()
-            self.assertIn('CEDAR_APPLICATION_VERSION=2.9.34-SNAPSHOT', text)
+            self.assertIn('IMAGE_VERSION=2.9.34-SNAPSHOT', text)
+            self.assertIn('CEDAR_MAVEN_VERSION=2.9.34-SNAPSHOT', text)
             self.assertIn('CEDAR_WORKSPACE_NPM_VERSION=2.9.32', text)
             self.assertIn('CEDAR_OPENVIEW_CEE_NPM_VERSION=2.0.32', text)
             self.assertIn('/npm-cedar-releases\n', text)

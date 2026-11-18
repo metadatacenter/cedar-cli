@@ -138,9 +138,14 @@ echo
 
     @staticmethod
     def generate_api_key(user_id: str):
-        # The server derived each new account's key this way until 3 September 2026, when it
-        # began issuing random keys (cedar-microservice-libraries b8da2d21). This reproduces the
-        # key of an account created before then; no salt reproduces one created since.
+        """Reproduce the API key of an account the server created before 3 September 2026.
+
+        The server derived each new account's key this way until that date, when it began issuing
+        random keys (cedar-microservice-libraries b8da2d21). No salt reproduces a key issued since.
+
+        CEDAR_SALT_API_KEY is optional, and no server reads it any more. Set it to the salt the
+        server used when it created the account. Without it, the derivation uses 'saltme'.
+        """
         if Const.CEDAR_SALT_API_KEY in invocation_environment():
             salt = invocation_environment()[Const.CEDAR_SALT_API_KEY]
         else:

@@ -157,9 +157,7 @@ class ReleaseVersionPreparer:
             ):
                 changed.add(path.relative_to(root).as_posix())
         base = root / "bin" / "cedar-images-base.sh"
-        for variable in (
-            "IMAGE_VERSION", "CEDAR_MAVEN_VERSION", "CEDAR_APPLICATION_VERSION",
-        ):
+        for variable in ("IMAGE_VERSION", "CEDAR_MAVEN_VERSION"):
             if not cls._replace_exact(
                 base,
                 f"export {variable}={old}".encode(),
@@ -179,7 +177,7 @@ class ReleaseVersionPreparer:
         """Point one `export VARIABLE=` line at a new value, whatever it named before.
 
         The compatibility defaults name whichever development packages the last operator pinned,
-        so unlike the three version variables they cannot be matched by their old value. A
+        so unlike the two version variables they cannot be matched by their old value. A
         variable the train's inputs name but the script does not declare is a configuration
         drift the release must not paper over.
         """

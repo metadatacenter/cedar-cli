@@ -1183,7 +1183,6 @@ class ReleasePreflight:
                 [
                     f"export IMAGE_VERSION={source_version}",
                     f"export CEDAR_MAVEN_VERSION={source_version}",
-                    f"export CEDAR_APPLICATION_VERSION={source_version}",
                 ],
             ),
         }

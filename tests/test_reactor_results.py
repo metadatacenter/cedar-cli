@@ -228,7 +228,7 @@ class ToolingTest(unittest.TestCase):
             self.assertEqual(baseline, self.tooling(), relative)
 
     def test_runtime_scripts_and_dependencies_remain_inputs(self):
-        for relative in ['scripts/javascript/new-rule.mjs', 'requirements.txt', 'CedarCliSettings.py']:
+        for relative in ['scripts/javascript/new-rule.mjs', 'requirements.txt', 'cedar.py']:
             baseline = self.tooling()
             path = self.cli / relative
             path.parent.mkdir(parents=True, exist_ok=True)

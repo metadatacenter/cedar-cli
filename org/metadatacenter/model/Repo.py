@@ -8,7 +8,7 @@ from org.metadatacenter.model.VersionType import VersionType
 class Repo:
 
     def __init__(self, name: str, repo_type: RepoType, version_list: List[VersionType],
-                 is_library=False, is_microservice=False, is_private=False, for_docker=False,
+                 is_library=False, is_microservice=False, for_docker=False,
                  is_frontend=False,
                  allow_different_version=False, skip_from_release=False,
                  build_command_list: List[str] = None, server_build_command_list: List[str] = None,
@@ -18,7 +18,6 @@ class Repo:
         self.version_list = version_list
         self.is_library = is_library
         self.is_microservice = is_microservice
-        self.is_private = is_private
         self.for_docker = for_docker
         self.is_frontend = is_frontend
         self.is_sub_repo = False

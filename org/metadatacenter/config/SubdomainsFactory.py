@@ -12,7 +12,7 @@ class SubdomainsFactory:
 
         subdomains.add_redirect('')
 
-        subdomains.add_backend('auth', 8443)
+        subdomains.add_backend('auth')
 
         subdomains.add_microservice('artifact')
         subdomains.add_microservice('bridge')
@@ -37,6 +37,6 @@ class SubdomainsFactory:
         subdomains.add_frontend('demo.cee')
         subdomains.add_frontend('demo-dist.cee')
 
-        subdomains.add_static('shared', static_location='cedar-shared-data')
+        subdomains.add_static('shared')
 
         return subdomains
