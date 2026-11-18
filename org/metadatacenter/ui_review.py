@@ -25,6 +25,15 @@ def runtime_evidence(home):
             'stale': stale, 'current': not stale, 'metadataOnlyChanges': metadata_only}
 
 
+def applications(root, env=None):
+    """The applications the review catalog defines; the catalog is the only list."""
+    output = subprocess.run(
+        ['node', '--input-type=module', '-e',
+         "import {APPS} from './ui-review/catalog.mjs'; console.log(JSON.stringify(APPS))"],
+        cwd=root, env=env, check=True, capture_output=True, text=True).stdout
+    return json.loads(output)
+
+
 def _invoke(command, *, cwd, env):
     process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True)
     try:
@@ -43,11 +52,11 @@ def _invoke(command, *, cwd, env):
 
 
 def run_review(*, plan=False, output=None, review=None, seal_review=False, diagnostic=False, app="designer"):
-    if app not in ("designer", "workspace", "metadata-editor", "all"):
-        raise ValueError("Unknown UI review application: " + app)
     home = Path(Util.cedar_home).resolve()
     root = home / 'cedar-development/ops/e2e'
     environment = dict(invocation_environment())
+    if app != 'all' and app not in applications(root, environment):
+        raise ValueError("Unknown UI review application: " + app)
     caller = Path(environment.get('CEDAR_CLI_CALLER_DIR', Path.cwd()))
     def absolute(value):
         path = Path(value)

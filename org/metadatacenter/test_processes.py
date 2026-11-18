@@ -17,7 +17,7 @@ console = Console()
 
 @app.command("ui-review")
 def ui_review(
-        app: str = typer.Option("designer", "--app", help="designer, workspace, metadata-editor, or all (sequential captures)."),
+        app: str = typer.Option("designer", "--app", help="An application from the review catalog (see --plan), or all to capture each in turn."),
         plan: bool = typer.Option(False, help="Show the application scenario matrix and independent review contract."),
         output: Optional[Path] = typer.Option(None, help="New evidence directory, or existing run for --review."),
         review: Optional[Path] = typer.Option(None, help="Review JSON, or parent directory containing APP/review.json with --app all."),
