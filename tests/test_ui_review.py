@@ -127,3 +127,56 @@ class UIReviewTest(unittest.TestCase):
             self.assertFalse((Path(parent) / 'refused').exists())
             self.assertEqual(ui_review.run_review(output=Path(parent) / 'touch', profile='webkit-touch'), 0)
         self.assertIn('--profile=webkit-touch', run.call_args.args[0])
+
+
+class CaptureAfterBuildTest(unittest.TestCase):
+    def evidence(self, designer='a', other='x'):
+        return {'build': 'b' * 64, 'sources': {
+            'cedar-embeddable-designer': {'current': {'sourceSha256': designer}},
+            'cedar-monitoring/cedar-monitoring-src': {'current': {'sourceSha256': other}}}}
+
+    def test_captures_when_a_reviewed_source_changed_and_records_only_complete_captures(self):
+        with tempfile.TemporaryDirectory() as home, \
+                patch.object(ui_review, 'runtime_evidence', return_value=self.evidence()), \
+                patch.object(ui_review, 'run_review', side_effect=[2, 0]) as run:
+            printed = []
+            self.assertEqual(ui_review.capture_after_build(home, printer=printed.append), 2)
+            latest = Path(home) / '.cedar/reports/ui-review/automatic/latest.json'
+            self.assertFalse(latest.exists())
+            self.assertIn('INCOMPLETE', printed[-1])
+            self.assertEqual(ui_review.capture_after_build(home, printer=printed.append), 0)
+            self.assertEqual(json.loads(latest.read_text())['sources'], {'cedar-embeddable-designer': 'a'})
+            self.assertEqual(run.call_args.kwargs['app'], 'all')
+
+    def test_an_unreviewed_source_alone_does_not_capture_again(self):
+        with tempfile.TemporaryDirectory() as home, patch.object(ui_review, 'run_review', return_value=0) as run:
+            with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence(other='x')):
+                ui_review.capture_after_build(home, printer=lambda *_: None)
+            with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence(other='y')):
+                self.assertIsNone(ui_review.capture_after_build(home, printer=lambda *_: None))
+            with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence(designer='changed')):
+                ui_review.capture_after_build(home, printer=lambda *_: None)
+        self.assertEqual(run.call_count, 2)
+
+    def test_keeps_only_the_most_recent_automatic_packets(self):
+        with tempfile.TemporaryDirectory() as home:
+            root = Path(home) / '.cedar/reports/ui-review/automatic'
+            for index in range(7):
+                (root / f'2026010{index}T000000Z-old').mkdir(parents=True)
+            def capture(**kwargs):
+                kwargs['output'].mkdir()
+                return 0
+            with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence()), \
+                    patch.object(ui_review, 'run_review', side_effect=capture):
+                ui_review.capture_after_build(home, printer=lambda *_: None)
+            kept = sorted(path.name for path in root.iterdir() if path.is_dir())
+            self.assertEqual(len(kept), ui_review.AUTOMATIC_PACKETS_KEPT)
+            self.assertNotIn('20260100T000000Z-old', kept)
+
+    def test_a_capture_that_cannot_start_is_reported_without_raising(self):
+        with tempfile.TemporaryDirectory() as home, \
+                patch.object(ui_review, 'runtime_evidence', return_value=self.evidence()), \
+                patch.object(ui_review, 'run_review', side_effect=ValueError('Frontend sources changed')):
+            printed = []
+            self.assertEqual(ui_review.capture_after_build(home, printer=printed.append), 2)
+        self.assertTrue(any('could not run' in line for line in printed))

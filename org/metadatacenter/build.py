@@ -374,11 +374,15 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
               reuse: bool = typer.Option(
                   True, "--reuse/--no-reuse",
                   help="Take a repository's earlier passing result when everything it reads is "
-                       "unchanged. --no-reuse runs every repository's checks again.")):
-    run_frontends(dry_run=dry_run, dump_plan=dump_plan, reuse=reuse, deploy=True)
+                       "unchanged. --no-reuse runs every repository's checks again."),
+              ui_review: bool = typer.Option(
+                  True, "--ui-review/--no-ui-review",
+                  help="After the smoke, capture UI review evidence if a reviewed frontend source "
+                       "changed since the last complete capture. A failed capture never fails the build.")):
+    run_frontends(dry_run=dry_run, dump_plan=dump_plan, reuse=reuse, deploy=True, ui_review=ui_review)
 
 
-def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False):
+def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False, ui_review=True):
     """Shared source verification; deployment is exclusively the full build command's contract."""
     from org.metadatacenter.cee_demos import check_selection
     from org.metadatacenter.frontend_timings import frontend_timings
@@ -426,6 +430,12 @@ def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False):
                 code = run_smoke(rest_workers=4 if current_context().settings.build_workers >= 12 else None)
                 if code:
                     raise typer.Exit(code)
+            # Evidence for a later independent review, while the stack is still this build's alone.
+            # A failed capture is reported and never fails the build.
+            if ui_review:
+                with timing.phase('UI review capture'):
+                    from org.metadatacenter.ui_review import capture_after_build
+                    capture_after_build(Util.cedar_home, printer=console.print)
         console.print("Frontend reactor completed: build, local deployment and whole-stack smoke passed.")
 
 
