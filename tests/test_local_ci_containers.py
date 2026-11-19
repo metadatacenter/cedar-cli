@@ -386,6 +386,48 @@ def test_the_runner_image_tag_follows_the_dockerfile_and_the_base():
     assert set(containers.RELEASES.values()) <= set(containers.BASES)
 
 
+def test_a_clone_that_lacks_an_object_fetches_the_commit_from_its_source(tmp_path, monkeypatch):
+    """The 2.9.37 release: gc packed the harness's loose objects while the clone linked them."""
+    from org.metadatacenter.local_ci import executor
+    home = tmp_path / "home"
+    revision = repository(home, CONTAINER)
+    harness = home / "cedar-harness"
+    harness.mkdir()
+    git(harness, "init", "-q", "-b", "develop")
+    git(harness, "config", "user.email", "ci@example.org")
+    git(harness, "config", "user.name", "CI")
+    (harness / "tool.txt").write_text("tool\n")
+    git(harness, "add", "-A")
+    git(harness, "commit", "-q", "-m", "Harness")
+    pinned = git(harness, "rev-parse", "HEAD")
+    real, calls, failed = executor.git, [], []
+
+    def flaky(repository, *args, check=True):
+        calls.append((Path(repository).name, args))
+        if args[:1] == ("checkout",) and not failed:
+            failed.append(args)
+            raise executor.LocalCIError(f"git checkout failed: fatal: unable to read tree ({pinned[:12]})")
+        return real(repository, *args, check=check)
+
+    monkeypatch.setattr(executor, "git", flaky)
+    runner = JobRunner(cedar_home=home, repository="cedar-sample", revision=revision, parent=None,
+                       run_directory=tmp_path / "run", environment={"PATH": "/usr/bin:/bin"},
+                       secrets={}, maven_repository=tmp_path / "m2", run_id="test")
+    workspace = tmp_path / "job" / "workspace"
+    (tmp_path / "job" / "tmp").mkdir(parents=True)
+    workspace.mkdir()
+    lines = []
+
+    result = runner._checkout({"repository": "metadatacenter/cedar-harness", "ref": pinned, "path": "harness"},
+                              workspace, SimpleNamespace(write=lines.append))
+
+    assert result["commit"] == pinned and (workspace / "harness" / "tool.txt").is_file()
+    assert any(args[:2] == ("fetch", "-q") and args[-1] == pinned for _, args in calls)
+    assert any("fetching" in line for line in lines)
+    source_fetch = next(args for name, args in calls if name == "cedar-harness" and "fetch" in args)
+    assert source_fetch[:4] == ("-c", "gc.auto=0", "-c", "maintenance.auto=false")
+
+
 def test_a_sparse_checkout_holds_only_the_directories_it_names(tmp_path):
     home = tmp_path / "home"
     root = home / "cedar-sample"

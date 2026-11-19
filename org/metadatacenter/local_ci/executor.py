@@ -721,7 +721,10 @@ class JobRunner:
         else:
             with self.lock:
                 if name not in self.fetched and name != self.repository:
-                    git(source, "fetch", "-q", "origin", check=False)
+                    # A fetch that leaves enough loose objects starts gc in the background, which
+                    # packs them and deletes the loose files while the clone below is linking them.
+                    git(source, "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+                        "fetch", "-q", "origin", check=False)
                     self.fetched.add(name)
             revision = resolve_ref(source, ref or "develop")
         destination = workspace / inputs.get("path", "") if inputs.get("path") else workspace
@@ -739,7 +742,14 @@ class JobRunner:
             # As actions/checkout does: cone mode unless the workflow turns it off.
             cone = inputs.get("sparse-checkout-cone-mode", "true").strip().lower() != "false"
             git(destination, "sparse-checkout", "set", "--cone" if cone else "--no-cone", *sparse)
-        git(destination, "checkout", "-q", "--force", "--detach", revision)
+        try:
+            git(destination, "checkout", "-q", "--force", "--detach", revision)
+        except LocalCIError as error:
+            # Git in another process may repack the source while the clone links its objects, and
+            # the clone then lacks some of them. Fetching the commit from the source fills the gap.
+            log.write(f"   {error}\n   fetching {revision[:12]} from {name} and checking it out again\n")
+            git(destination, "fetch", "-q", str(source), revision)
+            git(destination, "checkout", "-q", "--force", "--detach", revision)
         if name != self.repository or revision != self.revision:
             # The commit under test keeps its own entry; another commit of the same repository, such
             # as a performance comparison's base, is recorded beside it.
