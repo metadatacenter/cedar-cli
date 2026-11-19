@@ -57,6 +57,13 @@ class DevelopmentVersionTest(unittest.TestCase):
         self.assertEqual(development_version("0.1.0-dev.20260916.2593d382", "2593d382", "20260916"),
                          development_version("0.1.0", "2593d382", "20260916"))
 
+    def test_an_all_digit_head_loses_its_leading_zeros_as_npm_publishes_it(self):
+        """CEE 0900316 published as 2.0.37-dev.20261119.900316; a hex head keeps its zeros."""
+        self.assertEqual("2.0.37-dev.20261119.900316",
+                         development_version("2.0.37-dev.20261119.4310b6a", "0900316", "20261119"))
+        self.assertEqual("2.0.37-dev.20261119.0a9f316",
+                         development_version("2.0.37", "0a9f316", "20261119"))
+
     def test_a_version_this_cannot_advance_is_refused(self):
         with self.assertRaises(ComponentPinError):
             development_version("^0.1.0", "abcd1234", "20260917")

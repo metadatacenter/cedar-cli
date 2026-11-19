@@ -353,10 +353,16 @@ def development_version(carried: str, head: str, date: str) -> str:
 
     The date is the commit's rather than the day of publication, as CEE's CI names its packages,
     so a head published once is recognised as published on any later day.
+
+    A head whose short form is all digits is a numeric semver identifier, which may not start with
+    a zero, so npm publishes `0900316` as `900316`. The version is written as npm writes it, or no
+    registry ever answers for it.
     """
     match = VERSION.match(carried or "")
     if not match:
         raise ComponentPinError(f"{carried!r} is not a version this can advance")
+    if head.isdigit():
+        head = str(int(head))
     return f"{match.group('base')}-dev.{date}.{head}"
 
 
