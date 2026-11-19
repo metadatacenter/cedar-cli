@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from org.metadatacenter import maven, reactor, reactor_evidence
-from org.metadatacenter.coverage import report_coverage
+from org.metadatacenter.coverage import CoverageRegression, report_coverage
 from org.metadatacenter.design_tokens import check_design_tokens
 from org.metadatacenter.executor.PlanExecutor import PlanExecutor
 from org.metadatacenter.model.Plan import Plan
@@ -98,31 +98,38 @@ def _local_name(element):
     return element.tag.rsplit('}', 1)[-1]
 
 
-def maven_modules(checkout: Path):
-    """The modules a checkout's POM builds by default, as directories.
+def maven_modules(checkout: Path, profiles=()):
+    """The modules a checkout's POM builds with these profiles active, as directories.
 
-    Only the project's own <modules> count: a profile's modules are built only when it is active,
-    and a commented-out module is not built at all, which is why the POM is parsed rather than
-    searched.
+    The project's own <modules> count, and those of each named profile: a profile's modules are
+    built only when it is active, and a commented-out module is not built at all, which is why the
+    POM is parsed rather than searched.
     """
     try:
         project = ElementTree.parse(checkout / 'pom.xml').getroot()
     except (OSError, ElementTree.ParseError):
         return []
+    owners = [project] + [profile for section in project if _local_name(section) == 'profiles'
+                          for profile in section if _local_name(profile) == 'profile'
+                          and any(_local_name(child) == 'id' and (child.text or '').strip() in profiles
+                                  for child in profile)]
     return [(checkout / module.text.strip()).resolve()
-            for modules in project if _local_name(modules) == 'modules'
+            for owner in owners
+            for modules in owner if _local_name(modules) == 'modules'
             for module in modules if _local_name(module) == 'module' and (module.text or '').strip()]
 
 
-def aggregated_checkouts(checkout: Path, home: Path):
+def aggregated_checkouts(checkout: Path, home: Path, profiles=()):
     """The other checkouts an aggregator builds through `../` modules, followed transitively.
 
     cedar-project, for one, compiles cedar-artifact-server and every other server from their own
-    checkouts, and cedar-microservice-libraries among them aggregates further.
+    checkouts, and cedar-microservice-libraries among them aggregates further. The profiles apply
+    to the aggregator itself, as a command line's -P does.
     """
     found, pending = set(), [checkout]
     while pending:
-        for module in maven_modules(pending.pop()):
+        current = pending.pop()
+        for module in maven_modules(current, profiles if current == checkout else ()):
             try:
                 member = home / module.relative_to(home).parts[0]
             except (ValueError, IndexError):
@@ -144,18 +151,21 @@ def build_input_roots(plan):
     """
     home = Path(Util.cedar_home).resolve()
     roots = {home / 'cedar-cli', home / 'cedar-development'}
+    profiles = {}
     def visit(task):
         repo = getattr(task, 'repo', None)
         if repo is not None:
             while getattr(repo, 'parent_repo', None) is not None:
                 repo = repo.parent_repo
             roots.add(home / repo.name)
+            active = (getattr(task, 'parameters', None) or {}).get('maven_profiles', ())
+            profiles.setdefault((home / repo.name).resolve(), set()).update(active)
         for child in task.tasks:
             visit(child)
     visit(plan)
     roots = {root.resolve() for root in roots}
     for root in list(roots):
-        roots |= aggregated_checkouts(root, home)
+        roots |= aggregated_checkouts(root, home, tuple(profiles.get(root, ())))
     return roots
 
 
@@ -191,11 +201,28 @@ def capture_build_state(home: Path, frontends: bool):
     return state
 
 
-def execute_java_build(plan: Plan, dry_run: bool, dump_plan: bool):
+def execute_java_build(plan: Plan, dry_run: bool, dump_plan: bool, *, coverage_gate=False):
+    """Run a Java build and report its coverage.
+
+    `coverage_gate` holds the repository and any-test figures to their recorded values. Only a plan
+    that builds every Java reactor may set it, since a narrower build's execution data credits a
+    module with only the tests that build ran.
+    """
     started = time.time()
     selection = execute_build(plan, dry_run, dump_plan)
     if not GlobalContext.should_skip_tests() and not dry_run and not dump_plan:
-        report_coverage(started)
+        try:
+            report_coverage(started, gate=coverage_gate)
+        except CoverageRegression as regression:
+            console.print("Coverage gate failed. Each figure below is a module's coverage by its "
+                          "repository's tests or by any test, against its value in "
+                          "cedar-cli/assets/coverage/recorded.json:", soft_wrap=True)
+            for reason in regression.reasons:
+                console.print(f"  {reason}", markup=False, soft_wrap=True)
+            console.print("Restore the tests that covered it. If the fall is intended, record the new "
+                          "figures with `cedarcli build record-coverage --apply` and commit them.",
+                          soft_wrap=True)
+            raise typer.Exit(1) from regression
     return selection
 
 
@@ -330,10 +357,15 @@ def java(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build java")
     BuildPlanner.parent(plan)
-    BuildPlanner.libraries(plan)
-    BuildPlanner.project(plan)
+    try:
+        BuildPlanner.libraries_and_project(plan)
+    except PlanError as error:
+        console.print(str(error), markup=False, soft_wrap=True)
+        raise typer.Exit(1) from error
+    if tests:
+        BuildPlanner.corpus_verifiers(plan)
     BuildPlanner.clients(plan)
-    execute_java_build(plan, dry_run, dump_plan)
+    execute_java_build(plan, dry_run, dump_plan, coverage_gate=True)
 
 
 @app.command("frontends")
@@ -342,11 +374,15 @@ def frontends(dry_run: bool = typer.Option(False, help="Dry run"),
               reuse: bool = typer.Option(
                   True, "--reuse/--no-reuse",
                   help="Take a repository's earlier passing result when everything it reads is "
-                       "unchanged. --no-reuse runs every repository's checks again.")):
-    run_frontends(dry_run=dry_run, dump_plan=dump_plan, reuse=reuse, deploy=True)
+                       "unchanged. --no-reuse runs every repository's checks again."),
+              ui_review: bool = typer.Option(
+                  True, "--ui-review/--no-ui-review",
+                  help="After the smoke, capture UI review evidence if a reviewed frontend source "
+                       "changed since the last complete capture. A failed capture never fails the build.")):
+    run_frontends(dry_run=dry_run, dump_plan=dump_plan, reuse=reuse, deploy=True, ui_review=ui_review)
 
 
-def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False):
+def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False, ui_review=True):
     """Shared source verification; deployment is exclusively the full build command's contract."""
     from org.metadatacenter.cee_demos import check_selection
     from org.metadatacenter.frontend_timings import frontend_timings
@@ -394,6 +430,12 @@ def run_frontends(*, dry_run=False, dump_plan=False, reuse=True, deploy=False):
                 code = run_smoke(rest_workers=4 if current_context().settings.build_workers >= 12 else None)
                 if code:
                     raise typer.Exit(code)
+            # Evidence for a later independent review, while the stack is still this build's alone.
+            # A failed capture is reported and never fails the build.
+            if ui_review:
+                with timing.phase('UI review capture'):
+                    from org.metadatacenter.ui_review import capture_after_build
+                    capture_after_build(Util.cedar_home, printer=console.print)
         console.print("Frontend reactor completed: build, local deployment and whole-stack smoke passed.")
 
 
@@ -434,14 +476,61 @@ def build_all(dry_run: bool = typer.Option(False, help="Dry run"),
     GlobalContext.mark_global_task_type(TaskType.BUILD)
     plan = Plan("Build all")
     BuildPlanner.parent(plan)
-    BuildPlanner.libraries(plan)
-    BuildPlanner.project(plan)
+    try:
+        BuildPlanner.libraries_and_project(plan)
+    except PlanError as error:
+        console.print(str(error), markup=False, soft_wrap=True)
+        raise typer.Exit(1) from error
+    if tests:
+        BuildPlanner.corpus_verifiers(plan)
     BuildPlanner.clients(plan)
     BuildPlanner.frontends(plan, verification=tests)
-    selection = execute_java_build(plan, dry_run, dump_plan)
+    selection = execute_java_build(plan, dry_run, dump_plan, coverage_gate=True)
     if tests and not dry_run and not dump_plan:
         from org.metadatacenter.cee_demos import check_selection
         check_selection(selection)
+
+
+@app.command("record-coverage")
+def record_coverage(
+    record: Optional[Path] = typer.Option(
+        None, help="Coverage record to take the figures from; default the newest under .cedar/coverage"),
+    apply: bool = typer.Option(False, "--apply", help="Write the recorded figures; default only previews"),
+):
+    """Record each module's repository and any-test coverage, which `cedarcli build java` then holds.
+
+    Take the figures from the record of a full `cedarcli build java`: a narrower build credits a
+    module with only the tests it ran. Review the changes and commit
+    cedar-cli/assets/coverage/recorded.json.
+    """
+    from org.metadatacenter.coverage import (
+        CoverageUnavailable, read_recorded, recorded_figures, write_recorded)
+    if record is None:
+        records = sorted((Path(Util.cedar_home) / '.cedar' / 'coverage').glob('*Z.json'))
+        if not records:
+            console.print('No coverage record under .cedar/coverage; run `cedarcli build java` first.')
+            raise typer.Exit(1)
+        record = records[-1]
+    try:
+        figures = recorded_figures(json.loads(record.read_text()), record.name)
+    except (OSError, ValueError, KeyError) as error:
+        console.print(f"{record} is not a coverage record: {error}", markup=False)
+        raise typer.Exit(1) from error
+    try:
+        previous = read_recorded()
+    except CoverageUnavailable:
+        previous = {}
+    for module in sorted(set(previous) | set(figures['modules'])):
+        before, after = previous.get(module), figures['modules'].get(module)
+        if before != after:
+            console.print(f"{module}: {before or 'not recorded'} -> {after or 'removed'}",
+                          markup=False, soft_wrap=True)
+    console.print(f"{len(figures['modules'])} modules in {record.name}.", markup=False)
+    if not apply:
+        console.print('Preview only; add --apply to write the recorded figures.')
+        return
+    write_recorded(figures)
+    console.print("Wrote cedar-cli/assets/coverage/recorded.json; review and commit it.", markup=False)
 
 
 @app.command("diagnostics")

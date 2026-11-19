@@ -15,6 +15,24 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
+@app.command("ui-review")
+def ui_review(
+        app: str = typer.Option("designer", "--app", help="An application from the review catalog (see --plan), or all to capture each in turn."),
+        plan: bool = typer.Option(False, help="Show the application scenario matrix and independent review contract."),
+        output: Optional[Path] = typer.Option(None, help="New evidence directory, or existing run for --review."),
+        review: Optional[Path] = typer.Option(None, help="Review JSON, or parent directory containing APP/review.json with --app all."),
+        seal_review: bool = typer.Option(False, help="Freeze review.json before giving calibration cases to the reviewer."),
+        diagnostic: bool = typer.Option(False, help="Inspect a stale runtime for diagnosis; acceptance stays incomplete."),
+        profile: str = typer.Option("chromium", "--profile", help="Browser profile for a capture, from the review catalog (see --plan); the default drives Chromium with a mouse.")):
+    """Capture assembled applications and validate independent, evidence-backed UI reviews."""
+    from org.metadatacenter.ui_review import run_review
+    try:
+        raise typer.Exit(run_review(plan=plan, output=output, review=review, seal_review=seal_review, diagnostic=diagnostic, app=app, profile=profile))
+    except (ValueError, OSError, KeyError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("frontend-performance")
 def frontend_performance(
         samples: int = typer.Option(5, min=1, max=30, help="Repetitions per page/profile, each with cold and warm cache."),
@@ -133,7 +151,7 @@ def search(plan: bool = typer.Option(False, help="Print the offline corpus and e
 
 @app.command("status")
 def status():
-    """List embedded MongoDB processes that can interfere with backend tests."""
+    """List embedded MongoDB processes, saying which are orphaned and which a running test owns."""
     processes = embedded_mongo_processes()
     if not processes:
         console.print("No embedded Mongo test processes are running.")
@@ -143,11 +161,25 @@ def status():
 
 
 @app.command("cleanup")
-def cleanup():
-    """Terminate only mongods whose executable is inside .embedmongo."""
-    processes = embedded_mongo_processes()
+def cleanup(
+        all_processes: bool = typer.Option(
+            False, "--all",
+            help="Also stop mongods that running tests own, in this session or another.")):
+    """Terminate orphaned mongods whose executable is inside .embedmongo.
+
+    An orphan's test JVM has died, so nothing else will stop it. A mongod with a live parent
+    belongs to a test that is still running, and stopping it fails that test, so it is stopped
+    only under --all.
+    """
+    inventory = embedded_mongo_processes()
+    processes = [process for process in inventory if all_processes or process.orphaned]
+    skipped = [process for process in inventory if process not in processes]
+    for process in skipped:
+        console.print(f"Leaving {process.describe()}, which a running test owns; --all stops it",
+                      markup=False)
     if not processes:
-        console.print("No embedded Mongo test processes are running.")
+        console.print("No orphaned embedded Mongo test processes are running."
+                      if skipped else "No embedded Mongo test processes are running.")
         return
     for process in processes:
         console.print(f"Stopping {process.describe()}", markup=False)
@@ -155,9 +187,10 @@ def cleanup():
             os.kill(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+    stopping = {process.pid for process in processes}
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        remaining = embedded_mongo_processes()
+        remaining = [process for process in embedded_mongo_processes() if process.pid in stopping]
         if not remaining:
             console.print(f"Stopped {len(processes)} embedded Mongo test process(es).")
             return

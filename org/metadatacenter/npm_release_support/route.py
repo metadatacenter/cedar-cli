@@ -54,6 +54,11 @@ PACKAGE_STAGES = (
 # Nothing a package's stages up to here have done is visible on npmjs or main, so the run may
 # still be abandoned. A merged pull request already changed main.
 ABANDONABLE_BEFORE = "merge"
+# A package pushed but not yet merged may take a later develop head as the commit it releases.
+# Re-preparing gates that head again and records it as the commit; the stages after the push then
+# run against it, and the merge still proves main holds the tree the gate passed.
+REPREPARABLE_AFTER = "push"
+REPREPARED_STAGES = ("gate", "commit", "push", "pull-request", "checks")
 RUN_STAGES = ("baselines",)
 CI_POLL_SECONDS = 30
 CI_TIMEOUT_SECONDS = 3 * 3600
@@ -341,6 +346,74 @@ class NpmReleaseRoute:
                 last_report = self.tools.clock()
             self.tools.sleep(min(self.ci_poll_seconds, max(1.0, remaining)))
 
+    # Re-preparation ---------------------------------------------------------------------------
+
+    def reprepare(self, run: dict, package: str) -> list[str]:
+        """Release a pushed, unmerged package from develop's present head, gated again.
+
+        A preparation commit can meet a red check that the commit cannot repair: a defect already on
+        develop, which a later commit fixes. The pull request then heads that later commit, and the
+        checks and merge refuse it as a moved head. Re-preparing accepts the later head only when it
+        descends from the preparation commit and changes none of the paths the preparation wrote,
+        so the release edits stand as they were gated. The package's whole gate runs again on that
+        head, which becomes the commit the remaining stages check, merge and advance from. The
+        evidence it replaces is kept beside the record.
+        """
+        record = next((row for row in run["packages"] if row["package"] == package), None)
+        if record is None:
+            raise NpmReleaseError(f"{package} is not a package of this run")
+        definition = PACKAGES[package]
+        completed = record["completed"]
+        if REPREPARABLE_AFTER not in completed:
+            raise NpmReleaseError(f"{package} has not pushed its preparation commit; resume it as it stands")
+        if ABANDONABLE_BEFORE in completed:
+            raise NpmReleaseError(f"{package} has already merged to main, so its released commit is settled")
+        repository = self.repository(definition)
+        previous = record["evidence"]["commit"]["commit"]
+        self.tools.git(repository, "fetch", "origin", "develop")
+        remote = self._remote_ref(repository, "refs/heads/develop")
+        if not remote or remote == previous:
+            raise NpmReleaseError(
+                f"origin develop of {definition.repository} still heads the preparation commit {previous[:8]}; "
+                "push the fix to develop first")
+        branch = self.tools.git(repository, "rev-parse", "--abbrev-ref", "HEAD")
+        head = self.tools.git(repository, "rev-parse", "HEAD")
+        if branch != "develop" or head != remote:
+            raise NpmReleaseError(
+                f"{definition.repository} is at {branch} {head[:8]}, not origin develop {remote[:8]}")
+        dirty = self._dirty(repository)
+        if dirty:
+            raise NpmReleaseError(f"{definition.repository} has uncommitted changes: {', '.join(dirty)}")
+        if self.tools.git_result(repository, "merge-base", "--is-ancestor", previous, remote).returncode:
+            raise NpmReleaseError(
+                f"origin develop {remote[:8]} does not contain the preparation commit {previous[:8]}")
+        prepared = set(record["evidence"]["prepare"]["paths"])
+        changed = set(self.tools.git(repository, "diff", "--name-only", previous, remote).splitlines())
+        touched = sorted(prepared & changed)
+        if touched:
+            raise NpmReleaseError(
+                f"develop changed paths the release prepared since {previous[:8]}: {', '.join(touched)}")
+        tree = self.tools.git(repository, "rev-parse", f"{remote}^{{tree}}")
+        log = self._run_gate(definition, run, "regate")
+        if self._dirty(repository) or self.tools.git(repository, "rev-parse", "HEAD") != remote:
+            raise NpmReleaseError(f"the {definition.id} gate changed tracked files at {remote[:8]}")
+        commits = self.tools.git(repository, "log", "--format=%h %s", f"{previous}..{remote}").splitlines()
+        evidence = record["evidence"]
+        record.setdefault("repreparations", []).append({
+            "from": previous, "to": remote, "commits": commits, "at": now(),
+            "superseded": {stage: evidence[stage] for stage in REPREPARED_STAGES if stage in evidence},
+        })
+        evidence["gate"] = {"tree": tree, "log": str(log), "reprepared": True, "completedAt": now()}
+        evidence["commit"] = {"commit": remote, "reprepared": previous, "completedAt": now()}
+        evidence["push"] = {"commit": remote, "reused": True, "completedAt": now()}
+        for stage in ("pull-request", "checks"):
+            evidence.pop(stage, None)
+        record["completed"] = [stage for stage in completed if stage not in ("pull-request", "checks")]
+        record["stage"] = None
+        run["failure"] = None
+        return [f"{definition.repository}: releases develop {remote[:8]}, gated again, in place of "
+                f"{previous[:8]}"] + [f"  {line}" for line in commits]
+
     # Package stages --------------------------------------------------------------------------
 
     def _prepare(self, definition: NpmPackage, record: dict, run: dict) -> dict:
@@ -420,7 +493,15 @@ class NpmReleaseRoute:
         if sorted(self._dirty(repository)) != sorted(paths):
             raise NpmReleaseError(f"{definition.repository}'s prepared changes are not the ones recorded")
         tree = self._tree_of(repository, paths)
-        log = self._logs(run, definition, "gate")
+        log = self._run_gate(definition, run, "gate")
+        if self._tree_of(repository, paths) != tree or sorted(self._dirty(repository)) != sorted(paths):
+            raise NpmReleaseError(f"the {definition.id} gate changed tracked files; the gated tree is not the prepared one")
+        return {"tree": tree, "log": str(log)}
+
+    def _run_gate(self, definition: NpmPackage, run: dict, name: str) -> Path:
+        """Install every directory the package installs and run its whole gate, logged as `name`."""
+        repository = self.repository(definition)
+        log = self._logs(run, definition, name)
         for directory in definition.installs:
             cwd = repository if directory == "." else repository / directory
             self.tools.logged(["npm", "ci"], cwd, log)
@@ -429,9 +510,7 @@ class NpmReleaseRoute:
         if definition.framework_demos:
             self.tools.logged([*self.cli, "test", "cee-demos", "--cee-package",
                                str(repository / definition.stage_directory)], repository, log)
-        if self._tree_of(repository, paths) != tree or sorted(self._dirty(repository)) != sorted(paths):
-            raise NpmReleaseError(f"the {definition.id} gate changed tracked files; the gated tree is not the prepared one")
-        return {"tree": tree, "log": str(log)}
+        return log
 
     def _commit_message(self, definition: NpmPackage, record: dict) -> str:
         if definition.consumes_model:

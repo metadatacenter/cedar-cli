@@ -144,6 +144,35 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(["cedar-x", "cedar-y"], [entry["repository"] for entry in summary["repositories"]])
         self.assertEqual(["cedar-x/app", "cedar-y"], [entry["module"] for entry in summary["modules"]])
 
+    def test_a_module_without_tests_is_found_by_its_compiled_classes(self):
+        self.module_report("cedar-m/application")
+        dao = write(self.home / "cedar-m/core/target/classes/org/metadatacenter/messaging/dao/MessageDAO.class")
+        write(self.home / "cedar-m/core/target/classes/org/metadatacenter/messaging/Old.class")
+        write(self.home / "cedar-m/core/target/classes/com/other/Vendored.class")
+        write(self.home / "cedar-m/tests-only/target/classes/logback-test.xml")
+        started = time.time() - 10
+        os.utime(self.home / "cedar-m/core/target/classes/org/metadatacenter/messaging/Old.class",
+                 (started - 60, started - 60))
+
+        found = coverage.untested_modules({self.home / "cedar-m"}, started, {self.home / "cedar-m/application"})
+
+        self.assertEqual({self.home / "cedar-m/core": [dao]}, found)
+
+    def test_a_module_without_tests_is_reported_at_zero_own_coverage(self):
+        tested = self.module_report("cedar-m/application")
+        core = self.home / "cedar-m" / "core"
+        any_test = {self.home / "cedar-m" / "application": (4, 10, 1, 4, 4, 1), core: (288, 341, 20, 28, 288, 20)}
+        with patch.object(coverage, "merged_figures", return_value=any_test) as merged, \
+                patch.object(coverage, "jacoco_classpath", return_value=[]):
+            measured = coverage.measure({tested}, [], self.home, self.home, Path("java"),
+                                        {core: [core / "target/classes/Dao.class"]})
+            summary = coverage.summarize(measured, self.home)
+
+        self.assertEqual(("cedar-m", [core / "target/classes/Dao.class"]), merged.call_args.args[0][core])
+        self.assertEqual({"lines": (0, 341, 288, 288), "branches": (0, 28, 20, 20)}, measured[core])
+        self.assertEqual({"total": 351, "ownCovered": 4, "repositoryCovered": 292, "anyCovered": 292,
+                          "ownPercent": 1.1, "repositoryPercent": 83.2, "anyPercent": 83.2}, summary["lines"])
+
     def test_a_module_whose_classes_changed_after_its_report_is_not_misreported(self):
         report = self.module_report("cedar-x/app")
         with patch.object(coverage, "merged_figures", return_value={self.home / "cedar-x/app": (9, 12, 3, 4, 9, 3)}), \
@@ -151,7 +180,7 @@ class CoverageTest(unittest.TestCase):
             with self.assertRaisesRegex(coverage.CoverageUnavailable, "changed after its report"):
                 coverage.measure({report}, [], self.home, self.home, Path("java"))
 
-    def run_report(self, measured=None, error=None):
+    def run_report(self, measured=None, error=None, gate=False):
         output = StringIO()
         reports = {self.home / "cedar-x/target/site/jacoco/index.html"}
         measure = patch.object(coverage, "measure", return_value=measured, side_effect=error)
@@ -161,7 +190,7 @@ class CoverageTest(unittest.TestCase):
                 patch.object(coverage, "execution_data", return_value=[]), \
                 patch.object(coverage.ModeManager, "java_17_home", return_value="/jdk"), \
                 patch.object(coverage, "console", Console(file=output, width=40)), measure:
-            coverage.report_coverage(0)
+            coverage.report_coverage(0, gate=gate)
         return output.getvalue().splitlines()
 
     def test_a_build_reports_the_three_figures_in_one_unwrapped_line_and_a_file(self):
@@ -176,6 +205,19 @@ class CoverageTest(unittest.TestCase):
             f"module's own tests (1,000 lines in 1 module). Per module: {written[0]}",
         ], lines)
         self.assertEqual(68.7, json.loads(written[0].read_text())["repositories"][0]["lines"]["anyPercent"])
+
+    def test_a_build_measures_the_modules_that_wrote_no_report_beside_those_that_did(self):
+        core = self.home / "cedar-x" / "core"
+        reports = {self.home / "cedar-x/target/site/jacoco/index.html"}
+        with patch.object(coverage, "coverage_reports", return_value=reports), \
+                patch.object(coverage, "execution_data", return_value=[]), \
+                patch.object(coverage, "untested_modules", return_value={core: []}) as untested, \
+                patch.object(coverage, "measure", side_effect=coverage.CoverageUnavailable("stop")) as measure, \
+                patch.object(coverage, "console", Console(file=StringIO())):
+            coverage.report({self.home / "cedar-x"}, 5, self.home, self.home, lambda: Path("java"))
+
+        self.assertEqual(({self.home / "cedar-x"}, 5, {self.home / "cedar-x"}), untested.call_args.args)
+        self.assertEqual({core: []}, measure.call_args.args[5])
 
     def test_a_build_that_cannot_measure_says_why_and_writes_nothing(self):
         lines = self.run_report(error=coverage.CoverageUnavailable("the local repository lacks asm-9.10.1.jar"))
@@ -194,6 +236,89 @@ class CoverageTest(unittest.TestCase):
         checkouts, started, home, repository, java = report.call_args.args
         self.assertEqual({self.home / "cedar-project", self.home / "cedar-artifact-server"}, checkouts)
         self.assertEqual((0, self.home, Path("/m2"), Path("/jdk/bin/java")), (started, home, repository, java()))
+
+    @staticmethod
+    def summary(*modules):
+        """A summary with each (module, repository percent, any percent) as its line and branch figures."""
+        return {'modules': [
+            {'module': name, **{kind: {'repositoryPercent': repository, 'anyPercent': any_test}
+                                for kind in ('lines', 'branches')}}
+            for name, repository, any_test in modules]}
+
+    def test_the_gate_names_a_figure_more_than_two_points_below_its_recorded_value(self):
+        recorded = {'cedar-x/core': {'lines': {'repository': 97.6, 'any': 97.6},
+                                     'branches': {'repository': 85.9, 'any': 85.9}}}
+
+        self.assertEqual([], coverage.regressions(self.summary(('cedar-x/core', 95.6, 97.6)), recorded))
+        self.assertEqual([], coverage.regressions(
+            {'modules': [{'module': 'cedar-x/core',
+                          'lines': {'repositoryPercent': 99.0, 'anyPercent': 99.0},
+                          'branches': {'repositoryPercent': 83.9, 'anyPercent': 83.9}}]}, recorded))
+        # The bridge core's own tests cover 4.5% of it; its repository's tests cover 97.6%.
+        self.assertEqual([
+            "cedar-x/core: branches covered by its repository's tests fell to 4.5% from 85.9% recorded",
+            "cedar-x/core: lines covered by its repository's tests fell to 4.5% from 97.6% recorded",
+        ], coverage.regressions(self.summary(('cedar-x/core', 4.5, 97.6)), recorded))
+        self.assertEqual([
+            "cedar-x/core: branches covered by any test fell to 83.8% from 85.9% recorded",
+            "cedar-x/core: lines covered by any test fell to 95.5% from 97.6% recorded",
+        ], coverage.regressions(
+            {'modules': [{'module': 'cedar-x/core',
+                          'lines': {'repositoryPercent': 97.6, 'anyPercent': 95.5},
+                          'branches': {'repositoryPercent': 85.9, 'anyPercent': 83.8}}]}, recorded))
+
+    def test_the_gate_fails_a_recorded_module_that_was_not_measured_and_ignores_a_new_one(self):
+        recorded = {'cedar-x/core': {'lines': {'repository': 50.0, 'any': 60.0}}}
+
+        self.assertEqual(["cedar-x/core has recorded figures but none was measured"],
+                         coverage.regressions(self.summary(('cedar-y/new', 0.0, 0.0)), recorded))
+        self.assertEqual(["cedar-x/core: lines covered by its repository's tests fell to None% from 50.0% recorded",
+                          "cedar-x/core: lines covered by any test fell to None% from 60.0% recorded"],
+                         coverage.regressions(self.summary(('cedar-x/core', None, None)), recorded))
+
+    def test_the_committed_recorded_figures_name_modules_under_the_estate(self):
+        recorded = coverage.read_recorded()
+
+        # The modules whose own tests cover little of what their repository's tests reach.
+        for module in ('cedar-bridge-server/cedar-bridge-server-core',
+                       'cedar-microservice-libraries/cedar-workspace-operations-library',
+                       'cedar-microservice-libraries/cedar-template-operations-library'):
+            self.assertIn(module, recorded)
+        for module, kinds in recorded.items():
+            self.assertRegex(module, r'^cedar-[\w-]+(/[\w-]+)?$')
+            self.assertEqual({'lines', 'branches'}, set(kinds))
+            for scopes in kinds.values():
+                self.assertEqual({'repository', 'any'}, set(scopes))
+
+    def test_recorded_figures_round_trip_one_line_per_module(self):
+        summary = self.summary(('cedar-y/b', 40.0, 85.7), ('cedar-x/a', 97.6, 97.6))
+        path = self.home / 'recorded.json'
+
+        coverage.write_recorded(coverage.recorded_figures(summary, '20261115T205125Z.json'), path)
+
+        self.assertEqual({'cedar-x/a': {'lines': {'repository': 97.6, 'any': 97.6},
+                                        'branches': {'repository': 97.6, 'any': 97.6}},
+                          'cedar-y/b': {'lines': {'repository': 40.0, 'any': 85.7},
+                                        'branches': {'repository': 40.0, 'any': 85.7}}},
+                         coverage.read_recorded(path))
+        self.assertEqual(8, len(path.read_text().splitlines()))
+
+    def test_a_gated_build_fails_when_a_figure_falls_or_cannot_be_computed(self):
+        recorded = self.home / 'recorded.json'
+        coverage.write_recorded({'schemaVersion': 1, 'source': 'x', 'modules': {
+            'cedar-x': {'lines': {'repository': 70.0, 'any': 70.0}}}}, recorded)
+        measured = {self.home / "cedar-x": {"lines": (534, 1000, 687, 601), "branches": (1, 4, 3, 2)}}
+        with patch.object(coverage, 'RECORDED', recorded):
+            self.run_report(measured=measured)
+            with self.assertRaises(coverage.CoverageRegression) as raised:
+                self.run_report(measured=measured, gate=True)
+            self.assertEqual(["cedar-x: lines covered by its repository's tests fell to 60.1% from 70.0% recorded"],
+                             raised.exception.reasons)
+            with self.assertRaisesRegex(coverage.CoverageRegression, "because the local repository lacks"):
+                self.run_report(error=coverage.CoverageUnavailable("the local repository lacks asm"), gate=True)
+            coverage.write_recorded({'schemaVersion': 1, 'source': 'x', 'modules': {
+                'cedar-x': {'lines': {'repository': 62.0, 'any': 70.0}}}}, recorded)
+            self.run_report(measured=measured, gate=True)
 
     def coverage_records(self, now):
         """Two records the module wrote, one 20 days old, beside entries it must leave alone."""
@@ -224,6 +349,57 @@ class CoverageTest(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertEqual({recent.name, "notes.json", "20261002T120000Z.json", "20261003T120000Z.json"},
                          {path.name for path in (self.home / ".cedar" / "coverage").iterdir()})
+
+    def test_only_the_builds_that_span_every_java_reactor_gate_coverage(self):
+        from typer.testing import CliRunner
+        from org.metadatacenter import build
+        runner = CliRunner()
+        for command, gated in ((["java"], True), (["all", "--skip-tests"], True), (["project"], False),
+                               (["libraries"], False)):
+            with self.subTest(command=command), \
+                    patch.object(build, "require_integration_tags"), \
+                    patch.object(build, "require_design_token_adoption"), \
+                    patch.object(build, "execute_build", return_value=None), \
+                    patch.object(build, "report_coverage") as reported:
+                result = runner.invoke(build.app, command)
+                self.assertEqual(0, result.exit_code, result.output)
+                if "--skip-tests" in command:
+                    reported.assert_not_called()
+                else:
+                    reported.assert_called_once()
+                    self.assertEqual(gated, reported.call_args.kwargs["gate"])
+
+    def test_a_coverage_regression_fails_build_java_and_says_how_to_record_new_figures(self):
+        from typer.testing import CliRunner
+        from org.metadatacenter import build
+        regression = coverage.CoverageRegression(["cedar-x/core: lines covered by any test fell to 4.5% from 97.6% recorded"])
+        with patch.object(build, "require_integration_tags"), \
+                patch.object(build, "execute_build", return_value=None), \
+                patch.object(build, "report_coverage", side_effect=regression):
+            result = CliRunner().invoke(build.app, ["java"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        output = " ".join(result.output.split())
+        self.assertIn("cedar-x/core: lines covered by any test fell to 4.5% from 97.6% recorded", output)
+        self.assertIn("cedarcli build record-coverage --apply", output)
+
+    def test_record_coverage_previews_then_writes_the_newest_record(self):
+        from typer.testing import CliRunner
+        from org.metadatacenter import build
+        from org.metadatacenter.util.Util import Util
+        records = self.home / ".cedar" / "coverage"
+        write(records / "20261114T000000Z.json", json.dumps(self.summary(("cedar-x", 10.0, 10.0))))
+        write(records / "20261115T205125Z.json", json.dumps(self.summary(("cedar-x", 97.6, 98.0))))
+        recorded = self.home / "assets" / "recorded.json"
+        with patch.object(Util, "cedar_home", str(self.home)), patch.object(coverage, "RECORDED", recorded):
+            preview = CliRunner().invoke(build.app, ["record-coverage"])
+            self.assertEqual(0, preview.exit_code, preview.output)
+            self.assertFalse(recorded.exists())
+            applied = CliRunner().invoke(build.app, ["record-coverage", "--apply"])
+            self.assertEqual(0, applied.exit_code, applied.output)
+            self.assertEqual({"cedar-x": {"lines": {"repository": 97.6, "any": 98.0},
+                                          "branches": {"repository": 97.6, "any": 98.0}}},
+                             coverage.read_recorded(recorded))
 
     def test_build_diagnostics_lists_coverage_records_beside_failure_bundles(self):
         from typer.testing import CliRunner

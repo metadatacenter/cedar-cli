@@ -72,10 +72,10 @@ interrupted reader kills its owned process group, reaps the child, and closes th
 Each root CLI invocation binds an `InvocationContext` containing its environment, settings,
 repository/server catalogs, and task registries. Profile resolution updates that environment;
 subprocesses receive it explicitly. `create_app()` registers commands without host inspection,
-and importing `cedar` does not bootstrap a profile. `GlobalContext`, `Util.cedar_home`, and
-`CedarCliSettings` remain compatibility accessors rather than owners of mutable process state.
-Library callers can use `with use_context(InvocationContext(environment=...)):` or supply a
-context as the root application's `obj`. Calls made outside a bound context retain ambient
+and importing `cedar` does not bootstrap a profile. `GlobalContext` and `Util.cedar_home` remain
+compatibility accessors rather than owners of mutable process state. Library callers can use
+`with use_context(InvocationContext(environment=...)):` or supply a context as the root
+application's `obj`. Calls made outside a bound context retain ambient
 library behavior. Change settings on `context.settings`, rather than assigning class attributes.
 
 ## Contributor Setup

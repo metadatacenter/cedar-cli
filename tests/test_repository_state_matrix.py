@@ -41,7 +41,9 @@ from org.metadatacenter.util.ResultTable import ResultTable
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.ComponentWorker import ComponentWorker
 from org.metadatacenter.worker.GitWorker import GitWorker
-from tests.test_smoke_gate import REST_CHECKS, rest_payload, search_payload
+from tests.test_smoke_gate import (ALLOWED_SKIPS, BROWSER_STEPS, JOURNEY_SCENARIOS, REST_CHECKS,
+                                   browser_runner, rest_payload, search_payload, split_payload,
+                                   write_frontend_build)
 
 SUBJECT = "cedar-subject"
 OTHER = "cedar-other"
@@ -69,6 +71,9 @@ class Estate:
         (ops / "e2e" / "rest").mkdir()
         (ops / "e2e" / "rest" / "expected-checks.json").write_text(
             json.dumps({"version": 1, "checks": REST_CHECKS}), encoding="utf-8")
+        (ops / "e2e" / "rest" / "allowed-skips.json").write_text(json.dumps(ALLOWED_SKIPS), encoding="utf-8")
+        (ops / "e2e" / "browser-steps.json").write_text(json.dumps(BROWSER_STEPS), encoding="utf-8")
+        (ops / "e2e" / "journey-scenarios.json").write_text(json.dumps(JOURNEY_SCENARIOS), encoding="utf-8")
         (ops / "build-train.json").write_text(json.dumps({"repositories": list(REPOSITORIES)}),
                                               encoding="utf-8")
         for name in REPOSITORIES:
@@ -213,9 +218,11 @@ class StackStandIn:
     def __call__(self, args, **kwargs):
         if args and str(args[0]).endswith("cedar-services.sh"):
             return SimpleNamespace(returncode=0, stdout=HEALTHY, stderr="")
+        if args[:3] == ["npm", "run", "smoke"]:
+            return browser_runner()(args, kwargs)
         if args and args[0] == "npm":
             payload = (search_payload() if "smoke:search" in args else
-                       rest_payload() if "smoke:rest" in args else {"runId": "r", "verdict": "PASS"})
+                       rest_payload() if "smoke:rest" in args else split_payload())
             for argument in args:
                 if argument.startswith("--report="):
                     Path(argument.split("=", 1)[1]).write_text(json.dumps(payload), encoding="utf-8")
@@ -240,7 +247,13 @@ class RepositoryStateMatrix(unittest.TestCase):
         return estate
 
     def record(self, estate: Estate) -> dict | None:
-        """Run `cedarcli test e2e` against the estate, and return what it recorded, if anything."""
+        """Run `cedarcli test e2e` against the estate, and return what it recorded, if anything.
+
+        The frontends are taken to serve a reactor build of every develop head the estate holds, so
+        what the gates decide turns on the checkouts alone.
+        """
+        heads, _dirty, _problems = smoke_gate.develop_heads(estate.home, REPOSITORIES)
+        write_frontend_build(estate.home, heads)
         reports = smoke_gate.reports_dir(estate.home)
         with patch.object(smoke_gate.console, "print"), \
                 patch.object(smoke_gate.shutil, "which", return_value="/usr/bin/npm"):

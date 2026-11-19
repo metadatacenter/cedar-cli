@@ -518,6 +518,105 @@ def test_red_ci_stops_before_merge_and_the_run_can_still_be_abandoned(world, tmp
     assert not world.registry
 
 
+def _stop_on_red_preparation(world, state, files, specs, nexts, model=None, notes=()):
+    """Run until the preparation commit's CI fails; return the stopped run and the checkout."""
+    definition = PACKAGES[specs[0].split("@")[0]]
+    checkout = _make_repository(world.home, world.origins, definition, files)
+    request = parse_run_request(specs, nexts, model, None, list(notes))
+    run = _run(world, state, request.packages)
+    original_commit = route_module.NpmReleaseRoute._commit
+
+    def commit_and_fail_ci(self, definition, record, run):
+        evidence = original_commit(self, definition, record, run)
+        world.failing_ci.add(evidence["commit"])
+        return evidence
+
+    route = _route(world, state)
+    route._commit = lambda definition, record, run: commit_and_fail_ci(route, definition, record, run)
+    with pytest.raises(NpmReleaseError, match="failed CI"):
+        route.drive(run)
+    stopped, _ = state.read()
+    return stopped, checkout
+
+
+def _push_fix(checkout, path="ci.yml", content="fixed\n"):
+    (checkout / path).write_text(content)
+    git(checkout, "add", path)
+    git(checkout, "commit", "-m", "Fix the check")
+    git(checkout, "push", "origin", "develop")
+    return git(checkout, "rev-parse", "HEAD")
+
+
+def test_a_red_preparation_releases_the_fix_develop_takes_after_gating_it_again(world, tmp_path):
+    state = NpmReleaseState(tmp_path / "state")
+    notes = _notes(tmp_path, "- Adds a thing.\n")
+    stopped, checkout = _stop_on_red_preparation(
+        world, state, _component_files("cedar-embeddable-designer"), ["ced@0.1.3"], ["ced@0.1.4"], "1.0.28",
+        [f"ced={notes}"])
+    record = stopped["packages"][0]
+    prepared = record["evidence"]["commit"]["commit"]
+    assert stopped["failure"]["stage"] == "checks"
+    fix = _push_fix(checkout)
+    gates_before = sum(1 for command in world.commands if command == ("npm", "run", "test:ci"))
+
+    route = _route(world, state)
+    lines = route.reprepare(stopped, "ced")
+    state.save(stopped)
+
+    assert lines[0].startswith(f"cedar-embeddable-designer: releases develop {fix[:8]}")
+    assert sum(1 for command in world.commands if command == ("npm", "run", "test:ci")) == gates_before + 1
+    record = stopped["packages"][0]
+    assert record["completed"] == ["prepare", "gate", "commit", "push"]
+    assert record["evidence"]["commit"]["commit"] == fix
+    assert record["evidence"]["gate"]["tree"] == git(checkout, "rev-parse", f"{fix}^{{tree}}")
+    [history] = record["repreparations"]
+    assert history["from"] == prepared and history["to"] == fix
+    assert set(history["superseded"]) == {"gate", "commit", "push", "pull-request"}
+    assert stopped["failure"] is None
+
+    finished = _route(world, state).drive(stopped)
+
+    assert finished["conclusion"] == "released"
+    origin = world.origins / "cedar-embeddable-designer.git"
+    merge = finished["packages"][0]["evidence"]["merge"]["commit"]
+    assert fix in git(origin, "rev-list", "--parents", "-n", "1", merge).split()[1:]
+    assert git(origin, "show", f"{merge}:ci.yml") == "fixed"
+    assert json.loads(git(origin, "show", f"{merge}:package.json"))["version"] == "0.1.3"
+    assert "cedar-embeddable-designer@0.1.3" in world.registry
+
+
+def test_re_preparation_refuses_a_fix_that_changes_what_the_release_prepared(world, tmp_path):
+    state = NpmReleaseState(tmp_path / "state")
+    stopped, checkout = _stop_on_red_preparation(
+        world, state, _model_files(), ["model@1.0.28"], ["model@1.0.29"])
+    route = _route(world, state)
+
+    with pytest.raises(NpmReleaseError, match="still heads the preparation commit"):
+        route.reprepare(stopped, "model")
+    _push_fix(checkout, "package.json", json.dumps({"name": "cedar-model-typescript-library",
+                                                     "version": "9.9.9"}) + "\n")
+    with pytest.raises(NpmReleaseError, match="changed paths the release prepared .*package.json"):
+        route.reprepare(stopped, "model")
+    with pytest.raises(NpmReleaseError, match="cee is not a package of this run"):
+        route.reprepare(stopped, "cee")
+    assert stopped["packages"][0]["completed"][-1] == "pull-request"
+    assert "repreparations" not in stopped["packages"][0]
+
+
+def test_re_preparation_refuses_a_package_before_its_push_and_after_its_merge(world, tmp_path):
+    _make_repository(world.home, world.origins, PACKAGES["model"], _model_files())
+    state = NpmReleaseState(tmp_path / "state")
+    request = parse_run_request(["model@1.0.28"], ["model@1.0.29"], None, None, [])
+    run = _run(world, state, request.packages)
+    route = _route(world, state)
+
+    with pytest.raises(NpmReleaseError, match="has not pushed its preparation commit"):
+        route.reprepare(run, "model")
+    finished = route.drive(run)
+    with pytest.raises(NpmReleaseError, match="already merged to main"):
+        route.reprepare(finished, "model")
+
+
 def test_a_package_whose_develop_moved_before_it_started_is_planned_again(world, tmp_path):
     _make_repository(world.home, world.origins, PACKAGES["model"], _model_files())
     cee = _make_repository(world.home, world.origins, PACKAGES["cee"], _cee_files())

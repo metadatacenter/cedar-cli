@@ -15,7 +15,8 @@ import shutil
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
+from org.metadatacenter.util.BuildSafety import EmbeddedMongoProcess
 
 import typer
 from typer.testing import CliRunner
@@ -2359,7 +2360,6 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
                 "bin/cedar-images-base.sh": (
                     f"export IMAGE_VERSION={source_version}\n"
                     f"export CEDAR_MAVEN_VERSION={source_version}\n"
-                    f"export CEDAR_APPLICATION_VERSION={source_version}\n"
                     "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
                     "export CEDAR_WORKSPACE_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
                     "export CEDAR_OPENVIEW_CEE_NPM_VERSION=2.0.2-dev.202608010000.gold\n"
@@ -2539,9 +2539,7 @@ class ReleaseVersionPreparationTest(unittest.TestCase):
             next_docker_versions = (
                 next_workspace / "cedar-docker-build" / "bin" / "cedar-images-base.sh"
             ).read_text()
-            for variable in (
-                "IMAGE_VERSION", "CEDAR_MAVEN_VERSION", "CEDAR_APPLICATION_VERSION",
-            ):
+            for variable in ("IMAGE_VERSION", "CEDAR_MAVEN_VERSION"):
                 self.assertIn(f"export {variable}=2.9.3", release_docker_versions)
                 self.assertIn(f"export {variable}=2.9.4-SNAPSHOT", next_docker_versions)
             self.assertIn(
@@ -2868,7 +2866,7 @@ class ReleaseBuildValidationTest(unittest.TestCase):
 
             before.assert_called_once_with("release Maven task release:maven:parent")
             after.assert_called_once_with(
-                "completion of release Maven task release:maven:parent")
+                "completion of release Maven task release:maven:parent", scratch=ANY)
 
     def test_quiet_build_keeps_raw_output_in_its_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -4883,17 +4881,27 @@ class ReleasePreflightTest(unittest.TestCase):
         })
         self.assertEqual([], self._preflight(commands=commands).check_toolchain())
 
-    def test_embedded_mongo_process_blocks_release_before_building(self):
-        process = SimpleNamespace(
-            describe=lambda: "PID 42 (/Users/test/.embedmongo/5.0/mongod; "
-            "listening on 127.0.0.1:42317)")
-        with patch.object(preflight, "embedded_mongo_processes", return_value=[process]):
+    def test_orphaned_embedded_mongo_blocks_release_before_building(self):
+        mongod = Path("/Users/test/.embedmongo/5.0/mongod")
+        orphan = EmbeddedMongoProcess(42, mongod, ("127.0.0.1:42317",), 1)
+        live = EmbeddedMongoProcess(43, mongod, (), 5120)
+        with patch.object(preflight, "embedded_mongo_processes", return_value=[orphan, live]):
             findings = self._preflight().check_embedded_test_processes()
 
-        self.assertEqual(1, len(findings))
+        self.assertEqual(2, len(findings))
         self.assertTrue(findings[0].fatal)
         self.assertIn("PID 42", findings[0].message)
+        self.assertNotIn("PID 43", findings[0].message)
         self.assertIn("cedarcli test cleanup", findings[0].remedy)
+        self.assertFalse(findings[1].fatal)
+        self.assertIn("PID 43", findings[1].message)
+
+    def test_a_running_tests_mongod_does_not_block_a_release(self):
+        live = EmbeddedMongoProcess(43, Path("/Users/test/.embedmongo/5.0/mongod"), (), 5120)
+        with patch.object(preflight, "embedded_mongo_processes", return_value=[live]):
+            findings = self._preflight().check_embedded_test_processes()
+
+        self.assertEqual([False], [finding.fatal for finding in findings])
 
     def test_node_other_than_the_release_pin_is_refused(self):
         commands = FakeCommands({
@@ -5305,7 +5313,6 @@ class ReleasePreflightTest(unittest.TestCase):
             script = (
                 "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
                 "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
-                "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n"
                 "export CEDAR_TEMPLATE_EDITOR_NPM_VERSION=2.9.2-dev.202608010000.gold.p4\n"
             )
             commands = FakeCommands({
@@ -6703,8 +6710,7 @@ class DockerDefaultStampingTest(unittest.TestCase):
         (root / "bin").mkdir()
         (root / "bin" / "cedar-images-base.sh").write_text(
             "export IMAGE_VERSION=2.9.3-SNAPSHOT\n"
-            "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n"
-            "export CEDAR_APPLICATION_VERSION=2.9.3-SNAPSHOT\n" + extra,
+            "export CEDAR_MAVEN_VERSION=2.9.3-SNAPSHOT\n" + extra,
             encoding="utf-8",
         )
         return root

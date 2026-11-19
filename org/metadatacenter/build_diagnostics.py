@@ -26,14 +26,40 @@ def _npm_debug_logs(directory):
     return sorted(path for path in directory.glob('*.log') if path.is_file() and not path.is_symlink())
 
 
-def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None):
+def _within(path, scope):
+    try:
+        Path(path).resolve().relative_to(Path(scope).resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _evidence_priority(relative):
+    """Keep named failures before scratch recordings from every completed browser test."""
+    if relative == Path(COMMAND_LOG):
+        return 0
+    if any(part.startswith('.playwright-artifacts-') for part in relative.parts):
+        return 4
+    if {'test-results', 'surefire-reports', 'failsafe-reports'}.intersection(relative.parts):
+        return 1
+    if 'coverage' in relative.parts:
+        return 3
+    return 2
+
+
+def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None, scope=None):
     """Copy a failed build's evidence out of its workspace before the workspace is deleted.
 
     `npm_logs` is the directory npm writes its debug logs to. It lies outside the workspace, in
     the build's npm cache, and its logs are the only record of what an install did. They are small
     and come first, so a large test report cannot crowd them out of the budget.
+
+    `scope` is the private temporary directory the build was given. The workspace is swept only
+    when it lies inside it: a workspace anywhere else, such as /tmp, holds other sessions' reports
+    and sources, and once a single failure copied 25,747 of them.
     """
     workspace = Path(workspace)
+    swept = scope is not None and _within(workspace, scope)
     destination = Path(cedar_home) / '.cedar' / 'build-reports' / 'failures' / (
         datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8])
     destination.mkdir(parents=True, mode=0o700)
@@ -54,7 +80,8 @@ def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None):
 
     for source in _npm_debug_logs(npm_logs):
         keep(source, Path(NPM_LOGS) / source.name)
-    for directory, children, files in os.walk(workspace, followlinks=False):
+    candidates = []
+    for directory, children, files in os.walk(workspace, followlinks=False) if swept else ():
         root = Path(directory)
         children[:] = sorted(name for name in children
                              if name not in SKIP_DIRECTORIES and not (root / name).is_symlink())
@@ -66,17 +93,22 @@ def retain_failure(workspace, cedar_home, *, limit=MAX_BYTES, npm_logs=None):
             if not (REPORT_DIRECTORIES.intersection(relative.parts)
                     or (relative == Path('.') and name == COMMAND_LOG)):
                 continue
-            keep(source, source.relative_to(workspace))
+            candidates.append(source.relative_to(workspace))
+    # Playwright scratch directories sort before the named failing-test directories.
+    # With tracing enabled they can exhaust the entire budget before a failure's
+    # screenshot, error context or trace is visited. Retain those reports first.
+    for relative in sorted(candidates, key=lambda path: (_evidence_priority(path), path.as_posix())):
+        keep(workspace / relative, relative)
     (destination / 'manifest.json').write_text(json.dumps({
         'kind': 'cedar-failed-build-diagnostics', 'createdAt': datetime.now(timezone.utc).isoformat(),
-        'workspace': str(workspace), 'bytes': total, 'limitBytes': limit,
+        'workspace': str(workspace), 'workspaceSwept': swept, 'bytes': total, 'limitBytes': limit,
         'files': copied, 'omittedForSize': skipped,
     }, indent=2) + '\n')
     return destination
 
 
 @contextmanager
-def failure_diagnostics(workspace, cedar_home, report, *, npm_logs=None):
+def failure_diagnostics(workspace, cedar_home, report, *, npm_logs=None, scope=None):
     outcome = {'exitCode': None}
     try:
         yield outcome
@@ -84,7 +116,7 @@ def failure_diagnostics(workspace, cedar_home, report, *, npm_logs=None):
         # None also covers exceptions/interruptions before a command returned.
         if outcome['exitCode'] != 0:
             try:
-                path = retain_failure(workspace, cedar_home, npm_logs=npm_logs)
+                path = retain_failure(workspace, cedar_home, npm_logs=npm_logs, scope=scope)
                 report(f'Failed build diagnostics: {path}', markup=False)
             except (OSError, TypeError, ValueError) as error:
                 report(f'Could not retain failed build diagnostics: {error}', markup=False)

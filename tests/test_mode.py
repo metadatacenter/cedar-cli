@@ -447,12 +447,22 @@ class NativeProfileTest(unittest.TestCase):
 
     def test_the_frontend_settings_the_builds_require_must_all_be_present(self):
         incomplete = dict(self.SERVER_ENVIRONMENT)
-        del incomplete["CEDAR_FRONTEND_server_USER2_LOGIN"]
+        del incomplete["CEDAR_FRONTEND_server_REST_HOST"]
 
         with self.assertRaises(ModeError) as refused:
             ModeManager.require_profile_invariants(incomplete, CedarProfile.SERVER)
 
-        self.assertIn("CEDAR_FRONTEND_server_USER2_LOGIN", str(refused.exception))
+        self.assertIn("CEDAR_FRONTEND_server_REST_HOST", str(refused.exception))
+
+    def test_the_test_logins_are_not_required(self):
+        """No frontend build reads them, and the e2e suite that does has defaults of its own."""
+        for profile, environment in ((CedarProfile.DEVELOP, self.DEVELOP_ENVIRONMENT),
+                                     (CedarProfile.SERVER, self.SERVER_ENVIRONMENT)):
+            without_logins = {name: value for name, value in environment.items()
+                              if "_USER1_" not in name and "_USER2_" not in name}
+            with self.subTest(profile=profile):
+                self.assertIs(profile, ModeManager.require_profile_invariants(
+                    without_logins, profile))
 
     def test_a_server_may_not_run_on_template_placeholders(self):
         placeholder = dict(self.SERVER_ENVIRONMENT, CEDAR_NEO4J_USER_PASSWORD="changeme")
@@ -461,6 +471,13 @@ class NativeProfileTest(unittest.TestCase):
             ModeManager.require_profile_invariants(placeholder, CedarProfile.SERVER)
 
         self.assertIn("CEDAR_NEO4J_USER_PASSWORD", str(refused.exception))
+
+    def test_a_server_need_not_replace_the_api_key_salt(self):
+        """No server reads CEDAR_SALT_API_KEY. Only dev generate-api-key reads it, as an option."""
+        placeholder = dict(self.SERVER_ENVIRONMENT, CEDAR_SALT_API_KEY="changeme")
+
+        self.assertIs(CedarProfile.SERVER, ModeManager.require_profile_invariants(
+            placeholder, CedarProfile.SERVER))
 
     def test_a_workstation_may_carry_credentials_it_has_no_use_for(self):
         placeholder = dict(self.DEVELOP_ENVIRONMENT, CEDAR_NEO4J_USER_PASSWORD="changeme")

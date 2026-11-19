@@ -55,6 +55,20 @@ class IntegrationTagAnalysisTest(unittest.TestCase):
               SERVER_SUITE.format(tag='@Tag("integration")\n', name='RoutesTest'))
         self.assertEqual([], self.names())
 
+    def test_suite_with_only_qualified_test_annotations_is_still_a_suite(self):
+        write(self.root, 'TransitionTest', '''public class TransitionTest {
+  static final DropwizardAppExtension<Object> APP = null;
+  @org.junit.jupiter.params.ParameterizedTest void moves() {}
+}''')
+        report = scan(self.root)
+        self.assertEqual((1, ['TransitionTest']),
+                         (report.classes, [finding.name for finding in report.findings]))
+
+    def test_qualified_integration_tag_counts(self):
+        write(self.root, 'RoutesTest', SERVER_SUITE.format(
+            tag='@org.junit.jupiter.api.Tag("integration")\n', name='RoutesTest'))
+        self.assertEqual([], self.names())
+
     def test_unit_suite_is_not_an_integration_class(self):
         write(self.root, 'MathTest', UNIT_SUITE.format(name='MathTest'))
         report = scan(self.root)

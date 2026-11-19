@@ -94,7 +94,8 @@ class OperatorEvidenceTest(unittest.TestCase):
                 (work / 'browser/test-results/link').symlink_to(work / '.npmrc')
                 (work / COMMAND_LOG).write_text('failed command')
                 reports = []
-                with failure_diagnostics(work, home, lambda line, **kw: reports.append(line)) as outcome:
+                with failure_diagnostics(work, home, lambda line, **kw: reports.append(line),
+                                         scope=work) as outcome:
                     outcome['exitCode'] = 1
                 retained = next((home / '.cedar/build-reports/failures').iterdir())
             self.assertTrue((retained / 'browser/test-results/trace.zip').exists())
@@ -113,7 +114,7 @@ class OperatorEvidenceTest(unittest.TestCase):
             with failure_diagnostics(work, home, lambda *a, **k: None) as outcome:
                 outcome['exitCode'] = 0
             self.assertFalse((home / '.cedar').exists())
-            retained = retain_failure(work, home, limit=10)
+            retained = retain_failure(work, home, limit=10, scope=work)
             manifest = json.loads((retained / 'manifest.json').read_text())
             self.assertEqual(0, manifest['bytes'])
             self.assertEqual(['test-results/large.zip'], manifest['omittedForSize'])
@@ -136,7 +137,7 @@ class OperatorEvidenceTest(unittest.TestCase):
             def isolated(_source, *, manifests_only=False):
                 self.assertTrue(manifests_only)
                 with tempfile.TemporaryDirectory() as temporary:
-                    yield Path(temporary), {}, []
+                    yield Path(temporary), {'TMPDIR': str(Path(temporary) / 'tmp')}, []
             task = SimpleNamespace(node_id=1, repo=SimpleNamespace(name='example', repo_type='TYPESCRIPT'),
                 command_list=['failing test'], get_parameter=lambda name: name == 'isolated_frontend_build')
             def fail(task, repo, commands, cwd, progress, environment):
@@ -153,7 +154,8 @@ class OperatorEvidenceTest(unittest.TestCase):
                  patch(module + '.reactor.resolve', return_value=[]), \
                  patch(module + '.reactor.prepare_checks', return_value=[]), \
                  patch(module + '.isolated_frontend_workspace', isolated), \
-                 patch(module + '.materialize_frontend_workspace'), \
+                 patch(module + '.materialize_frontend_workspace', return_value=(Path(directory), [])), \
+                 patch(module + '.reactor_evidence.require_copy'), \
                  patch.object(executor, '_execute_commands', side_effect=fail):
                 self.assertEqual(7, executor.execute_shell_command_list(task, Mock(), False))
             retained = next((home / '.cedar/build-reports/failures').iterdir())

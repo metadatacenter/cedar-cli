@@ -517,7 +517,6 @@ class ModeManager:
         "CEDAR_MONGO_APP_USER_PASSWORD",
         "CEDAR_MYSQL_ROOT_PASSWORD",
         "CEDAR_NEO4J_USER_PASSWORD",
-        "CEDAR_SALT_API_KEY",
     )
 
     @classmethod
@@ -543,9 +542,12 @@ class ModeManager:
         target = environment.get("CEDAR_FRONTEND_TARGET")
         if not target:
             raise ModeError("CEDAR native profile set no CEDAR_FRONTEND_TARGET")
+        # The test logins, CEDAR_FRONTEND_<target>_USER1_* and _USER2_*, are not checked here. No
+        # frontend build reads them. The host-side e2e suite reads those of the local target, and
+        # it falls back to the realm's fixture users when they are unset.
         frontend_missing = [
             f"CEDAR_FRONTEND_{target}_{suffix}"
-            for suffix in ("UI_HOST", "REST_HOST", "USER1_LOGIN", "USER2_LOGIN")
+            for suffix in ("UI_HOST", "REST_HOST")
             if not environment.get(f"CEDAR_FRONTEND_{target}_{suffix}")
         ]
         if frontend_missing:

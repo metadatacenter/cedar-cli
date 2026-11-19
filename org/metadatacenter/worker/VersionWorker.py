@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 from jsonpath_ng import parse
 from lxml import etree
@@ -16,6 +17,7 @@ from org.metadatacenter.model.VersionType import VersionType
 from org.metadatacenter.util.Const import Const
 from org.metadatacenter.util.GitSync import GitSync
 from org.metadatacenter.util.GlobalContext import GlobalContext
+from org.metadatacenter.util.McpPins import stale_pins
 from org.metadatacenter.util.Util import Util
 from org.metadatacenter.worker.RepoWorker import RepoWorker
 from org.metadatacenter.worker.Worker import Worker
@@ -45,6 +47,14 @@ class VersionWorker(Worker):
         for line in report.get_remedy_lines(strict=strict):
             console.print(line)
         Util.write_rich_cedar_file('last_version_check.rich.txt', table)
+        # The MCP servers carry no platform version of their own, so the table cannot show them.
+        # What matters is the artifact library they validate with.
+        stale_mcp_pins = stale_pins(Path(Util.cedar_home))
+        for line in stale_mcp_pins:
+            console.print(f'[red]{line}[/red]')
+        if stale_mcp_pins:
+            console.print("Move each pin to the platform's release, which the deployed server validates with.")
+            return 1
         # An interactive run judges the estate, so a clone nobody pulled is not its verdict. A gate
         # judges this workspace, where an unpulled clone means the answer was read from the wrong
         # source, so --strict makes that fatal too.

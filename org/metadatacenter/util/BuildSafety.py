@@ -5,6 +5,7 @@ from org.metadatacenter.util.InvocationContext import invocation_environment
 import contextlib
 import dataclasses
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -121,13 +122,39 @@ def executable_build_workspace(environment=None, *, java=False):
 
 @dataclasses.dataclass(frozen=True)
 class EmbeddedMongoProcess:
+    """One Flapdoodle mongod, with what tells a leaked store from one a live test still owns.
+
+    A test JVM that ends normally stops its mongod. One that dies leaves it running, and the
+    operating system hands it to PID 1, so an orphan is a leak. A mongod with any other parent
+    belongs to a test that is still running, possibly in another session.
+    """
     pid: int
     executable: Path
     listeners: tuple[str, ...] = ()
+    parent_pid: int | None = None
+    dbpath: Path | None = None
+
+    @property
+    def orphaned(self) -> bool:
+        return self.parent_pid == 1
+
+    def stores_under(self, directory: Path) -> bool:
+        """Whether the store lies in `directory`, the temporary directory one build gave its tests."""
+        if self.dbpath is None:
+            return False
+        roots = {directory, directory.resolve()}
+        paths = {self.dbpath, self.dbpath.resolve()}
+        return any(path.is_relative_to(root) for path in paths for root in roots)
 
     def describe(self) -> str:
         endpoints = f"; listening on {', '.join(self.listeners)}" if self.listeners else ""
-        return f"PID {self.pid} ({self.executable}{endpoints})"
+        if self.orphaned:
+            owner = "; orphaned"
+        elif self.parent_pid is not None:
+            owner = f"; parent PID {self.parent_pid}"
+        else:
+            owner = ""
+        return f"PID {self.pid} ({self.executable}{endpoints}{owner})"
 
 
 def _is_embedded_mongod(path: Path) -> bool:
@@ -162,6 +189,47 @@ def _listening_endpoints(pid: int, command_runner=subprocess.run) -> tuple[str, 
     }))
 
 
+def _dbpath(arguments: list[str]) -> Path | None:
+    for index, argument in enumerate(arguments):
+        if argument == "--dbpath" and index + 1 < len(arguments):
+            return Path(arguments[index + 1])
+        if argument.startswith("--dbpath="):
+            return Path(argument.removeprefix("--dbpath="))
+    return None
+
+
+def _proc_ownership(directory: Path) -> tuple[int | None, Path | None]:
+    try:
+        # The command name, the second field, is parenthesised and may hold spaces.
+        fields = (directory / "stat").read_text().rsplit(")", 1)[1].split()
+        parent = int(fields[1])
+    except (OSError, IndexError, ValueError):
+        parent = None
+    try:
+        arguments = (directory / "cmdline").read_bytes().decode(errors="replace").split("\0")
+    except OSError:
+        arguments = []
+    return parent, _dbpath(arguments)
+
+
+def _ps_ownership(pid: int, command_runner=subprocess.run) -> tuple[int | None, Path | None]:
+    try:
+        result = command_runner(
+            ["ps", "-ww", "-o", "ppid=", "-o", "command=", "-p", str(pid)],
+            check=False, text=True, capture_output=True,
+            env=invocation_environment(),
+        )
+    except OSError:
+        return None, None
+    parts = (result.stdout or "").strip().split(None, 1)
+    if not parts or not parts[0].isdigit():
+        return None, None
+    command = parts[1] if len(parts) > 1 else ""
+    # ps joins the arguments with spaces, so a path is everything up to the next option.
+    match = re.search(r"--dbpath[= ](.+?)(?= --|$)", command)
+    return int(parts[0]), (Path(match.group(1)) if match else None)
+
+
 def embedded_mongo_processes(
     *, command_runner=subprocess.run, proc_root: Path = Path("/proc"),
 ) -> list[EmbeddedMongoProcess]:
@@ -193,37 +261,68 @@ def embedded_mongo_processes(
                 "cannot inspect embedded Mongo test processes"
                 + (f": {detail}" if detail else ""))
         found = _parse_lsof_embedded_mongods(result.stdout or "")
-    return [
-        EmbeddedMongoProcess(pid, executable, _listening_endpoints(pid, command_runner))
-        for pid, executable in sorted(found.items())
-    ]
+    processes = []
+    for pid, executable in sorted(found.items()):
+        if proc_root.is_dir():
+            parent, dbpath = _proc_ownership(proc_root / str(pid))
+        else:
+            parent, dbpath = _ps_ownership(pid, command_runner)
+        processes.append(EmbeddedMongoProcess(
+            pid, executable, _listening_endpoints(pid, command_runner), parent, dbpath))
+    return processes
 
 
-def _embedded_mongo_failure(context: str, processes: list[EmbeddedMongoProcess]) -> BuildSafetyError:
+def _embedded_mongo_failure(
+    context: str, finding: str, processes: list[EmbeddedMongoProcess],
+) -> BuildSafetyError:
     detail = ", ".join(process.describe() for process in processes)
     return BuildSafetyError(
-        f"refusing {context}: embedded Mongo test process(es) remain: {detail}. "
-        "End the owning test, or run `cedarcli test cleanup`."
-    )
+        f"refusing {context}: {finding}: {detail}. "
+        "Run `cedarcli test cleanup`, which stops only orphaned mongods.")
 
 
-def require_no_embedded_mongo_processes(context: str) -> None:
-    processes = embedded_mongo_processes()
-    if processes:
-        raise _embedded_mongo_failure(context, processes)
+def _poll(select, *, timeout_seconds: float, poll_seconds: float) -> list[EmbeddedMongoProcess]:
+    """The processes `select` keeps, polled until there are none or the time is up."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        processes = [process for process in embedded_mongo_processes() if select(process)]
+        if not processes or time.monotonic() >= deadline:
+            return processes
+        time.sleep(poll_seconds)
+
+
+def require_no_embedded_mongo_processes(
+    context: str, *, timeout_seconds: float = 5.0, poll_seconds: float = 0.1,
+) -> None:
+    """Refuse to start while an orphaned mongod, one whose test JVM has died, is running.
+
+    Mongods that live tests own, in this session or another, are left alone: each test took its
+    own ports, and stopping them would fail that test. An orphan holds its port with nobody to
+    release it, and on macOS a test server can bind the same port on the wildcard address and
+    then lose its localhost requests to it. A test that has just ended may take a moment to stop
+    its store, so an orphan is given the same few seconds the completion check waits.
+    """
+    orphans = _poll(lambda process: process.orphaned,
+                    timeout_seconds=timeout_seconds, poll_seconds=poll_seconds)
+    if orphans:
+        raise _embedded_mongo_failure(
+            context, "orphaned embedded Mongo test process(es) remain", orphans)
 
 
 def wait_for_no_embedded_mongo_processes(
-    context: str, *, timeout_seconds: float = 5.0, poll_seconds: float = 0.1,
+    context: str, *, scratch: Path, timeout_seconds: float = 5.0, poll_seconds: float = 0.1,
 ) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        processes = embedded_mongo_processes()
-        if not processes:
-            return
-        if time.monotonic() >= deadline:
-            raise _embedded_mongo_failure(context, processes)
-        time.sleep(poll_seconds)
+    """Fail when a mongod the task's own tests started outlives the task.
+
+    The build gives each task's JVMs a private temporary directory, and Flapdoodle puts every
+    store under it, so a store there belongs to this task whatever its parent is now. Another
+    session's mongods store elsewhere and are not this task's to wait for.
+    """
+    remaining = _poll(lambda process: process.stores_under(scratch),
+                      timeout_seconds=timeout_seconds, poll_seconds=poll_seconds)
+    if remaining:
+        raise _embedded_mongo_failure(
+            context, "embedded Mongo test process(es) the task's tests started remain", remaining)
 
 
 def is_test_bearing_maven_command(command: str) -> bool:
@@ -402,7 +501,7 @@ def isolated_frontend_workspace(source: Path, *, manifests_only=False):
                             target.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(origin, target)
             else:
-                shutil.copytree(checkout, copy_root, symlinks=True, ignore=frontend_copy_ignore(checkout))
+                copy_frontend_source(checkout, copy_root, versioned=before_root is not None)
             existing_path = environment.get("PATH", "")
             local_binaries = str(build_root / "node_modules" / ".bin")
             environment.update({
@@ -440,17 +539,52 @@ def require_no_frontend_runtime_collision(source: Path) -> None:
 
 
 def materialize_frontend_workspace(source: Path, build_root: Path):
-    """Only a cache miss needs a complete copy. Re-resolve copied manifests afterwards."""
+    """Only a cache miss needs a complete copy. Re-resolve copied manifests afterwards.
+
+    Returns the copy's root and the repository-relative paths copied into it, which are the paths
+    the reactor's source identity fingerprints.
+    """
     source = source.resolve()
-    checkout = repository_root(source) or source
+    versioned = repository_root(source)
+    checkout = versioned or source
     relative = source.relative_to(checkout)
     copy_root = build_root
     for _part in relative.parts:
         copy_root = copy_root.parent
     if copy_root.resolve() == checkout.resolve() or copy_root.resolve().is_relative_to(checkout.resolve()):
         raise BuildSafetyError('frontend materialization requires a separate disposable workspace')
-    shutil.copytree(checkout, copy_root, symlinks=True, dirs_exist_ok=True,
-                    ignore=frontend_copy_ignore(checkout))
+    return copy_root, copy_frontend_source(checkout, copy_root, versioned=versioned is not None)
+
+
+def copy_frontend_source(checkout: Path, copy_root: Path, *, versioned=True) -> list[bytes]:
+    """Copy into `copy_root` exactly the files the reactor's source identity fingerprints.
+
+    Those are the tracked files, the untracked files Git does not ignore, and the ignored local
+    tool configuration the identity also hashes. Any other ignored file, such as a dist/ an earlier
+    local build left, is no input the identity can name, so it stays out of the copy rather than
+    reaching the build unhashed. A tree outside Git has no identity and is copied whole. Returns the
+    copied paths, relative to the checkout.
+    """
+    if not versioned:
+        shutil.copytree(checkout, copy_root, symlinks=True, dirs_exist_ok=True,
+                        ignore=frontend_copy_ignore(checkout))
+        return []
+    from org.metadatacenter.reactor_evidence import source_paths
+    copied = []
+    for raw in source_paths(checkout):
+        relative = Path(os.fsdecode(raw))
+        origin = checkout / relative
+        copied.append(raw)
+        target = copy_root / relative
+        if origin.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            os.symlink(os.readlink(origin), target)
+        elif origin.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(origin, target)
+    return copied
 
 
 def frontend_copy_ignore(checkout):

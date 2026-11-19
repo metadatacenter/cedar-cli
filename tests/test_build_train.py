@@ -388,7 +388,9 @@ class BuildTrainTest(unittest.TestCase):
     def test_a_train_whose_record_is_still_in_flight_is_not_offered_for_resume(self, read):
         read.side_effect = self._recorded_except_docker
         with patch("org.metadatacenter.train_support.workflow._workflow_run",
-                   return_value=self._concluded(5)):
+                   return_value=self._concluded(5)), \
+                patch("org.metadatacenter.train_support.workflow._workflow_progress",
+                      return_value=self._concluded(5)):
             result = self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
 
         self.assertEqual(0, result.exit_code, result.output)
@@ -400,7 +402,9 @@ class BuildTrainTest(unittest.TestCase):
     def test_a_train_stopped_long_ago_is_still_offered_for_resume(self, read):
         read.side_effect = self._recorded_except_docker
         with patch("org.metadatacenter.train_support.workflow._workflow_run",
-                   return_value=self._concluded(3600)):
+                   return_value=self._concluded(3600)), \
+                patch("org.metadatacenter.train_support.workflow._workflow_progress",
+                      return_value=self._concluded(3600)):
             result = self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])
 
         self.assertEqual(0, result.exit_code, result.output)
@@ -416,6 +420,9 @@ class BuildTrainTest(unittest.TestCase):
                 patch("org.metadatacenter.train_support.workflow._workflow_run",
                       return_value={'databaseId': 13, 'status': 'completed',
                                     'conclusion': 'success'}), \
+                patch("org.metadatacenter.train_support.workflow._workflow_progress",
+                      return_value={'status': 'completed', 'conclusion': 'success',
+                                    'url': 'https://github.example/runs/13', 'jobs': []}), \
                 patch("org.metadatacenter.train_support.survey.releasability_survey",
                       return_value=survey_result):
             return self.runner.invoke(publish.app, ['train-status', '2.9.3-dev.20260824.1847'])

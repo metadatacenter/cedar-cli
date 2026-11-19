@@ -245,8 +245,6 @@ class ReleaseWorkspacePreparer:
                 # the retained tarball. The bytes, and so the integrity, are the train's.
                 scope = package['name'].split('/', 1)[0]
                 command.append(f"--{scope}:registry={package['registry']}")
-            if consumer.get('legacyPeerDeps'):
-                command.append('--legacy-peer-deps')
             self._run(command, cwd=manifest_path.parent, environment=command_environment)
             declared = json.loads(manifest_path.read_bytes())
             lock = json.loads(lock_path.read_bytes())

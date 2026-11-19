@@ -108,6 +108,19 @@ def test_tags(
     exit_on_failure(IntegrationTagWorker.check_test_tags(show_all=show_all))
 
 
+@app.command("concordance")
+def concordance():
+    """Check that each TypeScript concordance fixture was recorded from the current Java production code.
+
+    Fails when the Java repository a fixture's lock names has changed its src/main since the lock's
+    commit, as its develop head on the remote stands.
+    """
+    from pathlib import Path
+    from org.metadatacenter.concordance_check import check_concordance
+    from org.metadatacenter.util.Util import Util
+    exit_on_failure(check_concordance(Path(Util.cedar_home)))
+
+
 @app.command("main")
 def main(
         show_all: bool = typer.Option(

@@ -19,6 +19,7 @@ from org.metadatacenter.build_scheduler import (
     worker_pool,
 )
 from org.metadatacenter.util.worker_pool import POOL_VARIABLE, runs_gate, wanted
+from org.metadatacenter.util.MavenTestSummary import MavenTestSummary
 from org.metadatacenter.util.InvocationContext import current_context
 from org.metadatacenter.model.PlanTask import PlanTask
 from org.metadatacenter.taskexecutor.TaskExecutor import TaskExecutor
@@ -50,6 +51,12 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(('127.0.0.1', 0))
         return probe.getsockname()[1]
+
+
+def build_scope(environment):
+    """The private directory an isolated build was given, the parent of the TMPDIR it set, or None."""
+    temporary = (environment or {}).get('TMPDIR')
+    return Path(temporary).parent if temporary else None
 
 
 class ShellTaskExecutor(TaskExecutor):
@@ -86,6 +93,7 @@ class ShellTaskExecutor(TaskExecutor):
                                 environment.get('CEDAR_BUILD_WORKSPACE_ROOT', isolated_cwd),
                                 Util.cedar_home, job_progress.print,
                                 npm_logs=npm_install.log_directory(environment),
+                                scope=build_scope(environment),
                             ) as outcome:
                         diagnostic_root = Path(environment.get('CEDAR_BUILD_WORKSPACE_ROOT', isolated_cwd))
                         environment['CEDAR_BUILD_DIAGNOSTIC_LOG'] = str(diagnostic_root / COMMAND_LOG)
@@ -114,8 +122,9 @@ class ShellTaskExecutor(TaskExecutor):
                         pool = worker_pool()
                         if pool is not None:
                             environment[POOL_VARIABLE] = str(pool.directory)
-                        checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
-                                                        environment, commands_to_execute)
+                        prepared_checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
+                                                                 environment, commands_to_execute)
+                        checks = prepared_checks
                         ready_after = parameter("package_ready_after")
                         result = None
                         if parameter("reuse_passing_result") is True and identity is not None:
@@ -133,16 +142,20 @@ class ShellTaskExecutor(TaskExecutor):
                                 f"{reused['passedAt']} ({key[:12]}); reusing it", markup=False)
                             outcome['exitCode'] = 0
                             return 0
-                        materialize_frontend_workspace(Path(cwd), Path(isolated_cwd))
+                        copy_root, copied = materialize_frontend_workspace(Path(cwd), Path(isolated_cwd))
+                        reactor_evidence.require_copy(cwd, copy_root, copied, identity)
                         reactor.resolve(isolated_cwd, cedar_home)
                         checks = reactor.prepare_checks(repo, isolated_cwd, cedar_home,
                                                         environment, commands_to_execute)
+                        if checks != prepared_checks:
+                            raise reactor.ReactorError('Verification inputs changed while preparing the frontend build')
                         reactor_stages.configure(environment, repo, result, cedar_home)
                         task_config = reactor_tasks.configure(environment, repo, result, cedar_home, cwd, isolated_cwd)
                         code = self._execute_packaged_commands(
                             task, repo, commands_to_execute, isolated_cwd, job_progress,
-                            environment, ready_after, cedar_home,
+                            environment, ready_after, cedar_home, identity,
                         )
+                        reactor.verify_check_sources(checks, cedar_home)
                         # A concurrent checkout edit invalidates all newly recorded stage evidence,
                         # including successful stages of an otherwise failed build.
                         if task_config and reactor_evidence.source_identity(cwd) == identity:
@@ -152,7 +165,7 @@ class ShellTaskExecutor(TaskExecutor):
                                 job_progress.print(f"Task cache: could not retain completed stages: {error}", markup=False)
                         if code == 0:
                             evidence = reactor_evidence.record(cwd, isolated_cwd, identity, commands_to_execute, checks)
-                            stored = reactor.publish(repo, isolated_cwd, cedar_home, environment)
+                            stored = reactor.publish(repo, isolated_cwd, cedar_home, environment, source=identity)
                             if stored:
                                 job_progress.print(f"Reactor: stored {stored}", markup=False)
                             if result is not None and not (Path(isolated_cwd) / '.cedar-cache-unstable').exists():
@@ -195,7 +208,7 @@ class ShellTaskExecutor(TaskExecutor):
         return key, inputs, reactor_results.lookup(cedar_home, key, repo)
 
     def _execute_packaged_commands(self, task, repo, commands, build_root, job_progress, environment,
-                                   ready_after, cedar_home):
+                                   ready_after, cedar_home, identity=None):
         """Run a reactor build's commands, offering its package once the first `ready_after` pass.
 
         A surface with a package phase stores its package provisionally at that point and tells the
@@ -207,7 +220,8 @@ class ShellTaskExecutor(TaskExecutor):
         code = self._execute_commands(
             task, repo, commands[:ready_after], str(build_root), job_progress, environment)
         if code == 0:
-            stored = reactor.publish(repo, build_root, cedar_home, environment, provisional=True)
+            stored = reactor.publish(repo, build_root, cedar_home, environment, provisional=True,
+                                     source=identity)
             if stored:
                 job_progress.print(
                     f"Reactor: packaged {stored} for this build's consumers; its checks continue",
@@ -248,7 +262,7 @@ class ShellTaskExecutor(TaskExecutor):
                             markup=False)
                 workspace = (executable_build_workspace(command_environment, java=True)
                              if is_maven_command(command) else nullcontext((None, command_environment)))
-                with workspace as (_, child_environment):
+                with workspace as (scratch, child_environment):
                     if npm_logs and npm_install.is_install(command):
                         return_code = self._execute_npm_install(
                             task, repo, command, cwd, job_progress, child_environment, npm_logs)
@@ -256,9 +270,10 @@ class ShellTaskExecutor(TaskExecutor):
                         output, return_code = self.execute_shell_command(
                             task, repo, command, cwd, job_progress, environment=child_environment,
                         )
-                    if guarded_maven:
+                    if guarded_maven and scratch is not None:
                         wait_for_no_embedded_mongo_processes(
-                            f"completion of test-bearing Maven task for {repo.name}")
+                            f"completion of test-bearing Maven task for {repo.name}",
+                            scratch=scratch)
             if return_code == 0 and cache:
                 try:
                     task_cache.save(cache, command, log='\n'.join(output))
@@ -324,7 +339,10 @@ class ShellTaskExecutor(TaskExecutor):
 
         stages = []
         allocations = {}
+        summary = MavenTestSummary() if is_maven_command(command) else None
         def report(line):
+            if summary is not None:
+                summary.add(line)
             allocation = re.fullmatch(r"\[gate\] allocation ([\w-]+): (\d+) workers, ([\d.]+)s queued", line)
             if allocation:
                 allocations[allocation[1]] = {"workers": int(allocation[2]), "queuedSeconds": float(allocation[3])}
@@ -358,7 +376,8 @@ class ShellTaskExecutor(TaskExecutor):
                 env=environment, on_line=logged_report,
             )
         return_code = stdout_parts.returncode
-        record_timing(repo.name, command, started, return_code, stages)
+        record_timing(repo.name, command, started, return_code, stages,
+                      summary.lines if summary is not None else ())
         description = describe_subprocess_failure(return_code)
         if return_code < 0 and not stdout_parts:
             description += "; the process produced no diagnostic output of its own"

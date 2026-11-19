@@ -87,7 +87,8 @@ class BuildPolicyTest(unittest.TestCase):
                               if command.startswith("./mvnw clean install")]
             self.assertTrue(maven_commands)
             expected = f"./mvnw clean install -T {threads}" if threads > 1 else "./mvnw clean install"
-            self.assertTrue(all(command == expected for command in maven_commands),
+            # The full build takes the libraries into cedar-project's reactor through a profile.
+            self.assertTrue(all(command.replace(" -Plibraries", "") == expected for command in maven_commands),
                             (cpus, args, maven_commands))
 
     @patch.object(build.plan_executor, "execute")
@@ -104,6 +105,45 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertTrue(maven_commands)
         self.assertTrue(all(command.endswith("-DskipTests")
                             for command in maven_commands))
+
+    @patch.object(build.plan_executor, "execute")
+    def test_full_java_builds_run_the_corpus_verifiers_after_the_libraries(self, execute):
+        for command in ("java", "all"):
+            result = self.runner.invoke(build.app, [command, "--dry-run"])
+            self.assertEqual(0, result.exit_code, result.output)
+            plan = execute.call_args.args[0]
+            names = [task.name for task in plan.tasks]
+            self.assertEqual(names.index("Build libraries and project") + 1, names.index("Verify the shared corpus"))
+            self.assertEqual(names.index("Build clients") - 1, names.index("Verify the shared corpus"))
+            verification = plan.tasks[names.index("Verify the shared corpus")]
+            self.assertEqual("cedar-artifact-library", verification.repo.name)
+            corpus = str(Path(Util.cedar_home) / "cedar-test-artifacts")
+            # A missing corpus fails the task rather than skipping the verifiers.
+            self.assertTrue(verification.command_list[0].startswith(f"test -d {corpus} ||"))
+            self.assertIn("exit 1", verification.command_list[0])
+            self.assertEqual(
+                ["CorpusFixtureVerifier", "CorpusYamlTripVerifier", "CorpusYamlKeyVerifier"],
+                [re.search(r"-Dexec\.mainClass=\S+\.(\w+) ", c)[1] for c in verification.command_list[1:]])
+            self.assertTrue(all(c.endswith(f"-Dexec.args={corpus}") and "-Dexec.classpathScope=test" in c
+                                for c in verification.command_list[1:]))
+
+            result = self.runner.invoke(build.app, [command, "--skip-tests", "--dry-run"])
+            self.assertEqual(0, result.exit_code, result.output)
+            self.assertNotIn("Verify the shared corpus", [task.name for task in execute.call_args.args[0].tasks])
+
+    def test_the_corpus_check_fails_when_the_corpus_is_absent(self):
+        import subprocess
+        from org.metadatacenter.planner.BuildPlanner import BuildPlanner
+        with tempfile.TemporaryDirectory() as home, patch.object(Util, "cedar_home", home):
+            plan = Plan("Build java")
+            BuildPlanner.corpus_verifiers(plan)
+            guard = plan.tasks[0].command_list[0]
+            missing = subprocess.run(["/bin/sh", "-c", guard], capture_output=True, text=True)
+            (Path(home) / "cedar-test-artifacts").mkdir()
+            present = subprocess.run(["/bin/sh", "-c", guard], capture_output=True, text=True)
+        self.assertEqual(1, missing.returncode)
+        self.assertIn("cedar-test-artifacts is missing", missing.stderr)
+        self.assertEqual(0, present.returncode, present.stderr)
 
     @patch.object(build.plan_executor, "execute")
     def test_all_skip_tests_keeps_builds_but_omits_frontend_verification(self, execute):
@@ -303,7 +343,7 @@ class BuildPolicyTest(unittest.TestCase):
             (home / checkout / "pom.xml").write_text(
                 '<project xmlns="http://maven.apache.org/POM/4.0.0">'
                 f"<modules>{listed}{hidden}</modules>"
-                "<profiles><profile><modules><module>../cedar-profile-only</module></modules>"
+                "<profiles><profile><id>libraries</id><modules><module>../cedar-profile-only</module></modules>"
                 "</profile></profiles></project>")
         pom("cedar-project", "../cedar-artifact-server", "../cedar-microservice-libraries",
             "cedar-project-internal", commented=("../cedar-retired-server",))
@@ -326,6 +366,55 @@ class BuildPolicyTest(unittest.TestCase):
         self.assertEqual({home / name for name in (
             "cedar-cli", "cedar-development", "cedar-project", "cedar-artifact-server",
             "cedar-microservice-libraries", "cedar-model-library")}, roots)
+
+    def test_an_active_profiles_modules_are_inputs_of_the_task_that_activates_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            plan = self.aggregator_estate(home)
+            (home / "cedar-profile-only").mkdir()
+            plan.tasks[0].parameters = {"maven_profiles": ["libraries"]}
+            with patch.object(Util, "cedar_home", directory):
+                roots = build.build_input_roots(plan)
+
+        self.assertIn(home / "cedar-profile-only", roots)
+
+    @staticmethod
+    def maven_with_libraries():
+        from org.metadatacenter.taskfactory.BuildShellTaskFactory import BuildShellTaskFactory
+        return BuildShellTaskFactory.maven_command().replace(
+            "./mvnw clean install", "./mvnw clean install -Plibraries", 1)
+
+    @patch.object(build.plan_executor, "execute")
+    def test_full_java_builds_take_the_libraries_and_the_servers_in_one_reactor(self, execute):
+        for command in ("java", "all"):
+            result = self.runner.invoke(build.app, [command, "--dry-run"])
+            self.assertEqual(0, result.exit_code, result.output)
+            plan = execute.call_args.args[0]
+            self.assertNotIn("Build libraries", [task.name for task in plan.tasks])
+            maven = self.maven_with_libraries()
+            self.assertEqual([maven],
+                             [c for c in self.commands(plan, "cedar-project") if c.startswith("./mvnw")])
+            self.assertEqual([], [c for c in self.commands(plan) if "-Plibraries" in c
+                                  and c not in self.commands(plan, "cedar-project")])
+            # The task names its profile, so the workspace guard reads the profile's checkouts too.
+            merged = next(task for task in plan.tasks if task.name == "Build libraries and project")
+            self.assertEqual(["libraries"], merged.parameters["maven_profiles"])
+        result = self.runner.invoke(build.app, ["java", "--skip-tests", "--dry-run"])
+        self.assertEqual([self.maven_with_libraries() + " -DskipTests"],
+                         [c for c in self.commands(execute.call_args.args[0], "cedar-project")
+                          if c.startswith("./mvnw")])
+
+    def test_a_cedar_project_without_the_libraries_profile_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "cedar-project").mkdir()
+            (Path(directory) / "cedar-project" / "pom.xml").write_text("<project><modules/></project>")
+            with patch.object(Util, "cedar_home", directory), \
+                    patch.object(build.plan_executor, "execute") as execute:
+                result = self.runner.invoke(build.app, ["java", "--dry-run"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("has no 'libraries' profile", " ".join(result.output.split()))
+        execute.assert_not_called()
 
     def test_a_java_build_fails_when_a_checkout_an_aggregator_builds_changes(self):
         # cedar-project compiles cedar-artifact-server through a ../ module, so an edit there
@@ -393,7 +482,8 @@ class BuildPolicyTest(unittest.TestCase):
             stack.enter_context(patch(module + ".Util.get_wd", return_value="/tmp/source"))
             stack.enter_context(patch(module + ".is_frontend_build", return_value=False))
             stack.enter_context(patch(module + ".reactor_evidence.begin"))
-            stack.enter_context(patch(module + ".materialize_frontend_workspace"))
+            stack.enter_context(patch(module + ".materialize_frontend_workspace", return_value=(Path('/tmp'), [])))
+            stack.enter_context(patch(module + ".reactor_evidence.require_copy"))
             stack.enter_context(patch(module + ".reactor.resolve", return_value=[]))
             stack.enter_context(patch(module + ".reactor.prepare_checks", return_value=[]))
             stack.enter_context(patch(module + ".isolated_frontend_workspace", return_value=
@@ -436,12 +526,13 @@ class BuildPolicyTest(unittest.TestCase):
             report = copy / 'browser/test-results/failure.txt'
             report.parent.mkdir(parents=True)
             report.write_text('browser failure')
-            environment = {'CEDAR_BUILD_WORKSPACE_ROOT': str(copy)}
+            environment = {'CEDAR_BUILD_WORKSPACE_ROOT': str(copy), 'TMPDIR': str(home / 'tmp')}
             stack.enter_context(use_context(InvocationContext(environment={**os.environ, 'CEDAR_HOME': directory})))
             stack.enter_context(patch(module + '.Util.get_wd', return_value='/tmp/source/frontend-src'))
             stack.enter_context(patch(module + '.is_frontend_build', return_value=False))
             stack.enter_context(patch(module + '.reactor_evidence.begin'))
-            stack.enter_context(patch(module + '.materialize_frontend_workspace'))
+            stack.enter_context(patch(module + '.materialize_frontend_workspace', return_value=(Path('/tmp'), [])))
+            stack.enter_context(patch(module + '.reactor_evidence.require_copy'))
             stack.enter_context(patch(module + '.reactor.resolve', return_value=[]))
             stack.enter_context(patch(module + '.reactor.prepare_checks', return_value=[]))
             stack.enter_context(patch(module + '.isolated_frontend_workspace', return_value=
@@ -487,7 +578,8 @@ class BuildPolicyTest(unittest.TestCase):
         before.assert_called_once_with(
             "test-bearing Maven task for cedar-example")
         after.assert_called_once_with(
-            "completion of test-bearing Maven task for cedar-example")
+            "completion of test-bearing Maven task for cedar-example",
+            scratch=Path(child_env['TMPDIR']).parent)
 
     def test_a_failing_task_halts_the_plan_nonzero(self):
         """

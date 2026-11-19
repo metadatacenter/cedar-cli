@@ -67,6 +67,11 @@ class FingerprintTest(unittest.TestCase):
         with patch.object(reactor_results, "tooling", return_value={**TOOLING, "node": "v24.20.0"}):
             self.assertNotEqual(baseline, self.key())
 
+    def test_java_defaults_source_changes_invalidate_reuse(self):
+        check = {'kind': 'java-defaults-source', 'repository': 'cedar-artifact-library',
+                 'path': reactor.JAVA_DEFAULTS_CORE, 'sha256': 'a' * 64}
+        self.assertNotEqual(self.key(checks=[check]), self.key(checks=[{**check, 'sha256': 'b' * 64}]))
+
     def test_environment_changes_invalidate_but_scheduling_does_not(self):
         with patch.object(reactor_results, 'invocation_environment', return_value={'NODE_OPTIONS': '--a', 'CEDAR_TEST_WORKERS': '2'}):
             baseline = self.key()
@@ -74,6 +79,16 @@ class FingerprintTest(unittest.TestCase):
             self.assertEqual(baseline, self.key())
         with patch.object(reactor_results, 'invocation_environment', return_value={'NODE_OPTIONS': '--b', 'CEDAR_TEST_WORKERS': '12'}):
             self.assertNotEqual(baseline, self.key())
+
+    def test_variables_that_weaken_a_surface_suite_invalidate(self):
+        # CEE's carried-answers fuzz, the term picker's guards and CED's picker specs read these.
+        for variable, value in (('CARRY_FUZZ_RUNS', '1'), ('CARRY_FUZZ_RUN', '7'),
+                                ('CETP_I18N_ROOT', '/elsewhere'), ('PICKER_BUNDLE', '/tmp/picker.js')):
+            with self.subTest(variable=variable):
+                with patch.object(reactor_results, 'invocation_environment', return_value={}):
+                    baseline = self.key()
+                with patch.object(reactor_results, 'invocation_environment', return_value={variable: value}):
+                    self.assertNotEqual(baseline, self.key())
 
     def test_launch_directory_and_interactive_node_metadata_do_not_invalidate(self):
         with patch.object(reactor_results, 'invocation_environment', return_value={}):
@@ -213,7 +228,7 @@ class ToolingTest(unittest.TestCase):
             self.assertEqual(baseline, self.tooling(), relative)
 
     def test_runtime_scripts_and_dependencies_remain_inputs(self):
-        for relative in ['scripts/javascript/new-rule.mjs', 'requirements.txt', 'CedarCliSettings.py']:
+        for relative in ['scripts/javascript/new-rule.mjs', 'requirements.txt', 'cedar.py']:
             baseline = self.tooling()
             path = self.cli / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -339,7 +354,8 @@ class ExecutorReuseTest(unittest.TestCase):
                 patch(m + ".Util.cedar_home", "/tmp/cedar-reuse-fixture"), \
                 patch(m + ".isolated_frontend_workspace",
                       return_value=contextlib.nullcontext((Path("/tmp"), {}, []))), \
-                patch(m + ".materialize_frontend_workspace") as materialize, \
+                patch(m + ".materialize_frontend_workspace", return_value=(Path("/tmp"), [])) as materialize, \
+                patch(m + ".reactor_evidence.require_copy") as copied, \
                 patch(m + ".reactor_tasks.configure", return_value=None), \
                 patch(m + ".reactor_evidence.begin", return_value={"sourceSha256": "s" * 64}), \
                 patch(m + ".reactor_evidence.record") as record, \
@@ -354,7 +370,7 @@ class ExecutorReuseTest(unittest.TestCase):
                 patch.object(executor, "_execute_packaged_commands", return_value=code) as commands:
             result = executor.execute_shell_command_list(task, Mock(), False)
         return SimpleNamespace(code=result, record=record, publish=publish, reused=reused,
-                               key=key, save=save, commands=commands, materialize=materialize)
+                               key=key, save=save, commands=commands, materialize=materialize, copied=copied)
 
     def test_a_matching_result_stands_for_running_the_commands(self):
         run = self.run_task({"fingerprint": "k" * 64, "package": "p" * 64, "passedAt": "2026-10-14T00:00:00Z"})
@@ -371,9 +387,32 @@ class ExecutorReuseTest(unittest.TestCase):
         self.assertEqual(0, run.code)
         run.commands.assert_called_once()
         run.materialize.assert_called_once()
+        run.copied.assert_called_once_with("/tmp", Path("/tmp"), [], {"sourceSha256": "s" * 64})
         run.publish.assert_called_once()
         run.save.assert_called_once()
         self.assertEqual("p" * 64, run.save.call_args.args[3])
+
+    def test_a_copy_that_is_not_the_recorded_source_builds_nothing(self):
+        from org.metadatacenter.taskexecutor.ShellTaskExecutor import ShellTaskExecutor
+        # The executor turns the refusal into a failed task before any command runs.
+        parameters = {"isolated_frontend_build": True, "reuse_passing_result": False}
+        repo = producer()
+        task = SimpleNamespace(node_id=1, repo=repo, command_list=["npm ci"], parameters=parameters,
+                               get_parameter=parameters.get)
+        executor = ShellTaskExecutor()
+        m = self.MODULE
+        with patch(m + ".require_build_node"), patch(m + ".Util.get_wd", return_value="/tmp"), \
+                patch(m + ".Util.cedar_home", "/tmp/cedar-reuse-fixture"), \
+                patch(m + ".isolated_frontend_workspace",
+                      return_value=contextlib.nullcontext((Path("/tmp"), {}, []))), \
+                patch(m + ".materialize_frontend_workspace", return_value=(Path("/tmp"), [])), \
+                patch(m + ".reactor_evidence.require_copy", side_effect=reactor.ReactorError("copied")), \
+                patch(m + ".reactor_evidence.begin", return_value={"sourceSha256": "s" * 64}), \
+                patch.object(reactor, "resolve", return_value=[]), \
+                patch.object(reactor, "prepare_checks", return_value=[]), \
+                patch.object(executor, "_execute_packaged_commands", return_value=0) as commands:
+            self.assertEqual(1, executor.execute_shell_command_list(task, Mock(), False))
+        commands.assert_not_called()
 
     def test_a_failure_records_nothing(self):
         run = self.run_task(None, code=1)

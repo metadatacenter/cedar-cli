@@ -404,14 +404,25 @@ class ReleasePreflight:
             processes = embedded_mongo_processes()
         except BuildSafetyError as error:
             return [PreflightFinding("test-processes", "fail", str(error))]
-        if not processes:
-            return []
-        detail = ", ".join(process.describe() for process in processes)
-        return [PreflightFinding(
-            "test-processes", "fail",
-            f"embedded Mongo test process(es) remain before the release build: {detail}",
-            "cedarcli test status; cedarcli test cleanup",
-        )]
+        findings = []
+        orphans = [process for process in processes if process.orphaned]
+        live = [process for process in processes if not process.orphaned]
+        if orphans:
+            detail = ", ".join(process.describe() for process in orphans)
+            findings.append(PreflightFinding(
+                "test-processes", "fail",
+                f"orphaned embedded Mongo test process(es) remain before the release build: {detail}",
+                "cedarcli test status; cedarcli test cleanup",
+            ))
+        if live:
+            # A live test's store is that test's to stop. The release's own tasks wait only for
+            # the stores their tests start, so another session's run does not fail them.
+            detail = ", ".join(process.describe() for process in live)
+            findings.append(PreflightFinding(
+                "test-processes", "warn",
+                f"embedded Mongo test process(es) owned by running tests: {detail}",
+            ))
+        return findings
 
     def check_profile(self) -> list[PreflightFinding]:
         missing = [name for name in PROFILE_REQUIRED_VARIABLES if not self.environment.get(name)]
@@ -1172,7 +1183,6 @@ class ReleasePreflight:
                 [
                     f"export IMAGE_VERSION={source_version}",
                     f"export CEDAR_MAVEN_VERSION={source_version}",
-                    f"export CEDAR_APPLICATION_VERSION={source_version}",
                 ],
             ),
         }

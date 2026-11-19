@@ -30,6 +30,7 @@ from org.metadatacenter.local_ci import containers
 from org.metadatacenter.local_ci.containers import Container, Places
 from org.metadatacenter.local_ci.coverage import LegCoverage, python_interpreter, resolve_ref
 from org.metadatacenter.local_ci.errors import LocalCIError
+from org.metadatacenter.local_ci.registry import github_name
 from org.metadatacenter.local_ci.expressions import (
     UnsupportedExpression, condition, interpolate, to_string)
 from org.metadatacenter.local_ci.workflows import git, step_key
@@ -151,9 +152,13 @@ class JobRunner:
     def __init__(self, *, cedar_home: Path, repository: str, revision: str, parent: str | None,
                  run_directory: Path, environment: dict, secrets: dict, maven_repository: Path,
                  reporter: Callable[[str], None] = lambda line: None,
-                 command_runner=subprocess.Popen, clock=time.monotonic, run_id: str | None = None):
+                 command_runner=subprocess.Popen, clock=time.monotonic, run_id: str | None = None,
+                 branch: str = "develop"):
         self.cedar_home = Path(cedar_home)
         self.repository = repository
+        self.branch = branch
+        # The checkout may sit under a directory, as mcp/cedar-cee-mcp does; GitHub names it alone.
+        self.github_repository = f"metadatacenter/{github_name(repository)}"
         self.revision = revision
         self.parent = parent
         self.run_directory = Path(run_directory)
@@ -174,18 +179,18 @@ class JobRunner:
     def github_context(self, workspace: str, event_path: str, job_id: str, workflow_name: str) -> dict:
         before = self.parent or "0" * 40
         return {
-            "event_name": "push", "ref": "refs/heads/develop", "ref_name": "develop",
+            "event_name": "push", "ref": f"refs/heads/{self.branch}", "ref_name": self.branch,
             "ref_type": "branch", "sha": self.revision,
-            "repository": f"metadatacenter/{self.repository}", "repository_owner": "metadatacenter",
+            "repository": self.github_repository, "repository_owner": "metadatacenter",
             "workspace": workspace, "run_id": self.run_id, "run_number": "1", "run_attempt": "1",
             "server_url": "https://github.com", "api_url": "https://api.github.com",
             "actor": "local-ci", "triggering_actor": "local-ci", "base_ref": "", "head_ref": "",
             "job": job_id, "workflow": workflow_name, "action": "",
             "event_path": event_path,
-            "event": {"before": before, "after": self.revision, "ref": "refs/heads/develop",
+            "event": {"before": before, "after": self.revision, "ref": f"refs/heads/{self.branch}",
                       "head_commit": {"id": self.revision},
-                      "repository": {"full_name": f"metadatacenter/{self.repository}",
-                                     "name": self.repository, "default_branch": "develop"}},
+                      "repository": {"full_name": self.github_repository,
+                                     "name": github_name(self.repository), "default_branch": self.branch}},
         }
 
     # -- running ----------------------------------------------------------------------------
@@ -442,9 +447,9 @@ class JobRunner:
             environment["PATH"] = os.pathsep.join([*reversed(state["path"]), environment["PATH"]])
         environment.update({
             "GITHUB_WORKSPACE": where.workspace,
-            "GITHUB_SHA": self.revision, "GITHUB_REF": "refs/heads/develop",
-            "GITHUB_REF_NAME": "develop", "GITHUB_EVENT_NAME": "push",
-            "GITHUB_REPOSITORY": f"metadatacenter/{self.repository}",
+            "GITHUB_SHA": self.revision, "GITHUB_REF": f"refs/heads/{self.branch}",
+            "GITHUB_REF_NAME": self.branch, "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REPOSITORY": self.github_repository,
             "GITHUB_REPOSITORY_OWNER": "metadatacenter", "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_RUN_ID": self.run_id, "GITHUB_RUN_ATTEMPT": "1",
             "GITHUB_EVENT_PATH": context["github"]["event_path"],
@@ -703,8 +708,10 @@ class JobRunner:
         return {"download-path": destination}
 
     def _checkout(self, inputs: dict, workspace: Path, log, scratch: Path | None = None) -> dict:
-        repository = inputs.get("repository") or f"metadatacenter/{self.repository}"
+        repository = inputs.get("repository") or self.github_repository
         name = repository.split("/", 1)[1] if "/" in repository else repository
+        if name == github_name(self.repository):
+            name = self.repository
         source = self.cedar_home / name
         if not (source / ".git").exists():
             raise LocalCIError(f"{name} is not checked out under {self.cedar_home}")

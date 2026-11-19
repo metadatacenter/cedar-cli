@@ -229,7 +229,7 @@ class ReleaseBuildValidator:
         try:
             with executable_build_workspace(
                 environment, java=task.get("kind") == "maven",
-            ) as (_, environment):
+            ) as (scratch, environment):
                 command_failure = None
                 try:
                     if self.executor is None and npm_install.is_install(" ".join(task["command"])):
@@ -254,7 +254,7 @@ class ReleaseBuildValidator:
                 if guarded_maven:
                     try:
                         wait_for_no_embedded_mongo_processes(
-                            f"completion of release Maven task {task['id']}")
+                            f"completion of release Maven task {task['id']}", scratch=scratch)
                     except BuildSafetyError as error:
                         if command_failure is not None:
                             raise ReleaseError(f"{command_failure}\n{error}") from command_failure

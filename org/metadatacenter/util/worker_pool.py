@@ -26,6 +26,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -42,8 +43,52 @@ _BOOT_TOLERANCE = 60
 # A holder writes its slot's owner within moments of taking it.
 _UNWRITTEN_SECONDS = 60
 
-_NPM_RUN = re.compile(r'npm run ([\w:.-]+)')
-_NPM_SCRIPT = re.compile(r'npm (?:--prefix \S+ )?(?:run(?:-script)? \S|test\b)')
+_ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z_0-9]*=')
+
+
+def _npm_script(command):
+    """Read a simple npm invocation without evaluating its environment assignments.
+
+    Both shell assignments and `env NAME=value` are used by the reactor. Keep the command's
+    arguments intact (including quoted values); compound shell commands are not gate wrappers.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|<>')
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    while tokens and _ASSIGNMENT.match(tokens[0]):
+        tokens.pop(0)
+    if tokens and tokens[0] == 'env':
+        tokens.pop(0)
+        if tokens and tokens[0] == '--':
+            tokens.pop(0)
+        while tokens and _ASSIGNMENT.match(tokens[0]):
+            tokens.pop(0)
+        if tokens and tokens[0] == '--':
+            tokens.pop(0)
+    if not tokens or tokens.pop(0) != 'npm':
+        return None
+    prefix = None
+    if tokens and tokens[0] == '--prefix':
+        if len(tokens) < 3:
+            return None
+        _, prefix = tokens[:2]
+        tokens = tokens[2:]
+    elif tokens and tokens[0].startswith('--prefix='):
+        prefix = tokens.pop(0).split('=', 1)[1]
+    if not tokens:
+        return None
+    verb = tokens.pop(0)
+    if verb in ('run', 'run-script') and tokens and not tokens[0].startswith('-'):
+        script = tokens.pop(0)
+    elif verb == 'test':
+        script = 'test'
+    else:
+        return None
+    compound = any(token and set(token) <= set(';&|<>') for token in tokens)
+    return script, prefix, compound
 
 
 class WorkerPool:
@@ -142,14 +187,15 @@ def runs_gate(command, cwd):
     A gate schedules its own stages and takes each stage's workers from the pool, so the command
     that starts it takes none.
     """
-    match = _NPM_RUN.match(command.strip())
-    if not match:
+    invocation = _npm_script(command)
+    if not invocation or invocation[2]:
         return False
+    script, prefix, _ = invocation
     try:
-        scripts = json.loads((Path(cwd) / 'package.json').read_text()).get('scripts', {})
+        scripts = json.loads((Path(cwd) / (prefix or '.') / 'package.json').read_text()).get('scripts', {})
     except (OSError, ValueError):
         return False
-    return 'scripts/test-gate.mjs' in str(scripts.get(match.group(1), ''))
+    return 'scripts/test-gate.mjs' in str(scripts.get(script, ''))
 
 
 def wanted(command, budget):
@@ -158,7 +204,7 @@ def wanted(command, budget):
     Only an npm script starts the build and test tools that read the worker budget. An install or a
     browser download takes one worker, so it never waits for a share of the pool it would not use.
     """
-    return budget if _NPM_SCRIPT.match(command.strip()) else 1
+    return budget if _npm_script(command) else 1
 
 
 @lru_cache(maxsize=1)

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from org.metadatacenter.util.BuildSafety import (
     BuildSafetyError,
+    EmbeddedMongoProcess,
     _process_cwd,
     capture_estate_state,
     changed_repositories,
@@ -16,7 +17,9 @@ from org.metadatacenter.util.BuildSafety import (
     is_test_bearing_maven_command,
     isolated_frontend_workspace,
     materialize_frontend_workspace,
+    require_no_embedded_mongo_processes,
     require_no_frontend_runtime_collision,
+    wait_for_no_embedded_mongo_processes,
 )
 from org.metadatacenter.util.SubprocessDiagnostics import (
     describe_return_code,
@@ -127,6 +130,30 @@ class BuildSafetyTest(unittest.TestCase):
             with self.assertRaises(BuildSafetyError):
                 materialize_frontend_workspace(repo, repo)
 
+    def test_a_build_copy_holds_exactly_the_files_the_source_identity_hashes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.repository(Path(directory))
+            (repo / '.gitignore').write_text('dist/\n.env\n', encoding='utf-8')
+            (repo / 'package.json').write_text('{"name":"example"}')
+            (repo / 'dist').mkdir()
+            (repo / 'dist/stale.js').write_text('an earlier local build')
+            (repo / '.env').write_text('LOCAL=1\n')
+            (repo / 'untracked.txt').write_text('new source\n')
+            (repo / 'link.txt').symlink_to('source.txt')
+            with patch('org.metadatacenter.util.BuildSafety.frontend_runtime_collisions', return_value=[]):
+                with isolated_frontend_workspace(repo, manifests_only=True) as (workspace, _, _collisions):
+                    copy_root, copied = materialize_frontend_workspace(repo, workspace)
+                    self.assertEqual(workspace, copy_root)
+                    self.assertFalse((workspace / 'dist').exists(),
+                                     'an ignored build output is no input the identity names')
+                    self.assertEqual('LOCAL=1\n', (workspace / '.env').read_text())
+                    self.assertEqual('new source\n', (workspace / 'untracked.txt').read_text())
+                    self.assertEqual('source.txt', os.readlink(workspace / 'link.txt'))
+                    self.assertEqual(
+                        sorted(['.gitignore', '.env', 'link.txt', 'package.json', 'source.txt', 'untracked.txt']),
+                        sorted(os.fsdecode(path) for path in copied))
+                    self.assertNotIn(b'dist/stale.js', copied)
+
     def test_workspace_copy_does_not_keep_historical_staged_bundles(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = self.repository(Path(directory))
@@ -174,6 +201,9 @@ class BuildSafetyTest(unittest.TestCase):
             (proc / "84").mkdir(parents=True)
             (proc / "42" / "exe").symlink_to(embedded)
             (proc / "84" / "exe").symlink_to(native)
+            (proc / "42" / "stat").write_text("42 (mongod x) S 1 42 42 0 -1\n")
+            (proc / "42" / "cmdline").write_bytes(
+                b"mongod\0--port\0" b"42317\0--dbpath\0/build/tmp/temp--a b\0")
 
             def commands(*_args, **_kwargs):
                 return SimpleNamespace(
@@ -184,6 +214,9 @@ class BuildSafetyTest(unittest.TestCase):
 
         self.assertEqual([42], [process.pid for process in processes])
         self.assertEqual(("127.0.0.1:42317",), processes[0].listeners)
+        self.assertEqual(1, processes[0].parent_pid)
+        self.assertTrue(processes[0].orphaned)
+        self.assertEqual(Path("/build/tmp/temp--a b"), processes[0].dbpath)
 
     def test_only_test_bearing_maven_commands_get_the_process_gate(self):
         self.assertTrue(is_test_bearing_maven_command("./mvnw clean install"))
@@ -207,6 +240,12 @@ class BuildSafetyTest(unittest.TestCase):
                     ),
                     stderr="",
                 )
+            if args[0] == "ps":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(" 5120 /Users/test/.embedmongo/5.0/mongod --port 42317 "
+                            "--dbpath /private/var/build x/tmp/temp--1 --bind_ip 127.0.0.1\n"),
+                    stderr="")
             return SimpleNamespace(
                 returncode=0, stdout="n127.0.0.1:42317\n", stderr="")
 
@@ -218,6 +257,52 @@ class BuildSafetyTest(unittest.TestCase):
             Path("/Users/test/.embedmongo/5.0/mongod"),
             processes[0].executable,
         )
+        self.assertEqual(5120, processes[0].parent_pid)
+        self.assertFalse(processes[0].orphaned)
+        self.assertEqual(Path("/private/var/build x/tmp/temp--1"), processes[0].dbpath)
+        self.assertIn("parent PID 5120", processes[0].describe())
+
+    def test_start_check_refuses_orphans_and_leaves_live_tests_alone(self):
+        mongod = Path("/Users/test/.embedmongo/5.0/mongod")
+        live = EmbeddedMongoProcess(42, mongod, (), 5120, Path("/other/session/tmp/temp--1"))
+        orphan = EmbeddedMongoProcess(43, mongod, (), 1, Path("/old/build/tmp/temp--2"))
+        with patch("org.metadatacenter.util.BuildSafety.embedded_mongo_processes",
+                   return_value=[live]):
+            require_no_embedded_mongo_processes("task", timeout_seconds=0)
+        with patch("org.metadatacenter.util.BuildSafety.embedded_mongo_processes",
+                   return_value=[live, orphan]):
+            with self.assertRaisesRegex(BuildSafetyError, "orphaned") as raised:
+                require_no_embedded_mongo_processes("task", timeout_seconds=0)
+        self.assertIn("PID 43", str(raised.exception))
+        self.assertNotIn("PID 42", str(raised.exception))
+
+    def test_start_check_gives_a_just_orphaned_store_time_to_stop(self):
+        mongod = Path("/Users/test/.embedmongo/5.0/mongod")
+        orphan = EmbeddedMongoProcess(43, mongod, (), 1, Path("/old/build/tmp/temp--2"))
+        with patch("org.metadatacenter.util.BuildSafety.embedded_mongo_processes",
+                   side_effect=[[orphan], [orphan], []]) as inventory:
+            require_no_embedded_mongo_processes("task", timeout_seconds=5, poll_seconds=0)
+        self.assertEqual(3, inventory.call_count)
+
+    def test_completion_check_waits_only_for_the_tasks_own_stores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            mongod = Path("/Users/test/.embedmongo/5.0/mongod")
+            # Another session's live store and an orphan from an earlier build lie elsewhere.
+            others = [
+                EmbeddedMongoProcess(42, mongod, (), 5120, Path("/other/session/tmp/temp--1")),
+                EmbeddedMongoProcess(43, mongod, (), 1, Path("/old/build/tmp/temp--2")),
+            ]
+            own = EmbeddedMongoProcess(44, mongod, (), 1, scratch / "tmp" / "temp--3")
+            with patch("org.metadatacenter.util.BuildSafety.embedded_mongo_processes",
+                       return_value=others):
+                wait_for_no_embedded_mongo_processes("done", scratch=scratch, timeout_seconds=0)
+            with patch("org.metadatacenter.util.BuildSafety.embedded_mongo_processes",
+                       return_value=[*others, own]):
+                with self.assertRaisesRegex(BuildSafetyError, "PID 44") as raised:
+                    wait_for_no_embedded_mongo_processes("done", scratch=scratch, timeout_seconds=0)
+            self.assertNotIn("PID 42", str(raised.exception))
+            self.assertNotIn("PID 43", str(raised.exception))
 
     def test_process_cwd_reads_a_real_platform_process(self):
         """Exercise Linux /proc and the macOS lsof fallback on their real runners."""

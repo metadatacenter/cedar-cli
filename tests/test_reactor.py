@@ -19,10 +19,26 @@ class VerificationEnvironmentTest(unittest.TestCase):
     def test_model_reads_its_vendored_corpus_even_on_a_server(self):
         environment = {"CEDAR_HOME": "/srv/cedar", "CEDAR_PROFILE": "server"}
         repo = SimpleNamespace(name="cedar-model-typescript-library")
-        result = reactor.prepare_checks(repo, Path("/tmp/isolated/model"),
-                                        "/srv/cedar", environment, ["npm run test:coverage"])
-        self.assertEqual([], result)
-        self.assertEqual("/tmp/isolated/model", environment["CEDAR_HOME"])
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            source = home / 'cedar-artifact-library' / reactor.JAVA_DEFAULTS_CORE / 'Field.java'
+            source.parent.mkdir(parents=True)
+            source.write_text('sealed interface Field permits TextField {}')
+            isolated = home / 'isolated/model'
+            corpus = isolated / 'cedar-artifact-library/src/test/resources/example.json'
+            corpus.parent.mkdir(parents=True)
+            corpus.write_text('vendored corpus')
+            result = reactor.prepare_checks(repo, isolated, home, environment, ['npm run test:coverage'])
+            self.assertEqual(str(isolated), environment['CEDAR_HOME'])
+            self.assertEqual('vendored corpus', corpus.read_text())
+            self.assertEqual(source.read_bytes(), (isolated / 'cedar-artifact-library' /
+                             reactor.JAVA_DEFAULTS_CORE / 'Field.java').read_bytes())
+            reactor.verify_check_sources(result, home)
+            source.write_text('sealed interface Field permits TextField, NumericField {}')
+            with self.assertRaisesRegex(reactor.ReactorError, 'sources changed'):
+                reactor.verify_check_sources(result, home)
+            updated = reactor.prepare_checks(repo, isolated, home, environment, [])
+            self.assertNotEqual(result[0]['sha256'], updated[0]['sha256'])
         self.assertEqual("server", environment["CEDAR_PROFILE"])
 
 
@@ -81,6 +97,28 @@ class PublishTest(unittest.TestCase):
             self.assertEqual(b"// bundle", archive.extractfile("package/cedar-embeddable-designer.js").read())
         with tarfile.open(new) as archive:
             self.assertEqual(b"// rebuilt", archive.extractfile("package/cedar-embeddable-designer.js").read())
+
+    def test_a_package_built_from_a_recorded_source_names_it_and_leaves_the_output_alone(self):
+        staged = self._staged()
+        before = (staged / "package.json").read_bytes()
+        source = {"revision": "a" * 40, "dirty": True, "sourceSha256": "b" * 64}
+        reactor.publish(self._repo(), self.build, self.home, source=source)
+        with tarfile.open(reactor._available(self.home)[self._repo().name]) as archive:
+            packed = json.loads(archive.extractfile("package/package.json").read())
+            self.assertEqual(b"// bundle", archive.extractfile("package/cedar-embeddable-designer.js").read())
+        self.assertEqual({"sourceCommit": "a" * 40, "sourceDirty": True, "sourceSha256": "b" * 64},
+                         packed[reactor.BUILD_STAMP])
+        self.assertEqual("0.1.0", packed["version"])
+        self.assertEqual(before, (staged / "package.json").read_bytes())
+
+    def test_a_source_identity_without_a_commit_stores_nothing(self):
+        self._staged()
+        for source in ({"revision": "HEAD", "dirty": False, "sourceSha256": "b" * 64},
+                       {"revision": "a" * 40, "dirty": "no", "sourceSha256": "b" * 64},
+                       {"revision": "a" * 40, "dirty": False}):
+            with self.subTest(source=source), self.assertRaisesRegex(reactor.ReactorError, "source identity"):
+                reactor.publish(self._repo(), self.build, self.home, source=source)
+        self.assertFalse((self.home / reactor.STORE / "refs" / "cedar-embeddable-designer.json").exists())
 
     def test_a_repository_that_publishes_nothing_stores_nothing(self):
         self.assertIsNone(reactor.publish(self._repo(path=None), self.build, self.home))

@@ -1,7 +1,10 @@
 """`cedarcli ci run`: run repositories' CI at exact commits and record the result."""
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 import datetime as dt
+import fcntl
+import os
 import platform
 import re
 import subprocess
@@ -28,6 +31,27 @@ def _lock(name: str) -> threading.Lock:
         return _LOCKS.setdefault(name, threading.Lock())
 
 
+@contextmanager
+def exclusive(cedar_home: Path, names):
+    """Hold each named exclusion against this run's other repositories and against other processes.
+
+    A profile names an exclusion when its jobs share something one run at a time can use, such as
+    the OpenSearch container's name and port. A thread lock alone held only within one
+    `cedarcli ci run`, so a second run in another session removed the container under the first.
+    The file lock under $CEDAR_HOME/.cedar/locks is released when its descriptor closes, also when
+    the process dies holding it.
+    """
+    with ExitStack() as held:
+        for name in sorted(set(names)):
+            held.enter_context(_lock(name))
+            path = Path(cedar_home) / ".cedar" / "locks" / f"local-ci-{name}.lock"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            held.callback(os.close, descriptor)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+
+
 @dataclass
 class RepositoryOutcome:
     repository: str
@@ -39,15 +63,16 @@ class RepositoryOutcome:
     reasons: list[str] = field(default_factory=list)
 
 
-def resolve_revision(cedar_home: Path, repository: str, explicit: str | None) -> str:
+def resolve_revision(cedar_home: Path, repository: str, explicit: str | None,
+                     branch: str = "develop") -> str:
     root = cedar_home / repository
     if not (root / ".git").exists():
         raise LocalCIError(f"{repository} is not checked out under {cedar_home}")
     if explicit:
         git(root, "cat-file", "-e", f"{explicit}^{{commit}}")
         return git(root, "rev-parse", f"{explicit}^{{commit}}")
-    git(root, "fetch", "-q", "origin", "develop")
-    return git(root, "rev-parse", "refs/remotes/origin/develop")
+    git(root, "fetch", "-q", "origin", branch)
+    return git(root, "rev-parse", f"refs/remotes/origin/{branch}")
 
 
 def toolchain_environment(source: dict) -> tuple[dict, list[str]]:
@@ -176,24 +201,19 @@ def run_repository(cedar_home: Path, repository: str, revision: str, coverage: R
     root = cedar_home / repository
     parents = git(root, "rev-list", "--parents", "-n", "1", revision).split()[1:]
     started = dt.datetime.now(dt.timezone.utc)
-    run_name = f"{started.strftime('%Y%m%dT%H%M%SZ')}-{repository}-{revision[:8]}"
+    # One directory per run, also for a checkout under a directory such as mcp/.
+    run_name = (f"{started.strftime('%Y%m%dT%H%M%SZ')}-{repository.replace('/', '-')}"
+                f"-{revision[:8]}")
     run_directory = evidence.root(source_environment) / "runs" / run_name
     run_directory.mkdir(parents=True, exist_ok=True)
     job_runner = JobRunner(
         cedar_home=cedar_home, repository=repository, revision=revision,
         parent=parents[0] if parents else None, run_directory=run_directory, environment=clean,
         secrets=secrets, maven_repository=evidence.root(source_environment) / "maven" / "repository",
-        reporter=reporter)
-    exclusive = sorted({leg.config.exclusive for leg in coverage.legs
-                        if leg.config and leg.config.exclusive})
-    locks = [_lock(name) for name in exclusive]
-    for lock in locks:
-        lock.acquire()
-    try:
+        reporter=reporter, branch=registry.branch(repository))
+    exclusions = {leg.config.exclusive for leg in coverage.legs if leg.config and leg.config.exclusive}
+    with exclusive(cedar_home, exclusions):
         finished = _run_legs(job_runner, coverage.legs, repository, reporter, parallel)
-    finally:
-        for lock in reversed(locks):
-            lock.release()
     failed = [result.leg for result in finished if result.conclusion == "failure"]
     record = {
         "schemaVersion": evidence.SCHEMA_VERSION,
@@ -248,15 +268,16 @@ def run(cedar_home, repositories: list[str], *, revisions: dict[str, str] | None
     plans = []
     outcomes: list[RepositoryOutcome] = []
     for repository in repositories:
+        branch = registry.branch(repository)
         try:
-            revision = resolve_revision(cedar_home, repository, revisions.get(repository))
+            revision = resolve_revision(cedar_home, repository, revisions.get(repository), branch)
         except LocalCIError as error:
             outcomes.append(RepositoryOutcome(repository, revisions.get(repository, ""), "error", str(error)))
             continue
-        coverage = repository_coverage(cedar_home, repository, revision, registry)
+        coverage = repository_coverage(cedar_home, repository, revision, registry, branch=branch)
         if not coverage.runs_ci and not coverage.problems:
             outcomes.append(RepositoryOutcome(repository, revision, "no-ci",
-                                              "no workflow runs on a push of this commit to develop"))
+                                              f"no workflow runs on a push of this commit to {branch}"))
             continue
         if not coverage.covered:
             outcomes.append(RepositoryOutcome(repository, revision, "uncovered",

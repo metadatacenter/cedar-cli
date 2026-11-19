@@ -212,6 +212,30 @@ class GateDetectionTest(unittest.TestCase):
                         './browser/node_modules/.bin/playwright install --with-deps chromium'):
             self.assertEqual(1, wanted(command, 12), command)
 
+    def test_environment_prefixes_preserve_script_and_gate_classification(self):
+        for prefix in ('env CEDAR_TEST_NO_BUILD=1 ', 'CEDAR_TEST_NO_BUILD=1 ',
+                       'env NOTE="a value with spaces" SECOND=yes ', 'env -- ', 'env -- MODE=test '):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(12, wanted(prefix + 'npm run test:browser', 12))
+                self.assertTrue(runs_gate(prefix + 'npm run test:ci', self.root.name))
+                self.assertFalse(runs_gate(prefix + 'npm run test:browser', self.root.name))
+                self.assertEqual(1, wanted(prefix + 'npm ci', 12))
+
+    def test_gate_detection_reads_the_prefixed_package(self):
+        package = Path(self.root.name, 'consumer with spaces')
+        package.mkdir()
+        (package / 'package.json').write_text(json.dumps({'scripts': {'test': 'node scripts/test-gate.mjs'}}))
+        self.assertTrue(runs_gate('env MODE=test npm --prefix "consumer with spaces" test', self.root.name))
+        self.assertTrue(runs_gate('npm --prefix="consumer with spaces" test', self.root.name))
+        self.assertFalse(runs_gate('npm test', self.root.name))
+
+    def test_compound_and_malformed_commands_do_not_bypass_the_pool(self):
+        self.assertFalse(runs_gate('env MODE=x npm run test:ci && npm run test:browser', self.root.name))
+        self.assertEqual(12, wanted('npm run build && npm run bundle', 12))
+        for command in ('echo npm run test:ci', 'env NOTE="unterminated npm run test:ci', 'npm --prefix'):
+            self.assertFalse(runs_gate(command, self.root.name))
+            self.assertEqual(1, wanted(command, 12))
+
 
 class CommandLeaseTest(unittest.TestCase):
     def setUp(self):
@@ -230,6 +254,12 @@ class CommandLeaseTest(unittest.TestCase):
 
     def test_a_command_holds_the_repository_budget_while_it_runs(self):
         self.assertEqual((12, 12), self.lease('npm test'))
+        self.assertEqual((12, 12), self.lease('env CEDAR_TEST_NO_BUILD=1 npm run test:browser'))
+        self.assertEqual([], held(self.pool))
+
+    def test_an_environment_prefixed_script_cannot_exceed_the_shared_pool(self):
+        self.pool.size = 4
+        self.assertEqual((4, 4), self.lease('env CEDAR_TEST_NO_BUILD=1 npm run test:browser'))
         self.assertEqual([], held(self.pool))
 
     def test_an_install_or_a_download_holds_one_worker(self):
@@ -239,6 +269,7 @@ class CommandLeaseTest(unittest.TestCase):
 
     def test_a_gate_takes_its_own_workers(self):
         self.assertEqual((None, 0), self.lease('npm run test:ci'))
+        self.assertEqual((None, 0), self.lease('env CEDAR_TEST_NO_BUILD=1 npm run test:ci'))
 
     def test_a_build_without_a_pool_holds_nothing(self):
         self.assertEqual((None, 0), self.lease('npm test', {'CEDAR_TEST_WORKERS': '12'}))

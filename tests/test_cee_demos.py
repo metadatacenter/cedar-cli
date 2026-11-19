@@ -62,6 +62,7 @@ class DemoCommandsTest(unittest.TestCase):
 
     def test_test_enabled_build_all_checks_demos_but_compile_only_does_not(self):
         with patch.object(build, 'execute_build', return_value={'cedar-embeddable-editor': 'hash'}), \
+                patch.object(build, 'report_coverage'), \
                 patch.object(cee_demos, 'check_selection') as check:
             result = self.runner.invoke(build.app, ['all'])
             self.assertEqual(0, result.exit_code, result.output)

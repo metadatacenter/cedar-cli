@@ -1,11 +1,7 @@
-from org.metadatacenter.model.DomainMode import DomainMode
-
-
 class Subdomain:
 
-    def __init__(self, name: str, domain_mode: DomainMode) -> None:
+    def __init__(self, name: str) -> None:
         self.name = name
-        self.domain_mode = domain_mode
 
     def get_fqdn(self):
         from org.metadatacenter.util.GlobalContext import GlobalContext

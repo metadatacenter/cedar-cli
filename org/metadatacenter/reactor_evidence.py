@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from org.metadatacenter.reactor import ReactorError, store_root
+from org.metadatacenter.reactor import ReactorError, store_root, verify_check_sources
 
 _build = ContextVar('frontend_build_evidence', default=None)
 _inputs = ContextVar('frontend_build_inputs', default=None)
@@ -23,9 +23,20 @@ class Selection(dict):
 
 def source_paths(source):
     """Tracked/untracked source plus ignored local tool configuration, from a repository root."""
+    from org.metadatacenter.util.BuildSafety import frontend_copy_ignore
     source = Path(source)
-    paths = set(subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z',
-                '--cached', '--others', '--exclude-standard']).split(b'\0')) - {b''}
+    def listed(*args):
+        return set(subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z',
+                   *args]).split(b'\0')) - {b''}
+    # Tracked assets are inputs even beneath a directory conventionally used for dependencies.
+    # Untracked installed dependencies and staging outputs are neither hashed nor copied.
+    paths = listed('--cached')
+    excluded = frontend_copy_ignore(source)
+    for raw in listed('--others', '--exclude-standard'):
+        parts = Path(os.fsdecode(raw)).parts
+        if not any(name in excluded(str(source / Path(*parts[:index])), [name])
+                   for index, name in enumerate(parts)):
+            paths.add(raw)
     # Ignored local configuration is still an input to npm/build tools.
     directories = [source, *(p for p in source.iterdir() if p.is_dir() and p.name not in
                    {'.git', 'node_modules', '.angular', 'dist', 'dist-npm', '.venv'})]
@@ -36,18 +47,14 @@ def source_paths(source):
     return sorted(paths)
 
 
-def source_identity(source, *, include=None):
-    """Fingerprint the copied repository, including a nested app's sibling tests and locks."""
-    source = Path(source)
-    def git(*args):
-        return subprocess.check_output(['git', '-C', str(source), *args])
-    source = Path(git('rev-parse', '--show-toplevel').decode().strip())
-    paths = source_paths(source)
+def paths_digest(root, paths, *, include=None):
+    """The fingerprint of the given repository-relative paths under `root`, in the given order."""
+    root = Path(root)
     digest = hashlib.sha256()
     for raw in paths:
         if include is not None and not include(os.fsdecode(raw)):
             continue
-        path = source / os.fsdecode(raw)
+        path = root / os.fsdecode(raw)
         digest.update(raw + b'\0')
         if path.is_symlink():
             digest.update(b'link\0' + os.fsencode(os.readlink(path)))
@@ -58,9 +65,32 @@ def source_identity(source, *, include=None):
             digest.update(hashlib.sha256(path.read_bytes()).digest())
         else:
             digest.update(b'deleted')
+    return digest.hexdigest()
+
+
+def source_identity(source, *, include=None):
+    """Fingerprint the copied repository, including a nested app's sibling tests and locks."""
+    source = Path(source)
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(source), *args])
+    source = Path(git('rev-parse', '--show-toplevel').decode().strip())
     return {'revision': git('rev-parse', 'HEAD').decode().strip(),
-            'sourceSha256': digest.hexdigest(),
+            'sourceSha256': paths_digest(source, source_paths(source), include=include),
             'dirty': bool(git('status', '--porcelain', '--untracked-files=normal').strip())}
+
+
+def require_copy(source, copy_root, paths, identity):
+    """Refuse a build copy whose files are not the source the task recorded.
+
+    The checkout is compared with its recorded identity before a task and after it, which misses
+    an edit made after the first look and reverted before the last: the copy would hold the edit
+    and the record would name the original. The copy is fingerprinted the moment it is made,
+    over the paths it took, so what is built is exactly what is recorded.
+    """
+    if identity is None:
+        return
+    if paths_digest(copy_root, paths) != identity['sourceSha256']:
+        raise ReactorError(f'Frontend source changed while it was copied for its build: {source}')
 
 
 @contextlib.contextmanager
@@ -146,6 +176,7 @@ def finish(home, packages):
     for source, record in records.items():
         if source_identity(source) != record['source']:
             raise ReactorError(f'Frontend source changed during reactor: {source}')
+        verify_check_sources(record['testDependencies'], home)
     value = {'schemaVersion': 1, 'packages': packages,
              'repositories': {str(Path(source).relative_to(Path(home).resolve())): record
                               for source, record in records.items()}}

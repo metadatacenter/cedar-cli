@@ -16,6 +16,7 @@ class TestProcessCommandsTest(unittest.TestCase):
             42,
             Path("/Users/test/.embedmongo/5.0/mongod"),
             ("127.0.0.1:42317",),
+            5120,
         )
 
     @patch.object(test_processes, "embedded_mongo_processes")
@@ -68,14 +69,29 @@ class TestProcessCommandsTest(unittest.TestCase):
 
     @patch.object(test_processes.os, "kill")
     @patch.object(test_processes, "embedded_mongo_processes")
-    def test_cleanup_sends_sigterm_only_to_the_inventory(self, inventory, kill):
-        inventory.side_effect = [[self.process], []]
+    def test_cleanup_sends_sigterm_only_to_orphans(self, inventory, kill):
+        orphan = EmbeddedMongoProcess(43, self.process.executable, (), 1)
+        inventory.side_effect = [[self.process, orphan], [self.process]]
 
         result = self.runner.invoke(test_processes.app, ["cleanup"])
 
         self.assertEqual(0, result.exit_code, result.output)
-        kill.assert_called_once_with(42, signal.SIGTERM)
+        kill.assert_called_once_with(43, signal.SIGTERM)
+        self.assertIn("Leaving PID 42", result.output)
         self.assertIn("Stopped 1 embedded Mongo test process", result.output)
+
+    @patch.object(test_processes.os, "kill")
+    @patch.object(test_processes, "embedded_mongo_processes")
+    def test_cleanup_all_also_stops_mongods_that_running_tests_own(self, inventory, kill):
+        orphan = EmbeddedMongoProcess(43, self.process.executable, (), 1)
+        inventory.side_effect = [[self.process, orphan], []]
+
+        result = self.runner.invoke(test_processes.app, ["cleanup", "--all"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual([(42, signal.SIGTERM), (43, signal.SIGTERM)],
+                         [call.args for call in kill.call_args_list])
+        self.assertIn("Stopped 2 embedded Mongo test process", result.output)
 
 
 if __name__ == "__main__":

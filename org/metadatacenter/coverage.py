@@ -9,7 +9,11 @@ before any consumer sees a change: a module tested from a sibling module counts 
 figures go to the console as one line, and per module and per repository to a JSON file.
 cedar-project's CI runs the same report over its workspace through `python -m org.metadatacenter.coverage`.
 
-The figures are a report, never a gate: a build that passed stays passed when they cannot be computed.
+Own-test figures are gated in each module's POM. The repository and any-test figures are gated only by
+`cedarcli build java`, the one build whose execution data spans the estate: it fails when either figure
+of a module falls more than two points below the value recorded for it in `assets/coverage/recorded.json`,
+or when it cannot compute them. A module tested from a sibling module or another repository is then held
+to what those tests cover. Every other build only reports the figures.
 """
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +34,10 @@ from org.metadatacenter.util.Util import Util
 console = Console()
 
 HELPER = Path(__file__).resolve().parents[2] / 'scripts' / 'java' / 'MergedCoverage.java'
+RECORDED = Path(__file__).resolve().parents[2] / 'assets' / 'coverage' / 'recorded.json'
+# How far, in percentage points, a figure may fall below its recorded value before the build fails.
+TOLERANCE = 2.0
+GATED = ('repository', 'any')
 MAVEN_NAMESPACE = {'m': 'http://maven.apache.org/POM/4.0.0'}
 PRUNED = ('.git', 'node_modules', 'src')
 
@@ -71,6 +79,24 @@ def execution_data(checkouts, started: float):
     return sorted(execution for target in target_directories(checkouts)
                   for execution in target.glob('jacoco*.exec')
                   if execution.stat().st_mtime >= started and execution.stat().st_size > 0)
+
+
+def untested_modules(checkouts, started: float, reported):
+    """Modules the build compiled that wrote no coverage report, each with its CEDAR class files.
+
+    A module without tests writes no report, yet other modules' tests may run its code, and leaving
+    it out would drop its lines from every total. Only classes under org.metadatacenter count, as
+    the JaCoCo agent instruments only those.
+    """
+    found = {}
+    for target in target_directories(checkouts):
+        module, classes = target.parent, target / 'classes' / 'org' / 'metadatacenter'
+        if module in reported or not classes.is_dir():
+            continue
+        class_files = sorted(path for path in classes.rglob('*.class') if path.stat().st_mtime >= started)
+        if class_files:
+            found[module] = class_files
+    return found
 
 
 def read_report(report_xml: Path):
@@ -158,17 +184,20 @@ def merged_figures(modules, executions, java: Path, classpath):
     return figures
 
 
-def measure(reports, executions, home: Path, repository: Path, java: Path):
-    """Own-test, repository-test and any-test figures for every module that wrote a report.
+def measure(reports, executions, home: Path, repository: Path, java: Path, untested=None):
+    """Own-test, repository-test and any-test figures for every module that wrote a report, and for
+    each module in `untested` ({module directory: class files}), which has no tests of its own.
 
     A module that ran Failsafe suites has two reports on the same classes; the Surefire one supplies
-    its own-test figure.
+    its own-test figure. An untested module's own-test figure is zero of the lines the analysis finds.
     """
     modules = {}
     for report in sorted(reports, key=lambda path: path.parent.name != 'jacoco'):
         module = report.parents[3]
         if module not in modules:
             modules[module] = read_report(report.parent / 'jacoco.xml')
+    for module, classes in (untested or {}).items():
+        modules.setdefault(module, (classes, None, None))
     any_test = merged_figures({module: (repository_of(module, home), classes)
                                for module, (classes, _, _) in modules.items()},
                               [(repository_of(execution, home), execution) for execution in executions],
@@ -176,6 +205,8 @@ def measure(reports, executions, home: Path, repository: Path, java: Path):
     measured = {}
     for module, (_, own_lines, own_branches) in modules.items():
         covered_lines, lines, covered_branches, branches, repository_lines, repository_branches = any_test[module]
+        if own_lines is None:
+            own_lines, own_branches = (0, lines), (0, branches)
         if (lines, branches) != (own_lines[1], own_branches[1]):
             raise CoverageUnavailable(f"{module} changed after its report was written")
         measured[module] = {'lines': own_lines + (covered_lines, repository_lines),
@@ -271,44 +302,124 @@ def prune_coverage(cedar_home, *, days=14, apply=False, now=None):
     return result
 
 
-def report(checkouts, started: float, home: Path, repository: Path, java):
+def read_recorded(path: Path | None = None):
+    """The recorded repository and any-test figures: module -> kind -> scope -> percent."""
+    path = path or RECORDED
+    try:
+        recorded = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise CoverageUnavailable(f"the recorded figures in {path} could not be read ({error})") from error
+    if recorded.get('schemaVersion') != 1 or not isinstance(recorded.get('modules'), dict):
+        raise CoverageUnavailable(f"{path} is not a schema-version 1 record of module figures")
+    return recorded['modules']
+
+
+def regressions(summary, recorded):
+    """Each recorded figure the summary falls more than TOLERANCE points below, as a sentence.
+
+    A module the record names but the summary lacks is a regression too: its coverage can no longer
+    be seen. A module the record does not name yet is not judged.
+    """
+    current = {entry['module']: entry for entry in summary['modules']}
+    found = []
+    for module, kinds in sorted(recorded.items()):
+        if module not in current:
+            found.append(f"{module} has recorded figures but none was measured")
+            continue
+        for kind, scopes in sorted(kinds.items()):
+            for scope in GATED:
+                was = scopes.get(scope)
+                now = current[module][kind][f'{scope}Percent']
+                if was is not None and (now is None or round(was - now, 1) > TOLERANCE):
+                    tests = "its repository's tests" if scope == 'repository' else 'any test'
+                    found.append(f"{module}: {kind} covered by {tests} fell to {now}% from {was}% recorded")
+    return found
+
+
+def recorded_figures(summary, source: str):
+    """The record a summary would become, to be reviewed and committed as the new recorded figures."""
+    return {
+        'schemaVersion': 1,
+        'source': source,
+        'modules': {entry['module']: {kind: {scope: entry[kind][f'{scope}Percent'] for scope in GATED}
+                                      for kind in ('lines', 'branches')}
+                    for entry in summary['modules']},
+    }
+
+
+def write_recorded(figures, path: Path | None = None):
+    """Write recorded figures with one line per module, so a change reads as a one-line diff."""
+    path = path or RECORDED
+    rows = ',\n'.join(f'    {json.dumps(module)}: {json.dumps(kinds)}'
+                      for module, kinds in sorted(figures['modules'].items()))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{\n'
+                    f'  "schemaVersion": {figures["schemaVersion"]},\n'
+                    f'  "source": {json.dumps(figures["source"])},\n'
+                    '  "modules": {\n' + rows + '\n  }\n}\n')
+
+
+def report(checkouts, started: float, home: Path, repository: Path, java, *, gate=False):
     """Print what coverage the reports under these checkouts show, and record it.
 
     `java` is called for the Java executable only once there is something to measure, so a missing
     JDK is reported like any other reason the merged figure cannot be computed. Returns the record's
-    path, or None when nothing was recorded.
+    path, or None when nothing was recorded. With `gate`, a figure that cannot be computed, or one
+    that has fallen below its recorded value, raises CoverageRegression.
     """
     reports = coverage_reports(checkouts, started)
     if not reports:
+        if gate:
+            raise CoverageRegression(["the build wrote no coverage report"])
         return None
     noun = "report" if len(reports) == 1 else "reports"
     # Unwrapped, so a log shows each sentence whole at any terminal width.
     console.print(f"JaCoCo wrote {len(reports)} coverage {noun} under the tested modules' "
                   "target/site directories.", soft_wrap=True)
     try:
-        measured = measure(reports, execution_data(checkouts, started), home, repository, java())
+        untested = untested_modules(checkouts, started, {report.parents[3] for report in reports})
+        measured = measure(reports, execution_data(checkouts, started), home, repository, java(), untested)
     except (ModeError, CoverageUnavailable) as reason:
         console.print(f"No merged coverage figure, because {reason}.", style="yellow", soft_wrap=True,
                       markup=False, highlight=False)
+        if gate:
+            raise CoverageRegression([f"no merged coverage figure could be computed, because {reason}"])
         return None
     summary = summarize(measured, home)
     if not summary['lines']['total']:
+        if gate:
+            raise CoverageRegression(["the coverage reports hold no lines"])
         return None
     directory = home / '.cedar' / 'coverage'
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{summary['measuredAt'].replace('-', '').replace(':', '')}.json"
     path.write_text(json.dumps(summary, indent=2) + '\n')
     console.print(summary_line(summary, path), soft_wrap=True, markup=False, highlight=False)
+    if gate:
+        try:
+            found = regressions(summary, read_recorded())
+        except CoverageUnavailable as reason:
+            raise CoverageRegression([str(reason)]) from reason
+        if found:
+            raise CoverageRegression(found)
     return path
 
 
-def report_coverage(started: float):
-    """Say what coverage a build that ran Java tests measured."""
+class CoverageRegression(Exception):
+    """The repository or any-test figures a full build must hold, and why it did not hold them."""
+
+    def __init__(self, reasons):
+        super().__init__('; '.join(reasons))
+        self.reasons = reasons
+
+
+def report_coverage(started: float, *, gate=False):
+    """Say what coverage a build that ran Java tests measured, and with `gate`, hold it to the record."""
     environment = invocation_environment()
     home = Path(Util.cedar_home).resolve()
     repository = Path(environment.get('HOME') or Path.home()).expanduser() / '.m2' / 'repository'
-    report(java_checkouts(), started, home, repository,
-           lambda: Path(ModeManager.java_17_home(environment)) / 'bin' / 'java')
+    return report(java_checkouts(), started, home, repository,
+                  lambda: Path(ModeManager.java_17_home(environment)) / 'bin' / 'java', gate=gate)
 
 
 def main(argv=None):
