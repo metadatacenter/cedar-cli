@@ -28,6 +28,8 @@ NOTES_HELP = "Markdown bullets for a package's changelog entry and release draft
 DEFER_HELP = "Leave the lock baseline refresh in cedar-development to the operator"
 REBASE_HELP = ("Plan every package the run has not started again, from develop as it now stands; "
                "--notes then replaces such a package's notes")
+REPREPARE_HELP = ("Release a pushed, unmerged package from develop's present head, which must contain its "
+                  "preparation commit and change none of the paths it prepared; the head is gated again")
 
 
 def _say(message: str) -> None:
@@ -178,12 +180,20 @@ def resume(
     development_model_version: str = typer.Option(None, "--dev-model-version", help=DEV_MODEL_HELP),
     rebase: bool = typer.Option(False, "--rebase", help=REBASE_HELP),
     notes: list[str] = typer.Option(None, "--notes", help=NOTES_HELP),
+    reprepare: list[str] = typer.Option(None, "--reprepare", help=REPREPARE_HELP),
 ):
     """Continue the active npm release from the stage it stopped at."""
     state = NpmReleaseState()
     try:
         with state.exclusive():
             run, _ = state.read()
+            if reprepare:
+                home, tools = _context()
+                route = _route(home, tools, state)
+                for package in reprepare:
+                    for line in route.reprepare(run, package.strip()):
+                        _say(f"Re-prepared: {line}")
+                    state.save(run)
             if notes and not rebase:
                 raise NpmReleaseError("--notes on resume replaces an unstarted package's notes; pass --rebase too")
             if rebase:
