@@ -28,6 +28,31 @@ def runtime_evidence(home):
             'stale': stale, 'current': not stale, 'metadataOnlyChanges': metadata_only}
 
 
+def served_findings(home, evidence):
+    """Why the frontends serve something other than the build the capture records.
+
+    Each host's installed packages must carry the stamps of the sources the selected build names,
+    every component copy it serves must be those packages' bytes, and a host that records its own
+    build identity must name the selected revision and the tree it serves. The capture then compares
+    what the browser receives with those trees, which together bind the reviewed interface to the
+    selected build rather than to whatever happens to be staged.
+    """
+    from org.metadatacenter.smoke_gate import served_bundle_findings
+    home = Path(home)
+    try:
+        repositories = json.loads((home / '.reactor/builds' / (evidence['build'] + '.json')).read_text())['repositories']
+        if not isinstance(repositories, dict):
+            raise TypeError('the build names no repositories')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return [f'the selected build record cannot be read ({error})']
+    revisions = {}
+    for path, record in repositories.items():
+        source = record.get('source') if isinstance(record, dict) else None
+        if isinstance(source, dict) and isinstance(source.get('revision'), str):
+            revisions[Path(path).parts[0]] = source['revision']
+    return served_bundle_findings(home, revisions, repositories, evidence.get('packages') or {})[0]
+
+
 def catalog(root, env=None):
     """The applications and browser profiles the review catalog defines; the catalog is the only list."""
     output = subprocess.run(
@@ -90,6 +115,12 @@ def run_review(*, plan=False, output=None, review=None, seal_review=False, diagn
         raise ValueError('Frontend sources changed since the selected build: ' + ', '.join(evidence['stale']) +
                          '. Run cedarcli build frontends. --diagnostic may inspect the existing runtime, '
                          'but cannot produce an acceptance pass.')
+    served = served_findings(home, evidence)
+    if served:
+        evidence = {**evidence, 'current': False, 'servedFindings': served}
+        if not diagnostic:
+            raise ValueError('The frontends do not serve the selected build: ' + '; '.join(served[:3]) +
+                             ('; and more' if len(served) > 3 else '') + '. Run cedarcli build frontends.')
     directory = absolute(output) if output else home / '.cedar/reports/ui-review' / str(uuid.uuid4())
     directory.mkdir(parents=True, exist_ok=False)
     (directory / 'provenance.json').write_text(json.dumps(evidence, indent=2) + '\n')

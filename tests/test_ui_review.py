@@ -122,9 +122,26 @@ class UIReviewTest(unittest.TestCase):
         self.assertIn('--app=openview', run.call_args.args[0])
 
     @patch.object(ui_review, '_invoke', return_value=0)
+    @patch.object(ui_review, 'served_findings', return_value=['the designer serves stale components'])
+    @patch.object(ui_review, 'runtime_evidence', return_value={'build': 'b', 'current': True, 'stale': []})
+    @patch.object(ui_review, 'invocation_environment', return_value={})
+    def test_frontends_serving_another_build_refuse_acceptance_and_are_recorded_in_a_diagnostic(
+            self, environment, evidence, served, run):
+        with tempfile.TemporaryDirectory() as parent, patch.object(ui_review.Util, 'cedar_home', '/tmp/cedar'):
+            with self.assertRaisesRegex(ValueError, 'do not serve the selected build: the designer serves stale'):
+                ui_review.run_review(output=Path(parent) / 'refused')
+            self.assertFalse((Path(parent) / 'refused').exists())
+            self.assertEqual(ui_review.run_review(diagnostic=True, output=Path(parent) / 'diagnostic'), 0)
+            provenance = json.loads((Path(parent) / 'diagnostic/provenance.json').read_text())
+        self.assertFalse(provenance['current'])
+        self.assertEqual(provenance['servedFindings'], ['the designer serves stale components'])
+        self.assertEqual(run.call_count, 1)
+
+    @patch.object(ui_review, '_invoke', return_value=0)
+    @patch.object(ui_review, 'served_findings', return_value=[])
     @patch.object(ui_review, 'runtime_evidence', return_value={'current': True, 'stale': []})
     @patch.object(ui_review, 'invocation_environment', return_value={})
-    def test_capture_forwards_a_catalog_profile_and_refuses_others_before_writing(self, environment, evidence, run):
+    def test_capture_forwards_a_catalog_profile_and_refuses_others_before_writing(self, environment, evidence, served, run):
         with tempfile.TemporaryDirectory() as parent, patch.object(ui_review.Util, 'cedar_home', '/tmp/cedar'):
             with self.assertRaisesRegex(ValueError, 'Unknown UI review browser profile'):
                 ui_review.run_review(output=Path(parent) / 'refused', profile='firefox-touch')
