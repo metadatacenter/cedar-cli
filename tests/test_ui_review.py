@@ -68,6 +68,10 @@ class UIReviewTest(unittest.TestCase):
         with patch.object(ui_review.Util, 'cedar_home', '/tmp/cedar'):
             ui_review.run_review(app='metadata-editor', plan=True)
             self.assertIn('--app=metadata-editor', run.call_args.args[0])
+            self.assertIn('--profile=chromium', run.call_args.args[0])
+            # The touch profile's catalog differs, so planning must name it rather than fall back.
+            ui_review.run_review(app='designer', plan=True, profile='webkit-touch')
+            self.assertIn('--profile=webkit-touch', run.call_args.args[0])
             with self.assertRaisesRegex(ValueError, 'Unknown UI review'):
                 ui_review.run_review(app='typo', plan=True)
 
@@ -145,11 +149,11 @@ class CaptureAfterBuildTest(unittest.TestCase):
             self.assertFalse(latest.exists())
             self.assertIn('INCOMPLETE', printed[-1])
             self.assertEqual(ui_review.capture_after_build(home, printer=printed.append), 0)
-            self.assertEqual(json.loads(latest.read_text())['sources'], {'cedar-embeddable-designer': 'a'})
+            self.assertEqual(json.loads(latest.read_text())['inputs']['sources'], {'cedar-embeddable-designer': 'a'})
             self.assertEqual(run.call_args.kwargs['app'], 'all')
 
     def test_an_unreviewed_source_alone_does_not_capture_again(self):
-        with tempfile.TemporaryDirectory() as home, patch.object(ui_review, 'run_review', return_value=0) as run:
+        with tempfile.TemporaryDirectory() as home, patch.object(ui_review, 'run_review', side_effect=self.capture) as run:
             with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence(other='x')):
                 ui_review.capture_after_build(home, printer=lambda *_: None)
             with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence(other='y')):
@@ -172,6 +176,63 @@ class CaptureAfterBuildTest(unittest.TestCase):
             kept = sorted(path.name for path in root.iterdir() if path.is_dir())
             self.assertEqual(len(kept), ui_review.AUTOMATIC_PACKETS_KEPT)
             self.assertNotIn('20260100T000000Z-old', kept)
+
+    def capture(self, **kwargs):
+        # Captures in one test can fall in the same second, and so name the same directory.
+        kwargs['output'].mkdir(exist_ok=True)
+        return 0
+
+    def test_a_changed_package_model_library_or_review_tooling_captures_again(self):
+        with tempfile.TemporaryDirectory() as home, patch.object(ui_review, 'run_review', side_effect=self.capture) as run:
+            for evidence, tooling in [(self.evidence(), 't'), ({**self.evidence(), 'packages': {'cedar-embeddable-editor': 'p2'}}, 't'),
+                                      ({**self.evidence(), 'packages': {'cedar-embeddable-editor': 'p2'}}, 'u')]:
+                with patch.object(ui_review, 'runtime_evidence', return_value=evidence), \
+                        patch.object(ui_review, 'review_tooling_sha256', return_value=tooling):
+                    self.assertEqual(ui_review.capture_after_build(home, printer=lambda *_: None), 0)
+            model = self.evidence()
+            model['sources']['cedar-model-typescript-library'] = {'current': {'sourceSha256': 'm2'}}
+            model['packages'] = {'cedar-embeddable-editor': 'p2'}
+            with patch.object(ui_review, 'runtime_evidence', return_value=model), \
+                    patch.object(ui_review, 'review_tooling_sha256', return_value='u'):
+                self.assertEqual(ui_review.capture_after_build(home, printer=lambda *_: None), 0)
+                self.assertIsNone(ui_review.capture_after_build(home, printer=lambda *_: None))
+        self.assertEqual(run.call_count, 4)
+
+    def test_an_unreadable_record_or_evidence_is_reported_and_never_raises(self):
+        with tempfile.TemporaryDirectory() as home:
+            latest = Path(home) / '.cedar/reports/ui-review/automatic/latest.json'
+            latest.parent.mkdir(parents=True)
+            latest.write_text('{not json')
+            with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence()), \
+                    patch.object(ui_review, 'run_review', side_effect=self.capture):
+                self.assertEqual(ui_review.capture_after_build(home, printer=lambda *_: None), 0)
+            printed = []
+            with patch.object(ui_review, 'runtime_evidence', side_effect=KeyError('build')):
+                self.assertEqual(ui_review.capture_after_build(home, printer=printed.append), 2)
+        self.assertIn('build is unaffected', printed[-1])
+
+    def test_incomplete_captures_never_evict_the_complete_packet_the_record_names(self):
+        with tempfile.TemporaryDirectory() as home:
+            root = Path(home) / '.cedar/reports/ui-review/automatic'
+            with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence()), \
+                    patch.object(ui_review, 'run_review', side_effect=self.capture):
+                ui_review.capture_after_build(home, printer=lambda *_: None)
+            complete = Path(json.loads((root / 'latest.json').read_text())['packet'])
+            def incomplete(**kwargs):
+                kwargs['output'].mkdir()
+                return 2
+            for index in range(ui_review.AUTOMATIC_PACKETS_KEPT + 2):
+                with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence(designer=f'd{index}')), \
+                        patch.object(ui_review, 'run_review', side_effect=incomplete), \
+                        patch.object(ui_review.time, 'strftime', return_value=f'20990101T00000{index}Z'):
+                    ui_review.capture_after_build(home, printer=lambda *_: None)
+            self.assertTrue(complete.is_dir())
+            # A record whose packet is gone does not skip the capture its sources call for.
+            ui_review.shutil.rmtree(complete)
+            with patch.object(ui_review, 'runtime_evidence', return_value=self.evidence()), \
+                    patch.object(ui_review, 'run_review', side_effect=self.capture) as run:
+                self.assertEqual(ui_review.capture_after_build(home, printer=lambda *_: None), 0)
+            run.assert_called_once()
 
     def test_a_capture_that_cannot_start_is_reported_without_raising(self):
         with tempfile.TemporaryDirectory() as home, \

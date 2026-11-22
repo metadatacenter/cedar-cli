@@ -1,4 +1,5 @@
 """Application UI evidence and independent-review validation; never changes the product."""
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -72,7 +73,8 @@ def run_review(*, plan=False, output=None, review=None, seal_review=False, diagn
         raise ValueError('Choose one of --plan, --review or --seal-review')
     command = ['node', str(root / 'ui-review/run.mjs'), '--app=' + app]
     if plan:
-        return _invoke(command + ['--plan'], cwd=root, env=environment)
+        # The catalog depends on the profile: the touch profile has no text-size states.
+        return _invoke(command + ['--plan', f'--profile={profile}'], cwd=root, env=environment)
     if seal_review:
         if output is None:
             raise ValueError('--seal-review requires --output naming the captured run')
@@ -95,10 +97,11 @@ def run_review(*, plan=False, output=None, review=None, seal_review=False, diagn
 
 
 # Repositories whose source content a capture reviews. A frontend build that changes any of them
-# captures fresh evidence for a later independent review.
+# captures fresh evidence for a later independent review. The model library decides what the
+# editors render and accept, so it counts as much as the applications do.
 REVIEWED_SOURCES = ('cedar-embeddable-designer', 'cedar-template-designer', 'cedar-workspace',
                     'cedar-embeddable-editor', 'cedar-embeddable-term-picker', 'cedar-openview',
-                    'cedar-design-tokens')
+                    'cedar-design-tokens', 'cedar-model-typescript-library')
 AUTOMATIC_PACKETS_KEPT = 5
 
 
@@ -107,19 +110,64 @@ def reviewed_sources(evidence):
             if Path(name).parts[0] in REVIEWED_SOURCES}
 
 
+def review_tooling_sha256(home):
+    """One digest for the review tooling: every capture module, the catalog among them, and the
+    lockfile that fixes the browser driver and the checks. A change to any of them can leave the
+    previous packet unable to validate, so it calls for a new capture. None when it cannot be read."""
+    root = Path(home) / 'cedar-development/ops/e2e'
+    try:
+        files = sorted(path for path in (root / 'ui-review').glob('*.mjs')
+                       if not path.name.endswith(('.test.mjs', '.browser-test.mjs')))
+        files.append(root / 'package-lock.json')
+        digest = hashlib.sha256()
+        for path in files:
+            digest.update(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n'
+                          .encode())
+        return digest.hexdigest() if files[:-1] else None
+    except OSError:
+        return None
+
+
+def review_inputs(home, evidence):
+    """Everything a capture's evidence depends on: the reviewed sources, the component packages the
+    selected build installed, and the review tooling."""
+    return {'sources': reviewed_sources(evidence),
+            'packages': dict(sorted((evidence.get('packages') or {}).items())),
+            'tooling': review_tooling_sha256(home)}
+
+
 def capture_after_build(home, *, printer=print):
-    """Capture review evidence after a frontend build when reviewed sources changed.
+    """Capture review evidence after a frontend build when anything the review shows changed.
 
     The capture never fails the build: an incomplete packet is reported, and the next build that
-    reaches this step tries again, because only a complete capture records the sources it covered.
+    reaches this step tries again, because only a complete capture records the inputs it covered.
+    Every step is inside that guarantee, reading the previous record and pruning old packets included.
     """
-    home = Path(home)
+    try:
+        return _capture_after_build(Path(home), printer)
+    except Exception as error:  # an optional step; nothing in it may fail the build
+        printer(f'UI review capture could not run: {error}; the build is unaffected.')
+        return 2
+
+
+def _last_complete(latest):
+    """The record of the last complete capture, or None when there is none or it cannot be read."""
+    try:
+        record = json.loads(latest.read_text())
+        return record if isinstance(record, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _capture_after_build(home, printer):
     root = home / '.cedar/reports/ui-review/automatic'
     latest = root / 'latest.json'
     evidence = runtime_evidence(home)
-    sources = reviewed_sources(evidence)
-    if latest.exists() and json.loads(latest.read_text()).get('sources') == sources:
-        printer('UI review capture skipped: no reviewed frontend source changed since the last complete capture.')
+    inputs = review_inputs(home, evidence)
+    previous = _last_complete(latest)
+    # A record whose packet retention or a person removed no longer stands for evidence.
+    if previous and previous.get('inputs') == inputs and Path(str(previous.get('packet'))).is_dir():
+        printer('UI review capture skipped: nothing the review shows changed since the last complete capture.')
         return None
     root.mkdir(parents=True, exist_ok=True)
     directory = root / (time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + evidence['build'][:8])
@@ -129,12 +177,17 @@ def capture_after_build(home, *, printer=print):
         printer('UI review capture could not run: ' + str(error))
         code = 2
     if code == 0:
-        latest.write_text(json.dumps({'packet': str(directory), 'build': evidence['build'], 'sources': sources},
+        latest.write_text(json.dumps({'packet': str(directory), 'build': evidence['build'], 'inputs': inputs},
                                      indent=2) + '\n')
         printer(f'UI review evidence captured for independent review: {directory / "index.html"}')
     else:
         printer(f'UI review capture INCOMPLETE (exit {code}); the build is unaffected. Evidence: {directory}')
+    # Pruning never removes the packet the record names, so incomplete captures cannot evict the
+    # last complete one while the record still points at it.
+    complete = _last_complete(latest)
+    kept = Path(str(complete.get('packet'))).name if complete else None
     packets = sorted(path for path in root.iterdir() if path.is_dir())
     for stale in packets[:-AUTOMATIC_PACKETS_KEPT]:
-        shutil.rmtree(stale)
+        if stale.name != kept:
+            shutil.rmtree(stale)
     return code
