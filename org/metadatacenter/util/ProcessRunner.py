@@ -75,15 +75,78 @@ def _set_foreground(group):
         signal.signal(signal.SIGTTOU, previous)
 
 
-def _output_lines(process):
-    # Poll even a silent subprocess so Ctrl-C can cancel every scheduler worker.
-    if process_cancellation.get() is None:
+def _child_stopped(pid):
+    """Report a stop of the child since the last look, without ever reaping an exited child.
+
+    waitid with WSTOPPED alone reports stops and consumes each report; leaving out WEXITED
+    leaves the exit status for Popen to collect.
+    """
+    try:
+        result = os.waitid(os.P_PID, pid, os.WSTOPPED | os.WNOHANG)
+    except ChildProcessError:
+        return False
+    return result is not None and result.si_code == os.CLD_STOPPED
+
+
+class _TerminalHandoff:
+    """The controlling terminal, lent to the child's process group for the life of the command.
+
+    While the child's group holds the terminal, Ctrl-Z stops that group and not the CLI. Its
+    parent shell then never learns of a stop, never returns its prompt, and every Ctrl-C after it
+    only queues on the stopped processes. So a stop of the child becomes a stop of the CLI: the
+    terminal returns to the CLI's group, the CLI stops itself, and the shell reports the job as
+    stopped. When the shell resumes the CLI, the child's group is resumed with it, and gets the
+    terminal back only if the CLI was resumed in the foreground (`fg` rather than `bg`).
+    """
+
+    def __init__(self, shell_group, child_group):
+        self.shell_group = shell_group
+        self.child_group = child_group
+        self.lent = False
+
+    def lend(self):
+        _set_foreground(self.child_group)
+        self.lent = True
+        # A child that tried to read before the handoff may have received SIGTTIN.
+        self._continue_child()
+
+    def follow_stop(self):
+        if not _child_stopped(self.child_group):
+            return
+        _set_foreground(self.shell_group)
+        self.lent = False
+        os.kill(os.getpid(), signal.SIGTSTP)
+        # Execution continues here once the shell resumes the CLI.
+        if os.tcgetpgrp(0) == self.shell_group:
+            _set_foreground(self.child_group)
+            self.lent = True
+        self._continue_child()
+
+    def restore(self):
+        # Take the terminal back only from the child. After `bg` the shell owns it.
+        if self.lent:
+            _set_foreground(self.shell_group)
+            self.lent = False
+
+    def _continue_child(self):
+        try:
+            os.killpg(self.child_group, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+
+
+def _output_lines(process, tick=None):
+    # Poll even a silent subprocess so Ctrl-C can cancel every scheduler worker,
+    # and so a stop of a child holding the terminal is noticed.
+    if process_cancellation.get() is None and tick is None:
         yield from iter(process.stdout.readline, b'')
         return
     pending = b''
     while True:
         if cancellation_requested():
             raise InterruptedError('Build cancelled')
+        if tick is not None:
+            tick()
         ready, _, _ = select.select([process.stdout], [], [], 0.2)
         if not ready:
             continue
@@ -107,30 +170,31 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
     """
     if isinstance(argv, (str, bytes)) or not argv:
         raise ValueError('Process arguments must be a nonempty sequence, not a shell string')
-    foreground = None
+    shell_group = None
     if threading.current_thread() is threading.main_thread() and os.isatty(0) and os.tcgetpgrp(0) == os.getpgrp():
-        foreground = os.getpgrp()
+        shell_group = os.getpgrp()
     process = _spawn(list(argv), cwd=cwd, env=process_environment(env))
     lines = []
+    handoff = None
+    tick = None
     try:
-        if foreground is not None:
-            _set_foreground(process.pid)
-            # A child that tried to read before the handoff may have received SIGTTIN.
-            try:
-                os.killpg(process.pid, signal.SIGCONT)
-            except ProcessLookupError:
-                pass
-        for raw in _output_lines(process):
+        if shell_group is not None:
+            handoff = _TerminalHandoff(shell_group, process.pid)
+            handoff.lend()
+            tick = handoff.follow_stop
+        for raw in _output_lines(process, tick):
             line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
             if line.strip():
                 lines.append(line)
                 if on_line is not None:
                     on_line(line)
-        if process_cancellation.get() is None:
+        if process_cancellation.get() is None and tick is None:
             return CommandOutput(lines, process.wait())
         while True:
             if cancellation_requested():
                 raise InterruptedError('Build cancelled')
+            if tick is not None:
+                tick()
             try:
                 return CommandOutput(lines, process.wait(timeout=0.2))
             except subprocess.TimeoutExpired:
@@ -163,8 +227,8 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
         raise
     finally:
         process.stdout.close()
-        if foreground is not None:
-            _set_foreground(foreground)
+        if handoff is not None:
+            handoff.restore()
 
 
 def run_shell(script, *, shell, cwd=None, env=None, on_line=None):

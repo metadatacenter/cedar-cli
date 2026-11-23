@@ -141,6 +141,76 @@ class ProcessTerminalTest(unittest.TestCase):
                 pass
             os.waitpid(pid, 0)
 
+    def test_ctrl_z_stops_the_cli_and_resume_continues_the_child(self):
+        # Ctrl-Z reaches only the child's group, which holds the terminal. The CLI must stop too,
+        # with the terminal back in its own group, or its shell never returns a prompt.
+        child = "import sys; print('READY', flush=True); print('GOT='+input(), flush=True)"
+        driver = (
+            "import os,sys; from org.metadatacenter.util.ProcessRunner import run_process; "
+            "run_process([sys.executable,'-c',sys.argv[1]], on_line=lambda s: print(s,flush=True)); "
+            "print('RESTORED='+str(os.tcgetpgrp(0)==os.getpgrp()),flush=True)"
+        )
+        if self.force_python310:
+            driver = 'import sys; sys.version_info=(3,10); ' + driver
+        # A job-control shell in miniature. The kernel discards SIGTSTP for an orphaned process
+        # group, so the CLI needs a parent in its own session, as it has under a real shell. The
+        # shell runs it as a job, reports its stop and who held the terminal, then resumes it with
+        # `fg` semantics.
+        shell = (
+            "import os,sys,signal\n"
+            "signal.signal(signal.SIGTTOU, signal.SIG_IGN)\n"
+            "pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    os.setpgid(0, 0)\n"
+            "    os.execv(sys.executable, [sys.executable, '-c'] + sys.argv[1:])\n"
+            "os.setpgid(pid, pid)\n"
+            "os.tcsetpgrp(0, pid)\n"
+            "_, status = os.waitpid(pid, os.WUNTRACED)\n"
+            "if not os.WIFSTOPPED(status):\n"
+            "    print('NOT-STOPPED', flush=True); sys.exit(1)\n"
+            "owner = os.tcgetpgrp(0)\n"
+            "os.tcsetpgrp(0, os.getpgrp())\n"
+            "print('STOPPED owner-is-cli=' + str(owner == pid), flush=True)\n"
+            "os.tcsetpgrp(0, pid)\n"
+            "os.kill(pid, signal.SIGCONT)\n"
+            "os.waitpid(pid, 0)\n"
+        )
+        pid, master = pty.fork()
+        if pid == 0:
+            os.execv(sys.executable, [sys.executable, '-c', shell, driver, child])
+        output = b''
+        state = 'start'
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and b'RESTORED=' not in output:
+                readable, _, _ = select.select([master], [], [], 0.1)
+                if not readable:
+                    continue
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        break
+                    raise
+                if not chunk:
+                    break
+                output += chunk
+                if state == 'start' and b'READY' in output:
+                    os.write(master, b'\x1a')
+                    state = 'suspended'
+                if state == 'suspended' and b'STOPPED' in output:
+                    os.write(master, b'after-resume\n')
+                    state = 'resumed'
+            self.assertIn(b'STOPPED owner-is-cli=True', output)
+            self.assertIn(b'GOT=after-resume', output)
+            self.assertIn(b'RESTORED=True', output)
+        finally:
+            os.close(master)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
 
 class Python310ProcessRunnerTest(ProcessRunnerTest):
     """Run every process lifecycle assertion through the 3.10 path on newer CI too."""
