@@ -25,6 +25,11 @@ reactor's deployed build was made from commits other than the heads the record w
 frontend serves a package, a copy or a tree whose stamp does not name them, and while Keycloak runs
 an event listener other than develop's. The evidence would otherwise certify code the stack is not
 running.
+
+A run can instead speak for a completed Docker train, which is how the train workflow gates its own
+completion on a hosted runner. The record then names the commits the train captured, and the stack
+stands for them only while every container runs an image whose digest the train's verification
+recorded.
 """
 
 from __future__ import annotations
@@ -287,6 +292,114 @@ def stack_findings(cedar_home, runner=subprocess.run) -> list[str]:
         runner=runner,
     ))
     findings.extend(keycloak_listener_findings(cedar_home, runner))
+    return findings
+
+
+# Each image a train stack runs a container of, by the prefix of its name. The container is named
+# for the image without its `cedar-` prefix. The two base images run no container of their own.
+TRAIN_CONTAINER_PREFIXES = ("cedar-infra-", "cedar-server-", "cedar-frontend-")
+CEE_PACKAGE = "@org.metadatacenter/cedar-embeddable-editor"
+
+
+class TrainSubject:
+    """A completed Docker train, as its verified state records it.
+
+    A native run speaks for the working trees it was built from. A train run speaks for the commits
+    the train captured, and its stack is evidence about them only when every container runs an image
+    whose digest the train's own verification recorded.
+    """
+
+    def __init__(self, version: str, heads: Mapping[str, str], source_sha256: str,
+                 images: list[Mapping[str, str]], cee_version: str | None):
+        self.version = version
+        self.heads = dict(heads)
+        self.source_sha256 = source_sha256
+        self.images = [dict(image) for image in images]
+        self.cee_version = cee_version
+
+    def record(self) -> dict:
+        return {"kind": "train", "train": self.version, "sourceManifestSha256": self.source_sha256,
+                "images": [{"image": image["image"], "digest": image["digest"]} for image in self.images]}
+
+
+def _state_json(state: Path, relative: str) -> tuple[dict, bytes]:
+    path = state / relative
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as error:
+        raise SmokeGateError(f"cannot read {relative} from the train state: {error}") from error
+    if not isinstance(payload, dict):
+        raise SmokeGateError(f"{relative} in the train state is not an object")
+    return payload, raw
+
+
+def train_subject(cedar_home, state: Path, version: str) -> TrainSubject:
+    """The train a run against a Docker stack speaks for, read from the train's verified state."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+-dev\.\d{8}\.\d{4}", version or ""):
+        raise SmokeGateError(f"{version!r} is not a train version")
+    source, raw = _state_json(state, f"trains/{version}.json")
+    completion, _ = _state_json(state, f"docker/completed/{version}.json")
+    npm, _ = _state_json(state, f"npm/completed/{version}.json")
+    source_sha256 = hashlib.sha256(raw).hexdigest()
+    if completion.get("version") != version or completion.get("sourceManifestSha256") != source_sha256:
+        raise SmokeGateError(f"the Docker completion of {version} was not verified against its source manifest")
+    captured = source.get("repositories")
+    if not isinstance(captured, dict):
+        raise SmokeGateError(f"the source manifest of {version} names no repositories")
+    repositories = train_repositories(cedar_home)
+    missing = [name for name in repositories if not re.fullmatch(r"[0-9a-f]{40}", str(captured.get(name, "")))]
+    if missing:
+        raise SmokeGateError(f"the source manifest of {version} captures no commit of {_names(missing)}")
+    images = [image for image in completion.get("images") or []
+              if isinstance(image, dict) and str(image.get("image", "")).startswith(TRAIN_CONTAINER_PREFIXES)]
+    if not images or any(not re.fullmatch(r"sha256:[0-9a-f]{64}", str(image.get("digest", ""))) for image in images):
+        raise SmokeGateError(f"the Docker completion of {version} records no verified digest for its images")
+    cee = [entry.get("version") for entry in npm.get("packages") or []
+           if isinstance(entry, dict) and entry.get("name") == CEE_PACKAGE]
+    return TrainSubject(version, {name: captured[name] for name in repositories}, source_sha256, images,
+                        cee[0] if len(cee) == 1 and isinstance(cee[0], str) else None)
+
+
+def container_findings(subject: TrainSubject, runner=subprocess.run) -> list[str]:
+    """Why the running containers are not the images the train verified, and nothing when they are.
+
+    A container's image is compared by repository digest, which names the bytes the train pushed and
+    verified; a tag can be moved and a local image can be rebuilt under the same name.
+    """
+    findings = []
+    for image in subject.images:
+        container = image["image"].removeprefix("cedar-")
+        code, out, err = _capture(runner, ["docker", "inspect", "--format", "{{.Image}}", container])
+        if code != 0 or not out.strip():
+            findings.append(f"{container} is not running: {err.strip() or 'docker inspect found no container'}")
+            continue
+        code, digests, err = _capture(runner, ["docker", "image", "inspect", "--format",
+                                               "{{json .RepoDigests}}", out.strip()])
+        try:
+            recorded = json.loads(digests) if code == 0 else None
+        except json.JSONDecodeError:
+            recorded = None
+        if not isinstance(recorded, list):
+            findings.append(f"cannot read which image {container} runs: {err.strip() or 'no repository digest'}")
+        elif not any(str(entry).endswith("@" + image["digest"]) for entry in recorded):
+            findings.append(f"{container} runs an image other than the {image['digest'][:19]} "
+                            f"train {subject.version} verified")
+    return findings
+
+
+def train_findings(report: Mapping, subject: TrainSubject) -> list[str]:
+    """Every reason a recorded run does not stand for this train, and nothing when it does.
+
+    The same judgment the train and release gates apply to a native run, plus proof that the run
+    was made against this train's verified images rather than against other code at the same heads.
+    """
+    findings = evaluate(report, subject.heads)
+    recorded = report.get("subject")
+    if not isinstance(recorded, dict) or recorded != subject.record():
+        findings.append(f"the smoke run was not made against the verified images of train {subject.version}")
+    if report.get("verdict") != "PASS":
+        findings.append(f"the smoke run's verdict is {report.get('verdict', 'unrecorded')}")
     return findings
 
 
@@ -903,6 +1016,8 @@ def run_smoke(
     clock: Callable[[], dt.datetime] = _now,
     environment: Mapping[str, str] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
+    train: str | None = None,
+    train_state: Path | None = None,
 ) -> int:
     """Run every smoke tier and record what they ran against. Zero only when all of them pass.
 
@@ -910,7 +1025,13 @@ def run_smoke(
     stack is a reason to stop, not evidence about the source. Every tier runs even when an earlier
     one fails, so one command yields one complete answer. The REST tier runs beside the others and
     writes its output to a file beside its report; the browser, split and search tiers run in turn.
+
+    With a train and its verified state, the run speaks for that train instead of for the working
+    trees: the stack must be the train's Docker stack, every container running an image whose digest
+    the train's verification recorded, and the record names the commits the train captured.
     """
+    if (train is None) != (train_state is None):
+        raise ValueError("a train run needs both the train version and its verified state")
     if rest_workers is not None and (type(rest_workers) is not int or not 1 <= rest_workers <= 4):
         raise ValueError("REST workers must be an integer from 1 to 4")
     if split_lanes is not None and (type(split_lanes) is not int or not 1 <= split_lanes <= 6):
@@ -921,14 +1042,21 @@ def run_smoke(
         raise ValueError("the split tier's timeout cap must be an integer number of seconds from "
                          f"{SPLIT_TIMEOUT_CAP_RANGE[0]} to {SPLIT_TIMEOUT_CAP_RANGE[1]}")
     home = _home(cedar_home or invocation_environment().get("CEDAR_HOME"))
+    subject = None
+    if train is not None:
+        try:
+            subject = train_subject(home, Path(train_state), train)
+        except SmokeGateError as error:
+            console.print(f"[red]{error}[/red]", markup=False)
+            return 1
     with local_stack(home, console.print):
         return _run_tiers(home, rest_workers=rest_workers, split_lanes=split_lanes,
                           split_timeout_cap=split_timeout_cap, runner=runner, clock=clock,
-                          environment=environment, sleeper=sleeper)
+                          environment=environment, sleeper=sleeper, subject=subject)
 
 
 def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, clock, environment,
-               sleeper) -> int:
+               sleeper, subject: TrainSubject | None = None) -> int:
     """The smoke itself, run while this process holds the local stack."""
     environment = dict(environment if environment is not None else invocation_environment())
     e2e = home / E2E
@@ -939,54 +1067,68 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         console.print("[red]npm is not on PATH; the smoke tiers need Node[/red]")
         return 1
 
-    problems = stack_findings(home, runner)
-    if only_warming(problems):
-        problems = wait_out_warmup(home, problems, runner=runner, sleeper=sleeper)
-    if problems:
-        console.print("[red]The native stack cannot stand for its source:[/red]")
-        for problem in problems:
-            console.print(f"  - {problem}", markup=False)
-        console.print("Bring every service to healthy and current, then rerun cedarcli test e2e.")
-        return 1
+    if subject is not None:
+        problems = container_findings(subject, runner)
+        if problems:
+            console.print(f"[red]The Docker stack is not train {subject.version}:[/red]", markup=False)
+            for problem in problems:
+                console.print(f"  - {problem}", markup=False)
+            console.print("Start the train with cedarcli docker start all --train, then rerun.")
+            return 1
+        repositories = list(subject.heads)
+        heads, dirty, tree_dirty, frontend_build, processes = subject.heads, [], [], None, None
+        cee_version = subject.cee_version
+        if cee_version:
+            environment["CEDAR_EXPECT_CEE_VERSION"] = cee_version
+    else:
+        problems = stack_findings(home, runner)
+        if only_warming(problems):
+            problems = wait_out_warmup(home, problems, runner=runner, sleeper=sleeper)
+        if problems:
+            console.print("[red]The native stack cannot stand for its source:[/red]")
+            for problem in problems:
+                console.print(f"  - {problem}", markup=False)
+            console.print("Bring every service to healthy and current, then rerun cedarcli test e2e.")
+            return 1
 
-    repositories = train_repositories(home)
-    heads, dirty, head_problems = develop_heads(home, repositories, runner)
-    head_problems += running_cli_findings(home, heads)
-    if head_problems:
-        console.print("[red]Source heads cannot be recorded:[/red]")
-        for problem in head_problems:
-            console.print(f"  - {problem}", markup=False)
-        return 1
-    frontend_problems, built_dirty, frontend_build = frontend_sources(home, heads)
-    if frontend_problems:
-        console.print("[red]The frontends cannot stand for the source heads:[/red]")
-        for problem in frontend_problems:
-            console.print(f"  - {problem}", markup=False)
-        return 1
-    cee_version, cee_problem = expected_cee_version(home, heads, runner)
-    if cee_problem:
-        console.print(f"[red]{cee_problem}[/red]", markup=False)
-        return 1
-    if cee_version:
-        # login-smoke-test.mjs compares every editor it renders with this version.
-        environment["CEDAR_EXPECT_CEE_VERSION"] = cee_version
-    processes = native_processes(home, runner)
-    if processes is None:
-        console.print("[red]cannot read native stack status[/red]")
-        return 1
-    tree_dirty = list(dirty)
-    # A jar whose stamps say its build saw uncommitted changes holds code no commit does.
-    dirty = sorted(set(dirty) | set(built_dirty) | (set(stamped_dirty(home, processes)) & set(heads)))
-    if dirty:
-        console.print(
-            "[yellow]Uncommitted changes in: " + ", ".join(dirty)
-            + ". The run is recorded, and the gate will refuse it for these repositories.[/yellow]")
-    absent = absent_repositories(home, repositories)
-    if absent:
-        console.print(
-            "[yellow]Not checked out here: " + ", ".join(absent)
-            + ". The run cannot have tested them, and the gate will refuse a train or release that "
-              "captures them.[/yellow]")
+        repositories = train_repositories(home)
+        heads, dirty, head_problems = develop_heads(home, repositories, runner)
+        head_problems += running_cli_findings(home, heads)
+        if head_problems:
+            console.print("[red]Source heads cannot be recorded:[/red]")
+            for problem in head_problems:
+                console.print(f"  - {problem}", markup=False)
+            return 1
+        frontend_problems, built_dirty, frontend_build = frontend_sources(home, heads)
+        if frontend_problems:
+            console.print("[red]The frontends cannot stand for the source heads:[/red]")
+            for problem in frontend_problems:
+                console.print(f"  - {problem}", markup=False)
+            return 1
+        cee_version, cee_problem = expected_cee_version(home, heads, runner)
+        if cee_problem:
+            console.print(f"[red]{cee_problem}[/red]", markup=False)
+            return 1
+        if cee_version:
+            # login-smoke-test.mjs compares every editor it renders with this version.
+            environment["CEDAR_EXPECT_CEE_VERSION"] = cee_version
+        processes = native_processes(home, runner)
+        if processes is None:
+            console.print("[red]cannot read native stack status[/red]")
+            return 1
+        tree_dirty = list(dirty)
+        # A jar whose stamps say its build saw uncommitted changes holds code no commit does.
+        dirty = sorted(set(dirty) | set(built_dirty) | (set(stamped_dirty(home, processes)) & set(heads)))
+        if dirty:
+            console.print(
+                "[yellow]Uncommitted changes in: " + ", ".join(dirty)
+                + ". The run is recorded, and the gate will refuse it for these repositories.[/yellow]")
+        absent = absent_repositories(home, repositories)
+        if absent:
+            console.print(
+                "[yellow]Not checked out here: " + ", ".join(absent)
+                + ". The run cannot have tested them, and the gate will refuse a train or release that "
+                  "captures them.[/yellow]")
 
     digest = sources_digest(heads)
     reports = reports_dir(home)
@@ -1095,8 +1237,11 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
     tiers = {tier: results[tier] for tier in TIERS}
 
     # Judged again now that every tier has finished, since nothing stopped the stack moving meanwhile.
-    changes = changes_during_run(home, repositories, runner, heads=heads, dirty=tree_dirty,
-                                 processes=processes, frontend_build=frontend_build)
+    if subject is not None:
+        changes = container_findings(subject, runner)
+    else:
+        changes = changes_during_run(home, repositories, runner, heads=heads, dirty=tree_dirty,
+                                     processes=processes, frontend_build=frontend_build)
     if changes:
         console.print("[red]The stack or its sources changed while the tiers ran:[/red]")
         for change in changes:
@@ -1116,6 +1261,8 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
         "changedDuringRun": changes,
         "tiers": tiers,
     }
+    if subject is not None:
+        report["subject"] = subject.record()
     payload = json.dumps(report, indent=2) + "\n"
     (reports / f"{digest}.json").write_text(payload, encoding="utf-8")
     (reports / "latest.json").write_text(payload, encoding="utf-8")

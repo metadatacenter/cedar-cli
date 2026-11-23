@@ -1893,3 +1893,167 @@ class RunningCliTest(unittest.TestCase):
             self.assertEqual(1, len(findings))
             self.assertIn("not the cedar-cli checkout", findings[0])
             self.assertEqual([], smoke_gate.running_cli_findings(home, {}, elsewhere))
+
+
+TRAIN = "2.9.40-dev.20261122.1200"
+TRAIN_IMAGES = ["cedar-java", "cedar-infra-keycloak", "cedar-server-resource", "cedar-frontend-workspace"]
+
+
+def digest_of(image):
+    return "sha256:" + hashlib.sha256(image.encode()).hexdigest()
+
+
+def train_state(directory, heads=HEADS, cee="2.0.40-dev.20261122.gabc.t1200", verified=True):
+    """A build-trains checkout holding one completed Docker train."""
+    state = Path(directory) / "build-trains"
+    for relative in ("trains", "docker/completed", "npm/completed"):
+        (state / relative).mkdir(parents=True)
+    raw = json.dumps({"version": TRAIN, "repositories": dict(heads)}, indent=2).encode()
+    (state / "trains" / f"{TRAIN}.json").write_bytes(raw)
+    images = [{"image": image, "reference": f"registry/{image}:{TRAIN}", "digest": digest_of(image)}
+              for image in TRAIN_IMAGES]
+    (state / "docker" / "completed" / f"{TRAIN}.json").write_text(json.dumps({
+        "version": TRAIN, "images": images,
+        "sourceManifestSha256": hashlib.sha256(raw).hexdigest() if verified else "0" * 64}), encoding="utf-8")
+    (state / "npm" / "completed" / f"{TRAIN}.json").write_text(json.dumps({"packages": [
+        {"name": "@org.metadatacenter/cedar-embeddable-editor", "version": cee}]}), encoding="utf-8")
+    return state
+
+
+def docker_answers(running=None):
+    """`docker inspect` of each train container, which runs the image named in `running`."""
+    running = dict(running or {})
+
+    def container(args, _kwargs):
+        name = args[-1]
+        image = running.get(name, "cedar-" + name)
+        return FakeResult(stdout=f"local-{image}\n") if image else FakeResult(1, stderr="No such object")
+
+    def image(args, _kwargs):
+        local = args[-1].removeprefix("local-")
+        return FakeResult(stdout=json.dumps([f"registry/{local}@{digest_of(local)}"]))
+    return [(("docker", "inspect"), container), (("docker", "image", "inspect"), image)]
+
+
+def train_runner(home, running=None, during=None):
+    """The tiers pass; `during` names the containers that run another image once the tiers start."""
+    base = runner_for(home)
+    swapped = {"done": False}
+
+    def browser(args, kwargs):
+        if during:
+            swapped["done"] = True
+        return browser_runner()(args, kwargs)
+    answers = [(("npm", "run", "smoke"), browser)] if during else []
+    inspect = docker_answers(running)
+
+    def container(args, kwargs):
+        if swapped["done"]:
+            return docker_answers(during)[0][1](args, kwargs)
+        return inspect[0][1](args, kwargs)
+    runner = FakeRunner([(("docker", "inspect"), container), inspect[1]]
+                        + [(("npm", "run", "smoke:rest"), rest_runner()),
+                           (("npm", "run", "smoke:workspace:modern:full"), split_runner()),
+                           (("npm", "run", "smoke:search"), search_runner())]
+                        + answers + base.answers)
+    return runner
+
+
+class TrainRunTest(unittest.TestCase):
+    """A run against a completed Docker train speaks for the commits the train captured."""
+
+    def setUp(self):
+        which = patch("org.metadatacenter.smoke_gate.shutil.which", return_value="/usr/bin/npm")
+        which.start()
+        self.addCleanup(which.stop)
+
+    def run_train(self, home, state, runner):
+        return run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"},
+                         train=TRAIN, train_state=state)
+
+    def test_a_passing_run_records_the_train_and_its_captured_heads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            state = train_state(directory)
+            runner = train_runner(home)
+            self.assertEqual(0, self.run_train(home, state, runner))
+            report = read_report(home, HEADS)
+            self.assertEqual("PASS", report["verdict"])
+            self.assertEqual(HEADS, report["sources"])
+            self.assertEqual("train", report["subject"]["kind"])
+            self.assertEqual(TRAIN, report["subject"]["train"])
+            self.assertEqual(["cedar-infra-keycloak", "cedar-server-resource", "cedar-frontend-workspace"],
+                             [image["image"] for image in report["subject"]["images"]])
+            self.assertEqual([], train_findings_for(report, home, state))
+            self.assertEqual([], runner.commands(str(home / "cedar-development" / "ops" / "cedar-services.sh")))
+            browser = next(kwargs for args, kwargs in runner.calls if args == ["npm", "run", "smoke"])
+            self.assertEqual("2.0.40-dev.20261122.gabc.t1200", browser["env"]["CEDAR_EXPECT_CEE_VERSION"])
+
+    def test_a_container_running_another_image_refuses_the_run_and_records_nothing(self):
+        for running in ({"server-resource": "cedar-server-other"}, {"infra-keycloak": None}):
+            with self.subTest(running=running), tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                state = train_state(directory)
+                runner = train_runner(home, running=running)
+                self.assertEqual(1, self.run_train(home, state, runner))
+                self.assertEqual([], runner.commands("npm", "run"))
+                with self.assertRaises(SmokeGateError):
+                    read_report(home, HEADS)
+
+    def test_a_container_replaced_during_the_run_fails_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            state = train_state(directory)
+            runner = train_runner(home, during={"frontend-workspace": "cedar-frontend-other"})
+            self.assertEqual(1, self.run_train(home, state, runner))
+            report = read_report(home, HEADS)
+            self.assertEqual("FAIL", report["verdict"])
+            self.assertTrue(any("frontend-workspace" in change for change in report["changedDuringRun"]))
+            self.assertTrue(train_findings_for(report, home, state))
+
+    def test_an_unverified_or_incomplete_train_is_refused_before_anything_runs(self):
+        cases = {"unverified": {"verified": False},
+                 "missing a repository": {"heads": {"cedar-a": "a" * 40}}}
+        for name, arguments in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                home = fake_home(directory)
+                state = train_state(directory, **arguments)
+                runner = train_runner(home)
+                self.assertEqual(1, self.run_train(home, state, runner))
+                self.assertEqual([], runner.calls)
+
+    def test_a_train_needs_its_state_and_a_state_needs_its_train(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            with self.assertRaises(ValueError):
+                run_smoke(home, train=TRAIN)
+            with self.assertRaises(ValueError):
+                run_smoke(home, train_state=Path(directory))
+
+
+def train_findings_for(report, home, state):
+    return smoke_gate.train_findings(report, smoke_gate.train_subject(home, state, TRAIN))
+
+
+class TrainFindingsTest(unittest.TestCase):
+    """The completion of a train accepts only a passing run made against its own verified images."""
+
+    def test_only_a_passing_run_against_this_trains_images_stands_for_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            state = train_state(directory)
+            subject = smoke_gate.train_subject(home, state, TRAIN)
+            passing = report_for(subject=subject.record())
+            self.assertEqual([], smoke_gate.train_findings(passing, subject))
+            other_images = subject.record()
+            other_images["images"][0]["digest"] = digest_of("elsewhere")
+            refusals = {
+                "a native run": report_for(),
+                "another train": report_for(subject={**subject.record(), "train": "2.9.39-dev.20261121.1200"}),
+                "other images": report_for(subject=other_images),
+                "a failed run": report_for(subject=subject.record(), verdict="FAIL"),
+                "other heads": report_for(heads={**HEADS, "cedar-b": "c" * 40}, subject=subject.record()),
+            }
+            for name, report in refusals.items():
+                with self.subTest(name=name):
+                    self.assertTrue(smoke_gate.train_findings(report, subject))
