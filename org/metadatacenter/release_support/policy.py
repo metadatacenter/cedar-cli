@@ -442,6 +442,19 @@ NODE_24_CANDIDATE_DIRECTORIES = (
 )
 
 
+# The release's Node as nodejs.org publishes it, for the hosts CEDAR builds on, which the CLI
+# provisions when no installed Node is REQUIRED_NODE_VERSION. The checksums are the entries of that
+# version's SHASUMS256.txt, recorded here so a download is checked against this repository rather
+# than against a file served by the same host. They change with REQUIRED_NODE_VERSION.
+NODE_DIST_URL = "https://nodejs.org/dist"
+REQUIRED_NODE_ARCHIVE_SHA256 = {
+    "darwin-arm64": "654ba79de6155647e22321932b45f2a1ccb705976cc337c9b8e278beb085a628",
+    "darwin-x64": "65e450f90a6eaacd5000f611861c4ce65fadc87f813795dc4ed0c0e5f2fca2d4",
+    "linux-arm64": "dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e",
+    "linux-x64": "6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6",
+}
+
+
 LINUX_JVM_ROOT = "/usr/lib/jvm"
 
 

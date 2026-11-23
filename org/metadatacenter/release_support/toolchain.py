@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import subprocess
+from org.metadatacenter.release_support.node_provision import NodeProvisionError, provision_node
 from org.metadatacenter.release_support.policy import (
     LINUX_JVM_ROOT,
     NODE_24_CANDIDATE_DIRECTORIES,
@@ -37,18 +38,21 @@ class ToolchainResolver:
 
     A developer shell pins whatever the day's work needs, and a release needs Java 17 and Node
     24.22.1 exactly. The runbook tells the operator to export both before starting; the CLI can
-    follow those two instructions itself. It changes only the environment it is given, which for
-    a command is its invocation and children, says what it substituted, and leaves the toolchain
-    check to refuse whatever it could not find.
+    follow those two instructions itself. When no installed Node is that version, it provisions
+    the one nodejs.org publishes under ``$CEDAR_HOME/.cedar/toolchains``. It changes only the
+    environment it is given, which for a command is its invocation and children, says what it
+    substituted, and leaves the toolchain check to refuse whatever it could not find.
     """
 
-    def __init__(self, environment, *, command_runner=None, system=None, exists=None, jvms=None):
+    def __init__(self, environment, *, command_runner=None, system=None, exists=None, jvms=None,
+                 provision=None):
         self.environment = environment
         self.command_runner = command_runner or subprocess.run
         self.system = system or platform.system()
         self.exists = exists or (lambda path: Path(path).is_file())
         self.jvms = jvms or (lambda: sorted(
             str(path) for path in Path(LINUX_JVM_ROOT).glob(f"*{REQUIRED_JAVA_MAJOR}*")))
+        self.provision = provision or provision_node
 
     def _capture(self, args: list[str]) -> tuple[int, str, str]:
         try:
@@ -113,4 +117,22 @@ class ToolchainResolver:
                 self._prepend_path(directory)
                 offered = f"Node {version}" if code == 0 and version else "no working node"
                 return [f"Node {REQUIRED_NODE_VERSION} from {directory}; the shell offered {offered}"]
-        return []
+        return self._provision_node(version if code == 0 else None)
+
+    def _provision_node(self, offered_version: str | None) -> list[str]:
+        """The release's Node from ``$CEDAR_HOME/.cedar/toolchains``, downloaded when absent."""
+        home = self.environment.get("CEDAR_HOME")
+        if not home:
+            return []
+        try:
+            directory = str(self.provision(home))
+        except NodeProvisionError as error:
+            return [f"Node {REQUIRED_NODE_VERSION} could not be provisioned: {error}"]
+        code, version, _ = self._capture([str(Path(directory) / "node"), "--version"])
+        if code != 0 or version != REQUIRED_NODE_VERSION:
+            return [f"Node {REQUIRED_NODE_VERSION} could not be provisioned: {directory} reports "
+                    f"{version or 'no version'}"]
+        self._prepend_path(directory)
+        offered = f"Node {offered_version}" if offered_version else "no working node"
+        return [f"Node {REQUIRED_NODE_VERSION} from {directory}, which the CLI provisions from "
+                f"nodejs.org; the shell offered {offered}"]
