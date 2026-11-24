@@ -559,8 +559,12 @@ class ClaudeRunner(ReviewerProcess):
 
     Images and text reach the reviewer only on stdin. Claude Code keeps a session under the name of
     its working directory, so each session gets a directory of its own that calibration resumes in.
+    It also keeps the session's transcript and a copy of every image, which the coordinator releases
+    once nothing will resume the session.
     """
     image_limit = 100
+    # Claude Code copies received images under claude-<uid> in the system temporary directory.
+    scratch_roots = (Path('/tmp'),)
 
     def __init__(self, model=None, timeout=900):
         super().__init__(timeout)
@@ -597,8 +601,7 @@ class ClaudeRunner(ReviewerProcess):
             raise ValueError(f'{len(images)} images exceed the {self.image_limit} one Claude turn accepts')
         request = self.record_request(directory, prompt, images, schema, resume)
         session = resume or str(uuid.uuid4())
-        # A directory outside CEDAR_HOME, so no project instructions can apply to the reviewer.
-        workspace = Path(tempfile.gettempdir()) / 'cedar-ui-reviewer' / session
+        workspace = self.workspace(session)
         workspace.mkdir(parents=True, exist_ok=True)
         command = [self.executable, '--print', '--input-format', 'stream-json',
                    '--output-format', 'stream-json', '--verbose', '--tools', '', '--safe-mode',
@@ -638,6 +641,29 @@ class ClaudeRunner(ReviewerProcess):
             raise ValueError('Reviewer returned no structured answer')
         write_json(directory / 'response.json', response)
         return self.finish(directory, request, response, session)
+
+
+    @staticmethod
+    def workspace(session):
+        """A directory outside CEDAR_HOME, so no project instructions can apply to the reviewer."""
+        if not re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}', str(session)):
+            raise ValueError('Not a reviewer session identifier: ' + str(session))
+        return Path(tempfile.gettempdir()) / 'cedar-ui-reviewer' / session
+
+    def session_files(self, session):
+        """The directories Claude Code keeps for one session, each named after its working directory."""
+        workspace = self.workspace(session)
+        config = Path(self.environment.get('CLAUDE_CONFIG_DIR') or Path(self.environment.get('HOME', Path.home())) / '.claude')
+        user = f'claude-{os.getuid()}'
+        roots = [config / 'projects', *(root / user for root in {*self.scratch_roots, Path(tempfile.gettempdir())})]
+        # The session identifier is unique, so a name ending in it cannot be another session's.
+        found = [path for root in roots if root.is_dir() for path in root.glob('*cedar-ui-reviewer-' + session)]
+        return [path for path in [*found, workspace] if path.is_dir()]
+
+    def release(self, session):
+        """Delete a finished session's transcript, image copies and directory; the review keeps its own record."""
+        for path in self.session_files(session):
+            shutil.rmtree(path)
 
 
 REVIEWERS = {'codex': CodexRunner, 'claude': ClaudeRunner}
@@ -690,6 +716,12 @@ def cached_response(directory):
     return response, receipt
 
 
+def release(runner, session):
+    """Let a runner that keeps per-session files delete them once nothing will resume the session."""
+    if session and hasattr(runner, 'release'):
+        runner.release(session)
+
+
 def reviewed_job(directory, prompt, images, schema, runner, packet, calibration, harness, validate):
     directory.mkdir(parents=True, exist_ok=True)
     review_dir = directory / 'assessment'
@@ -715,6 +747,7 @@ def reviewed_job(directory, prompt, images, schema, runner, packet, calibration,
         if invalid.exists() or (directory / 'seal.json').exists() or (directory / 'calibration').exists():
             raise
         review_dir.rename(invalid)
+        release(runner, receipt['thread'])
         response, receipt = runner.run(review_dir, prompt, images, schema)
         if receipt['images'] != expected_images:
             raise ValueError('Reviewer receipt does not account for the assigned images')
@@ -743,6 +776,8 @@ def reviewed_job(directory, prompt, images, schema, runner, packet, calibration,
         answers, cal_receipt = runner.run(cal_dir, cal_prompt, cal_images, CALIBRATION_SCHEMA,
                                          resume=receipt['thread'])
     validate_shape(answers, CALIBRATION_SCHEMA)
+    # Calibration is the session's last turn. A failed one keeps the session so a resumed run can finish it.
+    release(runner, receipt['thread'])
     score = harness.score(packet, directory)
     # Preserve a failed score. Resuming must not keep rerolling until the reviewer happens to pass.
     write_json(directory / 'calibration-score.json', score)
@@ -791,7 +826,9 @@ def consolidate_findings(output, findings, runner):
     else:
         if directory.exists():
             directory.rename(output / ('failed-consolidation-' + str(time.time_ns())))
-        response, _ = runner.run(directory, prompt, [], schema)
+        response, receipt = runner.run(directory, prompt, [], schema)
+    # Consolidation is a single turn; a failed one runs again in a fresh session.
+    release(runner, receipt.get('thread'))
     validate_shape(response, schema)
     by_id = {f['id']: f for f in findings}
     members = [id_ for group in response['groups'] for id_ in group['memberIds']]

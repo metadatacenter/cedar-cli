@@ -483,6 +483,38 @@ class CoordinatorTest(unittest.TestCase):
         self.assertFalse((self.root / 'runner/receipt.json').exists())
 
 
+class ReleasingRunner(OfflineRunner):
+    def __init__(self, packet, **kwargs):
+        super().__init__(packet, **kwargs)
+        self.released = []
+
+    def release(self, session):
+        self.released.append(session)
+
+
+class SessionReleaseTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home, self.packet = fixture(self.root)
+
+    def test_sessions_are_released_after_calibration_and_consolidation(self):
+        runner = ReleasingRunner(self.packet, candidates=True)
+        c.coordinate(self.packet, self.root / 'review', self.home, batch_size=2, runner=runner,
+                     harness=OfflineHarness(), printer=lambda *_: None)
+        calibrated = [resume for directory, resume, _ in runner.calls if directory.name == 'calibration']
+        self.assertTrue(calibrated)
+        self.assertEqual(sorted(calibrated + ['offline-review']), sorted(runner.released),
+                         'every calibrated session and the consolidation session, nothing else')
+
+    def test_a_session_whose_calibration_failed_is_kept_for_resume(self):
+        runner = ReleasingRunner(self.packet, fail=lambda d: d.name == 'calibration' and d.parent.name == 'batch-001')
+        c.coordinate(self.packet, self.root / 'review', self.home, batch_size=2, runner=runner,
+                     harness=OfflineHarness(), printer=lambda *_: None)
+        self.assertNotIn('offline-batch-001', runner.released)
+        self.assertIn('offline-batch-002', runner.released)
+
 def claude_events(session, response, *, tools=('StructuredOutput',), blocks=None, result=None):
     """The stream-json lines Claude Code prints for one print-mode turn."""
     blocks = blocks if blocks is not None else [
@@ -526,8 +558,10 @@ class ClaudeRunnerTest(unittest.TestCase):
                    patch.object(c.subprocess, 'run', return_value=status),
                    patch.object(c.subprocess, 'Popen', Process),
                    patch.object(c.tempfile, 'gettempdir', return_value=str(self.root / 'tmp')),
+                   patch.object(c.ClaudeRunner, 'scratch_roots', (self.root / 'systmp',)),
                    patch.dict(c.os.environ, {'CEDAR_PRIVATE_TOKEN': 'must-not-reach-reviewer',
-                                             'CLAUDE_CODE_OAUTH_TOKEN': 'reviewer-login'})]
+                                             'CLAUDE_CODE_OAUTH_TOKEN': 'reviewer-login',
+                                             'CLAUDE_CONFIG_DIR': str(self.root / 'config')})]
         for item in patches:
             item.start()
             self.addCleanup(item.stop)
@@ -567,6 +601,27 @@ class ClaudeRunnerTest(unittest.TestCase):
         self.assertEqual((first['thread'], first['thread']), (second['thread'], second['resumeThread']))
         self.assertEqual(launches[0][1]['cwd'], launches[1][1]['cwd'])
         self.assertNotIn('--session-id', launches[1][0])
+
+    def test_release_deletes_only_the_finished_sessions_files(self):
+        runner = self.runner([])
+        _, receipt = runner.run(self.root / 'assessment', 'Review.', [], c.CALIBRATION_SCHEMA)
+        session, other = receipt['thread'], '0f0e0d0c-0b0a-4909-8807-060504030201'
+        name = lambda id_: '-private-tmp-cedar-ui-reviewer-' + id_
+        kept = [self.root / 'config/projects' / name(other), self.root / 'config/projects/-Users-someone-project',
+                self.root / 'systmp' / f'claude-{c.os.getuid()}' / name(other), runner.workspace(other)]
+        removed = [self.root / 'config/projects' / name(session),
+                   self.root / 'systmp' / f'claude-{c.os.getuid()}' / name(session) / session / 'images',
+                   self.root / 'tmp' / f'claude-{c.os.getuid()}' / name(session)]
+        for path in kept + removed:
+            path.mkdir(parents=True, exist_ok=True)
+            (path / 'kept.txt').write_text('file')
+        self.assertTrue(runner.workspace(session).is_dir())
+        runner.release(session)
+        self.assertEqual([], [p for p in removed + [runner.workspace(session)] if p.exists()])
+        self.assertEqual(kept, [p for p in kept if (p / 'kept.txt').exists()])
+        self.assertEqual((self.root / 'assessment/receipt.json').exists(), True, 'the review keeps its own record')
+        with self.assertRaisesRegex(ValueError, 'session identifier'):
+            runner.release('*')
 
     def test_refuses_tools_failed_turns_and_missing_answers(self):
         cases = {
