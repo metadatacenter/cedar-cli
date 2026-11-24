@@ -165,6 +165,8 @@ class ReleaseArtifactPublisher:
                 )
             elif surface.get("generatedBuildOutput"):
                 task["buildEvidenceId"] = f"release:npm:{surface['id']}:build"
+            if surface.get("stagedBuild"):
+                task["stagedEvidenceId"] = f"release:npm:{surface['id']}:stage"
             tasks.append(task)
         return self._checked(tasks)
 
@@ -602,7 +604,8 @@ class ReleaseArtifactPublisher:
         ):
             raise ReleaseError(f"npm package provenance differs for {evidence['name']}@{task['version']}")
         runtime_files = evidence.get("runtimeFiles")
-        if task.get("packedRuntimeDirectories") or task.get("generatedBuildOutput"):
+        if (task.get("packedRuntimeDirectories") or task.get("generatedBuildOutput")
+                or task.get("stagedBuild")):
             if not isinstance(runtime_files, dict) or not runtime_files:
                 raise ReleaseError(f"npm package has no runtime asset evidence for {task['id']}")
             self._verify_npm_tarball_files(
@@ -676,6 +679,7 @@ class ReleaseArtifactPublisher:
                 f"{generated_output}/{relative}": digest
                 for relative, digest in build_record["outputFiles"].items()
             }
+        generated_files.update(self._stage_validated_outputs(task, root, package_root))
         package_path = package_root / "package.json"
         try:
             package = json.loads(package_path.read_bytes())
@@ -714,6 +718,40 @@ class ReleaseArtifactPublisher:
             "packedTarball": str(tarball_path),
             "runtimeFiles": runtime_files,
         }
+
+    def _stage_validated_outputs(self, task: dict, root: Path, package_root: Path) -> dict:
+        """Copy the outputs the release's staging step recorded into the archived source.
+
+        The archive holds only what Git tracks, and a staged output is ignored by Git, so it
+        arrives here from the release workspace, proven unchanged since validation recorded it.
+        """
+        staged = task.get("stagedBuild")
+        if not staged:
+            return {}
+        manifest, _ = self.state.read_current_manifest()
+        record = manifest.get("buildValidation", {}).get(
+            "completedTasks", {}).get(task.get("stagedEvidenceId"))
+        if not isinstance(record, dict):
+            raise ReleaseError(f"release has no staged-output proof for {task['id']}")
+        ReleaseBuildValidator.verify_completed_task(record)
+        files = {}
+        for relative in staged["outputs"]:
+            relative_path = PurePosixPath(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ReleaseError(f"unsafe staged npm output for {task['id']}")
+            source = root / relative
+            if record.get("stagedOutputs", {}).get(relative) != str(source):
+                raise ReleaseError(f"release has no staged-output proof of {relative} for {task['id']}")
+            destination = package_root / relative_path
+            if destination.exists():
+                raise ReleaseError(
+                    f"staged npm output {relative} collides with archived source for {task['id']}")
+            shutil.copytree(source, destination)
+            files.update({
+                f"{relative}/{name}": digest
+                for name, digest in record["stagedFiles"][relative].items()
+            })
+        return files
 
     def _publish_npm(self, task: dict) -> dict:
         tarball, evidence = self._pack_npm(task)

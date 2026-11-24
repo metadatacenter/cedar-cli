@@ -61,6 +61,11 @@ class ReleaseBuildValidator:
         if not isinstance(threads, int) or not 1 <= threads <= 8:
             raise ReleaseError("Maven threads must be between 1 and 8")
         tasks = []
+        staged_builds = {
+            surface["id"]: surface["stagedBuild"]
+            for surface in manifest.get("publicationPlan", {}).get("npm", {}).get("surfaces", [])
+            if surface.get("stagedBuild")
+        }
         attempt = Path(manifest["frontendPreparation"]["workspace"]).parent
         for variant in ("release", "nextDevelopment"):
             variant_record = versions.get(variant, {})
@@ -155,6 +160,22 @@ class ReleaseBuildValidator:
                             workspace / surface["repository"] / surface["buildOutput"]
                         )
                     tasks.append(build_task)
+                staged = staged_builds.get(surface["id"])
+                if staged:
+                    # Last in the surface's sequence, so the bytes it records are the ones
+                    # packed, whatever the surface's own checks staged on the way.
+                    tasks.append({
+                        "id": self._task_id(variant, "npm", surface["id"], "stage"),
+                        "variant": variant,
+                        "kind": "frontend-build",
+                        "repository": surface["repository"],
+                        "cwd": str(root),
+                        "command": staged["command"],
+                        "tests": False,
+                        "stagedOutputs": {
+                            relative: str(root / relative) for relative in staged["outputs"]
+                        },
+                    })
         # Catch prepared consumer failures before paying for the Java build. Preserve
         # install/check/build order within each frontend and Maven dependency order.
         tasks.sort(key=lambda task: (task["variant"] != "release", task["kind"] == "maven"))
@@ -272,6 +293,11 @@ class ReleaseBuildValidator:
         }
         if task.get("buildOutput"):
             record["outputFiles"] = _directory_file_hashes(Path(task["buildOutput"]))
+        if task.get("stagedOutputs"):
+            record["stagedFiles"] = {
+                relative: _directory_file_hashes(Path(path))
+                for relative, path in task["stagedOutputs"].items()
+            }
         return record
 
     @staticmethod
@@ -300,3 +326,12 @@ class ReleaseBuildValidator:
                 raise ReleaseError(f"completed build has no output evidence for {record.get('id')}")
             if _directory_file_hashes(Path(record["buildOutput"])) != expected_files:
                 raise ReleaseError(f"completed build output changed for {record.get('id')}")
+        if record.get("stagedOutputs"):
+            expected_staged = record.get("stagedFiles")
+            if (not isinstance(expected_staged, dict)
+                    or set(expected_staged) != set(record["stagedOutputs"])):
+                raise ReleaseError(f"completed build has no staged evidence for {record.get('id')}")
+            for relative, path in record["stagedOutputs"].items():
+                if _directory_file_hashes(Path(path)) != expected_staged[relative]:
+                    raise ReleaseError(
+                        f"completed staged output {relative} changed for {record.get('id')}")

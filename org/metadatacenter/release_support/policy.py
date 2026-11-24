@@ -275,7 +275,17 @@ MAVEN_SNAPSHOT_REPOSITORY = "https://nexus.bmir.stanford.edu/repository/snapshot
 NPM_RELEASE_SURFACES = [
     {"id": "template-editor", "repository": "cedar-template-editor", "directory": "."},
     {"id": "workspace", "repository": "cedar-workspace", "directory": "."},
-    {"id": "template-designer", "repository": "cedar-template-designer", "directory": "."},
+    {
+        "id": "template-designer", "repository": "cedar-template-designer", "directory": ".",
+        # The Designer serves the components it stages from its dependencies into these two
+        # directories, which Git ignores, and its image refuses a package without them. A train
+        # packs them as overlays of its prepared build; the release stages them in its own
+        # validation and packs the bytes that step recorded.
+        "stagedBuild": {
+            "command": ["npm", "run", "prepare:components"],
+            "outputs": ["app/components", "app/host"],
+        },
+    },
     {
         "id": "openview", "repository": "cedar-openview", "directory": "cedar-openview-dist",
         "buildOutput": "cedar-openview-src/dist/cedar-openview",

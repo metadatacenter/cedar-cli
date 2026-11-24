@@ -2741,6 +2741,52 @@ class ReleaseBuildValidationTest(unittest.TestCase):
             self.assertEqual(2, len(checks))
             self.assertTrue(all(task['command']==['npm','run','recorded-check'] for task in checks))
 
+    def test_a_staged_build_runs_last_and_records_the_bytes_it_staged(self):
+        # The Designer's image serves components the package must carry, and Git ignores them.
+        # The release stages them after the surface's checks and records exactly what it staged.
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_manifest(directory, include_frontend=True)
+            manifest['frontendSurfaces'] = [dict(
+                id='designer', repository='cedar-template-editor', directory='.', install=[],
+                build=[], verify=[['npm', 'run', 'prepare:components'], ['npm', 'test']])]
+            manifest['publicationPlan'] = {'npm': {'surfaces': [dict(
+                id='designer', repository='cedar-template-editor', directory='.',
+                stagedBuild={'command': ['npm', 'run', 'prepare:components'],
+                             'outputs': ['app/components', 'app/host']})]}}
+
+            def stage(task, _environment):
+                for relative in task['stagedOutputs']:
+                    output = Path(task['cwd']) / relative
+                    output.mkdir(parents=True, exist_ok=True)
+                    (output / 'bundle.js').write_text(f'{relative}\n', encoding='utf-8')
+                return ''
+
+            validator = ReleaseBuildValidator(
+                ReleaseState(root=Path(directory) / 'state'), executor=stage)
+            tasks = validator.tasks(manifest)
+            for variant in ('release', 'nextDevelopment'):
+                designer = [task['id'].rsplit(':', 1)[-1] for task in tasks
+                            if task['variant'] == variant and ':designer:' in task['id']]
+                self.assertEqual(['install', 'verify-0', 'verify-1', 'stage'], designer)
+            task = next(task for task in tasks if task['id'] == 'release:npm:designer:stage')
+            self.assertEqual(['npm', 'run', 'prepare:components'], task['command'])
+            workspace = Path(manifest['versionPreparation']['release']['workspace'])
+            self.assertEqual(
+                {'app/components': str(workspace / 'cedar-template-editor' / 'app/components'),
+                 'app/host': str(workspace / 'cedar-template-editor' / 'app/host')},
+                task['stagedOutputs'])
+
+            record = validator.run_task(manifest, task)
+
+            self.assertEqual(
+                {'app/components': {'bundle.js': hashlib.sha256(b'app/components\n').hexdigest()},
+                 'app/host': {'bundle.js': hashlib.sha256(b'app/host\n').hexdigest()}},
+                record['stagedFiles'])
+            ReleaseBuildValidator.verify_completed_task(record)
+            (Path(task['stagedOutputs']['app/host']) / 'bundle.js').write_text('changed\n')
+            with self.assertRaisesRegex(ReleaseError, 'staged output app/host changed'):
+                ReleaseBuildValidator.verify_completed_task(record)
+
     def test_setup_beyond_the_root_install_runs_before_verification(self):
         # The Designer host's browser contracts need their own package and Chromium. The train
         # and the reactor install both from the surface's setup, and so must the release.
@@ -4721,6 +4767,80 @@ class ReleaseArtifactPublicationTest(unittest.TestCase):
             publisher._verify_npm_tarball_files(
                 "packed surface", tarball.read_bytes(), evidence["runtimeFiles"],
             )
+
+    def test_npm_pack_includes_the_staged_outputs_release_validation_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            root = workspace / "cedar-template-designer"
+            root.mkdir(parents=True)
+            (root / ".gitignore").write_text("app/components/\napp/host/\n", encoding="utf-8")
+            (root / ".npmignore").write_text("node_modules/\n", encoding="utf-8")
+            (root / "app").mkdir()
+            (root / "app" / "index.html").write_text("<html></html>\n", encoding="utf-8")
+            (root / "package.json").write_text(json.dumps({
+                "name": "cedar-template-designer",
+                "version": "2.9.38",
+                "publishConfig": {"registry": "https://nexus.example/repository/npm/"},
+            }) + "\n", encoding="utf-8")
+            commit = ReleaseWorkspaceTest._commit_repository(root)
+            tree = ReleaseLocalRefsTest._git(root, "rev-parse", "HEAD^{tree}")
+            components = root / "app" / "components" / "page-size.json"
+            components.parent.mkdir()
+            components.write_text("{\"files\": []}\n", encoding="utf-8")
+            host = root / "app" / "host" / "host.js"
+            host.parent.mkdir()
+            host.write_text("host\n", encoding="utf-8")
+            log = Path(directory) / "stage.log"
+            log.write_text("staged\n", encoding="utf-8")
+            outputs = {relative: str(root / relative)
+                       for relative in ("app/components", "app/host")}
+            stage_record = {
+                "id": "release:npm:template-designer:stage",
+                "stagedOutputs": outputs,
+                "stagedFiles": {relative: release_train._directory_file_hashes(Path(path))
+                                for relative, path in outputs.items()},
+                "log": str(log),
+                "logSha256": release_train._file_sha256(log),
+            }
+            state = SimpleNamespace(read_current_manifest=lambda: ({
+                "buildValidation": {"completedTasks": {stage_record["id"]: stage_record}},
+            }, None))
+            task = {
+                "id": "npm:release:template-designer",
+                "kind": "npm-release",
+                "repository": "cedar-template-designer",
+                "directory": ".",
+                "version": "2.9.38",
+                "registry": "https://nexus.example/repository/npm/",
+                "workspace": str(workspace),
+                "expectedCommit": commit,
+                "expectedTree": tree,
+                "stagedBuild": {"command": ["npm", "run", "prepare:components"],
+                                "outputs": ["app/components", "app/host"]},
+                "stagedEvidenceId": stage_record["id"],
+            }
+            publisher = ReleaseArtifactPublisher(state)
+
+            tarball, evidence = publisher._pack_npm(task)
+
+            self.assertEqual(
+                {"app/components/page-size.json": release_train._file_sha256(components),
+                 "app/host/host.js": release_train._file_sha256(host)},
+                evidence["runtimeFiles"])
+            publisher._verify_npm_tarball_files(
+                "packed Designer", tarball.read_bytes(), evidence["runtimeFiles"],
+            )
+
+            host.write_text("changed after validation\n", encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseError, "staged output app/host changed"):
+                publisher._pack_npm(task)
+
+    def test_the_designer_release_stages_what_its_image_requires(self):
+        designer = next(surface for surface in release_train.NPM_RELEASE_SURFACES
+                        if surface["repository"] == "cedar-template-designer")
+        self.assertIn("app/components", designer["stagedBuild"]["outputs"])
+        self.assertIn("app/host", designer["stagedBuild"]["outputs"])
+        self.assertEqual(["npm", "run", "prepare:components"], designer["stagedBuild"]["command"])
 
 
 class FakeNexus:
