@@ -18,6 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
+from org.metadatacenter.release_support.archives import extract_within
 from org.metadatacenter.release_support.policy import (
     NODE_DIST_URL,
     REQUIRED_NODE_ARCHIVE_SHA256,
@@ -91,7 +92,7 @@ def provision_node(cedar_home: str | Path, *, system: str | None = None,
                 f"{url} has SHA-256 {digest}, not the {expected} the CLI pins; nothing was unpacked")
         try:
             with tarfile.open(archive, "r:xz") as tar:
-                tar.extractall(work, filter="data")
+                extract_within(tar, work)
         except (tarfile.TarError, OSError) as error:
             raise NodeProvisionError(f"{url} could not be unpacked: {error}") from error
         unpacked = Path(work) / name

@@ -23,7 +23,7 @@ from typer.testing import CliRunner
 
 from org.metadatacenter import release_train
 from org.metadatacenter.release_support import integration, lifecycle, preflight, validation
-from org.metadatacenter.release_support import publication
+from org.metadatacenter.release_support import archives, publication
 from org.metadatacenter.release_support.publication import _extract_source_archive
 from org.metadatacenter.release_support.scheduling import build_edges
 from org.metadatacenter.release_support.planning import _verify_public_records
@@ -4186,7 +4186,7 @@ class ReleaseMavenSettingsCredentialsTest(unittest.TestCase):
 @contextmanager
 def _tarfile_without_data_filter():
     """Take the path a Python without tarfile's data filter takes, as 3.10.11 does."""
-    with patch.object(publication, "_TARFILE_HAS_DATA_FILTER", False):
+    with patch.object(archives, "HAS_DATA_FILTER", False):
         yield
 
 

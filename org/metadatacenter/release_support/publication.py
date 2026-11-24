@@ -8,7 +8,6 @@ import datetime as dt
 import gzip
 import io
 import json
-import posixpath
 import shutil
 import subprocess
 import tarfile
@@ -16,6 +15,7 @@ import tempfile
 import time
 import urllib.request
 from org.metadatacenter.npm_package import NpmPackageError, inspect_tarball, pack_and_inspect
+from org.metadatacenter.release_support.archives import UnsafeArchive, extract_within
 from org.metadatacenter.release_support.parallel import checked_map
 from org.metadatacenter.release_support.distribution import (
     ReleaseDistributionMaterializer,
@@ -50,34 +50,13 @@ from org.metadatacenter.release_support.validation import (
 )
 
 
-# tarfile gained `extractall(filter=...)` in 3.12, backported to 3.10.12 and 3.11.4. The
-# macOS runner image resolves "3.10" to 3.10.11, where the keyword is a TypeError, so the
-# two refusals that matter for an archive of tracked source are made by hand there.
-_TARFILE_HAS_DATA_FILTER = hasattr(tarfile, "data_filter")
-
-
 def _extract_source_archive(archive: Path, destination: Path) -> None:
     """Extract a `git archive` tar under `destination`, refusing any member that leaves it."""
     with tarfile.open(archive, mode="r:") as content:
-        if _TARFILE_HAS_DATA_FILTER:
-            content.extractall(destination, filter="data")
-            return
-        # A member or link target that leaves the destination, and anything that is not a
-        # regular file, directory or link.
-        for member in content.getmembers():
-            if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
-                raise ReleaseError(f"release source archive holds a special file: {member.name}")
-            targets = [member.name]
-            if member.issym():
-                targets.append(posixpath.join(posixpath.dirname(member.name), member.linkname))
-            elif member.islnk():
-                targets.append(member.linkname)
-            for target in targets:
-                resolved = posixpath.normpath(target)
-                if posixpath.isabs(target) or resolved == ".." or resolved.startswith("../"):
-                    raise ReleaseError(
-                        f"release source archive leaves its destination: {member.name}")
-        content.extractall(destination)
+        try:
+            extract_within(content, destination)
+        except UnsafeArchive as error:
+            raise ReleaseError(f"release source archive {error}") from error
 
 
 class ReleaseArtifactPublisher:

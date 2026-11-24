@@ -57,6 +57,8 @@ from org.metadatacenter.release_support.acceptance import (
     _publication_evidence_by_plan,
 )
 
+from org.metadatacenter.release_support.archives import UnsafeArchive, extract_within
+
 from org.metadatacenter.release_support.development import DevelopmentVerifier, verify_active_development
 
 from org.metadatacenter.release_support.distribution import (

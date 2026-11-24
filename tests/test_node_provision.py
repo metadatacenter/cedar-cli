@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from org.metadatacenter.release_support import node_provision
+from org.metadatacenter.release_support import archives, node_provision
 from org.metadatacenter.release_support.node_provision import (
     NodeProvisionError,
     node_platform,
@@ -86,6 +86,28 @@ class NodeProvisionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home, pinned(b""):
             with self.assertRaisesRegex(NodeProvisionError, "could not be downloaded"):
                 provision_node(home, system="Darwin", machine="arm64", fetch=offline)
+
+    def test_a_python_without_the_data_filter_unpacks_the_archive_and_its_links(self):
+        # Python 3.10.11, the macOS CI baseline, has no extractall(filter=...).
+        body = archive()
+        with tempfile.TemporaryDirectory() as home, pinned(body), \
+                patch.object(archives, "HAS_DATA_FILTER", False):
+            bin_dir = provision_node(home, system="Darwin", machine="arm64", fetch=Fetcher(body))
+            self.assertTrue(os.access(bin_dir / "node", os.X_OK))
+            self.assertEqual("../lib/node_modules/npm/bin/npm-cli.js", os.readlink(bin_dir / "npm"))
+
+    def test_a_python_without_the_data_filter_refuses_a_link_that_leaves_the_toolchain(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:xz") as tar:
+            link = tarfile.TarInfo(f"{NAME}/bin/node")
+            link.type, link.linkname = tarfile.SYMTYPE, "../../../../etc/passwd"
+            tar.addfile(link)
+        body = buffer.getvalue()
+        with tempfile.TemporaryDirectory() as home, pinned(body), \
+                patch.object(archives, "HAS_DATA_FILTER", False):
+            with self.assertRaisesRegex(NodeProvisionError, "leaves its destination"):
+                provision_node(home, system="Darwin", machine="arm64", fetch=Fetcher(body))
+            self.assertEqual([], list((Path(home) / ".cedar" / "toolchains").iterdir()))
 
 
 class ResolverProvisionTest(unittest.TestCase):
