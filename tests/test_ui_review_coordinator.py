@@ -515,8 +515,10 @@ class SessionReleaseTest(unittest.TestCase):
         self.assertNotIn('offline-batch-001', runner.released)
         self.assertIn('offline-batch-002', runner.released)
 
-def claude_events(session, response, *, tools=('StructuredOutput',), blocks=None, result=None):
-    """The stream-json lines Claude Code prints for one print-mode turn."""
+def claude_events(session, response, *, field='answer', tools=('StructuredOutput',), blocks=None, result=None):
+    """The stream-json lines Claude Code prints for one print-mode turn, answering in one field."""
+    other = 'calibration' if field == 'answer' else 'answer'
+    response = {field: response, other: None} if field else response
     blocks = blocks if blocks is not None else [
         {'type': 'thinking', 'thinking': ''},
         {'type': 'tool_use', 'name': 'StructuredOutput', 'input': response}]
@@ -548,8 +550,11 @@ class ClaudeRunnerTest(unittest.TestCase):
             def communicate(self, stdin, timeout):
                 self.stdin = stdin
                 launches[-1] = (self.command, {**self.kwargs, 'input': stdin})
-                session = self.command[self.command.index('--resume' if '--resume' in self.command else '--session-id') + 1]
-                for event in (events(session) if events else claude_events(session, response)):
+                resumed = '--resume' in self.command
+                session = self.command[self.command.index('--resume' if resumed else '--session-id') + 1]
+                shared = 'answer' in json.loads(self.command[self.command.index('--json-schema') + 1])['properties']
+                field = ('calibration' if resumed else 'answer') if shared else None
+                for event in (events(session) if events else claude_events(session, response, field=field)):
                     self.kwargs['stdout'].write(json.dumps(event) + '\n')
 
         status = subprocess.CompletedProcess([], int(not signed_in), stdout=json.dumps({'loggedIn': signed_in}))
@@ -579,14 +584,16 @@ class ClaudeRunnerTest(unittest.TestCase):
             self.assertIn(flag, command)
         self.assertEqual(command[command.index('--tools') + 1], '')
         self.assertEqual(command[command.index('--setting-sources') + 1], '')
-        self.assertEqual(json.loads(command[command.index('--json-schema') + 1]), c.CALIBRATION_SCHEMA)
+        shared = json.loads(command[command.index('--json-schema') + 1])
+        self.assertEqual([c.CALIBRATION_SCHEMA, {'type': 'null'}], shared['properties']['answer']['anyOf'])
         self.assertEqual(receipt['thread'], command[command.index('--session-id') + 1])
         self.assertEqual(receipt['runner'], '2.1.330 (Claude Code)')
         self.assertNotIn('CEDAR_PRIVATE_TOKEN', options['env'])
         self.assertEqual('reviewer-login', options['env']['CLAUDE_CODE_OAUTH_TOKEN'])
         self.assertEqual(self.root / 'tmp/cedar-ui-reviewer' / receipt['thread'], Path(options['cwd']))
         content = json.loads(options['input'])['message']['content']
-        self.assertEqual(['text', 'image', 'text'], [block['type'] for block in content])
+        self.assertEqual(['text', 'image', 'text', 'text'], [block['type'] for block in content])
+        self.assertIn('`answer` field', content[3]['text'])
         self.assertEqual('Image 1: state-0.png', content[0]['text'])
         self.assertEqual(('image/png', images[0].read_bytes()),
                          (content[1]['source']['media_type'], c.base64.b64decode(content[1]['source']['data'])))
@@ -601,6 +608,21 @@ class ClaudeRunnerTest(unittest.TestCase):
         self.assertEqual((first['thread'], first['thread']), (second['thread'], second['resumeThread']))
         self.assertEqual(launches[0][1]['cwd'], launches[1][1]['cwd'])
         self.assertNotIn('--session-id', launches[1][0])
+        schema = lambda launch: launch[0][launch[0].index('--json-schema') + 1]
+        self.assertEqual(schema(launches[0]), schema(launches[1]), 'both turns send one tool definition, so the second reads the cache')
+        self.assertIn('`calibration` field', json.loads(launches[1][1]['input'])['message']['content'][-1]['text'])
+        with self.assertRaisesRegex(ValueError, 'only its calibration answer'):
+            runner.run(self.root / 'other', 'Review.', [], c.REVIEW_SCHEMA, resume=first['thread'])
+
+    def test_a_session_begun_without_a_shared_schema_resumes_with_the_turns_own(self):
+        launches = []
+        runner = self.runner(launches)
+        _, first = runner.run(self.root / 'assessment', 'Review.', [], c.CALIBRATION_SCHEMA)
+        (runner.workspace(first['thread']) / 'session-schema.json').unlink()
+        answer, _ = runner.run(self.root / 'calibration', 'Calibrate.', [], c.CALIBRATION_SCHEMA, resume=first['thread'])
+        self.assertEqual(self.response, answer)
+        self.assertEqual(c.CALIBRATION_SCHEMA, json.loads(launches[1][0][launches[1][0].index('--json-schema') + 1]))
+        self.assertEqual(['text'], [b['type'] for b in json.loads(launches[1][1]['input'])['message']['content']])
 
     def test_release_deletes_only_the_finished_sessions_files(self):
         runner = self.runner([])
@@ -634,7 +656,10 @@ class ClaudeRunnerTest(unittest.TestCase):
                 'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': s, 'result': '{}'}),
             'session identity': lambda s: claude_events(s, self.response, result={
                 'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': 'another',
-                'structured_output': self.response}),
+                'structured_output': {'answer': self.response, 'calibration': None}}),
+            "outside this turn's field": lambda s: claude_events(s, self.response, result={
+                'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': s,
+                'structured_output': {'answer': None, 'calibration': self.response}}),
         }
         for message, events in cases.items():
             with self.subTest(message=message):
