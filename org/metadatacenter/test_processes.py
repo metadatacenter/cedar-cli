@@ -42,6 +42,27 @@ def ui_review_coordinate(
     raise typer.Exit(code)
 
 
+@app.command("ui-review-board")
+def ui_review_board(
+        port: int = typer.Option(47831, min=0, max=65535, help="Local port; 0 lets the system choose one."),
+        reports: Optional[Path] = typer.Option(None, help="Report root; defaults to $CEDAR_HOME/.cedar/reports."),
+        plan: bool = typer.Option(False, help="List the retained reviews and decisions without serving.")):
+    """Serve a local board for triaging retained UI reviews and recording your answers."""
+    from org.metadatacenter.ui_review_board import plan as board_plan, serve
+    from org.metadatacenter.util.InvocationContext import invocation_environment
+    from org.metadatacenter.util.Util import Util
+    if reports is None:
+        root = Path(Util.cedar_home) / '.cedar/reports'
+    else:
+        root = Path(invocation_environment().get('CEDAR_CLI_CALLER_DIR', Path.cwd())) / reports
+    say = lambda message: console.print(message, markup=False, soft_wrap=True, highlight=False)
+    try:
+        raise typer.Exit(board_plan(root, printer=say) if plan else serve(root, port=port, printer=say))
+    except OSError as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("ui-review")
 def ui_review(
         app: str = typer.Option("designer", "--app", help="An application from the review catalog (see --plan), or all to capture each in turn."),

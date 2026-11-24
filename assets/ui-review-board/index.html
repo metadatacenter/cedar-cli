@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UI Review Board</title>
+<style>
+:root{--bg:#fff;--panel:#f5f8f8;--fg:#173e3c;--muted:#5b6d6c;--line:#d8e1e1;--accent:#0f6e74;--sel:#e1f0ef;
+--warn:#a14a00;--warn-bg:#fff0e1;--bad:#b42318;--bad-bg:#fdeceb;--ok:#1d7a3c;--ok-bg:#e5f4e9;--neutral:#ecf0f0}
+@media (prefers-color-scheme:dark){:root{--bg:#111818;--panel:#182121;--fg:#e2ebeb;--muted:#9aaaaa;--line:#2a3636;
+--accent:#5cc3c8;--sel:#1d3332;--warn:#efa25d;--warn-bg:#382715;--bad:#f18b81;--bad-bg:#3a1b19;--ok:#6fcf8e;--ok-bg:#172f21;--neutral:#212b2b}}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,sans-serif;
+display:grid;grid-template:auto 1fr/230px 360px 1fr;height:100vh}
+header{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
+h1{font-size:16px;margin:0}.muted{color:var(--muted);font-size:12px}
+.keys{margin-left:auto;color:var(--muted);font-size:12px}
+kbd{font:11px ui-monospace,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:0 4px;background:var(--panel)}
+button{font:inherit;color:inherit;cursor:pointer}
+nav,#list{overflow:auto;border-right:1px solid var(--line)}nav{background:var(--panel);padding:6px 0 24px}
+nav h2{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:14px 12px 4px}
+nav h3{font-size:12px;margin:10px 12px 2px}
+nav .entry{display:flex;gap:6px;width:100%;border:0;background:none;padding:4px 12px;text-align:left}
+nav .entry span:last-child{margin-left:auto;color:var(--muted);white-space:nowrap}
+nav .entry.on{background:var(--sel);font-weight:600}nav .more{border:0;background:none;color:var(--accent);padding:2px 12px;font-size:12px}
+#filters{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:6px 10px;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+#filters button{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:0 8px;font-size:12px}
+#filters button.on{background:var(--sel);border-color:var(--accent)}#filters label{font-size:12px;color:var(--muted);margin-left:auto}
+.row{padding:7px 12px;border-bottom:1px solid var(--line);cursor:pointer}.row.on{background:var(--sel)}
+.row .t{font-weight:500}.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.chip{font-size:11px;padding:0 6px;border-radius:9px;background:var(--neutral);color:var(--muted);white-space:nowrap}
+.chip.confirmed,.chip.needs-fix,.chip.provisional{background:var(--bad-bg);color:var(--bad)}
+.chip.decision,.chip.uncertain,.chip.design,.chip.not-verified,.chip.raised{background:var(--warn-bg);color:var(--warn)}
+.chip.approved,.chip.option,.chip.passed,.chip.dismissed{background:var(--ok-bg);color:var(--ok)}
+.chip.mine{outline:1px solid currentColor}.chip.repeat{background:var(--sel);color:var(--accent)}
+.match{border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:8px 0;max-width:920px}.match .opt{width:100%;margin-top:4px}.chip.sev-high,.chip.sev-medium{font-weight:600}
+main{overflow:auto;padding:14px 18px 60px}main h2{font-size:19px;margin:0 0 4px}
+p{margin:6px 0;max-width:920px}.note{color:var(--muted)}
+.opts{display:grid;gap:6px;margin:10px 0;max-width:920px}
+.opt{display:flex;gap:10px;text-align:left;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:7px 10px}
+.opt kbd{align-self:flex-start}.opt.rec{border-color:var(--accent)}.opt.on{background:var(--sel);border:2px solid var(--accent)}.opt small{color:var(--muted)}
+.acts{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.acts button{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:4px 10px}.acts button.on{border-color:var(--accent);background:var(--sel);font-weight:600}
+textarea{width:100%;max-width:920px;min-height:56px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:6px}
+.shots{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.shots figure{margin:0;width:230px;cursor:zoom-in}.shots img{width:100%;height:160px;object-fit:cover;object-position:top;border:1px solid var(--line);border-radius:4px;display:block;background:var(--panel)}
+.shots figcaption{font-size:11px;color:var(--muted);word-break:break-all}
+details{margin:8px 0;max-width:920px}summary{cursor:pointer;color:var(--accent)}
+.occ{border-left:3px solid var(--line);padding:2px 10px;margin:8px 0}.occ dt{font-weight:600;font-size:12px;color:var(--muted)}.occ dd{margin:0 0 4px}
+table{border-collapse:collapse;font-size:13px;max-width:920px}td{border-top:1px solid var(--line);padding:3px 8px;vertical-align:top}
+.empty{color:var(--muted);padding:20px}
+.overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;z-index:9}
+.overlay.on{display:flex}#lightbox{background:rgba(0,0,0,.86)}#lightbox img{max-width:96vw;max-height:88vh;background:#fff}#lightbox div{color:#ddd;font-size:12px;margin-top:6px}
+#answers{background:rgba(0,0,0,.45);padding:16px}#answers .box{background:var(--bg);border-radius:8px;padding:14px;width:min(760px,100%)}#answers textarea{min-height:260px}
+@media (max-width:980px){body{grid-template:auto auto auto 1fr/1fr;height:auto}nav,#list{max-height:45vh;border-right:0;border-bottom:1px solid var(--line)}.keys{display:none}.shots figure{width:calc(50% - 4px)}.shots img{height:auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1>UI Review Board</h1><span class="muted" id="summary">Loading…</span>
+  <button id="answersButton" class="opt">My answers</button>
+  <span class="keys"><kbd>j</kbd><kbd>k</kbd> next and previous · <kbd>1</kbd>–<kbd>4</kbd> choose · <kbd>a</kbd> approve · <kbd>x</kbd> needs fix · <kbd>d</kbd> defer · <kbd>f</kbd> note · <kbd>u</kbd> clear · <kbd>l</kbd> same issue · <kbd>Enter</kbd> enlarge · <kbd>h</kbd> hide answered</span>
+</header>
+<nav id="nav" aria-label="Reviews"></nav>
+<div id="list" aria-label="Items"></div>
+<main id="detail"><div class="empty">Choose a review on the left.</div></main>
+<div id="lightbox" class="overlay"><img alt=""><div></div></div>
+<div id="answers" class="overlay"><div class="box"><b>My answers</b><p class="note">Every answer is also saved on this machine. Copy this text to share it.</p>
+<textarea readonly></textarea><div class="acts"><button id="answersCopy">Copy</button><button id="answersClose">Close</button></div></div></div>
+<script>
+const LABEL={decision:'Needs your decision',confirmed:'Confirmed defect',uncertain:'Uncertain',design:'Design decision',
+'not-verified':'Not verified',dismissed:'Dismissed by verifier',passed:'Reviewer passed',raised:'Reviewer raised',
+approved:'You approved','needs-fix':'You: needs fix',deferred:'You deferred',option:'You chose'};
+const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,expanded={};
+const A=()=>INDEX.answers;
+// A finding answers through the issue it is linked to; a decision or a screen answers under its own identifier.
+const issueOf=i=>i.selfIdentified?i.id:(A().links[i.id]||{}).issue;
+const V=i=>A().issues[issueOf(i)];
+const sharing=i=>{const issue=issueOf(i);return issue&&!i.selfIdentified?Object.values(A().links).filter(l=>l.issue===issue).length-1:0;};
+function answerLabel(v,options){const o=v.option&&(options||[]).find(x=>x.key===v.option);return `${LABEL[v.status]||v.status}${o?': '+o.label:''}`;}
+async function api(path,options){const r=await fetch(path,options);const body=await r.json();if(!r.ok)throw new Error(body.error||r.statusText);return body;}
+function runner(run){const s=(run.runner||'').toLowerCase();return run.kind==='single'?'Single reviewer':s.includes('claude')?'Claude':s.includes('codex')?'Codex':'Coordinated';}
+function appName(a){return {designer:'Designer',workspace:'Workspace','metadata-editor':'Metadata Editor',openview:'OpenView'}[a]||a;}
+function runLabel(run){return `${runner(run)} · ${run.profile||'default'} · ${run.updated.slice(5,10)} ${run.updated.slice(11,16)}`;}
+async function load(){INDEX=await api('/api/index');
+  const latest=INDEX.runs.find(r=>r.kind==='coordinated');
+  summarise();
+  if(INDEX.decisions.length)view={kind:'decisions'};else if(latest)await openRun(latest.id);render();}
+async function openRun(id){if(!RUNS[id])RUNS[id]=await api('/api/run?id='+encodeURIComponent(id));view={kind:'run',id};cursor=0;}
+function items(){let list;
+  if(view.kind==='decisions')list=INDEX.decisions.map(d=>({...d,status:'decision',kind:'decision'}));
+  else{const run=RUNS[view.id];if(!run)return[];list=filter==='screens'?run.states:filter==='all'?run.items:run.items.filter(i=>i.status===filter);}
+  return hide?list.filter(i=>!V(i)):list;}
+const count=(n,word)=>`${n} ${word}${n===1?'':'s'}`;
+function summarise(){$('#summary').textContent=`${count(INDEX.runs.length,'retained review')} · ${count(INDEX.decisions.length,'decision')} · ${count(Object.keys(A().issues).length,'answer')}`;}
+function answered(list){return list.filter(i=>V(i)).length;}
+function nav(){let html=`<h2>Needs your decision</h2><button class="entry ${view.kind==='decisions'?'on':''}" data-view="decisions"><span>Design decisions</span><span>${answered(INDEX.decisions)}/${INDEX.decisions.length}</span></button><h2>Reviews</h2>`;
+  const byApp={};INDEX.runs.forEach(r=>(byApp[r.app]??=[]).push(r));
+  for(const [app,runs] of Object.entries(byApp)){html+=`<h3>${esc(appName(app))}</h3>`;
+    const shown=expanded[app]?runs:runs.slice(0,4);
+    for(const run of shown)html+=`<button class="entry ${view.kind==='run'&&view.id===run.id?'on':''}" data-run="${esc(run.id)}" title="${esc(run.name)}"><span>${esc(runLabel(run))}</span><span>${run.findings}</span></button>`;
+    if(runs.length>4)html+=`<button class="more" data-app="${esc(app)}">${expanded[app]?'Show fewer':`Show ${runs.length-4} older`}</button>`;}
+  $('#nav').innerHTML=html;
+  $('#nav').querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view={kind:'decisions'};cursor=0;render();});
+  $('#nav').querySelectorAll('[data-run]').forEach(b=>b.onclick=async()=>{filter='all';await openRun(b.dataset.run);render();});
+  $('#nav').querySelectorAll('[data-app]').forEach(b=>b.onclick=()=>{expanded[b.dataset.app]=!expanded[b.dataset.app];nav();});}
+function chips(i){const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
+  if(i.severity)s+=`<span class="chip sev-${esc(i.severity)}">${esc(i.severity)}</span>`;
+  if(i.provisional)s+='<span class="chip provisional">Provisional</span>';
+  if(i.area)s+=`<span class="chip">${esc(i.area)}</span>`;if(i.group)s+=`<span class="chip">${esc(i.group)}</span>`;
+  if(v)s+=`<span class="chip mine ${esc(v.status)}">${esc(answerLabel(v,i.options))}</span>`;
+  else if((i.matches||[]).length)s+=`<span class="chip repeat">${i.matches[0].likely?'Likely repeat':'Possible repeat'}</span>`;return s;}
+function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.length-1);
+  let head='';if(view.kind==='run'){const run=RUNS[view.id];const n=k=>k==='all'?run.items.length:k==='screens'?run.states.length:run.items.filter(i=>i.status===k).length;
+    head=FILTERS.filter(([k])=>k==='all'||n(k)).map(([k,l])=>`<button data-filter="${k}" class="${filter===k?'on':''}">${l} ${n(k)}</button>`).join('');}
+  $('#list').innerHTML=`<div id="filters">${head}<label><input type="checkbox" id="hide" ${hide?'checked':''}> Hide answered</label></div>`+
+    (all.map((i,n)=>`<div class="row ${n===cursor?'on':''}" data-n="${n}"><div class="t">${esc(i.title)}</div><div class="chips">${chips(i)}</div></div>`).join('')||'<div class="empty">Nothing here.</div>');
+  $('#list').querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;cursor=0;render();});
+  $('#hide').onchange=e=>{hide=e.target.checked;cursor=0;render();};
+  $('#list').querySelectorAll('.row').forEach(r=>r.onclick=()=>{cursor=+r.dataset.n;list();detail();});
+  $('#list .row.on')?.scrollIntoView({block:'nearest'});}
+function shots(images){return images.length?`<div class="shots">${images.map((s,n)=>`<figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"><figcaption>${esc(s.label)}</figcaption></figure>`).join('')}</div>`:'<p class="note">No screenshot retained for this item.</p>';}
+function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
+  const v=V(i)||{},state=filter==='screens'&&view.kind==='run',shared=sharing(i);
+  const options=(i.options||[]).map(o=>`<button class="opt ${o.recommended?'rec':''} ${v.option===o.key?'on':''}" data-option="${esc(o.key)}"><kbd>${esc(o.key)}</kbd><span><b>${esc(o.label)}</b>${o.recommended?' <small>(recommended)</small>':''}<br><small>${esc(o.detail||'')}</small></span></button>`).join('');
+  const acts=(options?'':`<button data-status="approved" class="${v.status==='approved'?'on':''}"><kbd>a</kbd> ${state?'Agree':'Approve'}</button>`)+
+    `<button data-status="needs-fix" class="${v.status==='needs-fix'?'on':''}"><kbd>x</kbd> Needs fix</button><button data-status="deferred" class="${v.status==='deferred'?'on':''}"><kbd>d</kbd> Defer</button>`+(V(i)?`<button data-status="clear"><kbd>u</kbd> ${shared?'Unlink':'Clear'}</button>`:'');
+  const linked=shared?`<p class="note">Issue ${esc(issueOf(i))} also covers ${count(shared,'other finding')}; an answer here applies to all of them, and Unlink detaches this one.</p>`:'';
+  const matches=!V(i)&&(i.matches||[]).length?`<div class="match"><b>${i.matches[0].likely?'Likely':'Possibly'} the same issue as one you answered</b>${i.matches.map((m,n)=>{const a=A().issues[m.issue];
+    return `<button class="opt" data-link="${esc(m.issue)}">${n?'':'<kbd>l</kbd>'}<span><b>${esc(m.title)}</b><br><small>${esc(m.issue)} · ${a?esc(answerLabel(a)):''}${a&&a.note?' — '+esc(a.note):''}</small></span></button>`;}).join('')}</div>`:'';
+  const occ=(i.occurrences||[]).map(o=>`<div class="occ"><div class="muted">${esc(o.id)} · verifier: <b>${esc(o.verifier)}</b>${o.calibrated===false?' · provisional':''}</div><b>${esc(o.title)}</b><dl>
+    ${o.observed?`<dt>Observed</dt><dd>${esc(o.observed)}</dd>`:''}${o.expected?`<dt>Expected</dt><dd>${esc(o.expected)}</dd>`:''}${o.impact?`<dt>Impact</dt><dd>${esc(o.impact)}</dd>`:''}
+    ${o.verifierReason?`<dt>Verifier</dt><dd>${esc(o.verifierReason)}</dd>`:''}${o.steps&&o.steps.length?`<dt>Steps</dt><dd>${esc(o.steps.join(' → '))}</dd>`:''}${o.states&&o.states.length?`<dt>States</dt><dd>${esc(o.states.join(', '))}</dd>`:''}</dl></div>`).join('');
+  const aspects=i.aspects?`<table>${Object.entries(i.aspects).map(([k,a])=>`<tr><td>${esc(k)}</td><td><span class="chip ${a.status==='acceptable'?'passed':a.status==='not-applicable'?'':'raised'}">${esc(a.status)}</span></td><td>${esc(a.observation)}</td></tr>`).join('')}</table>`:'';
+  $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><div class="chips">${chips(i)}</div><p>${esc(i.summary)}</p>${i.note?`<p class="note">${esc(i.note)}</p>`:''}
+    ${matches}${options?`<div class="opts">${options}</div>`:''}<div class="acts">${acts}</div>${linked}
+    <textarea id="note" placeholder="Suggested fix or conditions (press f). Saved when you leave the box.">${esc(v.note||'')}</textarea>
+    ${shots(i.images||[])}${aspects}${occ?`<h3>Reviewer findings</h3>${occ}`:''}`;
+  $('#detail').querySelectorAll('[data-option]').forEach(b=>b.onclick=()=>answer({status:'option',option:b.dataset.option}));
+  $('#detail').querySelectorAll('[data-status]').forEach(b=>b.onclick=()=>b.dataset.status==='clear'?clear():answer({status:b.dataset.status}));
+  $('#detail').querySelectorAll('[data-shot]').forEach(f=>f.onclick=()=>enlarge(+f.dataset.shot));
+  $('#detail').querySelectorAll('[data-link]').forEach(b=>b.onclick=()=>link(b.dataset.link));
+  $('#note').onchange=e=>answer({note:e.target.value},true);}
+function render(){nav();list();detail();}
+async function post(body){INDEX.answers=await api('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  // Matches depend on every answer, so reviews read before this one are read again when opened.
+  const id=view.kind==='run'?view.id:null;RUNS={};if(id)RUNS[id]=await api('/api/run?id='+encodeURIComponent(id));
+  summarise();}
+async function answer(change,noteOnly){const i=items()[cursor];if(!i)return;const v={...(V(i)||{})};delete v.title;delete v.app;delete v.at;
+  if(noteOnly){v.note=change.note;v.status??='needs-fix';}else{Object.assign(v,change);if(change.status!=='option')v.option=null;v.note=$('#note')?.value??v.note??'';}
+  try{await post({id:i.id,...v});}catch(e){alert('Answer not saved: '+e.message);}render();}
+async function clear(){const i=items()[cursor];if(!i)return;await post({id:i.id,clear:true});render();}
+async function link(issue){const i=items()[cursor];if(!i||!issue)return;try{await post({id:i.id,link:issue});}catch(e){alert('Link not saved: '+e.message);}render();}
+function enlarge(n){const i=items()[cursor];if(!i||!(i.images||[]).length)return;shot=(n+i.images.length)%i.images.length;
+  $('#lightbox img').src=i.images[shot].src;$('#lightbox div').textContent=i.images[shot].label+'  ·  ←/→ to step, Esc to close';$('#lightbox').classList.add('on');}
+function close(){$('#lightbox').classList.remove('on');$('#answers').classList.remove('on');shot=-1;}
+function answerText(){
+  return Object.entries(A().issues).map(([id,v])=>{const d=INDEX.decisions.find(x=>x.id===id);const n=Object.values(A().links).filter(l=>l.issue===id).length;
+    return `${v.title} [${id}]: ${answerLabel(v,d&&d.options)}${n>1?` (${n} findings)`:''}${v.note?' — '+v.note:''}`;}).join('\n')||'No answers yet.';}
+$('#lightbox').onclick=close;$('#answersClose').onclick=close;
+$('#answersButton').onclick=()=>{$('#answers textarea').value=answerText();$('#answers').classList.add('on');};
+$('#answersCopy').onclick=async()=>{const t=$('#answers textarea');t.select();try{await navigator.clipboard.writeText(t.value);}catch(e){document.execCommand('copy');}$('#answersCopy').textContent='Copied';};
+document.addEventListener('keydown',e=>{
+  if($('#answers').classList.contains('on')){if(e.key==='Escape')close();return;}
+  if(e.target.tagName==='TEXTAREA'){if(e.key==='Escape')e.target.blur();return;}if(e.target.tagName==='INPUT')return;
+  if($('#lightbox').classList.contains('on')){if(['Escape','Enter',' '].includes(e.key))close();else if(e.key==='ArrowRight')enlarge(shot+1);else if(e.key==='ArrowLeft')enlarge(shot-1);e.preventDefault();return;}
+  const all=items(),i=all[cursor];
+  if(e.key==='j'||e.key==='ArrowDown'){cursor=Math.min(all.length-1,cursor+1);list();detail();}
+  else if(e.key==='k'||e.key==='ArrowUp'){cursor=Math.max(0,cursor-1);list();detail();}
+  else if(/^[1-9]$/.test(e.key)&&i&&(i.options||[]).some(o=>o.key===e.key))answer({status:'option',option:e.key});
+  else if(e.key==='a'&&i&&!(i.options||[]).length)answer({status:'approved'});
+  else if(e.key==='x')answer({status:'needs-fix'});else if(e.key==='d')answer({status:'deferred'});else if(e.key==='u')clear();
+  else if(e.key==='l'&&i&&!V(i)&&(i.matches||[]).length)link(i.matches[0].issue);
+  else if(e.key==='f')$('#note')?.focus();else if(e.key==='Enter'||e.key===' ')enlarge(0);
+  else if(e.key==='h'){hide=!hide;cursor=0;render();}else return;e.preventDefault();});
+load().catch(e=>{$('#summary').textContent='Could not load reviews: '+e.message;});
+</script>
+</body>
+</html>
