@@ -1,0 +1,512 @@
+import copy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import subprocess
+
+from typer.testing import CliRunner
+
+from org.metadatacenter import ui_review_coordinator as c, test_processes
+
+
+def fixture(root, count=3):
+    home = root / 'home'
+    guide = home / 'cedar-development/ops/FRONTEND-RUNBOOK.md'
+    guide.parent.mkdir(parents=True)
+    guide.write_text('###### Agreed Layout Behavior\nKeep full field names.\n###### Retained Evidence\n')
+    packet = root / 'original'
+    packet.mkdir()
+    states, files = [], {}
+    for i in range(count):
+        id_ = 'supplemental' if i == count - 1 else f'state-{i}'
+        state = {'id': id_, 'screenshot': id_ + '.png', 'crops': [id_ + '-crop.png'],
+                 'aria': id_ + '.yml', 'metrics': id_ + '.json'}
+        for name in c.state_images(state):
+            (packet / name).write_bytes(b'fake PNG for offline tests only: ' + id_.encode())
+        (packet / state['aria']).write_text('button: Save')
+        (packet / state['metrics']).write_text(json.dumps({'viewport': {'width': 800, 'height': 600},
+                                                          'controls': [], 'regions': []}))
+        for name in [*c.state_images(state), state['aria'], state['metrics']]:
+            files[name] = c.digest((packet / name).read_bytes())
+        states.append(state)
+    c.write_json(packet / 'capture.json', {'app': 'designer', 'files': files, 'states': states,
+        'provenance': {'current': True}, 'automaticChecks': {'groups': []}})
+    cal = packet / 'calibration'
+    cal.mkdir()
+    (cal / 'case.png').write_bytes(b'calibration fixture')
+    c.write_json(cal / 'packet.json', [{'id': 'case', 'images': ['case.png'], 'actions': [],
+        'imageSha256': {'case.png': c.digest((cal / 'case.png').read_bytes())}}])
+    return home, packet
+
+
+def assessment(state):
+    return {'id': state['id'], 'images': c.state_images(state),
+            'visualObservation': 'Save is visible above the empty field area.',
+            'aspects': {a: {'status': 'acceptable', 'observation': 'Recorded evidence is coherent.'}
+                        for a in c.ASPECTS}}
+
+
+def finding(id_, state):
+    return {'id': id_, 'title': 'Save overlaps field name', 'target': 'Save', 'category': 'alignment',
+            'observed': 'Save overlaps the name.', 'expected': 'Keep the name and action separate.',
+            'impact': 'The name cannot be read.', 'kind': 'defect', 'severity': 'medium',
+            'stateIds': [state['id']], 'steps': ['Open the recorded state.'],
+            'evidence': [state['screenshot']]}
+
+
+class OfflineRunner:
+    """A protocol stand-in, never evidence that a real model inspected an image."""
+    def __init__(self, packet, *, omit=None, candidates=False, fail=None):
+        self.states = c.read_json(packet / 'capture.json')['states']
+        self.calibration = c.read_json(packet / 'calibration/packet.json')
+        self.omit, self.candidates, self.fail = omit, candidates, fail
+        self.calls = []
+
+    def run(self, directory, prompt, images, schema, *, resume=None):
+        self.calls.append((directory, resume, images))
+        if self.fail and self.fail(directory):
+            raise ValueError('Injected runner interruption')
+        supplied = {p.name for p in images}
+        selected = [s for s in self.states if s['screenshot'] in supplied]
+        if 'assessments' in schema['properties']:
+            result = {'assessments': [assessment(s) for s in selected if s['id'] != self.omit], 'findings': []}
+            if self.candidates and selected:
+                result['findings'] = [finding('candidate', selected[0])]
+        elif 'decisions' in schema['properties']:
+            candidates = json.loads(prompt.split('\nCandidates:\n')[1])
+            result = {'decisions': [{'id': f['id'], 'decision': 'confirmed',
+                                     'reason': 'Overlap is visible in the supplied screenshot.',
+                                     'evidence': f['evidence']} for f in candidates]}
+        elif 'groups' in schema['properties']:
+            findings = json.loads(prompt.split('\nFindings:\n')[1])
+            grouped = {}
+            for f in findings:
+                grouped.setdefault((f['kind'], f['category'], f['target']), []).append(f['id'])
+            result = {'groups': [{'representativeId': ids[0], 'memberIds': ids} for ids in grouped.values()]}
+        else:
+            result = {'cases': [{'id': case['id'], 'issue': False, 'reason': 'Offline stand-in; no visual judgment.'}
+                                for case in self.calibration]}
+        directory.mkdir(parents=True)
+        c.write_json(directory / 'schema.json', schema)
+        c.write_json(directory / 'response.json', result)
+        (directory / 'prompt.txt').write_text(prompt)
+        (directory / 'events.jsonl').write_text('offline protocol stand-in\n')
+        receipt = {'thread': resume or 'offline-' + directory.parent.name, 'resumeThread': resume,
+            'promptSha256': c.digest(prompt.encode()), 'schemaSha256': c.digest(c.encoded(schema)),
+            'images': [{'file': str(p), 'sha256': c.digest(p.read_bytes())} for p in images],
+            'responseSha256': c.digest(c.encoded(result)),
+            'eventsSha256': c.digest((directory / 'events.jsonl').read_bytes())}
+        c.write_json(directory / 'receipt.json', receipt)
+        return result, receipt
+
+
+class OfflineHarness:
+    def __init__(self, failed_calibration=False, blockers=()):
+        self.failed_calibration = failed_calibration
+        self.capture_blockers = list(blockers)
+
+    def blockers(self, packet):
+        return self.capture_blockers
+
+    def score(self, packet, job):
+        return {'detected': 0, 'defects': int(self.failed_calibration), 'falseAlarms': 0}
+
+
+class CoordinatorTest(unittest.TestCase):
+    def test_oversized_verification_union_splits_without_losing_candidates_or_related_images(self):
+        candidates = [{'id': 'a', 'job': 'batch-001'}, {'id': 'b', 'job': 'batch-001'}]
+        def request(rows):
+            return 'evidence' * 100 * len(rows), [name for row in rows
+                                                for name in (row['id'] + '.png', row['id'] + '-follow-up.png')]
+        jobs = c.bounded_verification_jobs([{'id': 'batch-001'}], candidates, request, limit=1000)
+        self.assertEqual([j['id'] for j in jobs], ['batch-001-001', 'batch-001-002'])
+        self.assertEqual([f for j in jobs for f in j['candidates']], candidates)
+        self.assertEqual([p for j in jobs for p in j['images']],
+                         ['a.png', 'a-follow-up.png', 'b.png', 'b-follow-up.png'])
+        self.assertTrue(all(len(j['prompt']) <= 1000 and j['error'] is None for j in jobs))
+        too_large = c.bounded_verification_jobs([{'id': 'batch-001'}], candidates[:1], request, limit=500)
+        self.assertIn('no evidence was omitted', too_large[0]['error'])
+        self.assertEqual(too_large[0]['prompt'], request(candidates[:1])[0])
+
+    def test_evidence_tables_preserve_values_missing_keys_and_control_order(self):
+        controls = []
+        for index in range(1000):
+            row = {'tag': 'button', 'id': str(index), 'label': 'Move field down',
+                   'x': 10.125, 'y': index * 24, 'width': 24, 'height': 24,
+                   'intrinsicTextWidth': 110, 'paddingInline': ['0px', '0px'],
+                   'gap': 'normal', 'disabled': False, 'expanded': None,
+                   'pointerTarget': {'x': 22.125, 'y': index * 24 + 12, 'belongsToControl': True}}
+            if index % 2:
+                del row['expanded']
+            controls.append(row)
+        states = [{'id': 'state', 'images': ['state.png'], 'accessibility': 'button: Move field down',
+                   'geometry': {'viewport': {'width': 800, 'height': 600},
+                                'controls': controls, 'regions': [], 'controlsOmitted': 3}}]
+        original = copy.deepcopy(states)
+        text = c.evidence_json(states)
+        restored = json.loads(text)['states']
+        for state in restored:
+            for group in ('controls', 'regions'):
+                indexed = []
+                for table in state['geometry'][group]:
+                    indexed.extend((index, dict(zip(table['columns'], values)))
+                                   for index, values in zip(table['indices'], table['rows']))
+                state['geometry'][group] = [row for _, row in sorted(indexed)]
+        self.assertEqual(restored, original)
+        self.assertEqual(states, original)
+        self.assertLess(len(text), len(json.dumps(original)) * 0.7)
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home, self.packet = fixture(self.root)
+        self.output = self.root / 'review'
+
+    def run_coordinator(self, **kwargs):
+        return c.coordinate(self.packet, self.output, self.home, batch_size=2,
+                            runner=kwargs.pop('runner', OfflineRunner(self.packet)),
+                            harness=kwargs.pop('harness', OfflineHarness()), printer=lambda *_: None, **kwargs)
+
+    def test_plan_covers_all_captured_states_including_supplemental_without_calling_ai(self):
+        plan = c.make_plan(self.packet, self.home, 2)
+        self.assertEqual([id_ for job in plan['jobs'] for id_ in job['states']], plan['states'])
+        self.assertIn('supplemental', plan['states'])
+        with patch.object(c, 'CodexRunner', side_effect=AssertionError('must not launch')):
+            self.assertEqual(self.run_coordinator(plan_only=True), 0)
+        self.assertFalse(self.output.exists())
+
+    def test_complete_run_accounts_for_every_state_and_image_and_preserves_original(self):
+        before = {str(p): p.read_bytes() for p in self.packet.rglob('*') if p.is_file()}
+        runner = OfflineRunner(self.packet)
+        self.assertEqual(self.run_coordinator(runner=runner), 0)
+        ledger = c.read_json(self.output / 'coverage.json')['states']
+        self.assertEqual({r['id'] for r in ledger}, {'state-0', 'state-1', 'supplemental'})
+        self.assertTrue(all(r['status'] == 'assessed' and r['calibrated'] and len(r['images']) == 2 for r in ledger))
+        for row in ledger:
+            receipt = c.read_json(self.output / row['receipt'])
+            supplied = {Path(i['file']).name for i in receipt['images']}
+            self.assertLessEqual(set(row['images']), supplied)
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.packet.rglob('*') if p.is_file()})
+        self.assertTrue((self.output / 'report.html').exists())
+        self.assertTrue(all(resume for directory, resume, _ in runner.calls if directory.name == 'calibration'))
+
+    def test_omitted_state_never_passes_even_if_audit_reviewer_assesses_it(self):
+        self.assertEqual(self.run_coordinator(runner=OfflineRunner(self.packet, omit='supplemental')), 2)
+        report = c.read_json(self.output / 'report.json')
+        self.assertIn('supplemental', report['coverage']['missing'])
+
+    def test_changed_or_unhashed_image_is_rejected_before_runner(self):
+        (self.packet / 'state-0.png').write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError, 'changed since capture'):
+            self.run_coordinator()
+        self.assertFalse(self.output.exists())
+
+    def test_related_evidence_must_name_a_captured_state(self):
+        capture = c.read_json(self.packet / 'capture.json')
+        capture['states'][0]['relatedStates'] = ['invented-follow-up']
+        c.write_json(self.packet / 'capture.json', capture)
+        with self.assertRaisesRegex(ValueError, 'uncaptured state'):
+            self.run_coordinator()
+        self.assertFalse(self.output.exists())
+
+    def test_verifier_receives_related_follow_up_from_another_batch(self):
+        capture = c.read_json(self.packet / 'capture.json')
+        capture['states'][0]['relatedStates'] = ['supplemental']
+        c.write_json(self.packet / 'capture.json', capture)
+        runner = OfflineRunner(self.packet, candidates=True)
+        self.run_coordinator(runner=runner)
+        supplied = next(images for directory, _, images in runner.calls
+                        if directory.parent.name == 'verify-batch-001' and directory.name == 'assessment')
+        self.assertIn((self.output / 'packet/supplemental.png').resolve(), supplied)
+        self.assertIn((self.output / 'packet/supplemental-crop.png').resolve(), supplied)
+
+    def test_symlink_image_and_path_escape_are_rejected(self):
+        path = self.packet / 'state-0.png'
+        path.unlink()
+        path.symlink_to(self.packet / 'state-1.png')
+        with self.assertRaisesRegex(ValueError, 'regular file'):
+            c.inspect_packet(self.packet)
+        for name in ['../secret', '/secret', 'sub/file', '..', 'a\\b']:
+            with self.assertRaises(ValueError):
+                c.safe_file(self.packet, name)
+
+    def test_legacy_unhashed_calibration_is_refused(self):
+        cal = c.read_json(self.packet / 'calibration/packet.json')
+        del cal[0]['imageSha256']
+        c.write_json(self.packet / 'calibration/packet.json', cal)
+        with self.assertRaisesRegex(ValueError, 'unhashed'):
+            self.run_coordinator()
+
+    def test_failed_calibration_is_incomplete_and_not_rerolled_on_resume(self):
+        runner = OfflineRunner(self.packet)
+        harness = OfflineHarness(failed_calibration=True)
+        self.assertEqual(self.run_coordinator(runner=runner, harness=harness), 2)
+        calls = len(runner.calls)
+        self.assertEqual(self.run_coordinator(runner=runner, harness=harness, resume=True), 2)
+        self.assertEqual(len(runner.calls), calls)
+
+    def test_calibration_failure_does_not_hide_complete_coverage_or_imply_trusted_findings(self):
+        self.assertEqual(self.run_coordinator(runner=OfflineRunner(self.packet, candidates=True),
+                                             harness=OfflineHarness(failed_calibration=True)), 2)
+        report = c.read_json(self.output / 'report.json')
+        self.assertEqual(report['coverage'], {'captured': 3, 'assessed': 3, 'missing': []})
+        self.assertTrue(report['findings'])
+        self.assertTrue(all(not f['calibrated'] for f in report['findings']))
+        self.assertIn('Provisional:', (self.output / 'report.html').read_text())
+
+    def test_resume_reuses_success_and_retries_only_interrupted_jobs(self):
+        runner = OfflineRunner(self.packet, fail=lambda directory: directory.parent.name == 'batch-002')
+        self.assertEqual(self.run_coordinator(runner=runner), 2)
+        resumed = OfflineRunner(self.packet)
+        self.assertEqual(self.run_coordinator(runner=resumed, resume=True), 0)
+        self.assertEqual({d.parent.name for d, _, _ in resumed.calls}, {'batch-002'})
+
+    def test_resume_refuses_changed_response_or_configuration(self):
+        self.run_coordinator()
+        response = self.output / 'jobs/batch-001/assessment/response.json'
+        changed = c.read_json(response)
+        changed['assessments'][0]['visualObservation'] = 'Modified'
+        c.write_json(response, changed)
+        self.assertEqual(self.run_coordinator(resume=True), 2)
+        self.assertTrue(any('changed' in e for e in c.read_json(self.output / 'report.json')['blockers']))
+        with self.assertRaisesRegex(ValueError, 'partition changed'):
+            self.run_coordinator(resume=True, model='different')
+
+    def test_candidate_verification_deduplicates_without_dropping_occurrences(self):
+        runner = OfflineRunner(self.packet, candidates=True)
+        self.assertEqual(self.run_coordinator(runner=runner), 1)
+        report = c.read_json(self.output / 'report.json')
+        self.assertEqual(len(report['findings']), 1)
+        self.assertGreater(len(report['findings'][0]['occurrences']), 1)
+        self.assertEqual(report['coverage']['assessed'], 3)
+        calls = len(runner.calls)
+        self.assertEqual(self.run_coordinator(runner=runner, resume=True), 1)
+        self.assertEqual(len(runner.calls), calls)
+
+    def test_consolidation_cannot_drop_duplicate_or_mix_verdicts(self):
+        state = c.read_json(self.packet / 'capture.json')['states'][0]
+        findings = [finding('one', state), {**finding('two', state), 'kind': 'uncertain'}]
+        bad_groups = [
+            [{'representativeId': 'one', 'memberIds': ['one']}],
+            [{'representativeId': 'one', 'memberIds': ['one', 'one', 'two']}],
+            [{'representativeId': 'one', 'memberIds': ['one', 'two']}],
+            [{'representativeId': 'two', 'memberIds': ['one']},
+             {'representativeId': 'two', 'memberIds': ['two']}],
+        ]
+        for groups in bad_groups:
+            runner = OfflineRunner(self.packet)
+            with patch.object(runner, 'run', return_value=({'groups': groups}, {})):
+                with self.assertRaises(ValueError):
+                    c.consolidate_findings(self.output, findings, runner)
+
+    def test_consolidation_retains_worst_severity_and_all_provenance(self):
+        state = c.read_json(self.packet / 'capture.json')['states'][0]
+        findings = [{**finding('one', state), 'calibrated': False, 'severity': 'high'},
+                    {**finding('two', state), 'calibrated': True, 'severity': 'low'}]
+        grouped = c.group_findings(findings, {'one': 'two', 'two': 'two'})
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(grouped[0]['id'], 'two')
+        self.assertEqual(grouped[0]['severity'], 'high')
+        self.assertFalse(grouped[0]['calibrated'])
+        self.assertEqual({f['id'] for f in grouped[0]['occurrences']}, {'one', 'two'})
+
+    def test_original_capture_blockers_and_automatic_findings_are_not_overridden(self):
+        capture = c.read_json(self.packet / 'capture.json')
+        violation = {'source': 'axe', 'rule': 'button-name', 'target': '.icon',
+                     'detail': 'The icon button has no accessible name.', 'states': ['state-0'], 'exception': None}
+        capture['automaticChecks']['groups'] = [violation, {**violation, 'exception': 'Accepted exception'}]
+        c.write_json(self.packet / 'capture.json', capture)
+        self.assertEqual(self.run_coordinator(harness=OfflineHarness(blockers=['Stale runtime'])), 2)
+        report = c.read_json(self.output / 'report.json')
+        self.assertIn('Stale runtime', report['blockers'])
+        self.assertEqual(report['automaticFindings'], [violation])
+
+    def test_output_inside_capture_and_existing_output_are_refused(self):
+        with self.assertRaisesRegex(ValueError, 'separate'):
+            c.coordinate(self.packet, self.packet / 'review', self.home)
+        self.output.mkdir()
+        with self.assertRaises(FileExistsError):
+            self.run_coordinator()
+
+    def test_missing_crop_or_criterion_and_unsupported_finding_fail_validation(self):
+        states = c.read_json(self.packet / 'capture.json')['states'][:1]
+        correct = {'assessments': [assessment(states[0])], 'findings': []}
+        missing_crop = copy.deepcopy(correct)
+        missing_crop['assessments'][0]['images'].pop()
+        missing_criterion = copy.deepcopy(correct)
+        del missing_criterion['assessments'][0]['aspects']['alignment']
+        unsupported = copy.deepcopy(correct)
+        unsupported['findings'] = [finding('f', states[0])]
+        unsupported['findings'][0]['evidence'] = ['not-supplied.png']
+        concern_without_finding = copy.deepcopy(correct)
+        concern_without_finding['assessments'][0]['aspects']['alignment']['status'] = 'concern'
+        for bad in [missing_crop, missing_criterion, unsupported, concern_without_finding]:
+            with self.assertRaises(ValueError):
+                c.validate_assessments(bad, states)
+
+    def test_comparison_evidence_may_name_a_good_assigned_state(self):
+        states = c.read_json(self.packet / 'capture.json')['states'][:2]
+        result = {'assessments': [assessment(s) for s in states], 'findings': [finding('f', states[0])]}
+        result['findings'][0]['evidence'].append(states[1]['screenshot'])
+        c.validate_assessments(result, states)
+        result['findings'][0]['evidence'] = [states[1]['screenshot']]
+        with self.assertRaisesRegex(ValueError, 'affected state'):
+            c.validate_assessments(result, states)
+
+    def test_generation_schema_constrains_state_and_image_references(self):
+        states = c.read_json(self.packet / 'capture.json')['states'][:2]
+        result = {'assessments': [assessment(s) for s in states], 'findings': [finding('f', states[0])]}
+        schema = c.review_schema(states)
+        c.validate_shape(result, schema)
+        result['findings'][0]['evidence'] = [states[0]['screenshot'] + ' shows an overlap']
+        with self.assertRaisesRegex(ValueError, 'unsupported value'):
+            c.validate_shape(result, schema)
+        self.assertNotIn('enum', c.REVIEW_SCHEMA['properties']['assessments']['items']['properties']['id'])
+
+    def test_unsealed_invalid_answer_gets_one_retained_retry(self):
+        runner = OfflineRunner(self.packet, omit='supplemental')
+        self.assertEqual(self.run_coordinator(runner=runner), 2)
+        job = self.output / 'jobs/batch-002'
+        self.assertTrue((job / 'invalid-assessment/receipt.json').exists())
+        self.assertFalse((job / 'seal.json').exists())
+        attempts = len(runner.calls)
+        self.assertEqual(self.run_coordinator(runner=runner, resume=True), 2)
+        self.assertEqual(len(runner.calls), attempts)
+        self.assertEqual(sum(d.parent.name == 'batch-002' for d, _, _ in runner.calls), 2)
+
+    def test_validator_revision_revalidates_saved_answers_without_rerolling(self):
+        runner = OfflineRunner(self.packet)
+        self.run_coordinator(runner=runner)
+        calls = len(runner.calls)
+        plan = c.read_json(self.output / 'plan.json')
+        updated = {**plan, 'coordinatorSha256': 'new-validator-version'}
+        with patch.object(c, 'make_plan', return_value=updated):
+            self.assertEqual(self.run_coordinator(runner=runner, resume=True), 0)
+        self.assertEqual(len(runner.calls), calls)
+        self.assertEqual(c.read_json(self.output / 'coordinator-history.json'),
+                         [plan['coordinatorSha256'], 'new-validator-version'])
+
+    def test_cli_resolves_paths_from_the_callers_directory_and_preserves_exit_code(self):
+        with patch.object(c, 'coordinate', return_value=2) as run, \
+                patch('org.metadatacenter.util.InvocationContext.invocation_environment',
+                      return_value={'CEDAR_CLI_CALLER_DIR': '/tmp/caller'}), \
+                patch('org.metadatacenter.util.Util.Util.cedar_home', '/tmp/home'):
+            result = CliRunner().invoke(test_processes.app, ['ui-review-coordinate', '--capture', 'packet',
+                '--output', 'report', '--plan'])
+        self.assertEqual(result.exit_code, 2, result.output)
+        self.assertEqual(run.call_args.args[:2], (Path('/tmp/caller/packet'), Path('/tmp/caller/report')))
+        self.assertTrue(run.call_args.kwargs['plan_only'])
+
+    def test_runner_delivers_images_on_stdin_protocol_and_records_completed_receipt(self):
+        directory = self.root / 'runner'
+        images = [self.packet / 'state-0.png']
+        response = {'cases': [{'id': 'one', 'issue': False, 'reason': 'Visible control.'}]}
+        launches = []
+
+        class Process:
+            returncode = 0
+
+            def __init__(self, command, **kwargs):
+                launches.append((command, kwargs))
+                self.command, self.kwargs = command, kwargs
+
+            def communicate(self, prompt, timeout):
+                self.kwargs['stdout'].write(json.dumps({'type': 'thread.started', 'thread_id': 'fresh-reviewer'}) + '\n')
+                self.kwargs['stdout'].write(json.dumps({'type': 'item.completed', 'item': {
+                    'type': 'error', 'message': 'Code Mode is unavailable because code-mode host is disabled. '
+                    'Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.'}}) + '\n')
+                self.kwargs['stdout'].write(json.dumps({'type': 'turn.completed', 'usage': {}}) + '\n')
+                c.write_json(Path(self.command[self.command.index('-o') + 1]), response)
+
+        with patch.object(c.shutil, 'which', return_value='/mock/codex'), \
+                patch.object(c.subprocess, 'check_output', return_value='codex test'), \
+                patch.object(c.subprocess, 'Popen', Process), \
+                patch.dict(c.os.environ, {'CEDAR_PRIVATE_TOKEN': 'must-not-reach-reviewer'}):
+            runner = c.CodexRunner()
+            result, receipt = runner.run(directory, 'Review the image.', images, c.CALIBRATION_SCHEMA)
+        self.assertEqual(result, response)
+        self.assertEqual(receipt['thread'], 'fresh-reviewer')
+        self.assertEqual(receipt['images'][0]['sha256'], c.digest(images[0].read_bytes()))
+        command, options = launches[0]
+        self.assertEqual(command[-2:], ['--', '-'])
+        self.assertIn('--ignore-user-config', command)
+        self.assertIn('features.shell_tool=false', command)
+        self.assertIn('features.view_image=false', command)
+        self.assertIn('project_doc_max_bytes=0', command)
+        self.assertNotIn('CEDAR_PRIVATE_TOKEN', options['env'])
+        self.assertNotEqual(Path(command[command.index('-C') + 1]), self.packet)
+
+    def test_runner_rejects_tool_usage_even_with_valid_structured_output(self):
+        class Process:
+            returncode = 0
+
+            def __init__(self, command, **kwargs):
+                self.kwargs = kwargs
+
+            def communicate(self, prompt, timeout):
+                self.kwargs['stdout'].write(json.dumps({'type': 'item.completed',
+                    'item': {'type': 'command_execution', 'command': 'cat source'}}) + '\n')
+
+        with patch.object(c.shutil, 'which', return_value='/mock/codex'), \
+                patch.object(c.subprocess, 'check_output', return_value='codex test'), \
+                patch.object(c.subprocess, 'Popen', Process):
+            runner = c.CodexRunner()
+            with self.assertRaisesRegex(ValueError, 'unexpected tool'):
+                runner.run(self.root / 'runner', 'Review.', [], c.CALIBRATION_SCHEMA)
+        self.assertFalse((self.root / 'runner/receipt.json').exists())
+
+    def test_runner_timeout_stops_process_before_a_receipt_can_exist(self):
+        class Process:
+            returncode = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def communicate(self, *args, **kwargs):
+                raise subprocess.TimeoutExpired('codex', 1)
+
+        with patch.object(c.shutil, 'which', return_value='/mock/codex'), \
+                patch.object(c.subprocess, 'check_output', return_value='codex test'), \
+                patch.object(c.subprocess, 'Popen', Process), \
+                patch.object(c.CodexRunner, 'stop') as stop:
+            runner = c.CodexRunner(timeout=1)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                runner.run(self.root / 'runner', 'Review.', [], c.CALIBRATION_SCHEMA)
+        stop.assert_called_once()
+        self.assertFalse((self.root / 'runner/receipt.json').exists())
+
+
+class SharedEvidenceTest(unittest.TestCase):
+    def test_repeated_related_evidence_roundtrips_without_changing_order_or_values(self):
+        row = {'label': 'Mélanoma — full authored name ' * 20,
+               'x': 1.125, 'expanded': None, 'disabled': False,
+               'pointerTarget': {'x': 11.5, 'y': 24, 'belongsToControl': True}}
+        original = {'states': [{'id': str(i), 'rows': [copy.deepcopy(row), {'label': row['label']}],
+                                'accessibility': 'button: complete source and release name\n' * 20}
+                               for i in range(20)]}
+        before = copy.deepcopy(original)
+        encoded = c.shared_evidence_json(original)
+        packet = json.loads(encoded)
+        def decode(value):
+            if isinstance(value, dict) and set(value) == {'$sharedEvidenceValue'}:
+                return decode(packet['sharedValues'][value['$sharedEvidenceValue']])
+            if isinstance(value, dict):
+                return {key: decode(child) for key, child in value.items()}
+            if isinstance(value, list):
+                return [decode(child) for child in value]
+            return value
+        self.assertEqual(decode(packet['evidence']), original)
+        self.assertEqual(original, before)
+        self.assertLess(len(encoded), len(json.dumps(original)) / 2)
+
+    def test_reference_like_input_cannot_be_silently_reinterpreted(self):
+        with self.assertRaisesRegex(ValueError, 'reserved'):
+            c.shared_evidence_json({'original': {'$sharedEvidenceValue': 0}})
+
+
+
+if __name__ == '__main__':
+    unittest.main()

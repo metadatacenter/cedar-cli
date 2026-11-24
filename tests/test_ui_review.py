@@ -1,3 +1,4 @@
+import fcntl
 import json
 import tempfile
 import unittest
@@ -17,6 +18,49 @@ class UIReviewTest(unittest.TestCase):
         known = patch.object(ui_review, 'catalog', return_value={'applications': APPS, 'profiles': PROFILES})
         self.catalog = known.start()
         self.addCleanup(known.stop)
+
+    @patch.object(ui_review, 'invocation_environment', return_value={})
+    def test_capture_locks_before_provenance_and_through_collector_then_releases_on_failure(self, environment):
+        for outcome in (0, 2, RuntimeError('collector failed')):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as parent:
+                home = Path(parent)
+                lock = home / '.cedar/locks/local-stack.lock'
+
+                def assert_held():
+                    with lock.open('r+') as probe:
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                def evidence(_home):
+                    assert_held()
+                    return {'current': True, 'stale': []}
+
+                def collect(*args, **kwargs):
+                    assert_held()
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    return outcome
+
+                with patch.object(ui_review.Util, 'cedar_home', parent), \
+                        patch.object(ui_review, 'runtime_evidence', side_effect=evidence), \
+                        patch.object(ui_review, 'served_findings', return_value=[]), \
+                        patch.object(ui_review, '_invoke', side_effect=collect):
+                    if isinstance(outcome, Exception):
+                        with self.assertRaisesRegex(RuntimeError, 'collector failed'):
+                            ui_review.run_review(output=home / 'capture')
+                    else:
+                        self.assertEqual(ui_review.run_review(output=home / 'capture'), outcome)
+                with lock.open('r+') as probe:
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    @patch.object(ui_review, '_invoke', return_value=0)
+    @patch.object(ui_review, 'invocation_environment', return_value={})
+    @patch.object(ui_review, 'local_stack', side_effect=AssertionError('offline operation took stack lock'))
+    def test_offline_plan_seal_and_review_do_not_wait_for_the_stack(self, lock, environment, run):
+        with patch.object(ui_review.Util, 'cedar_home', '/tmp/cedar'):
+            for options in ({'plan': True}, {'seal_review': True}, {'review': '/tmp/review.json'}):
+                self.assertEqual(ui_review.run_review(output='/tmp/review', **options), 0)
+        lock.assert_not_called()
 
     @patch.object(ui_review, '_invoke', return_value=0)
     @patch.object(ui_review, 'runtime_evidence')

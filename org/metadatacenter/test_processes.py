@@ -1,5 +1,6 @@
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,32 @@ from org.metadatacenter.util.BuildSafety import embedded_mongo_processes
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
+
+
+@app.command("ui-review-coordinate")
+def ui_review_coordinate(
+        capture: Path = typer.Option(..., help="Existing Designer application capture directory."),
+        output: Path = typer.Option(..., help="Separate review directory; never overwrites the capture."),
+        plan: bool = typer.Option(False, help="Verify evidence and list every assigned state without calling AI."),
+        resume: bool = typer.Option(False, help="Resume the same immutable packet and coordinator configuration."),
+        batch_size: int = typer.Option(8, min=1, max=12, help="States supplied to each independent reviewer."),
+        workers: int = typer.Option(2, min=1, max=4, help="Concurrent review jobs."),
+        model: Optional[str] = typer.Option(None, help="Codex model; omitted uses the runner's default."),
+        timeout: int = typer.Option(900, min=30, help="Maximum seconds per AI turn.")):
+    """Review every captured Designer state with AI and report actionable findings and decisions."""
+    from org.metadatacenter.ui_review_coordinator import coordinate
+    from org.metadatacenter.util.InvocationContext import invocation_environment
+    from org.metadatacenter.util.Util import Util
+    caller = Path(invocation_environment().get('CEDAR_CLI_CALLER_DIR', Path.cwd()))
+    try:
+        code = coordinate(caller / capture, caller / output, Util.cedar_home, batch_size=batch_size,
+                          workers=workers, model=model, timeout=timeout, resume=resume,
+                          plan_only=plan, printer=lambda message: console.print(
+                              message, markup=False, soft_wrap=True, highlight=False))
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+    raise typer.Exit(code)
 
 
 @app.command("ui-review")

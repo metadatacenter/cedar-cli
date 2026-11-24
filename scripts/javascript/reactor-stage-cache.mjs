@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
-export function stageCache(environment = process.env) {
+export function stageCache(environment = process.env, { timeoutMs = 60_000 } = {}) {
   if (environment.CEDAR_TASK_CACHE_CONFIG) {
     const path = environment.CEDAR_TASK_CACHE_CONFIG;
     const config = JSON.parse(readFileSync(path, 'utf8'));
@@ -16,7 +16,8 @@ export function stageCache(environment = process.env) {
         ['-I', config.engine, operation, path, stage.name,
           JSON.stringify({ script: stage.script, environment: stage.env ?? {} })],
         { encoding: 'utf8', input: operation === 'save' ? logs.get(stage.name) ?? '' : '',
-          maxBuffer: 4 * 1024 * 1024 });
+          // Cache I/O is optional. A blocked writer must not hold a completed test gate forever.
+          timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
       if (result.status !== 0) {
         console.warn(`[gate] cache ${stage.name}: ${result.stderr || result.error || 'unavailable'}`);
         return null;

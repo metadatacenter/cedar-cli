@@ -11,6 +11,7 @@ import uuid
 from org.metadatacenter.reactor_evidence import source_identity
 from org.metadatacenter.util.InvocationContext import invocation_environment
 from org.metadatacenter.util.Util import Util
+from org.metadatacenter.util.local_stack_lock import local_stack
 
 
 def runtime_evidence(home):
@@ -110,21 +111,25 @@ def run_review(*, plan=False, output=None, review=None, seal_review=False, diagn
             raise ValueError('--review requires --output naming the captured run')
         return _invoke(command + [f'--output={absolute(output)}', f'--review={absolute(review)}'],
                        cwd=root, env=environment)
-    evidence = runtime_evidence(home)
-    if not evidence['current'] and not diagnostic:
-        raise ValueError('Frontend sources changed since the selected build: ' + ', '.join(evidence['stale']) +
-                         '. Run cedarcli build frontends. --diagnostic may inspect the existing runtime, '
-                         'but cannot produce an acceptance pass.')
-    served = served_findings(home, evidence)
-    if served:
-        evidence = {**evidence, 'current': False, 'servedFindings': served}
-        if not diagnostic:
-            raise ValueError('The frontends do not serve the selected build: ' + '; '.join(served[:3]) +
-                             ('; and more' if len(served) > 3 else '') + '. Run cedarcli build frontends.')
-    directory = absolute(output) if output else home / '.cedar/reports/ui-review' / str(uuid.uuid4())
-    directory.mkdir(parents=True, exist_ok=False)
-    (directory / 'provenance.json').write_text(json.dumps(evidence, indent=2) + '\n')
-    return _invoke(command + [f'--output={directory}', '--capture', f'--profile={profile}'], cwd=root, env=environment)
+    # A capture drives shared services and must not race a deployment, smoke or load run.
+    # Check provenance after acquiring the lock, and retain it through collector cleanup.
+    # The reactor may already hold this re-entrant lock when it requests its capture.
+    with local_stack(home, report=lambda message: print(message, flush=True)):
+        evidence = runtime_evidence(home)
+        if not evidence['current'] and not diagnostic:
+            raise ValueError('Frontend sources changed since the selected build: ' + ', '.join(evidence['stale']) +
+                             '. Run cedarcli build frontends. --diagnostic may inspect the existing runtime, '
+                             'but cannot produce an acceptance pass.')
+        served = served_findings(home, evidence)
+        if served:
+            evidence = {**evidence, 'current': False, 'servedFindings': served}
+            if not diagnostic:
+                raise ValueError('The frontends do not serve the selected build: ' + '; '.join(served[:3]) +
+                                 ('; and more' if len(served) > 3 else '') + '. Run cedarcli build frontends.')
+        directory = absolute(output) if output else home / '.cedar/reports/ui-review' / str(uuid.uuid4())
+        directory.mkdir(parents=True, exist_ok=False)
+        (directory / 'provenance.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        return _invoke(command + [f'--output={directory}', '--capture', f'--profile={profile}'], cwd=root, env=environment)
 
 
 # Repositories whose source content a capture reviews. A frontend build that changes any of them

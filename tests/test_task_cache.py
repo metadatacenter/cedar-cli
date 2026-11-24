@@ -155,6 +155,37 @@ assert.ok(existsSync('unstable'));
         self.assertIsNone(task_cache.save(self.config, 'build'))
         self.assertIsNone(task_cache.save(self.config, 'browser'))
 
+    @unittest.skipUnless(shutil.which('node'), 'requires node')
+    def test_blocked_optional_cache_calls_time_out_and_reap_their_children(self):
+        module = Path(reactor_tasks.__file__).resolve().parents[2] / 'scripts/javascript/reactor-stage-cache.mjs'
+        engine = self.home / 'blocked-cache.py'
+        engine.write_text("import os, pathlib, time\n"
+                          "with pathlib.Path('cache-pids').open('a') as out: out.write(str(os.getpid())+'\\n')\n"
+                          "time.sleep(60)\n")
+        self.config.update(python=sys.executable, engine=str(engine))
+        path = self.home / 'config.json'
+        path.write_text(json.dumps(self.config))
+        code = '''
+import assert from 'node:assert/strict';
+import { readFileSync, existsSync } from 'node:fs';
+const { stageCache } = await import(process.env.CACHE_MODULE);
+const cache = stageCache(process.env, { timeoutMs: 500 });
+const stage = { name: 'browser', script: 'browser-test' };
+assert.equal(cache.reuse(stage), false);
+cache.observe(stage, '3477 passed');
+cache.save(stage);
+for (const pid of readFileSync('cache-pids', 'utf8').trim().split('\\n'))
+  assert.throws(() => process.kill(Number(pid), 0), { code: 'ESRCH' });
+console.log('gate can finish after the optional cache failed');
+'''
+        result = subprocess.run(['node', '--input-type=module', '-e', code], cwd=self.root,
+                                env={**os.environ, 'CACHE_MODULE': module.as_uri(),
+                                     reactor_tasks.CONFIG: str(path)}, capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('ETIMEDOUT', result.stderr)
+        self.assertIn('gate can finish', result.stdout)
+        self.assertFalse((self.home / 'cache').exists())
+
     def test_a_flaky_success_is_not_cached_and_marks_the_repository(self):
         self.assertIsNone(task_cache.save(self.config, 'browser', log='1 flaky\n100 passed'))
         self.assertTrue(Path(self.config['uncacheable']).exists())
