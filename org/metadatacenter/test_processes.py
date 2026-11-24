@@ -24,7 +24,8 @@ def ui_review_coordinate(
         resume: bool = typer.Option(False, help="Resume the same immutable packet and coordinator configuration."),
         batch_size: int = typer.Option(8, min=1, max=12, help="States supplied to each independent reviewer."),
         workers: int = typer.Option(2, min=1, max=4, help="Concurrent review jobs."),
-        model: Optional[str] = typer.Option(None, help="Codex model; omitted uses the runner's default."),
+        reviewer: str = typer.Option("codex", help="Reviewer CLI: codex, or claude for Claude Code."),
+        model: Optional[str] = typer.Option(None, help="Reviewer model; omitted uses the reviewer's default."),
         timeout: int = typer.Option(900, min=30, help="Maximum seconds per AI turn.")):
     """Review every captured Designer state with AI and report actionable findings and decisions."""
     from org.metadatacenter.ui_review_coordinator import coordinate
@@ -34,7 +35,7 @@ def ui_review_coordinate(
     try:
         code = coordinate(caller / capture, caller / output, Util.cedar_home, batch_size=batch_size,
                           workers=workers, model=model, timeout=timeout, resume=resume,
-                          plan_only=plan, printer=lambda message: console.print(
+                          plan_only=plan, reviewer=reviewer, printer=lambda message: console.print(
                               message, markup=False, soft_wrap=True, highlight=False))
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         console.print(str(error), markup=False)

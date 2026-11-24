@@ -1,8 +1,10 @@
 """Image-backed, resumable Designer review of immutable capture evidence.
 
-The coordinator owns coverage and validation. Codex supplies judgments, never coverage counts,
-file writes, verdicts, or calibration scores. No collector or live CEDAR service is invoked.
+The coordinator owns coverage and validation. The reviewer, Codex or Claude, supplies judgments,
+never coverage counts, file writes, verdicts, or calibration scores. No collector or live CEDAR
+service is invoked.
 """
+import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 import copy
@@ -18,6 +20,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 
 
 ASPECTS = ('alignment', 'grouping', 'hierarchy', 'wrapping', 'visibility', 'interaction')
@@ -333,7 +336,16 @@ def shared_evidence_json(value):
                 'sharedValues': shared, 'evidence': evidence})
 
 
-def bounded_verification_jobs(jobs, candidates, request, limit=900_000):
+def oversized(prompt, images, limit, image_limit):
+    """Name the runner limit a request exceeds, or None when it fits."""
+    if len(prompt) > limit:
+        return f'exceeds {limit} characters'
+    if image_limit is not None and len(images) > image_limit:
+        return f'exceeds {image_limit} images'
+    return None
+
+
+def bounded_verification_jobs(jobs, candidates, request, limit=900_000, image_limit=None):
     """Split oversized unions by candidate, retaining each candidate's complete related evidence."""
     result = []
     for job in jobs:
@@ -341,14 +353,16 @@ def bounded_verification_jobs(jobs, candidates, request, limit=900_000):
         if not relevant:
             continue
         prompt, images = request(relevant)
-        groups = [relevant] if len(prompt) <= limit or len(relevant) == 1 else [[f] for f in relevant]
+        fits = not oversized(prompt, images, limit, image_limit)
+        groups = [relevant] if fits or len(relevant) == 1 else [[f] for f in relevant]
         for index, group in enumerate(groups):
             text, supplied = (prompt, images) if len(groups) == 1 else request(group)
             id_ = job['id'] if len(groups) == 1 else f'{job["id"]}-{index + 1:03}'
+            excess = oversized(text, supplied, limit, image_limit)
             result.append({'id': id_, 'candidates': group, 'prompt': text, 'images': supplied,
-                           'error': (f'Complete verification evidence exceeds {limit} characters for '
+                           'error': (f'Complete verification evidence {excess} for '
                                      + ', '.join(f['id'] for f in group) + '; no evidence was omitted.')
-                           if len(text) > limit else None})
+                           if excess else None})
     return result
 
 
@@ -391,15 +405,13 @@ def validate_decisions(result, candidates, images):
             raise ValueError('Verifier lacks supplied image evidence')
 
 
-class CodexRunner:
-    """Only attached images and stdin text reach a fresh reviewer. Calibration resumes that reviewer."""
-    def __init__(self, model=None, timeout=900):
-        self.model = model
+class ReviewerProcess:
+    """One reviewer turn runs as a child process in its own session, so cancellation stops it."""
+    text_limit = 900_000
+    image_limit = None
+
+    def __init__(self, timeout):
         self.timeout = timeout
-        self.executable = shutil.which('codex')
-        if not self.executable:
-            raise ValueError('codex is not installed or not on PATH')
-        self.version = subprocess.check_output([self.executable, '--version'], text=True).strip()
         self._lock = threading.Lock()
         self._processes = set()
         self._cancelled = False
@@ -423,7 +435,7 @@ class CodexRunner:
         for process in processes:
             self.stop(process)
 
-    def run(self, directory, prompt, images, schema, *, resume=None):
+    def record_request(self, directory, prompt, images, schema, resume):
         directory.mkdir(parents=True, exist_ok=True)
         write_json(directory / 'schema.json', schema)
         (directory / 'prompt.txt').write_text(prompt)
@@ -432,6 +444,47 @@ class CodexRunner:
             'schemaSha256': digest(encoded(schema)), 'runner': self.version, 'model': self.model,
             'resumeThread': resume}
         write_json(directory / 'request.json', request)
+        return request
+
+    def execute(self, command, stdin, directory, environment, cwd=None):
+        with (directory / 'events.jsonl').open('w') as events, (directory / 'stderr.log').open('w') as errors:
+            with self._lock:
+                if self._cancelled:
+                    raise ValueError('Review cancelled')
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=events, stderr=errors,
+                                           text=True, env=environment, cwd=cwd, start_new_session=True)
+                self._processes.add(process)
+            try:
+                process.communicate(stdin, timeout=self.timeout)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                self.stop(process)
+                raise
+            finally:
+                with self._lock:
+                    self._processes.discard(process)
+        return process.returncode
+
+    @staticmethod
+    def finish(directory, request, response, thread):
+        receipt = {**request, 'thread': thread, 'responseSha256': digest(encoded(response)),
+                   'eventsSha256': digest((directory / 'events.jsonl').read_bytes()),
+                   'completedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+        write_json(directory / 'receipt.json', receipt)
+        return response, receipt
+
+
+class CodexRunner(ReviewerProcess):
+    """Only attached images and stdin text reach a fresh reviewer. Calibration resumes that reviewer."""
+    def __init__(self, model=None, timeout=900):
+        super().__init__(timeout)
+        self.model = model
+        self.executable = shutil.which('codex')
+        if not self.executable:
+            raise ValueError('codex is not installed or not on PATH')
+        self.version = subprocess.check_output([self.executable, '--version'], text=True).strip()
+
+    def run(self, directory, prompt, images, schema, *, resume=None):
+        request = self.record_request(directory, prompt, images, schema, resume)
         # Neither the evidence repository nor its parents become the reviewer's project.
         with tempfile.TemporaryDirectory(prefix='cedar-ui-reviewer-') as isolated:
             command = [self.executable, 'exec', '-C', isolated, '--sandbox', 'read-only']
@@ -459,23 +512,9 @@ class CodexRunner:
                            if key in ('PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'SYSTEMROOT',
                                       'CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY',
                                       'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE')}
-            with (directory / 'events.jsonl').open('w') as events, (directory / 'stderr.log').open('w') as errors:
-                with self._lock:
-                    if self._cancelled:
-                        raise ValueError('Review cancelled')
-                    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=events, stderr=errors,
-                                               text=True, env=environment, start_new_session=True)
-                    self._processes.add(process)
-                try:
-                    process.communicate(prompt, timeout=self.timeout)
-                except (subprocess.TimeoutExpired, KeyboardInterrupt):
-                    self.stop(process)
-                    raise
-                finally:
-                    with self._lock:
-                        self._processes.discard(process)
-            if process.returncode:
-                raise ValueError(f'Reviewer exited {process.returncode}; inspect {directory / "stderr.log"}')
+            returncode = self.execute(command, prompt, directory, environment)
+            if returncode:
+                raise ValueError(f'Reviewer exited {returncode}; inspect {directory / "stderr.log"}')
         events = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines() if line.strip()]
         for event in events:
             item = event.get('item', {})
@@ -493,12 +532,115 @@ class CodexRunner:
         thread = next((e['thread_id'] for e in events if e.get('type') == 'thread.started'), resume)
         if not thread or not any(e.get('type') == 'turn.completed' for e in events):
             raise ValueError('Reviewer has no completed turn or session identity')
-        response = read_json(directory / 'response.json')
-        receipt = {**request, 'thread': thread, 'responseSha256': digest(encoded(response)),
-                   'eventsSha256': digest((directory / 'events.jsonl').read_bytes()),
-                   'completedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
-        write_json(directory / 'receipt.json', receipt)
-        return response, receipt
+        return self.finish(directory, request, read_json(directory / 'response.json'), thread)
+
+
+CLAUDE_SYSTEM = ('You are an independent reviewer of recorded user-interface evidence. The user turn '
+                 'holds your instructions, the attached images and the recorded evidence. You have no '
+                 'tools besides the structured answer. Give your answer only through it.')
+CLAUDE_ENVIRONMENT = ('PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'ANTHROPIC_API_KEY',
+                      'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY',
+                      'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS')
+IMAGE_TYPES = {b'\x89PNG': 'image/png', b'\xff\xd8\xff': 'image/jpeg', b'GIF8': 'image/gif'}
+
+
+def image_type(path):
+    head = Path(path).read_bytes()[:12]
+    if head[:4] == b'RIFF' and head[8:12] == b'WEBP':
+        return 'image/webp'
+    for magic, kind in IMAGE_TYPES.items():
+        if head.startswith(magic):
+            return kind
+    raise ValueError('Evidence is not a PNG, JPEG, GIF or WebP image: ' + Path(path).name)
+
+
+class ClaudeRunner(ReviewerProcess):
+    """Claude Code in print mode, with no tools, settings, memory, skills or MCP servers.
+
+    Images and text reach the reviewer only on stdin. Claude Code keeps a session under the name of
+    its working directory, so each session gets a directory of its own that calibration resumes in.
+    """
+    image_limit = 100
+
+    def __init__(self, model=None, timeout=900):
+        super().__init__(timeout)
+        self.model = model
+        configured = os.environ.get('CEDAR_UI_REVIEW_CLAUDE')
+        self.executable = configured or shutil.which('claude')
+        if not self.executable:
+            raise ValueError('claude is not installed or not on PATH; set CEDAR_UI_REVIEW_CLAUDE to '
+                             'the Claude Code executable')
+        self.environment = {key: value for key, value in os.environ.items() if key in CLAUDE_ENVIRONMENT}
+        self.version = subprocess.check_output([self.executable, '--version'], text=True,
+                                               env=self.environment).strip()
+        status = subprocess.run([self.executable, 'auth', 'status'], text=True, capture_output=True,
+                                env=self.environment, timeout=60)
+        try:
+            signed_in = json.loads(status.stdout).get('loggedIn') is True
+        except ValueError:
+            signed_in = False
+        if not signed_in:
+            raise ValueError('Claude Code is not signed in; run `claude auth login` or export ANTHROPIC_API_KEY')
+
+    @staticmethod
+    def message(prompt, images):
+        content = []
+        for index, path in enumerate(images, 1):
+            content.append({'type': 'text', 'text': f'Image {index}: {path.name}'})
+            content.append({'type': 'image', 'source': {'type': 'base64', 'media_type': image_type(path),
+                            'data': base64.b64encode(path.read_bytes()).decode()}})
+        content.append({'type': 'text', 'text': prompt})
+        return json.dumps({'type': 'user', 'message': {'role': 'user', 'content': content}}) + '\n'
+
+    def run(self, directory, prompt, images, schema, *, resume=None):
+        if len(images) > self.image_limit:
+            raise ValueError(f'{len(images)} images exceed the {self.image_limit} one Claude turn accepts')
+        request = self.record_request(directory, prompt, images, schema, resume)
+        session = resume or str(uuid.uuid4())
+        # A directory outside CEDAR_HOME, so no project instructions can apply to the reviewer.
+        workspace = Path(tempfile.gettempdir()) / 'cedar-ui-reviewer' / session
+        workspace.mkdir(parents=True, exist_ok=True)
+        command = [self.executable, '--print', '--input-format', 'stream-json',
+                   '--output-format', 'stream-json', '--verbose', '--tools', '', '--safe-mode',
+                   '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands',
+                   '--no-chrome', '--system-prompt', CLAUDE_SYSTEM, '--json-schema', json.dumps(schema),
+                   '--effort', 'high', *(['--resume', session] if resume else ['--session-id', session])]
+        if self.model:
+            command += ['--model', self.model]
+        returncode = self.execute(command, self.message(prompt, images), directory, self.environment,
+                                  cwd=workspace)
+        events = []
+        for line in (directory / 'events.jsonl').read_text().splitlines():
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                continue
+        result = next((e for e in reversed(events) if e.get('type') == 'result'), None)
+        if result and (result.get('is_error') or result.get('subtype') != 'success'):
+            raise ValueError('Reviewer reported a failed turn: ' + str(result.get('result') or result.get('subtype'))[:500])
+        if returncode:
+            raise ValueError(f'Reviewer exited {returncode}; inspect {directory / "stderr.log"}')
+        start = next((e for e in events if e.get('type') == 'system' and e.get('subtype') == 'init'), None)
+        if not start or start.get('tools') != ['StructuredOutput'] or start.get('mcp_servers'):
+            raise ValueError('Reviewer started with tools beyond its structured answer; refusing its assessment')
+        for event in events:
+            if event.get('type') != 'assistant':
+                continue
+            for block in event.get('message', {}).get('content', []):
+                if block.get('type') == 'tool_use' and block.get('name') == 'StructuredOutput':
+                    continue
+                if block.get('type') not in ('text', 'thinking', 'redacted_thinking'):
+                    raise ValueError('Reviewer used an unexpected tool; refusing its assessment')
+        if not result or result.get('session_id') != session:
+            raise ValueError('Reviewer has no completed turn or session identity')
+        response = result.get('structured_output')
+        if not isinstance(response, dict):
+            raise ValueError('Reviewer returned no structured answer')
+        write_json(directory / 'response.json', response)
+        return self.finish(directory, request, response, session)
+
+
+REVIEWERS = {'codex': CodexRunner, 'claude': ClaudeRunner}
 
 
 class Harness:
@@ -735,16 +877,22 @@ def render_report(output, report):
 
 
 def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, timeout=900,
-               resume=False, plan_only=False, runner=None, harness=None, printer=print):
+               resume=False, plan_only=False, reviewer='codex', runner=None, harness=None, printer=print):
     source, output, home = Path(source).resolve(), Path(output).resolve(), Path(home).resolve()
     if output == source or source in output.parents or output in source.parents:
         raise ValueError('Review output must be separate from the original capture')
     if not 1 <= workers <= 4:
         raise ValueError('Workers must be between 1 and 4')
+    if runner is None and reviewer not in REVIEWERS:
+        raise ValueError('Unknown reviewer: ' + str(reviewer))
     plan = make_plan(source, home, batch_size, model)
     if plan_only:
         printer(json.dumps({**plan, 'rules': '(approved rules fingerprinted above)'}, indent=2))
         return 0
+    # An unavailable or signed-out reviewer is refused before any review directory exists.
+    runner = runner or REVIEWERS[reviewer](model, timeout)
+    text_limit = getattr(runner, 'text_limit', 900_000)
+    image_limit = getattr(runner, 'image_limit', None)
     output.mkdir(parents=True, exist_ok=resume)
     harness = harness or Harness(home)
     with output_lock(output):
@@ -771,7 +919,6 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
         blockers = harness.blockers(packet)
         # This is evidence assessment, so an incomplete capture can still yield useful findings,
         # but its original blockers survive every positive model assessment.
-        runner = runner or CodexRunner(model, timeout)
         identity = {'runner': getattr(runner, 'version', 'injected offline test runner'),
                     'requestedModel': model or 'CLI default'}
         identity_path = output / 'runner.json'
@@ -787,6 +934,9 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
         def run_job(job):
             rows, images = state_input(packet, capture, set(job['states']))
             prompt = RUBRIC + '\nApproved design agreements:\n' + plan['rules'] + '\nStates (image order follows each images list):\n' + evidence_json(rows)
+            excess = oversized(prompt, images, text_limit, image_limit)
+            if excess:
+                raise ValueError(f'Assigned evidence {excess} for this reviewer; use a smaller --batch-size')
             return reviewed_job(output / 'jobs' / job['id'], prompt, images,
                                 review_schema([by_id[id_] for id_ in job['states']]), runner,
                                 packet, calibration, harness,
@@ -837,11 +987,12 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
                       'when the evidence refutes it. Explain the actual observation, not agreement with the '
                       'first reviewer.\nApproved agreements:\n' + plan['rules'] + '\nStates:\n' + evidence +
                       '\nCandidates:\n' + json.dumps(relevant))
-            if len(relevant) == 1 and len(prompt) > 900_000:
+            if len(relevant) == 1 and len(prompt) > text_limit:
                 prompt = prompt.replace(evidence, evidence_json(rows, shared=True), 1)
             return prompt, images
 
-        verification_jobs = bounded_verification_jobs(jobs, candidates, verification_request)
+        verification_jobs = bounded_verification_jobs(jobs, candidates, verification_request,
+                                                      limit=text_limit, image_limit=image_limit)
 
         def verify_job(job):
             if job['error']:

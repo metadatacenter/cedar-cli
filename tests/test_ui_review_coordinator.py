@@ -396,9 +396,13 @@ class CoordinatorTest(unittest.TestCase):
                 patch('org.metadatacenter.util.Util.Util.cedar_home', '/tmp/home'):
             result = CliRunner().invoke(test_processes.app, ['ui-review-coordinate', '--capture', 'packet',
                 '--output', 'report', '--plan'])
+            chosen = CliRunner().invoke(test_processes.app, ['ui-review-coordinate', '--capture', 'packet',
+                '--output', 'report', '--reviewer', 'claude'])
         self.assertEqual(result.exit_code, 2, result.output)
-        self.assertEqual(run.call_args.args[:2], (Path('/tmp/caller/packet'), Path('/tmp/caller/report')))
-        self.assertTrue(run.call_args.kwargs['plan_only'])
+        self.assertEqual(run.call_args_list[0].args[:2], (Path('/tmp/caller/packet'), Path('/tmp/caller/report')))
+        self.assertTrue(run.call_args_list[0].kwargs['plan_only'])
+        self.assertEqual(('codex', 'claude'), tuple(call.kwargs['reviewer'] for call in run.call_args_list))
+        self.assertEqual(chosen.exit_code, 2, chosen.output)
 
     def test_runner_delivers_images_on_stdin_protocol_and_records_completed_receipt(self):
         directory = self.root / 'runner'
@@ -477,6 +481,142 @@ class CoordinatorTest(unittest.TestCase):
                 runner.run(self.root / 'runner', 'Review.', [], c.CALIBRATION_SCHEMA)
         stop.assert_called_once()
         self.assertFalse((self.root / 'runner/receipt.json').exists())
+
+
+def claude_events(session, response, *, tools=('StructuredOutput',), blocks=None, result=None):
+    """The stream-json lines Claude Code prints for one print-mode turn."""
+    blocks = blocks if blocks is not None else [
+        {'type': 'thinking', 'thinking': ''},
+        {'type': 'tool_use', 'name': 'StructuredOutput', 'input': response}]
+    return [{'type': 'system', 'subtype': 'init', 'session_id': session, 'tools': list(tools), 'mcp_servers': []},
+            {'type': 'assistant', 'message': {'content': blocks}},
+            {'type': 'rate_limit_event'},
+            result or {'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': session,
+                       'structured_output': response}]
+
+
+class ClaudeRunnerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        _, self.packet = fixture(self.root)
+        png = b'\x89PNG\r\n\x1a\n' + b'offline image'
+        (self.packet / 'state-0.png').write_bytes(png)
+        self.response = {'cases': [{'id': 'one', 'issue': False, 'reason': 'Visible control.'}]}
+
+    def runner(self, launches, events=None, signed_in=True, returncode=0):
+        response = self.response
+
+        class Process:
+            def __init__(self, command, **kwargs):
+                launches.append((command, kwargs))
+                self.command, self.kwargs, self.returncode = command, kwargs, returncode
+
+            def communicate(self, stdin, timeout):
+                self.stdin = stdin
+                launches[-1] = (self.command, {**self.kwargs, 'input': stdin})
+                session = self.command[self.command.index('--resume' if '--resume' in self.command else '--session-id') + 1]
+                for event in (events(session) if events else claude_events(session, response)):
+                    self.kwargs['stdout'].write(json.dumps(event) + '\n')
+
+        status = subprocess.CompletedProcess([], int(not signed_in), stdout=json.dumps({'loggedIn': signed_in}))
+        patches = [patch.object(c.shutil, 'which', return_value='/mock/claude'),
+                   patch.object(c.subprocess, 'check_output', return_value='2.1.330 (Claude Code)'),
+                   patch.object(c.subprocess, 'run', return_value=status),
+                   patch.object(c.subprocess, 'Popen', Process),
+                   patch.object(c.tempfile, 'gettempdir', return_value=str(self.root / 'tmp')),
+                   patch.dict(c.os.environ, {'CEDAR_PRIVATE_TOKEN': 'must-not-reach-reviewer',
+                                             'CLAUDE_CODE_OAUTH_TOKEN': 'reviewer-login'})]
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        return c.ClaudeRunner()
+
+    def test_delivers_labelled_images_on_stdin_without_tools_settings_or_credentials(self):
+        launches = []
+        images = [self.packet / 'state-0.png']
+        result, receipt = self.runner(launches).run(self.root / 'runner', 'Review the image.', images,
+                                                    c.CALIBRATION_SCHEMA)
+        self.assertEqual(result, self.response)
+        self.assertEqual(c.read_json(self.root / 'runner/response.json'), self.response)
+        command, options = launches[0]
+        for flag in ('--print', '--safe-mode', '--strict-mcp-config', '--disable-slash-commands', '--no-chrome'):
+            self.assertIn(flag, command)
+        self.assertEqual(command[command.index('--tools') + 1], '')
+        self.assertEqual(command[command.index('--setting-sources') + 1], '')
+        self.assertEqual(json.loads(command[command.index('--json-schema') + 1]), c.CALIBRATION_SCHEMA)
+        self.assertEqual(receipt['thread'], command[command.index('--session-id') + 1])
+        self.assertEqual(receipt['runner'], '2.1.330 (Claude Code)')
+        self.assertNotIn('CEDAR_PRIVATE_TOKEN', options['env'])
+        self.assertEqual('reviewer-login', options['env']['CLAUDE_CODE_OAUTH_TOKEN'])
+        self.assertEqual(self.root / 'tmp/cedar-ui-reviewer' / receipt['thread'], Path(options['cwd']))
+        content = json.loads(options['input'])['message']['content']
+        self.assertEqual(['text', 'image', 'text'], [block['type'] for block in content])
+        self.assertEqual('Image 1: state-0.png', content[0]['text'])
+        self.assertEqual(('image/png', images[0].read_bytes()),
+                         (content[1]['source']['media_type'], c.base64.b64decode(content[1]['source']['data'])))
+        self.assertEqual('Review the image.', content[2]['text'])
+
+    def test_calibration_resumes_the_reviewer_in_its_own_directory(self):
+        launches = []
+        runner = self.runner(launches)
+        _, first = runner.run(self.root / 'assessment', 'Review.', [], c.CALIBRATION_SCHEMA)
+        _, second = runner.run(self.root / 'calibration', 'Calibrate.', [], c.CALIBRATION_SCHEMA,
+                               resume=first['thread'])
+        self.assertEqual((first['thread'], first['thread']), (second['thread'], second['resumeThread']))
+        self.assertEqual(launches[0][1]['cwd'], launches[1][1]['cwd'])
+        self.assertNotIn('--session-id', launches[1][0])
+
+    def test_refuses_tools_failed_turns_and_missing_answers(self):
+        cases = {
+            'unexpected tool': lambda s: claude_events(s, self.response, blocks=[
+                {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': '/etc/hosts'}}]),
+            'tools beyond its structured answer': lambda s: claude_events(s, self.response, tools=('StructuredOutput', 'Read')),
+            'Not logged in': lambda s: claude_events(s, self.response, result={
+                'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'Not logged in', 'session_id': s}),
+            'no structured answer': lambda s: claude_events(s, self.response, result={
+                'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': s, 'result': '{}'}),
+            'session identity': lambda s: claude_events(s, self.response, result={
+                'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': 'another',
+                'structured_output': self.response}),
+        }
+        for message, events in cases.items():
+            with self.subTest(message=message):
+                directory = self.root / message.replace(' ', '-')
+                with self.assertRaisesRegex(ValueError, message):
+                    self.runner([], events).run(directory, 'Review.', [], c.CALIBRATION_SCHEMA)
+                self.assertFalse((directory / 'receipt.json').exists())
+
+    def test_signed_out_reviewer_is_refused_before_a_review_directory_exists(self):
+        with self.assertRaisesRegex(ValueError, 'not signed in'):
+            self.runner([], signed_in=False)
+        home, packet = fixture(self.root / 'second')
+        output = self.root / 'review'
+        with patch.object(c, 'REVIEWERS', {'claude': lambda *_: (_ for _ in ()).throw(ValueError('Claude Code is not signed in'))}):
+            with self.assertRaisesRegex(ValueError, 'not signed in'):
+                c.coordinate(packet, output, home, reviewer='claude', harness=OfflineHarness(), printer=lambda *_: None)
+        self.assertFalse(output.exists())
+        with self.assertRaisesRegex(ValueError, 'Unknown reviewer'):
+            c.coordinate(packet, output, home, reviewer='gemini', printer=lambda *_: None)
+
+    def test_too_many_images_split_verification_and_refuse_a_primary_batch(self):
+        candidates = [{'id': 'a', 'job': 'batch-001'}, {'id': 'b', 'job': 'batch-001'}]
+        def request(rows):
+            return 'evidence', [row['id'] + str(i) + '.png' for row in rows for i in range(3)]
+        jobs = c.bounded_verification_jobs([{'id': 'batch-001'}], candidates, request, image_limit=4)
+        self.assertEqual([['a'], ['b']], [[f['id'] for f in j['candidates']] for j in jobs])
+        self.assertTrue(all(j['error'] is None for j in jobs))
+        single = c.bounded_verification_jobs([{'id': 'batch-001'}], candidates[:1], request, image_limit=2)
+        self.assertIn('exceeds 2 images', single[0]['error'])
+
+        class Narrow(OfflineRunner):
+            image_limit = 1
+        home, packet = fixture(self.root / 'narrow')
+        code = c.coordinate(packet, self.root / 'narrow-review', home, batch_size=2, runner=Narrow(packet),
+                            harness=OfflineHarness(), printer=lambda *_: None)
+        self.assertEqual(2, code)
+        self.assertTrue(any('smaller --batch-size' in b for b in c.read_json(self.root / 'narrow-review/report.json')['blockers']))
 
 
 class SharedEvidenceTest(unittest.TestCase):
