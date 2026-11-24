@@ -75,17 +75,23 @@ def _set_foreground(group):
         signal.signal(signal.SIGTTOU, previous)
 
 
-def _child_stopped(pid):
-    """Report a stop of the child since the last look, without ever reaping an exited child.
+def _child_stopped(process):
+    """Report a stop of the child since the last look.
 
-    waitid with WSTOPPED alone reports stops and consumes each report; leaving out WEXITED
-    leaves the exit status for Popen to collect.
+    waitpid with WUNTRACED reports each stop once. It reaps the child if it has exited instead,
+    so the exit status is handed to Popen, which then returns it rather than waiting again.
+    os.waitid, which can look for stops alone, exists on macOS only from Python 3.13.
     """
     try:
-        result = os.waitid(os.P_PID, pid, os.WSTOPPED | os.WNOHANG)
+        pid, status = os.waitpid(process.pid, os.WUNTRACED | os.WNOHANG)
     except ChildProcessError:
         return False
-    return result is not None and result.si_code == os.CLD_STOPPED
+    if pid == 0:
+        return False
+    if os.WIFSTOPPED(status):
+        return True
+    process.returncode = os.waitstatus_to_exitcode(status)
+    return False
 
 
 class _TerminalHandoff:
@@ -99,9 +105,10 @@ class _TerminalHandoff:
     terminal back only if the CLI was resumed in the foreground (`fg` rather than `bg`).
     """
 
-    def __init__(self, shell_group, child_group):
+    def __init__(self, shell_group, child):
         self.shell_group = shell_group
-        self.child_group = child_group
+        self.child = child
+        self.child_group = child.pid
         self.lent = False
 
     def lend(self):
@@ -111,7 +118,7 @@ class _TerminalHandoff:
         self._continue_child()
 
     def follow_stop(self):
-        if not _child_stopped(self.child_group):
+        if not _child_stopped(self.child):
             return
         _set_foreground(self.shell_group)
         self.lent = False
@@ -179,7 +186,7 @@ def run_process(argv, *, cwd=None, env=None, on_line=None):
     tick = None
     try:
         if shell_group is not None:
-            handoff = _TerminalHandoff(shell_group, process.pid)
+            handoff = _TerminalHandoff(shell_group, process)
             handoff.lend()
             tick = handoff.follow_stop
         for raw in _output_lines(process, tick):
