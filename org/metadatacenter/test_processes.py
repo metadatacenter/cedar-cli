@@ -130,6 +130,9 @@ def e2e(rest_workers: int = typer.Option(None, min=1, max=4,
         train_state: Optional[Path] = typer.Option(None,
         help="Checkout of the build-trains state branch holding the train's verified completion.")):
     """Run every whole-stack smoke tier and record the evidence the train and release gates require."""
+    if (train is None) != (train_state is None):
+        console.print("--train and --train-state go together")
+        raise typer.Exit(2)
     raise typer.Exit(run_smoke(rest_workers=rest_workers, split_lanes=split_lanes,
                                split_timeout_cap=split_timeout_cap, train=train,
                                train_state=train_state.resolve() if train_state else None))
@@ -158,9 +161,6 @@ def search(plan: bool = typer.Option(False, help="Print the offline corpus and e
 def status():
     """List embedded MongoDB processes, saying which are orphaned and which a running test owns."""
     processes = embedded_mongo_processes()
-    if (train is None) != (train_state is None):
-        console.print("--train and --train-state go together")
-        raise typer.Exit(2)
     if not processes:
         console.print("No embedded Mongo test processes are running.")
         return
