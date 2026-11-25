@@ -160,7 +160,7 @@ function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div cl
     ${decision?`${i.background?`<p>${esc(i.background)}</p>`:''}${steps(i.images||[])}`:''}
     ${matches}${options?`<div class="opts">${options}</div>`:''}<div class="acts">${acts}</div>${linked}
     <textarea id="note" placeholder="Suggested fix or conditions (press f). Saved when you leave the box.">${esc(v.note||'')}</textarea>
-    ${decision?'':shots(i.images||[])}${aspects}${occ?`<h3>Reviewer findings</h3>${occ}`:''}`;
+    ${decision?'':(i.images||[]).some(s=>s.caption)?steps(i.images):shots(i.images||[])}${aspects}${occ?`<h3>Reviewer findings</h3>${occ}`:''}`;
   $('#detail').querySelectorAll('[data-option]').forEach(b=>b.onclick=()=>answer({status:'option',option:b.dataset.option}));
   $('#detail').querySelectorAll('[data-status]').forEach(b=>b.onclick=()=>b.dataset.status==='clear'?clear():answer({status:b.dataset.status}));
   $('#detail').querySelectorAll('[data-shot]').forEach(f=>f.onclick=()=>enlarge(+f.dataset.shot));

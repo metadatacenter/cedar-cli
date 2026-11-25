@@ -23,7 +23,8 @@ def write(path, value):
 def finding(id_, state, decision=None, calibrated=True, kind='defect', title='1. Save overlaps the name',
             target='Save', observed='Save overlaps the name.'):
     verification = {'id': id_, 'decision': decision, 'reason': 'Seen in the capture.', 'evidence': []} if decision else None
-    item = {'id': id_, 'title': title, 'target': target, 'category': 'alignment',
+    captions = [{'file': state + '.png', 'caption': 'The card, where Save covers the name.'}] if id_ == 'A-F1' else []
+    item = {'id': id_, 'title': title, 'target': target, 'category': 'alignment', 'evidenceCaptions': captions,
             'observed': observed, 'expected': 'Keep them apart.', 'impact': 'The name is hidden.',
             'kind': kind, 'severity': 'medium', 'stateIds': [state], 'steps': ['Open the state.'],
             'evidence': [state + '.png', 'missing.png', 'notes.json'], 'verification': verification, 'calibrated': calibrated}
@@ -112,6 +113,8 @@ class BoardContentTest(unittest.TestCase):
         self.assertEqual(('Designer', 'Term picker'), (by_id['A-F1']['area'], by_id['A-F2']['area']))
         self.assertEqual(['type-text.png'], [i['label'] for i in by_id['A-F1']['images']],
                          'only image files that exist are offered')
+        self.assertEqual(['The card, where Save covers the name.'], [i['caption'] for i in by_id['A-F1']['images']])
+        self.assertEqual([''], [i['caption'] for i in by_id['A-F3']['images']], 'a review from before captions shows none')
         self.assertEqual({'type-text': 'passed', 'term-picker-open-1440': 'raised'},
                          {s['title']: s['status'] for s in contents['states']})
 

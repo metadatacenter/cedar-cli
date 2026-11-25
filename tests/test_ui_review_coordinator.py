@@ -53,7 +53,8 @@ def finding(id_, state):
             'observed': 'Save overlaps the name.', 'expected': 'Keep the name and action separate.',
             'impact': 'The name cannot be read.', 'kind': 'defect', 'severity': 'medium',
             'stateIds': [state['id']], 'steps': ['Open the recorded state.'],
-            'evidence': [state['screenshot']]}
+            'evidence': [state['screenshot']],
+            'evidenceCaptions': [{'file': state['screenshot'], 'caption': 'The card header, where Save covers the end of the name.'}]}
 
 
 class OfflineRunner:
@@ -302,6 +303,14 @@ class CoordinatorTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     c.consolidate_findings(self.output, findings, runner)
 
+    def test_a_group_keeps_one_caption_for_each_image_its_occurrences_cite(self):
+        one, two = c.read_json(self.packet / 'capture.json')['states'][:2]
+        findings = [finding('one', one), {**finding('two', two), 'evidenceCaptions': [{'file': two['screenshot'], 'caption': 'Second.'}]},
+                    {**finding('three', one), 'evidenceCaptions': [{'file': one['screenshot'], 'caption': 'A later wording.'}]}]
+        group, = c.group_findings(findings, {'one': 'one', 'two': 'one', 'three': 'one'})
+        self.assertEqual({one['screenshot']: 'The card header, where Save covers the end of the name.', two['screenshot']: 'Second.'},
+                         {caption['file']: caption['caption'] for caption in group['evidenceCaptions']})
+
     def test_consolidation_retains_worst_severity_and_all_provenance(self):
         state = c.read_json(self.packet / 'capture.json')['states'][0]
         findings = [{**finding('one', state), 'calibrated': False, 'severity': 'high'},
@@ -347,10 +356,28 @@ class CoordinatorTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 c.validate_assessments(bad, states)
 
+    def test_every_cited_image_has_exactly_one_caption(self):
+        states = c.read_json(self.packet / 'capture.json')['states'][:2]
+        result = {'assessments': [assessment(s) for s in states], 'findings': [finding('f', states[0])]}
+        c.validate_assessments(result, states)
+        uncaptioned = copy.deepcopy(result)
+        uncaptioned['findings'][0]['evidence'].append(states[0]['crops'][0])
+        twice = copy.deepcopy(result)
+        twice['findings'][0]['evidenceCaptions'].append(dict(twice['findings'][0]['evidenceCaptions'][0]))
+        stray = copy.deepcopy(result)
+        stray['findings'][0]['evidenceCaptions'].append({'file': states[0]['crops'][0], 'caption': 'A crop the finding does not cite.'})
+        for bad in (uncaptioned, twice, stray):
+            with self.subTest(bad=bad['findings'][0]['evidenceCaptions']), self.assertRaisesRegex(ValueError, 'caption each image'):
+                c.validate_assessments(bad, states)
+        schema = c.review_schema(states)
+        self.assertEqual(sorted(c.state_images(states[0]) + c.state_images(states[1])),
+                         schema['properties']['findings']['items']['properties']['evidenceCaptions']['items']['properties']['file']['enum'])
+
     def test_comparison_evidence_may_name_a_good_assigned_state(self):
         states = c.read_json(self.packet / 'capture.json')['states'][:2]
         result = {'assessments': [assessment(s) for s in states], 'findings': [finding('f', states[0])]}
         result['findings'][0]['evidence'].append(states[1]['screenshot'])
+        result['findings'][0]['evidenceCaptions'].append({'file': states[1]['screenshot'], 'caption': 'The same header, unobstructed.'})
         c.validate_assessments(result, states)
         result['findings'][0]['evidence'] = [states[1]['screenshot']]
         with self.assertRaisesRegex(ValueError, 'affected state'):

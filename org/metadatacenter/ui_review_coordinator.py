@@ -40,8 +40,11 @@ use recorded actions, and say not-applicable when the evidence cannot address an
 Give each state a specific visual observation (identify visible text/control and arrangement),
 all supplied image filenames, and a short evidence-based assessment of EVERY requested aspect.
 Every concern/uncertainty must link to a finding of the corresponding category and state. Report
-findings only with attached screenshot/crop evidence. State-specific observations must not be
-replaced by a generic checklist. Automated violations are handled separately by the coordinator.
+findings only with attached screenshot/crop evidence. For every image a finding cites, give one
+caption in evidenceCaptions saying what that image shows for this finding, for a reader who has not
+seen the capture: the screen, the visible content and where the problem is. State-specific
+observations must not be replaced by a generic checklist. Automated violations are handled
+separately by the coordinator.
 """
 
 
@@ -84,6 +87,7 @@ FINDING_SCHEMA = object_schema({
     'kind': {'type': 'string', 'enum': ['defect', 'design-proposal', 'uncertain']},
     'severity': {'type': 'string', 'enum': ['high', 'medium', 'low']},
     **{key: array_schema(text_schema()) for key in ('stateIds', 'steps', 'evidence')},
+    'evidenceCaptions': array_schema(object_schema({'file': text_schema(), 'caption': text_schema()})),
 })
 ASSESSMENT_SCHEMA = object_schema({
     'id': text_schema(), 'images': array_schema(text_schema()), 'visualObservation': text_schema(),
@@ -110,6 +114,7 @@ def review_schema(states):
     assessment['id'], assessment['images']['items'] = ids, images
     finding = schema['properties']['findings']['items']['properties']
     finding['stateIds']['items'], finding['evidence']['items'] = ids, images
+    finding['evidenceCaptions']['items']['properties']['file'] = images
     return schema
 
 
@@ -386,6 +391,9 @@ def validate_assessments(result, states):
             raise ValueError('Finding lacks supplied image evidence or reproduction steps')
         if not set(finding['evidence']) & affected:
             raise ValueError('Finding supplies no image of an affected state')
+        captioned = [caption['file'] for caption in finding['evidenceCaptions']]
+        if len(captioned) != len(set(captioned)) or set(captioned) != set(finding['evidence']):
+            raise ValueError('Finding must caption each image it cites exactly once: ' + finding['id'])
     for row in result['assessments']:
         if sorted(row['images']) != sorted(state_images(expected[row['id']])):
             raise ValueError('Reviewer did not account for every image: ' + row['id'])
@@ -856,6 +864,11 @@ def group_findings(findings, assignments=None):
         group['occurrences'].append(finding)
         group['stateIds'] = sorted(set(group['stateIds']) | set(finding['stateIds']))
         group['evidence'] = sorted(set(group['evidence']) | set(finding['evidence']))
+        # A group shows one caption per image, the first occurrence's that cites it.
+        captions = {c['file']: c for c in group.get('evidenceCaptions', [])}
+        for caption in finding.get('evidenceCaptions', []):
+            captions.setdefault(caption['file'], caption)
+        group['evidenceCaptions'] = [captions[name] for name in group['evidence'] if name in captions]
         if ['high', 'medium', 'low'].index(finding['severity']) < ['high', 'medium', 'low'].index(group['severity']):
             group['severity'] = finding['severity']
     return sorted(groups.values(), key=lambda group: (
@@ -868,7 +881,9 @@ def render_report(output, report):
     for title, findings in [('Actionable findings', report['findings']), ('Design decisions', report['designDecisions'])]:
         cards = []
         for finding in findings:
-            pictures = ''.join(f'<a href="packet/{esc(name)}"><img src="packet/{esc(name)}" alt="{esc(name)}"></a>'
+            captions = {c['file']: c['caption'] for c in finding.get('evidenceCaptions', [])}
+            pictures = ''.join(f'<figure><a href="packet/{esc(name)}"><img src="packet/{esc(name)}" alt="{esc(name)}"></a>'
+                               + (f'<figcaption>{esc(captions[name])}</figcaption>' if name in captions else '') + '</figure>'
                                for name in finding['evidence'][:2])
             occurrences = '<details><summary>All occurrences and reproduction</summary><ul>' + ''.join(
                 f'<li>States: {esc(", ".join(item["stateIds"]))}. {esc(item["observed"])} '

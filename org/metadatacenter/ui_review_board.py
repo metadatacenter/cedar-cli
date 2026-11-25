@@ -142,10 +142,21 @@ def image_url(reports, path):
     return '/image?path=' + Path(path).resolve().relative_to(Path(reports).resolve()).as_posix()
 
 
-def _images(reports, root, names):
+def _captions(*findings):
+    """What each cited image shows, as reviewers caption it; the first caption of an image wins."""
+    captions = {}
+    for finding in findings:
+        for caption in finding.get('evidenceCaptions') or []:
+            if isinstance(caption, dict) and isinstance(caption.get('file'), str) and isinstance(caption.get('caption'), str):
+                captions.setdefault(caption['file'], caption['caption'])
+    return captions
+
+
+def _images(reports, root, names, captions=None):
     # Later single reviews cite evidence as {path, sha256}; earlier ones cite the file name alone.
     names = [name.get('path') if isinstance(name, dict) else name for name in names]
-    return [{'src': image_url(reports, root / name), 'label': name}
+    captions = captions or {}
+    return [{'src': image_url(reports, root / name), 'label': name, 'caption': captions.get(name, '')}
             for name in names if isinstance(name, str) and Path(name).suffix.lower() in IMAGE_TYPES and (root / name).is_file()]
 
 
@@ -156,7 +167,7 @@ def _occurrence(reports, root, finding):
             'steps': finding.get('steps', []), 'states': finding.get('stateIds', []),
             'severity': finding.get('severity', ''), 'kind': finding.get('kind', ''),
             'verifier': verification.get('decision', 'unverified'), 'verifierReason': verification.get('reason', ''),
-            'calibrated': finding.get('calibrated'), 'images': _images(reports, root, finding.get('evidence', []))}
+            'calibrated': finding.get('calibrated'), 'images': _images(reports, root, finding.get('evidence', []), _captions(finding))}
 
 
 def run_contents(reports, run_id):
@@ -181,7 +192,8 @@ def run_contents(reports, run_id):
                               'provisional': not group.get('calibrated', False) and section != 'dismissed',
                               'area': designer_area(group.get('stateIds', [])) if report.get('app', 'designer') == 'designer' else report.get('app', ''),
                               'states': group.get('stateIds', []), 'occurrences': occurrences,
-                              'images': _images(reports, packet, group.get('evidence', []))})
+                              'images': _images(reports, packet, group.get('evidence', []),
+                                                _captions(group, *group.get('occurrences', [])))})
         coverage = _optional(directory / 'coverage.json') or {'states': []}
         states = []
         for row in coverage.get('states', []):
@@ -202,7 +214,7 @@ def run_contents(reports, run_id):
     items = [{'id': run_id + '/' + f['id'], 'title': f['title'], 'summary': f.get('observed', ''),
               'target': f.get('target', ''), 'category': f.get('category', ''),
               'status': 'not-verified', 'severity': str(f.get('severity', '')), 'provisional': False,
-              'area': directory.name, 'states': [], 'images': _images(reports, directory, f.get('evidence', [])),
+              'area': directory.name, 'states': [], 'images': _images(reports, directory, f.get('evidence', []), _captions(f)),
               'occurrences': [{**_occurrence(reports, directory, {**f, 'stateIds': []}), 'verifier': 'unverified'}]}
              for f in review.get('findings', [])]
     _suggest(answers(reports), items, app)
