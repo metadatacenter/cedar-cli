@@ -57,10 +57,8 @@ BODILESS_WRITES = {
         'starts the one regeneration job the service runs and returns that job',
     ('cedar-resource-server', 'POST', '/command/generate-empty-search-index'):
         'starts an index job whose only input is the index it claims',
-    ('cedar-resource-server', 'POST', '/command/reset-search-index-job'):
-        'releases the search index claim and returns the resulting status',
-    ('cedar-resource-server', 'POST', '/command/reset-valuesets-import'):
-        'releases the value sets import claim and returns the resulting status',
+    ('cedar-resource-server', 'POST', '/jobs/{id}/reset'):
+        'releases the claim of the job named in the path and returns that job',
     ('cedar-resource-server', 'POST', '/command/load-valuesets-ontology'):
         'starts the value sets import, which reads its ontology from configuration',
 }
