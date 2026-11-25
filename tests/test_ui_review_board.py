@@ -55,7 +55,7 @@ def fixture(root):
     write(single / 'capture.json', {'states': [{'id': 'empty'}]})
     write(single / 'review.json', {'inspectedStates': ['empty'], 'findings': [
         {'id': 'D-01', 'title': 'Toolbar crowds the title', 'kind': 'defect', 'severity': 'P2', 'observed': 'Crowded.',
-         'evidence': ['empty.png']}]})
+         'evidence': ['empty.png', {'path': 'empty.png', 'sha256': 'x'}, {'sha256': 'no path'}]}]})
     (single / 'empty.png').write_bytes(b'png')
     write(reports / 'ui-review-board/decisions.json', {'decisions': [
         {'slug': 'icons', 'title': 'Preview Icons', 'summary': 'Choose.', 'options': [{'key': '1', 'label': 'Keep'}],
@@ -121,7 +121,7 @@ class BoardContentTest(unittest.TestCase):
 
     def test_single_reviews_are_shown_unverified(self):
         items = board.run_contents(self.reports, 'single/20261115-designer-pilot')['items']
-        self.assertEqual([('Toolbar crowds the title', 'not-verified', 1)],
+        self.assertEqual([('Toolbar crowds the title', 'not-verified', 2)],
                          [(i['title'], i['status'], len(i['images'])) for i in items])
 
     def test_unknown_or_escaping_reviews_are_refused(self):

@@ -78,7 +78,6 @@ def state_group(state_id):
     """A catalog family for browsing captured states; only a navigation aid."""
     for prefix, name in (('term-picker', 'Term picker'), ('type-', 'Field types'), ('required', 'Required fields'),
                          ('server-findings', 'Save and recovery'), ('draft', 'Save and recovery'),
-                         ('last-field', 'Save and recovery'), ('removed-panel', 'Save and recovery'),
                          ('save', 'Save and recovery'), ('saved', 'Save and recovery'), ('reopened', 'Save and recovery'),
                          ('width-', 'Widths and panels'), ('both-panels', 'Widths and panels'),
                          ('phone-', 'Widths and panels'), ('configuration-end', 'Widths and panels')):
@@ -144,8 +143,10 @@ def image_url(reports, path):
 
 
 def _images(reports, root, names):
+    # Later single reviews cite evidence as {path, sha256}; earlier ones cite the file name alone.
+    names = [name.get('path') if isinstance(name, dict) else name for name in names]
     return [{'src': image_url(reports, root / name), 'label': name}
-            for name in names if Path(name).suffix.lower() in IMAGE_TYPES and (root / name).is_file()]
+            for name in names if isinstance(name, str) and Path(name).suffix.lower() in IMAGE_TYPES and (root / name).is_file()]
 
 
 def _occurrence(reports, root, finding):
