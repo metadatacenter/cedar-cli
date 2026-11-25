@@ -47,6 +47,7 @@ textarea{width:100%;max-width:920px;min-height:56px;font:inherit;color:var(--fg)
 .shots figure{margin:0;width:230px;cursor:zoom-in}.shots img{width:100%;height:160px;object-fit:cover;object-position:top;border:1px solid var(--line);border-radius:4px;display:block;background:var(--panel)}
 .shots figcaption{font-size:11px;color:var(--muted);word-break:break-all}
 .question{font-size:16px;font-weight:500}
+.screen{margin:10px 0 0;max-width:1440px;cursor:zoom-in}.screen img{width:100%;height:auto;display:block;border:1px solid var(--line);border-radius:4px;background:var(--panel)}
 .steps{list-style:none;padding:0;margin:12px 0;max-width:1100px}
 .steps li{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
 .steps li>div{flex:1 1 260px;min-width:0}
@@ -88,6 +89,7 @@ const CHOICES=[['needs-fix','x','Fix it','Change the product. Say how in the not
 ['approved','a','Leave as is','The current behavior is acceptable or intended.'],['deferred','d','Decide later','Keep it open.']];
 const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let SCREENS={},appFilter='all';
 let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,earlierOpen=false;
 const A=()=>INDEX.answers;
 // A finding answers through the issue it is linked to; a decision or a screen answers under its own identifier.
@@ -115,7 +117,10 @@ async function load(){INDEX=await api('/api/index');
   summarise();
   if(INDEX.decisions.length)view={kind:'decisions'};else if(latest)await openRun(latest.id);render();}
 async function openRun(id){if(!RUNS[id])RUNS[id]=await api('/api/run?id='+encodeURIComponent(id));view={kind:'run',id};cursor=0;}
+// Every captured state of the newest capture of each application, for looking through rather than answering.
+function screenList(){return (SCREENS[view.profile]||[]).flatMap(c=>c.screens.map(s=>({...s,kind:'screen',title:s.id,app:c.app,area:c.name,captured:c.updated})));}
 function items(){let list;
+  if(view.kind==='screens'){const all=screenList();return appFilter==='all'?all:all.filter(s=>s.app===appFilter);}
   if(view.kind==='decisions')list=INDEX.decisions.map(d=>({...d,status:'decision',kind:'decision'}));
   else{const run=RUNS[view.id];if(!run)return[];list=filter==='screens'?run.states:filter==='all'?run.items:run.items.filter(i=>i.status===filter);}
   return hide?list.filter(i=>!V(i)):list;}
@@ -126,12 +131,18 @@ function nav(){const {current,earlier}=partition();
   if(view.kind==='run'&&earlier.some(r=>r.id===view.id))earlierOpen=true;
   let html=`<h2>Needs your decision</h2><button class="entry ${view.kind==='decisions'?'on':''}" data-view="decisions"><span class="name">Design decisions</span><span class="sub">${answered(INDEX.decisions)} of ${INDEX.decisions.length} answered</span></button>`;
   html+=`<h2>Current reviews</h2>${byApp(current,false)}`;
+  const counts=INDEX.screens||{};
+  html+=`<h2>All screens</h2>`+[['chromium','Mouse'],['webkit-touch','Touch']].filter(([p])=>counts[p]).map(([p,label])=>
+    `<button class="entry ${view.kind==='screens'&&view.profile===p?'on':''}" data-screens="${p}"><span class="name">${label}</span><span class="sub">${count(counts[p],'screen')}, newest capture of each application</span></button>`).join('');
   if(earlier.length)html+=`<button class="fold" id="earlier" aria-expanded="${earlierOpen}">${earlierOpen?'▾':'▸'} Earlier reviews (${earlier.length})</button>${earlierOpen?byApp(earlier,true):''}`;
   $('#nav').innerHTML=html;
   $('#nav').querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view={kind:'decisions'};cursor=0;render();});
   $('#nav').querySelectorAll('[data-run]').forEach(b=>b.onclick=async()=>{filter='all';await openRun(b.dataset.run);render();});
-  $('#earlier')?.addEventListener('click',()=>{earlierOpen=!earlierOpen;nav();});}
-function chips(i){const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
+  $('#earlier')?.addEventListener('click',()=>{earlierOpen=!earlierOpen;nav();});
+  $('#nav').querySelectorAll('[data-screens]').forEach(b=>b.onclick=async()=>{const p=b.dataset.screens;
+    if(!SCREENS[p])SCREENS[p]=(await api('/api/screens?profile='+encodeURIComponent(p))).captures;view={kind:'screens',profile:p};appFilter='all';cursor=0;render();});}
+function chips(i){if(i.kind==='screen')return `<span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}`;
+  const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
   if(i.severity)s+=`<span class="chip sev-${esc(i.severity)}">${esc(i.severity)}</span>`;
   if(i.provisional)s+='<span class="chip provisional">Provisional</span>';
   if((i.problems||[]).length)s+='<span class="chip provisional">Not ready to decide</span>';
@@ -139,18 +150,29 @@ function chips(i){const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABE
   if(v)s+=`<span class="chip mine ${esc(v.status)}">${esc(answerLabel(v,i.options,(i.id||'').includes('/state/')))}</span>`;
   else if((i.matches||[]).length)s+=`<span class="chip repeat">${i.matches[0].likely?'Likely repeat':'Possible repeat'}</span>`;return s;}
 function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.length-1);
-  let head='';if(view.kind==='run'){const run=RUNS[view.id];const n=k=>k==='all'?run.items.length:k==='screens'?run.states.length:run.items.filter(i=>i.status===k).length;
+  let head='';if(view.kind==='screens'){const every=screenList();const apps=[...new Set(every.map(s=>s.app))];
+    head=[['all','All',every.length],...apps.map(a=>[a,appName(a),every.filter(s=>s.app===a).length])].map(([k,l,n])=>`<button data-app-filter="${k}" class="${appFilter===k?'on':''}">${esc(l)} ${n}</button>`).join('');}
+  else if(view.kind==='run'){const run=RUNS[view.id];const n=k=>k==='all'?run.items.length:k==='screens'?run.states.length:run.items.filter(i=>i.status===k).length;
     head=FILTERS.filter(([k])=>k==='all'||n(k)).map(([k,l])=>`<button data-filter="${k}" class="${filter===k?'on':''}">${l} ${n(k)}</button>`).join('');}
-  $('#list').innerHTML=`<div id="filters">${head}<label><input type="checkbox" id="hide" ${hide?'checked':''}> Hide answered</label></div>`+
+  $('#list').innerHTML=`<div id="filters">${head}${view.kind==='screens'?'':`<label><input type="checkbox" id="hide" ${hide?'checked':''}> Hide answered</label>`}</div>`+
     (all.map((i,n)=>`<div class="row ${n===cursor?'on':''}" data-n="${n}"><div class="t">${esc(i.title)}</div><div class="chips">${chips(i)}</div></div>`).join('')||'<div class="empty">Nothing here.</div>');
   $('#list').querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;cursor=0;render();});
-  $('#hide').onchange=e=>{hide=e.target.checked;cursor=0;render();};
+  if($('#hide'))$('#hide').onchange=e=>{hide=e.target.checked;cursor=0;render();};
+  $('#list').querySelectorAll('[data-app-filter]').forEach(b=>b.onclick=()=>{appFilter=b.dataset.appFilter;cursor=0;render();});
   $('#list').querySelectorAll('.row').forEach(r=>r.onclick=()=>{cursor=+r.dataset.n;list();detail();});
   $('#list .row.on')?.scrollIntoView({block:'nearest'});}
 // A decision's screens, in order, each beside what it shows.
 function steps(images){return images.length?`<ol class="steps">${images.map((s,n)=>`<li><figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"></figure><div><b>${n+1}. ${esc(s.label)}</b>${s.caption?`<p>${esc(s.caption)}</p>`:''}</div></li>`).join('')}</ol>`:'';}
 function shots(images){return images.length?`<div class="shots">${images.map((s,n)=>`<figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"><figcaption>${esc(s.label)}</figcaption></figure>`).join('')}</div>`:'<p class="note">No screenshot retained for this item.</p>';}
 function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
+  if(i.kind==='screen'){const all=items();
+    $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><div class="chips"><span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}<span class="chip">captured ${esc(day(i.captured))} ${esc(clock(i.captured))}</span></div>
+      ${i.note?`<p>${esc(i.note)}</p>`:''}<p class="note">Screen ${cursor+1} of ${all.length} · <kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>Enter</kbd> full size</p>
+      <figure class="screen" data-shot="${cursor}"><img src="${esc(i.src)}" alt="${esc(i.title)}"></figure>`;
+    $('#detail').querySelector('[data-shot]').onclick=()=>enlarge(cursor);
+    // The neighbours load while this screen is looked at, so stepping does not wait for them.
+    [cursor+1,cursor-1,cursor+2].forEach(k=>{if(all[k]){const image=new Image();image.src=all[k].src;}});
+    $('#detail').scrollTop=0;return;}
   const v=V(i)||{},state=filter==='screens'&&view.kind==='run',shared=sharing(i);
   const options=(i.options||[]).map(o=>`<button class="opt ${o.recommended?'rec':''} ${v.option===o.key?'on':''}" data-option="${esc(o.key)}"><kbd>${esc(o.key)}</kbd><span><b>${esc(o.label)}</b>${o.recommended?' <small>(recommended)</small>':''}<br><small>${esc(o.detail||'')}</small></span></button>`).join('');
   const finding=!options&&!state&&!i.selfIdentified;
@@ -182,12 +204,15 @@ async function post(body){INDEX.answers=await api('/api/answer',{method:'POST',h
   // Matches depend on every answer, so reviews read before this one are read again when opened.
   const id=view.kind==='run'?view.id:null;RUNS={};if(id)RUNS[id]=await api('/api/run?id='+encodeURIComponent(id));
   summarise();}
-async function answer(change,noteOnly){const i=items()[cursor];if(!i)return;const v={...(V(i)||{})};delete v.title;delete v.app;delete v.at;
+async function answer(change,noteOnly){const i=items()[cursor];if(!i||i.kind==='screen')return;const v={...(V(i)||{})};delete v.title;delete v.app;delete v.at;
   if(noteOnly){v.note=change.note;v.status??='needs-fix';}else{Object.assign(v,change);if(change.status!=='option')v.option=null;v.note=$('#note')?.value??v.note??'';}
   try{await post({id:i.id,...v});}catch(e){alert('Answer not saved: '+e.message);}render();}
-async function clear(){const i=items()[cursor];if(!i)return;await post({id:i.id,clear:true});render();}
+async function clear(){const i=items()[cursor];if(!i||i.kind==='screen')return;await post({id:i.id,clear:true});render();}
 async function link(issue){const i=items()[cursor];if(!i||!issue)return;try{await post({id:i.id,link:issue});}catch(e){alert('Link not saved: '+e.message);}render();}
-function enlarge(n){const i=items()[cursor];if(!i||!(i.images||[]).length)return;shot=(n+i.images.length)%i.images.length;
+function enlarge(n){
+  if(view.kind==='screens'){const all=items();if(!all.length)return;cursor=(n+all.length)%all.length;shot=cursor;list();detail();
+    const s=all[cursor];$('#lightbox img').src=s.src;$('#lightbox div').textContent=`${s.area} · ${s.title}${s.note?'. '+s.note:''}  ·  ←/→ to step, Esc to close`;$('#lightbox').classList.add('on');return;}
+  const i=items()[cursor];if(!i||!(i.images||[]).length)return;shot=(n+i.images.length)%i.images.length;
   $('#lightbox img').src=i.images[shot].src;const s=i.images[shot];$('#lightbox div').textContent=(s.caption?`${s.label}. ${s.caption}`:s.label)+'  ·  ←/→ to step, Esc to close';$('#lightbox').classList.add('on');}
 function close(){$('#lightbox').classList.remove('on');$('#answers').classList.remove('on');shot=-1;}
 function answerText(){
@@ -207,7 +232,7 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='a'&&i&&!(i.options||[]).length)answer({status:'approved'});
   else if(e.key==='x')answer({status:'needs-fix'});else if(e.key==='d')answer({status:'deferred'});else if(e.key==='u')clear();
   else if(e.key==='l'&&i&&!V(i)&&(i.matches||[]).length)link(i.matches[0].issue);
-  else if(e.key==='f')$('#note')?.focus();else if(e.key==='Enter'||e.key===' ')enlarge(0);
+  else if(e.key==='f')$('#note')?.focus();else if(e.key==='Enter'||e.key===' ')enlarge(view.kind==='screens'?cursor:0);
   else if(e.key==='h'){hide=!hide;cursor=0;render();}else return;e.preventDefault();});
 load().catch(e=>{$('#summary').textContent='Could not load reviews: '+e.message;});
 </script>

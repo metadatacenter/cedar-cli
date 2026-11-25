@@ -250,6 +250,53 @@ def run_contents(reports, run_id):
     return {'run': run_id, 'app': app, 'items': items, 'states': [], 'blockers': []}
 
 
+PROFILE_ORDER = ('chromium', 'webkit-touch')
+
+
+def discover_captures(reports):
+    """Every capture under ui-review that holds states, newest first: named runs and the frontend build's."""
+    root = Path(reports) / 'ui-review'
+    captures = []
+    for path in root.glob('**/capture.json'):
+        capture = _optional(path)
+        states = capture.get('states') if isinstance(capture, dict) else None
+        if not isinstance(states, list) or not states:
+            continue
+        relative = path.parent.relative_to(root).as_posix()
+        captures.append({'id': relative, 'app': capture.get('app') or _app_from_path(relative),
+                         'profile': capture.get('profile') or 'chromium', 'states': len(states), 'updated': _updated(path)})
+    return sorted(captures, key=lambda capture: capture['updated'], reverse=True)
+
+
+def latest_captures(reports):
+    """The newest capture of each application under each profile."""
+    latest = {}
+    for capture in discover_captures(reports):
+        latest.setdefault((capture['profile'], capture['app']), capture)
+    return latest
+
+
+def screens(reports, profile):
+    """Every state of the newest capture of each application under one profile, in catalog order."""
+    latest = latest_captures(reports)
+    order = [app for app in APP_NAMES if (profile, app) in latest]
+    out = []
+    for app in order:
+        meta = latest[(profile, app)]
+        directory = Path(reports) / 'ui-review' / meta['id']
+        capture = _optional(directory / 'capture.json') or {}
+        states = []
+        for state in capture.get('states', []):
+            shot = state.get('screenshot')
+            if not isinstance(shot, str) or not (directory / shot).is_file():
+                continue
+            relative = (directory / shot).resolve().relative_to(Path(reports).resolve()).as_posix()
+            states.append({'id': state['id'], 'group': state_group(state['id']) if app == 'designer' else '',
+                           'note': state.get('note', ''), 'src': '/image?path=' + relative})
+        out.append({**meta, 'name': APP_NAMES[app], 'screens': states})
+    return out
+
+
 def decision_problems(reports, decision):
     """What keeps a decision from being put to a person, in the form every decision takes.
 
@@ -487,10 +534,15 @@ def make_handler(reports):
                 if url.path == '/':
                     return self.respond(200, PAGE.read_bytes(), 'text/html; charset=utf-8')
                 if url.path == '/api/index':
+                    latest = latest_captures(reports)
+                    counts = {profile: sum(c['states'] for (p, _), c in latest.items() if p == profile) for profile in PROFILE_ORDER}
                     return self.respond(200, json.dumps({'runs': discover_runs(reports), 'decisions': decisions(reports),
-                                                         'answers': answers(reports)}).encode())
+                                                         'answers': answers(reports), 'screens': counts}).encode())
                 if url.path == '/api/run':
                     return self.respond(200, json.dumps(run_contents(reports, query.get('id', [''])[0])).encode())
+                if url.path == '/api/screens':
+                    return self.respond(200, json.dumps({'profile': query.get('profile', ['chromium'])[0],
+                                                         'captures': screens(reports, query.get('profile', ['chromium'])[0])}).encode())
                 if url.path == '/image':
                     target = (reports / query.get('path', [''])[0]).resolve()
                     if reports not in target.parents or target.suffix.lower() not in IMAGE_TYPES or not target.is_file():

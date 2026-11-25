@@ -135,6 +135,25 @@ class BoardContentTest(unittest.TestCase):
                          [(i['label'], i['caption'], i['screenNote']) for i in by_id['A-F1']['images']],
                          "a reviewer's caption for the finding wins over the note on the screen")
 
+    def test_all_screens_come_from_the_newest_capture_of_each_application_and_profile(self):
+        older = self.reports / 'ui-review/automatic/20261120/workspace'
+        newer = self.reports / 'ui-review/automatic/20261125/workspace'
+        touch = self.reports / 'ui-review/workspace-touch'
+        for directory, profile, states in ((older, 'chromium', ['old']), (newer, 'chromium', ['listing', 'missing']),
+                                           (touch, 'webkit-touch', ['listing'])):
+            write(directory / 'capture.json', {'app': 'workspace', 'profile': profile,
+                                               'states': [{'id': s, 'screenshot': s + '.png', 'note': 'Seen.'} for s in states]})
+            for s in states:
+                if s != 'missing':
+                    (directory / (s + '.png')).write_bytes(b'png')
+        os.utime(older / 'capture.json', (time.time() - 1000, time.time() - 1000))
+        mouse = {c['app']: c for c in board.screens(self.reports, 'chromium')}
+        self.assertEqual('automatic/20261125/workspace', mouse['workspace']['id'])
+        self.assertEqual([('listing', 'Seen.')], [(s['id'], s['note']) for s in mouse['workspace']['screens']],
+                         'a state whose screenshot is missing is left out')
+        self.assertEqual(['workspace'], [c['app'] for c in board.screens(self.reports, 'webkit-touch')])
+        self.assertTrue(mouse['workspace']['screens'][0]['src'].startswith('/image?path=ui-review/automatic/20261125/workspace/'))
+
     def test_area_names_cee_only_for_findings_on_preview_alone(self):
         self.assertEqual('CEE Preview', board.designer_area(['type-image-preview', 'phone-preview-375']))
         self.assertEqual('Designer', board.designer_area(['empty', 'single-preview-a']))
