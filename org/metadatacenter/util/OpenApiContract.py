@@ -51,7 +51,7 @@ BODILESS_WRITES = {
         'starts a full rebuild with fixed server-owned options and reads no caller body',
     ('cedar-messaging-server', 'POST', '/command/mark-all-as-read'):
         'marks the caller\'s own unread messages read and returns the count',
-    ('cedar-user-server', 'POST', '/users/{id}/api-keys/{keyId}/regenerate'):
+    ('cedar-user-server', 'POST', '/users/{user_id}/api-keys/{id}/regenerate'):
         'rotates the secret of the key named in the path and returns the user',
     ('cedar-worker-server', 'POST', '/command/regenerate-inclusion-subgraph'):
         'starts the one regeneration job the service runs and returns that job',
@@ -71,13 +71,13 @@ BODILESS_WRITES = {
 # and says why the response is empty. An entry that stops matching a declared response is reported
 # as stale rather than ignored.
 EMPTY_RESPONSES = {
-    ('cedar-resource-server', 'DELETE', '/templates/{template_id}', '202'):
+    ('cedar-resource-server', 'DELETE', '/templates/{id}', '202'):
         'content is gone and downstream cleanup is still running, which needs no body',
-    ('cedar-resource-server', 'DELETE', '/template-elements/{template_element_id}', '202'):
+    ('cedar-resource-server', 'DELETE', '/template-elements/{id}', '202'):
         'content is gone and downstream cleanup is still running, which needs no body',
-    ('cedar-resource-server', 'DELETE', '/template-fields/{template_field_id}', '202'):
+    ('cedar-resource-server', 'DELETE', '/template-fields/{id}', '202'):
         'content is gone and downstream cleanup is still running, which needs no body',
-    ('cedar-resource-server', 'DELETE', '/template-instances/{template_instance_id}', '202'):
+    ('cedar-resource-server', 'DELETE', '/template-instances/{id}', '202'):
         'content is gone and downstream cleanup is still running, which needs no body',
     ('cedar-resource-server', 'POST', '/command/auth-user-callback', '201'):
         'provisions the user\'s objects for the Keycloak listener, which reads no body back',

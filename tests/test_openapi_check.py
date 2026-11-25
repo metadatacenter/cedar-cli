@@ -382,7 +382,7 @@ class EmptyResponseTest(unittest.TestCase):
     """A response that carries no body says so by declaring no content, not an empty media type."""
 
     def test_a_listed_empty_response_passes_and_counts_as_described(self):
-        doc = document(paths={'/templates/{template_id}': {'delete': {'responses': {
+        doc = document(paths={'/templates/{id}': {'delete': {'responses': {
             '202': {'description': 'Content deleted; downstream cleanup is pending'}}}}})
         report = analyze_document('cedar-resource-server', 'swagger.json', doc)
 
@@ -390,14 +390,14 @@ class EmptyResponseTest(unittest.TestCase):
         self.assertEqual(1, report.described_responses)
 
     def test_an_unlisted_empty_response_still_fails(self):
-        doc = document(paths={'/templates/{template_id}': {'get': {'responses': {
+        doc = document(paths={'/templates/{id}': {'get': {'responses': {
             '200': {'description': 'The template'}}}}})
         report = analyze_document('cedar-resource-server', 'swagger.json', doc)
 
         self.assertEqual([RULE_RESPONSE_CONTENT], rules(report))
 
     def test_a_listed_response_that_gains_content_warns_rather_than_failing(self):
-        doc = document(paths={'/templates/{template_id}': {'delete': {'responses': {
+        doc = document(paths={'/templates/{id}': {'delete': {'responses': {
             '202': USER_RESPONSE}}}})
         report = analyze_document('cedar-resource-server', 'swagger.json', doc)
 
