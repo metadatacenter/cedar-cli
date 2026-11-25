@@ -63,14 +63,6 @@ BODILESS_WRITES = {
         'releases the value sets import claim and returns the resulting status',
     ('cedar-resource-server', 'POST', '/command/load-valuesets-ontology'):
         'starts the value sets import, which reads its ontology from configuration',
-    ('cedar-resource-server', 'POST', '/template-elements/{template_element_id}/download'):
-        'reads the artifact named in the path; the POST exists for callers that predate the GET',
-    ('cedar-resource-server', 'POST', '/template-fields/{template_field_id}/download'):
-        'reads the artifact named in the path; the POST exists for callers that predate the GET',
-    ('cedar-resource-server', 'POST', '/template-instances/{template_instance_id}/download'):
-        'reads the artifact named in the path; the POST exists for callers that predate the GET',
-    ('cedar-resource-server', 'POST', '/templates/{template_id}/download'):
-        'reads the artifact named in the path; the POST exists for callers that predate the GET',
 }
 
 # Success responses that carry no body. OpenAPI states an empty response by declaring no content at
