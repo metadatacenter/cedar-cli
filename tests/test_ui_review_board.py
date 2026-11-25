@@ -58,8 +58,10 @@ def fixture(root):
          'evidence': ['empty.png', {'path': 'empty.png', 'sha256': 'x'}, {'sha256': 'no path'}]}]})
     (single / 'empty.png').write_bytes(b'png')
     write(reports / 'ui-review-board/decisions.json', {'decisions': [
-        {'slug': 'icons', 'title': 'Preview Icons', 'summary': 'Choose.', 'options': [{'key': '1', 'label': 'Keep'}],
-         'evidence': ['ui-review/20261115-designer-pilot/empty.png', 'ui-review/absent.png']}]})
+        {'slug': 'icons', 'title': 'Preview Icons', 'summary': 'Should Preview keep its icons?',
+         'background': 'Preview shows an icon beside each field name.',
+         'options': [{'key': '1', 'label': 'Keep', 'recommended': True}, {'key': '2', 'label': 'Remove'}],
+         'steps': [{'path': 'ui-review/20261115-designer-pilot/empty.png', 'title': 'empty', 'caption': 'The icons beside the names.'}]}]})
     os.utime(single / 'review.json', (time.time() - 100, time.time() - 100))
     return reports
 
@@ -132,6 +134,25 @@ class BoardContentTest(unittest.TestCase):
     def test_decisions_offer_only_existing_evidence(self):
         decision, = board.decisions(self.reports)
         self.assertEqual(('decision/icons', ['empty']), (decision['id'], [i['label'] for i in decision['images']]))
+
+    def test_a_decision_out_of_the_agreed_form_says_what_it_lacks(self):
+        self.assertEqual([], board.decisions(self.reports)[0]['problems'])
+        write(self.reports / 'ui-review-board/decisions.json', {'decisions': [
+            {'slug': 'bare', 'title': 'Bare', 'summary': 'Choose.', 'options': [{'key': '1', 'label': 'Keep', 'recommended': True},
+                                                                              {'key': '2', 'label': 'Change', 'recommended': True}],
+             'evidence': ['ui-review/20261115-designer-pilot/empty.png']},
+            {'slug': 'captionless', 'title': 'Captionless', 'summary': 'Keep it?', 'background': 'A user gets here by saving.',
+             'options': [{'key': '1', 'label': 'Keep'}, {'key': '2', 'label': 'Change'}],
+             'steps': [{'path': 'ui-review/20261115-designer-pilot/empty.png', 'title': 'Saved'},
+                       {'path': 'ui-review/absent.png', 'title': 'Gone', 'caption': 'Not captured.'}]}]})
+        bare, captionless = board.decisions(self.reports)
+        self.assertEqual(['no question', 'no background', 'no screens', 'more than one recommended'],
+                         [problem.split(':')[0].split(' saying')[0].split(' option')[0] for problem in bare['problems']])
+        self.assertEqual(['screen 1 has no caption saying what it shows', "screen 2 has no screenshot at 'ui-review/absent.png'"],
+                         captionless['problems'])
+        lines = []
+        self.assertEqual(1, board.plan(self.reports, printer=lines.append), 'the plan fails while a decision is not ready')
+        self.assertTrue(any(line.startswith('  bare is not ready to decide: no question') for line in lines), lines)
 
     def test_decision_steps_keep_their_titles_and_captions_in_order(self):
         write(self.reports / 'ui-review-board/decisions.json', {'decisions': [

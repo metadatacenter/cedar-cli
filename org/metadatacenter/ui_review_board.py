@@ -209,20 +209,59 @@ def run_contents(reports, run_id):
     return {'run': run_id, 'app': app, 'items': items, 'states': [], 'blockers': []}
 
 
+def decision_problems(reports, decision):
+    """What keeps a decision from being put to a person, in the form every decision takes.
+
+    A decision asks one question, says how a user reaches the situation it concerns and what is
+    going on there, and walks through the screens that show it, each with a title and a caption
+    saying what that screen shows. It offers at least two options, at most one of them recommended.
+    """
+    def text(value):
+        return isinstance(value, str) and value.strip()
+    problems = []
+    if not text(decision.get('summary')) or not decision['summary'].strip().endswith('?'):
+        problems.append('no question: the summary must ask one, ending in a question mark')
+    if not text(decision.get('background')):
+        problems.append('no background saying how a user reaches this and what is going on')
+    steps = decision.get('steps')
+    if not isinstance(steps, list) or not steps:
+        problems.append('no screens: steps must list each screenshot with a title and a caption')
+    else:
+        for number, step in enumerate(steps, 1):
+            if not isinstance(step, dict):
+                problems.append(f'screen {number} is not a step')
+                continue
+            if not (isinstance(step.get('path'), str) and (Path(reports) / step['path']).is_file()):
+                problems.append(f'screen {number} has no screenshot at {step.get("path")!r}')
+            if not text(step.get('title')):
+                problems.append(f'screen {number} has no title')
+            if not text(step.get('caption')):
+                problems.append(f'screen {number} has no caption saying what it shows')
+    options = decision.get('options') if isinstance(decision.get('options'), list) else []
+    if len([o for o in options if isinstance(o, dict) and text(o.get('label'))]) < 2:
+        problems.append('fewer than two options')
+    if len([o for o in options if isinstance(o, dict) and o.get('recommended')]) > 1:
+        problems.append('more than one recommended option')
+    return problems
+
+
 def decisions(reports):
     """Design decisions put to the person, with their options; kept in the board's own store.
 
     A decision walks through its screens as steps, each a screenshot with a title and a caption
-    saying what the screen shows. A plain list of evidence paths is still read, captioned by name.
+    saying what the screen shows. A plain list of evidence paths is still read, captioned by name,
+    and reported as a problem, like any other departure from that form.
     """
     value = _optional(board_dir(reports) / 'decisions.json') or {'decisions': []}
     out = []
     for decision in value.get('decisions', []):
         steps = decision.get('steps') or [{'path': path, 'title': Path(path).stem} for path in decision.get('evidence', [])]
+        steps = [step for step in steps if isinstance(step, dict)]
         images = [{'src': image_url(reports, Path(reports) / step['path']), 'label': step.get('title') or Path(step['path']).stem,
                    'caption': step.get('caption', '')}
                   for step in steps if isinstance(step.get('path'), str) and (Path(reports) / step['path']).is_file()]
-        out.append({**decision, 'id': 'decision/' + decision['slug'], 'images': images, 'selfIdentified': True})
+        out.append({**decision, 'id': 'decision/' + decision['slug'], 'images': images, 'selfIdentified': True,
+                    'problems': decision_problems(reports, decision)})
     return out
 
 
@@ -478,6 +517,10 @@ def plan(reports, printer=print):
         printer(f"  {run['id']}  {run['app']} {run['profile']}  {run['verdict'] or run['kind']}  "
                 f"{run['findings']} findings  {run['updated']}")
     store = answers(reports)
-    printer(f'{len(decisions(reports))} design decisions, {len(store["issues"])} answered issues '
+    offered = decisions(reports)
+    printer(f'{len(offered)} design decisions, {len(store["issues"])} answered issues '
             f'covering {len(store["links"])} linked findings, in {board_dir(reports)}.')
-    return 0
+    incomplete = [decision for decision in offered if decision['problems']]
+    for decision in incomplete:
+        printer(f"  {decision['slug']} is not ready to decide: " + '; '.join(decision['problems']) + '.')
+    return 1 if incomplete else 0

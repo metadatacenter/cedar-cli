@@ -126,6 +126,7 @@ function nav(){const {current,earlier}=partition();
 function chips(i){const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
   if(i.severity)s+=`<span class="chip sev-${esc(i.severity)}">${esc(i.severity)}</span>`;
   if(i.provisional)s+='<span class="chip provisional">Provisional</span>';
+  if((i.problems||[]).length)s+='<span class="chip provisional">Not ready to decide</span>';
   if(i.area)s+=`<span class="chip">${esc(i.area)}</span>`;if(i.group)s+=`<span class="chip">${esc(i.group)}</span>`;
   if(v)s+=`<span class="chip mine ${esc(v.status)}">${esc(answerLabel(v,i.options))}</span>`;
   else if((i.matches||[]).length)s+=`<span class="chip repeat">${i.matches[0].likely?'Likely repeat':'Possible repeat'}</span>`;return s;}
@@ -155,6 +156,7 @@ function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div cl
   const aspects=i.aspects?`<table>${Object.entries(i.aspects).map(([k,a])=>`<tr><td>${esc(k)}</td><td><span class="chip ${a.status==='acceptable'?'passed':a.status==='not-applicable'?'':'raised'}">${esc(a.status)}</span></td><td>${esc(a.observation)}</td></tr>`).join('')}</table>`:'';
   const decision=i.kind==='decision';
   $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><div class="chips">${chips(i)}</div><p${decision?' class="question"':''}>${esc(i.summary)}</p>${i.note?`<p class="note">${esc(i.note)}</p>`:''}
+    ${decision&&(i.problems||[]).length?`<p class="note">Not ready to decide: ${esc(i.problems.join('; '))}.</p>`:''}
     ${decision?`${i.background?`<p>${esc(i.background)}</p>`:''}${steps(i.images||[])}`:''}
     ${matches}${options?`<div class="opts">${options}</div>`:''}<div class="acts">${acts}</div>${linked}
     <textarea id="note" placeholder="Suggested fix or conditions (press f). Saved when you leave the box.">${esc(v.note||'')}</textarea>
