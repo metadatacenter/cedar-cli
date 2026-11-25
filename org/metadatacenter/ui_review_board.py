@@ -210,13 +210,19 @@ def run_contents(reports, run_id):
 
 
 def decisions(reports):
-    """Design decisions put to the person, with their options; kept in the board's own store."""
+    """Design decisions put to the person, with their options; kept in the board's own store.
+
+    A decision walks through its screens as steps, each a screenshot with a title and a caption
+    saying what the screen shows. A plain list of evidence paths is still read, captioned by name.
+    """
     value = _optional(board_dir(reports) / 'decisions.json') or {'decisions': []}
     out = []
     for decision in value.get('decisions', []):
-        evidence = [{'src': image_url(reports, Path(reports) / path), 'label': Path(path).stem}
-                    for path in decision.get('evidence', []) if (Path(reports) / path).is_file()]
-        out.append({**decision, 'id': 'decision/' + decision['slug'], 'images': evidence, 'selfIdentified': True})
+        steps = decision.get('steps') or [{'path': path, 'title': Path(path).stem} for path in decision.get('evidence', [])]
+        images = [{'src': image_url(reports, Path(reports) / step['path']), 'label': step.get('title') or Path(step['path']).stem,
+                   'caption': step.get('caption', '')}
+                  for step in steps if isinstance(step.get('path'), str) and (Path(reports) / step['path']).is_file()]
+        out.append({**decision, 'id': 'decision/' + decision['slug'], 'images': images, 'selfIdentified': True})
     return out
 
 

@@ -133,6 +133,16 @@ class BoardContentTest(unittest.TestCase):
         decision, = board.decisions(self.reports)
         self.assertEqual(('decision/icons', ['empty']), (decision['id'], [i['label'] for i in decision['images']]))
 
+    def test_decision_steps_keep_their_titles_and_captions_in_order(self):
+        write(self.reports / 'ui-review-board/decisions.json', {'decisions': [
+            {'slug': 'cues', 'title': 'Cues', 'summary': 'Should rows say they open?', 'options': [], 'steps': [
+                {'path': 'ui-review/20261115-designer-pilot/empty.png', 'title': 'Before', 'caption': 'Nothing opened.'},
+                {'path': 'ui-review/absent.png', 'title': 'Missing', 'caption': 'Not captured.'},
+                {'path': 'ui-review/20261115-designer-pilot/empty.png', 'title': 'After', 'caption': 'Opened.'}]}]})
+        decision, = board.decisions(self.reports)
+        self.assertEqual([('Before', 'Nothing opened.'), ('After', 'Opened.')],
+                         [(i['label'], i['caption']) for i in decision['images']], 'a step whose screen is missing is left out')
+
     def test_answers_are_validated_and_kept_beside_the_reports(self):
         before = tree_digest(self.reports)
         first = 'coordinated/designer-run/A-F1'

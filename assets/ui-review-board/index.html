@@ -46,6 +46,12 @@ textarea{width:100%;max-width:920px;min-height:56px;font:inherit;color:var(--fg)
 .shots{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
 .shots figure{margin:0;width:230px;cursor:zoom-in}.shots img{width:100%;height:160px;object-fit:cover;object-position:top;border:1px solid var(--line);border-radius:4px;display:block;background:var(--panel)}
 .shots figcaption{font-size:11px;color:var(--muted);word-break:break-all}
+.question{font-size:16px;font-weight:500}
+.steps{list-style:none;padding:0;margin:12px 0;max-width:1100px}
+.steps li{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
+.steps li>div{flex:1 1 260px;min-width:0}
+.steps figure{margin:0;cursor:zoom-in;flex:1 1 320px;max-width:440px}.steps img{width:100%;max-height:360px;object-fit:contain;object-position:left top;border:1px solid var(--line);border-radius:4px;background:var(--panel);display:block}
+.steps p{margin:4px 0 0}
 details{margin:8px 0;max-width:920px}summary{cursor:pointer;color:var(--accent)}
 .occ{border-left:3px solid var(--line);padding:2px 10px;margin:8px 0}.occ dt{font-weight:600;font-size:12px;color:var(--muted)}.occ dd{margin:0 0 4px}
 table{border-collapse:collapse;font-size:13px;max-width:920px}td{border-top:1px solid var(--line);padding:3px 8px;vertical-align:top}
@@ -132,6 +138,8 @@ function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.le
   $('#hide').onchange=e=>{hide=e.target.checked;cursor=0;render();};
   $('#list').querySelectorAll('.row').forEach(r=>r.onclick=()=>{cursor=+r.dataset.n;list();detail();});
   $('#list .row.on')?.scrollIntoView({block:'nearest'});}
+// A decision's screens, in order, each beside what it shows.
+function steps(images){return images.length?`<ol class="steps">${images.map((s,n)=>`<li><figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"></figure><div><b>${n+1}. ${esc(s.label)}</b>${s.caption?`<p>${esc(s.caption)}</p>`:''}</div></li>`).join('')}</ol>`:'';}
 function shots(images){return images.length?`<div class="shots">${images.map((s,n)=>`<figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"><figcaption>${esc(s.label)}</figcaption></figure>`).join('')}</div>`:'<p class="note">No screenshot retained for this item.</p>';}
 function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
   const v=V(i)||{},state=filter==='screens'&&view.kind==='run',shared=sharing(i);
@@ -145,10 +153,12 @@ function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div cl
     ${o.observed?`<dt>Observed</dt><dd>${esc(o.observed)}</dd>`:''}${o.expected?`<dt>Expected</dt><dd>${esc(o.expected)}</dd>`:''}${o.impact?`<dt>Impact</dt><dd>${esc(o.impact)}</dd>`:''}
     ${o.verifierReason?`<dt>Verifier</dt><dd>${esc(o.verifierReason)}</dd>`:''}${o.steps&&o.steps.length?`<dt>Steps</dt><dd>${esc(o.steps.join(' → '))}</dd>`:''}${o.states&&o.states.length?`<dt>States</dt><dd>${esc(o.states.join(', '))}</dd>`:''}</dl></div>`).join('');
   const aspects=i.aspects?`<table>${Object.entries(i.aspects).map(([k,a])=>`<tr><td>${esc(k)}</td><td><span class="chip ${a.status==='acceptable'?'passed':a.status==='not-applicable'?'':'raised'}">${esc(a.status)}</span></td><td>${esc(a.observation)}</td></tr>`).join('')}</table>`:'';
-  $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><div class="chips">${chips(i)}</div><p>${esc(i.summary)}</p>${i.note?`<p class="note">${esc(i.note)}</p>`:''}
+  const decision=i.kind==='decision';
+  $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><div class="chips">${chips(i)}</div><p${decision?' class="question"':''}>${esc(i.summary)}</p>${i.note?`<p class="note">${esc(i.note)}</p>`:''}
+    ${decision?`${i.background?`<p>${esc(i.background)}</p>`:''}${steps(i.images||[])}`:''}
     ${matches}${options?`<div class="opts">${options}</div>`:''}<div class="acts">${acts}</div>${linked}
     <textarea id="note" placeholder="Suggested fix or conditions (press f). Saved when you leave the box.">${esc(v.note||'')}</textarea>
-    ${shots(i.images||[])}${aspects}${occ?`<h3>Reviewer findings</h3>${occ}`:''}`;
+    ${decision?'':shots(i.images||[])}${aspects}${occ?`<h3>Reviewer findings</h3>${occ}`:''}`;
   $('#detail').querySelectorAll('[data-option]').forEach(b=>b.onclick=()=>answer({status:'option',option:b.dataset.option}));
   $('#detail').querySelectorAll('[data-status]').forEach(b=>b.onclick=()=>b.dataset.status==='clear'?clear():answer({status:b.dataset.status}));
   $('#detail').querySelectorAll('[data-shot]').forEach(f=>f.onclick=()=>enlarge(+f.dataset.shot));
@@ -165,7 +175,7 @@ async function answer(change,noteOnly){const i=items()[cursor];if(!i)return;cons
 async function clear(){const i=items()[cursor];if(!i)return;await post({id:i.id,clear:true});render();}
 async function link(issue){const i=items()[cursor];if(!i||!issue)return;try{await post({id:i.id,link:issue});}catch(e){alert('Link not saved: '+e.message);}render();}
 function enlarge(n){const i=items()[cursor];if(!i||!(i.images||[]).length)return;shot=(n+i.images.length)%i.images.length;
-  $('#lightbox img').src=i.images[shot].src;$('#lightbox div').textContent=i.images[shot].label+'  ·  ←/→ to step, Esc to close';$('#lightbox').classList.add('on');}
+  $('#lightbox img').src=i.images[shot].src;const s=i.images[shot];$('#lightbox div').textContent=(s.caption?`${s.label}. ${s.caption}`:s.label)+'  ·  ←/→ to step, Esc to close';$('#lightbox').classList.add('on');}
 function close(){$('#lightbox').classList.remove('on');$('#answers').classList.remove('on');shot=-1;}
 function answerText(){
   return Object.entries(A().issues).map(([id,v])=>{const d=INDEX.decisions.find(x=>x.id===id);const n=Object.values(A().links).filter(l=>l.issue===id).length;
