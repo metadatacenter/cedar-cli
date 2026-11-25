@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from org.metadatacenter import ui_review_coordinator as c, test_processes
 
 
-def fixture(root, count=3):
+def fixture(root, count=3, app='designer'):
     home = root / 'home'
     guide = home / 'cedar-development/ops/FRONTEND-RUNBOOK.md'
     guide.parent.mkdir(parents=True)
@@ -31,7 +31,7 @@ def fixture(root, count=3):
         for name in [*c.state_images(state), state['aria'], state['metrics']]:
             files[name] = c.digest((packet / name).read_bytes())
         states.append(state)
-    c.write_json(packet / 'capture.json', {'app': 'designer', 'files': files, 'states': states,
+    c.write_json(packet / 'capture.json', {'app': app, 'files': files, 'states': states,
         'provenance': {'current': True}, 'automaticChecks': {'groups': []}})
     cal = packet / 'calibration'
     cal.mkdir()
@@ -170,6 +170,23 @@ class CoordinatorTest(unittest.TestCase):
         return c.coordinate(self.packet, self.output, self.home, batch_size=2,
                             runner=kwargs.pop('runner', OfflineRunner(self.packet)),
                             harness=kwargs.pop('harness', OfflineHarness()), printer=lambda *_: None, **kwargs)
+
+    def test_any_catalogued_application_is_reviewed_under_its_own_name(self):
+        home, packet = fixture(self.root / 'openview', app='openview')
+        output = self.root / 'openview-review'
+        runner = OfflineRunner(packet)
+        self.assertEqual(0, c.coordinate(packet, output, home, batch_size=2, runner=runner, harness=OfflineHarness(),
+                                         printer=lambda *_: None))
+        report = c.read_json(output / 'report.json')
+        self.assertEqual('openview', report['app'])
+        self.assertTrue(report['scope'].startswith('Review of recorded OpenView evidence'), report['scope'])
+        self.assertIn('<h1>OpenView: REVIEWED</h1>', (output / 'report.html').read_text())
+        self.assertTrue(all('assembled CEDAR OpenView' in (d / 'prompt.txt').read_text()
+                            for d, _, _ in runner.calls if (d / 'prompt.txt').exists() and d.name == 'assessment'))
+        self.assertEqual('designer', c.make_plan(self.packet, self.home, 2)['app'])
+        _, unknown = fixture(self.root / 'unknown', app='monitoring')
+        with self.assertRaisesRegex(ValueError, 'no application the review catalog covers'):
+            c.make_plan(unknown, home, 2)
 
     def test_plan_covers_all_captured_states_including_supplemental_without_calling_ai(self):
         plan = c.make_plan(self.packet, self.home, 2)
@@ -517,6 +534,68 @@ class ReleasingRunner(OfflineRunner):
 
     def release(self, session):
         self.released.append(session)
+
+
+class ShortCalibrationRunner(OfflineRunner):
+    """Answers batch-001's calibration without its cases a given number of times, then completely."""
+    def __init__(self, packet, short=1):
+        super().__init__(packet)
+        self.short, self.released = short, []
+
+    def release(self, session):
+        self.released.append(session)
+
+    def run(self, directory, prompt, images, schema, *, resume=None):
+        if directory.name == 'calibration' and directory.parent.name == 'batch-001' and self.short:
+            self.short -= 1
+            self.calls.append((directory, resume, images))
+            result = {'cases': []}
+            directory.mkdir(parents=True)
+            c.write_json(directory / 'schema.json', schema)
+            c.write_json(directory / 'response.json', result)
+            (directory / 'prompt.txt').write_text(prompt)
+            (directory / 'events.jsonl').write_text('offline protocol stand-in\n')
+            receipt = {'thread': resume, 'resumeThread': resume, 'promptSha256': c.digest(prompt.encode()),
+                       'schemaSha256': c.digest(c.encoded(schema)), 'images': [], 'responseSha256': c.digest(c.encoded(result)),
+                       'eventsSha256': c.digest((directory / 'events.jsonl').read_bytes())}
+            c.write_json(directory / 'receipt.json', receipt)
+            return result, receipt
+        return super().run(directory, prompt, images, schema, resume=resume)
+
+
+class CalibrationAnswerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home, self.packet = fixture(self.root)
+        self.calibration = c.read_json(self.packet / 'calibration/packet.json')
+
+    def test_the_schema_asks_for_each_case_once(self):
+        schema = c.calibration_schema(self.calibration)
+        cases = schema['properties']['cases']
+        self.assertEqual((1, 1, ['case']), (cases['minItems'], cases['maxItems'], cases['items']['properties']['id']['enum']))
+        with self.assertRaisesRegex(ValueError, 'wrong number of items'):
+            c.validate_calibration({'cases': []}, self.calibration)
+
+    def test_a_short_answer_is_asked_again_once_in_the_same_session(self):
+        runner = ShortCalibrationRunner(self.packet, short=1)
+        self.assertEqual(0, c.coordinate(self.packet, self.root / 'review', self.home, batch_size=2, runner=runner,
+                                         harness=OfflineHarness(), printer=lambda *_: None))
+        job = self.root / 'review/jobs/batch-001'
+        self.assertTrue((job / 'invalid-calibration/receipt.json').exists())
+        asked = [resume for directory, resume, _ in runner.calls
+                 if (directory.parent.name, directory.name) == ('batch-001', 'calibration')]
+        self.assertEqual(2, len(asked))
+        self.assertEqual(1, len(set(asked)), 'both answers come from the reviewer that made the assessment')
+
+    def test_a_second_short_answer_leaves_the_job_incomplete_and_its_session_kept(self):
+        runner = ShortCalibrationRunner(self.packet, short=2)
+        self.assertEqual(2, c.coordinate(self.packet, self.root / 'review', self.home, batch_size=2, runner=runner,
+                                         harness=OfflineHarness(), printer=lambda *_: None))
+        self.assertTrue(any('batch-001' in b and 'wrong number of items' in b
+                            for b in c.read_json(self.root / 'review/report.json')['blockers']))
+        self.assertNotIn('offline-batch-001', runner.released)
 
 
 class SessionReleaseTest(unittest.TestCase):

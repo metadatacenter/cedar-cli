@@ -1,4 +1,4 @@
-"""Image-backed, resumable Designer review of immutable capture evidence.
+"""Image-backed, resumable review of an application's immutable capture evidence.
 
 The coordinator owns coverage and validation. The reviewer, Codex or Claude, supplies judgments,
 never coverage counts, file writes, verdicts, or calibration scores. No collector or live CEDAR
@@ -24,6 +24,8 @@ import uuid
 
 
 ASPECTS = ('alignment', 'grouping', 'hierarchy', 'wrapping', 'visibility', 'interaction')
+# The applications the review catalog captures, by the name a capture records and the name a person reads.
+APPS = {'designer': 'Designer', 'workspace': 'Workspace', 'metadata-editor': 'Metadata Editor', 'openview': 'OpenView'}
 SCOPE = ('Review of recorded Designer evidence, not live interaction verification or release '
          'certification. Image delivery and complete assessments are recorded; model attention '
          'and absence of missed defects cannot be proved.')
@@ -46,6 +48,14 @@ seen the capture: the screen, the visible content and where the problem is. Stat
 observations must not be replaced by a generic checklist. Automated violations are handled
 separately by the coordinator.
 """
+
+
+def scope(app):
+    return SCOPE.replace('recorded Designer evidence', f'recorded {APPS[app]} evidence')
+
+
+def rubric(app):
+    return RUBRIC.replace('the assembled CEDAR Designer', f'the assembled CEDAR {APPS[app]}')
 
 
 def digest(data):
@@ -126,6 +136,21 @@ def verification_schema(candidates, images):
     return schema
 
 
+def calibration_schema(calibration):
+    """The calibration answer for these cases: each case answered once, so a short answer cannot pass."""
+    schema = copy.deepcopy(CALIBRATION_SCHEMA)
+    cases = schema['properties']['cases']
+    cases['items']['properties']['id'] = {'type': 'string', 'enum': [case['id'] for case in calibration]}
+    cases['minItems'] = cases['maxItems'] = len(calibration)
+    return schema
+
+
+def validate_calibration(answers, calibration):
+    validate_shape(answers, calibration_schema(calibration))
+    if sorted(case['id'] for case in answers['cases']) != sorted(case['id'] for case in calibration):
+        raise ValueError('Calibration answer does not answer each case exactly once')
+
+
 def validate_shape(value, schema, location='result'):
     """Validate the small JSON Schema subset used here, independently of the model provider."""
     kind = schema['type']
@@ -138,6 +163,8 @@ def validate_shape(value, schema, location='result'):
         for key, child in schema['properties'].items():
             validate_shape(value[key], child, location + '.' + key)
     elif kind == 'array':
+        if len(value) < schema.get('minItems', 0) or len(value) > schema.get('maxItems', len(value)):
+            raise ValueError(f'{location}: wrong number of items')
         for index, item in enumerate(value):
             validate_shape(item, schema['items'], f'{location}[{index}]')
     elif kind == 'string' and not value.strip():
@@ -163,8 +190,8 @@ def inspect_packet(source):
     source = Path(source)
     raw = safe_file(source, 'capture.json').read_bytes()
     capture = json.loads(raw)
-    if capture.get('app') != 'designer':
-        raise ValueError('The coordinator currently supports Designer captures only')
+    if capture.get('app') not in APPS:
+        raise ValueError('Capture names no application the review catalog covers: ' + repr(capture.get('app')))
     states = capture.get('states')
     if not isinstance(states, list) or not states:
         raise ValueError('Capture has no states')
@@ -223,11 +250,11 @@ def make_plan(source, home, batch_size=8, model=None):
             for index in range(0, len(capture['states']), batch_size)]
     # Recheck one state per batch, chosen deterministically without selecting only reported defects.
     audit = [min(job['states'], key=lambda id_: digest(id_.encode())) for job in jobs]
-    return {'schemaVersion': 1, 'app': 'designer', 'captureSha256': sha,
+    return {'schemaVersion': 1, 'app': capture['app'], 'captureSha256': sha,
             'calibrationSha256': cal_sha, 'coordinatorSha256': digest(Path(__file__).read_bytes()),
             'rules': rules, 'rulesSha256': digest(rules.encode()), 'model': model,
             'batchSize': batch_size, 'states': [s['id'] for s in capture['states']],
-            'jobs': jobs, 'auditStates': audit, 'calibrationCases': len(calibration), 'scope': SCOPE}
+            'jobs': jobs, 'auditStates': audit, 'calibrationCases': len(calibration), 'scope': scope(capture['app'])}
 
 
 def copy_packet(source, target, capture, calibration):
@@ -769,6 +796,15 @@ def reviewed_job(directory, prompt, images, schema, runner, packet, calibration,
     else:
         write_json(seal_path, seal)
     cal_dir = directory / 'calibration'
+    cal_images = [packet / 'calibration' / name for c in calibration for name in c['images']]
+    cal_prompt = ('Your application assessment is now sealed. Do not revise it. Inspect every '
+                  'attached calibration image. For each case decide whether the illustrated '
+                  'behavior or composition has a concern. Give the observation supporting your '
+                  'answer. Answer every case once. No tools. Image order follows cases and their '
+                  'images below.\n' + json.dumps(calibration))
+
+    def ask():
+        return runner.run(cal_dir, cal_prompt, cal_images, calibration_schema(calibration), resume=receipt['thread'])
     if (cal_dir / 'receipt.json').exists():
         answers, cal_receipt = cached_response(cal_dir)
         if cal_receipt['resumeThread'] != receipt['thread']:
@@ -776,19 +812,23 @@ def reviewed_job(directory, prompt, images, schema, runner, packet, calibration,
     else:
         if cal_dir.exists():
             cal_dir.rename(directory / ('failed-calibration-' + str(time.time_ns())))
-        cal_images = [packet / 'calibration' / name for c in calibration for name in c['images']]
-        cal_prompt = ('Your application assessment is now sealed. Do not revise it. Inspect every '
-                      'attached calibration image. For each case decide whether the illustrated '
-                      'behavior or composition has a concern. Give the observation supporting your '
-                      'answer. No tools. Image order follows cases and their images below.\n' + json.dumps(calibration))
-        answers, cal_receipt = runner.run(cal_dir, cal_prompt, cal_images, CALIBRATION_SCHEMA,
-                                         resume=receipt['thread'])
-    validate_shape(answers, CALIBRATION_SCHEMA)
-    # Calibration is the session's last turn. A failed one keeps the session so a resumed run can finish it.
-    release(runner, receipt['thread'])
+        answers, cal_receipt = ask()
+    try:
+        validate_calibration(answers, calibration)
+    except ValueError:
+        # An answer that skips or repeats a case has not been scored, so asking the same reviewer
+        # once more for a complete answer grades nothing twice. A scored answer is never re-asked.
+        invalid = directory / 'invalid-calibration'
+        if invalid.exists() or (directory / 'calibration-score.json').exists():
+            raise
+        cal_dir.rename(invalid)
+        answers, cal_receipt = ask()
+        validate_calibration(answers, calibration)
     score = harness.score(packet, directory)
     # Preserve a failed score. Resuming must not keep rerolling until the reviewer happens to pass.
     write_json(directory / 'calibration-score.json', score)
+    # Calibration is the session's last turn once it is scored; an unscored one keeps the session.
+    release(runner, receipt['thread'])
     calibrated = score['detected'] == score['defects'] and score['falseAlarms'] == 0
     result = {'response': response, 'receipt': receipt, 'calibrated': calibrated,
               'calibration': {key: score[key] for key in ('detected', 'defects', 'falseAlarms')}}
@@ -917,14 +957,15 @@ def render_report(output, report):
                                'failed the existing calibration gate. Findings remain provisional; individual '
                                'scores and answers are retained under jobs/.')
     blockers = '<ol>' + ''.join('<li>' + esc(b) + '</li>' for b in visible_blockers) + '</ol>' if visible_blockers else ''
-    page = ('<!doctype html><meta charset="utf-8"><title>Designer review</title><style>'
+    name = APPS.get(report['app'], report['app'])
+    page = ('<!doctype html><meta charset="utf-8"><title>' + esc(name) + ' review</title><style>'
             'body{font:16px system-ui;max-width:1000px;margin:32px auto;padding:0 20px;color:#173e3c}'
             'img{max-width:100%;max-height:650px;border:1px solid #ddd}li{margin:20px 0}</style>'
-            f'<h1>Designer: {esc(report["verdict"])}</h1><p>{report["coverage"]["assessed"]}/'
+            f'<h1>{esc(name)}: {esc(report["verdict"])}</h1><p>{report["coverage"]["assessed"]}/'
             f'{report["coverage"]["captured"]} captured states have image-backed assessments.</p>' + blockers +
             ''.join(sections) + '<p><a href="report.json">Full report</a> · '
             '<a href="coverage.json">Per-state delivery and assessment ledger</a></p>'
-            f'<p>{esc(SCOPE)}</p>')
+            f'<p>{esc(report["scope"])}</p>')
     (output / 'report.html').write_text(page)
 
 
@@ -985,7 +1026,7 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
 
         def run_job(job):
             rows, images = state_input(packet, capture, set(job['states']))
-            prompt = RUBRIC + '\nApproved design agreements:\n' + plan['rules'] + '\nStates (image order follows each images list):\n' + evidence_json(rows)
+            prompt = rubric(plan['app']) + '\nApproved design agreements:\n' + plan['rules'] + '\nStates (image order follows each images list):\n' + evidence_json(rows)
             excess = oversized(prompt, images, text_limit, image_limit)
             if excess:
                 raise ValueError(f'Assigned evidence {excess} for this reviewer; use a smaller --batch-size')
@@ -1031,7 +1072,7 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
             ids.update(related for id_ in list(ids) for related in by_id[id_].get('relatedStates', []))
             rows, images = state_input(packet, capture, ids)
             evidence = evidence_json(rows)
-            prompt = (RUBRIC.split('Give each state')[0] + '\nThis is independent verification of candidate findings, which may be wrong. '
+            prompt = (rubric(plan['app']).split('Give each state')[0] + '\nThis is independent verification of candidate findings, which may be wrong. '
                       'Use the supplied before/after sequences, including related states from other review batches. '
                       'Do not return per-state checklists; return a concise decision and evidence for each candidate. '
                       'For EVERY candidate return confirmed only for an evidenced defect, design-decision '
@@ -1120,14 +1161,14 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
                 errors.append('Finding consolidation: ' + str(error))
         blockers += errors
         verdict = 'INCOMPLETE' if blockers else 'FINDINGS' if findings or automatic else 'DESIGN_REVIEW' if designs else 'REVIEWED'
-        report = {'schemaVersion': 1, 'app': 'designer', 'verdict': verdict, 'captureSha256': sha,
+        report = {'schemaVersion': 1, 'app': plan['app'], 'verdict': verdict, 'captureSha256': sha,
                   'coverage': {'captured': len(ledger), 'assessed': len(ledger) - len(missing), 'missing': missing},
                   'findings': group_findings(findings, assignments), 'designDecisions': group_findings(designs, assignments),
-                  'automaticFindings': automatic, 'dismissed': dismissed, 'blockers': blockers, 'scope': SCOPE}
+                  'automaticFindings': automatic, 'dismissed': dismissed, 'blockers': blockers, 'scope': plan['scope']}
         write_json(output / 'coverage.json', {'captureSha256': sha, 'states': ledger})
         write_json(output / 'report.json', report)
         render_report(output, report)
-        printer(f'Designer {verdict}: {len(ledger) - len(missing)}/{len(ledger)} states assessed; '
+        printer(f'{APPS[plan["app"]]} {verdict}: {len(ledger) - len(missing)}/{len(ledger)} states assessed; '
                 f'{len(report["findings"]) + len(automatic)} findings, {len(report["designDecisions"])} design decisions. '
                 f'{output / "report.html"}')
         return 2 if blockers else 1 if findings or automatic or designs else 0

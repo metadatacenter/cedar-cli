@@ -18,7 +18,7 @@ console = Console()
 
 @app.command("ui-review-coordinate")
 def ui_review_coordinate(
-        capture: Path = typer.Option(..., help="Existing Designer application capture directory."),
+        capture: Path = typer.Option(..., help="Existing application capture directory: Designer, Workspace, Metadata Editor or OpenView."),
         output: Path = typer.Option(..., help="Separate review directory; never overwrites the capture."),
         plan: bool = typer.Option(False, help="Verify evidence and list every assigned state without calling AI."),
         resume: bool = typer.Option(False, help="Resume the same immutable packet and coordinator configuration."),
@@ -27,7 +27,7 @@ def ui_review_coordinate(
         reviewer: str = typer.Option("codex", help="Reviewer CLI: codex, or claude for Claude Code."),
         model: Optional[str] = typer.Option(None, help="Reviewer model; omitted uses the reviewer's default."),
         timeout: int = typer.Option(900, min=30, help="Maximum seconds per AI turn.")):
-    """Review every captured Designer state with AI and report actionable findings and decisions."""
+    """Review every captured state of an application with AI and report actionable findings and decisions."""
     from org.metadatacenter.ui_review_coordinator import coordinate
     from org.metadatacenter.util.InvocationContext import invocation_environment
     from org.metadatacenter.util.Util import Util

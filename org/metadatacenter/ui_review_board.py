@@ -27,6 +27,7 @@ PAGE = Path(__file__).resolve().parents[2] / 'assets' / 'ui-review-board' / 'ind
 STATUSES = ('approved', 'needs-fix', 'deferred', 'option')
 IMAGE_TYPES = ('.png', '.jpg', '.jpeg', '.webp')
 DEFAULT_PORT = 47831
+APP_NAMES = {'designer': 'Designer', 'workspace': 'Workspace', 'metadata-editor': 'Metadata Editor', 'openview': 'OpenView'}
 ANSWERS = 'answers.json'
 _ID = re.compile(r'^[\w./:@-]{1,300}$')
 # A suggestion is offered from SUGGEST and called likely from LIKELY. Both were set by scoring every
@@ -190,7 +191,8 @@ def run_contents(reports, run_id):
                               'target': group.get('target', ''), 'category': group.get('category', ''),
                               'severity': group.get('severity', ''),
                               'provisional': not group.get('calibrated', False) and section != 'dismissed',
-                              'area': designer_area(group.get('stateIds', [])) if report.get('app', 'designer') == 'designer' else report.get('app', ''),
+                              'area': designer_area(group.get('stateIds', [])) if report.get('app', 'designer') == 'designer'
+                              else APP_NAMES.get(report.get('app'), report.get('app', '')),
                               'states': group.get('stateIds', []), 'occurrences': occurrences,
                               'images': _images(reports, packet, group.get('evidence', []),
                                                 _captions(group, *group.get('occurrences', [])))})
