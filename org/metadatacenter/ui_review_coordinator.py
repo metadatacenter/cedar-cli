@@ -561,14 +561,8 @@ class ClaudeRunner(ReviewerProcess):
     its working directory, so each session gets a directory of its own that calibration resumes in.
     It also keeps the session's transcript and a copy of every image, which the coordinator releases
     once nothing will resume the session.
-
-    Claude Code sends the answer schema as a tool definition at the head of the prompt, so a resumed
-    turn with a schema of its own would write the whole cached conversation again. Every turn of a
-    session therefore uses one schema with a field for the first answer and a field for calibration,
-    the only turn that resumes a session. Each turn fills its own field and leaves the other null.
     """
     image_limit = 100
-    follow_up_schema = CALIBRATION_SCHEMA
     # Claude Code copies received images under claude-<uid> in the system temporary directory.
     scratch_roots = (Path('/tmp'),)
 
@@ -592,22 +586,14 @@ class ClaudeRunner(ReviewerProcess):
         if not signed_in:
             raise ValueError('Claude Code is not signed in; run `claude auth login` or export ANTHROPIC_API_KEY')
 
-    def session_schema(self, first):
-        nullable = lambda schema: {'anyOf': [schema, {'type': 'null'}]}
-        return object_schema({'answer': nullable(first), 'calibration': nullable(self.follow_up_schema)})
-
     @staticmethod
-    def message(prompt, images, field=None):
+    def message(prompt, images):
         content = []
         for index, path in enumerate(images, 1):
             content.append({'type': 'text', 'text': f'Image {index}: {path.name}'})
             content.append({'type': 'image', 'source': {'type': 'base64', 'media_type': image_type(path),
                             'data': base64.b64encode(path.read_bytes()).decode()}})
         content.append({'type': 'text', 'text': prompt})
-        if field:
-            other = 'calibration' if field == 'answer' else 'answer'
-            content.append({'type': 'text', 'text': f'Give this answer in the `{field}` field of the '
-                            f'structured answer, and set the `{other}` field to null.'})
         return json.dumps({'type': 'user', 'message': {'role': 'user', 'content': content}}) + '\n'
 
     def run(self, directory, prompt, images, schema, *, resume=None):
@@ -617,26 +603,14 @@ class ClaudeRunner(ReviewerProcess):
         session = resume or str(uuid.uuid4())
         workspace = self.workspace(session)
         workspace.mkdir(parents=True, exist_ok=True)
-        stored = workspace / 'session-schema.json'
-        if resume:
-            # A session begun before its turns shared one schema keeps each turn's own schema.
-            shared = read_json(stored) if stored.is_file() else None
-        else:
-            shared = self.session_schema(schema)
-            write_json(stored, shared)
-        field = None if shared is None else 'calibration' if resume else 'answer'
-        if field and shared['properties'][field]['anyOf'][0] != schema:
-            raise ValueError('A resumed Claude session accepts only its calibration answer')
-        tool_schema = shared or schema
-        write_json(directory / 'session-schema.json', tool_schema)
         command = [self.executable, '--print', '--input-format', 'stream-json',
                    '--output-format', 'stream-json', '--verbose', '--tools', '', '--safe-mode',
                    '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands',
-                   '--no-chrome', '--system-prompt', CLAUDE_SYSTEM, '--json-schema', json.dumps(tool_schema),
+                   '--no-chrome', '--system-prompt', CLAUDE_SYSTEM, '--json-schema', json.dumps(schema),
                    '--effort', 'high', *(['--resume', session] if resume else ['--session-id', session])]
         if self.model:
             command += ['--model', self.model]
-        returncode = self.execute(command, self.message(prompt, images, field), directory, self.environment,
+        returncode = self.execute(command, self.message(prompt, images), directory, self.environment,
                                   cwd=workspace)
         events = []
         for line in (directory / 'events.jsonl').read_text().splitlines():
@@ -663,11 +637,6 @@ class ClaudeRunner(ReviewerProcess):
         if not result or result.get('session_id') != session:
             raise ValueError('Reviewer has no completed turn or session identity')
         response = result.get('structured_output')
-        if field and isinstance(response, dict):
-            other = 'calibration' if field == 'answer' else 'answer'
-            if response.get(other) is not None:
-                raise ValueError("Reviewer answered outside this turn's field")
-            response = response.get(field)
         if not isinstance(response, dict):
             raise ValueError('Reviewer returned no structured answer')
         write_json(directory / 'response.json', response)
