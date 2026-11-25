@@ -111,7 +111,8 @@ def discover_runs(reports):
                      'app': report.get('app', 'designer'), 'profile': capture.get('profile', ''),
                      'verdict': report.get('verdict', ''), 'coverage': report.get('coverage', {}),
                      'runner': runner.get('runner', ''), 'model': runner.get('requestedModel', ''),
-                     'findings': len(groups), 'updated': _updated(report_path)})
+                     'findings': len(groups), 'confirmed': len(report.get('findings', [])),
+                     'updated': _updated(report_path)})
     for review_path in sorted((reports / 'ui-review').glob('**/review.json')):
         directory = review_path.parent
         review, capture = _optional(review_path), _optional(directory / 'capture.json')

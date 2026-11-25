@@ -95,7 +95,8 @@ class BoardContentTest(unittest.TestCase):
     def test_discovers_coordinated_and_single_reviews_newest_first(self):
         runs = board.discover_runs(self.reports)
         self.assertEqual(['coordinated/designer-run', 'single/20261115-designer-pilot'], [r['id'] for r in runs])
-        self.assertEqual(('chromium', 'codex-cli 1.0', 5), (runs[0]['profile'], runs[0]['runner'], runs[0]['findings']))
+        self.assertEqual(('chromium', 'codex-cli 1.0', 5, 1),
+                         (runs[0]['profile'], runs[0]['runner'], runs[0]['findings'], runs[0]['confirmed']))
         self.assertEqual('designer', runs[1]['app'], 'a capture that names no application predates the other collectors')
 
     def test_statuses_follow_the_report_section_and_verifier(self):

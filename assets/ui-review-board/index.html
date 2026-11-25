@@ -20,9 +20,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 nav,#list{overflow:auto;border-right:1px solid var(--line)}nav{background:var(--panel);padding:6px 0 24px}
 nav h2{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:14px 12px 4px}
 nav h3{font-size:12px;margin:10px 12px 2px}
-nav .entry{display:flex;gap:6px;width:100%;border:0;background:none;padding:4px 12px;text-align:left}
-nav .entry span:last-child{margin-left:auto;color:var(--muted);white-space:nowrap}
-nav .entry.on{background:var(--sel);font-weight:600}nav .more{border:0;background:none;color:var(--accent);padding:2px 12px;font-size:12px}
+nav .entry{display:block;width:100%;border:0;background:none;padding:4px 12px;text-align:left}
+nav .entry .sub{display:block;color:var(--muted);font-size:12px}
+nav .entry.on{background:var(--sel)}nav .entry.on .name{font-weight:600}
+nav .fold{display:block;border:0;background:none;padding:0;margin:14px 12px 4px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 #filters{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:6px 10px;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
 #filters button{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:0 8px;font-size:12px}
 #filters button.on{background:var(--sel);border-color:var(--accent)}#filters label{font-size:12px;color:var(--muted);margin-left:auto}
@@ -73,7 +74,7 @@ const LABEL={decision:'Needs your decision',confirmed:'Confirmed defect',uncerta
 approved:'You approved','needs-fix':'You: needs fix',deferred:'You deferred',option:'You chose'};
 const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,expanded={};
+let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,earlierOpen=false;
 const A=()=>INDEX.answers;
 // A finding answers through the issue it is linked to; a decision or a screen answers under its own identifier.
 const issueOf=i=>i.selfIdentified?i.id:(A().links[i.id]||{}).issue;
@@ -81,9 +82,20 @@ const V=i=>A().issues[issueOf(i)];
 const sharing=i=>{const issue=issueOf(i);return issue&&!i.selfIdentified?Object.values(A().links).filter(l=>l.issue===issue).length-1:0;};
 function answerLabel(v,options){const o=v.option&&(options||[]).find(x=>x.key===v.option);return `${LABEL[v.status]||v.status}${o?': '+o.label:''}`;}
 async function api(path,options){const r=await fetch(path,options);const body=await r.json();if(!r.ok)throw new Error(body.error||r.statusText);return body;}
-function runner(run){const s=(run.runner||'').toLowerCase();return run.kind==='single'?'Single reviewer':s.includes('claude')?'Claude':s.includes('codex')?'Codex':'Coordinated';}
+function runner(run){const s=(run.runner||'').toLowerCase();return run.kind==='single'?'Single reviewer':s.includes('claude')?(s.includes('manual')?'Claude, hand-run':'Claude'):s.includes('codex')?'Codex':'Coordinated';}
+const PROFILES={chromium:'Mouse','webkit-touch':'Touch'},APPS=['designer','workspace','metadata-editor','openview'];
+const day=ts=>new Date(ts).toLocaleDateString('en-GB',{day:'numeric',month:'short'}),clock=ts=>ts.slice(11,16);
+// The run's profile and reviewer; a run without a profile, or an earlier one, also needs its date to be told apart.
+function runTitle(run,earlier){return [PROFILES[run.profile],runner(run),(earlier||!PROFILES[run.profile])&&day(run.updated)+(earlier?' '+clock(run.updated):'')].filter(Boolean).join(' · ');}
+function answeredIn(run){const prefix=run.id+'/';return Object.keys(A().links).filter(k=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')).length;}
+function runCounts(run){return `${run.kind==='single'?count(run.findings,'finding'):count(run.confirmed,'defect')} · ${answeredIn(run)} answered`;}
+function runEntry(run,earlier){return `<button class="entry ${view.kind==='run'&&view.id===run.id?'on':''}" data-run="${esc(run.id)}" title="${esc(run.name)}, reviewed ${esc(day(run.updated))} ${esc(clock(run.updated))}"><span class="name">${esc(runTitle(run,earlier))}</span><span class="sub">${esc(runCounts(run))}</span></button>`;}
+// The newest review of each application and profile is current; every other one is earlier. A capture
+// that records no profile predates them, when every capture drove Chromium with a mouse.
+function partition(){const seen=new Set(),current=[],earlier=[];for(const run of INDEX.runs){const key=run.app+'|'+(run.profile||'chromium');(seen.has(key)?earlier:current).push(run);seen.add(key);}return {current,earlier};}
+function byApp(runs,earlier){const order=[...APPS,...new Set(runs.map(r=>r.app).filter(a=>!APPS.includes(a)))];
+  return order.filter(app=>runs.some(r=>r.app===app)).map(app=>`<h3>${esc(appName(app))}</h3>`+runs.filter(r=>r.app===app).map(r=>runEntry(r,earlier)).join('')).join('');}
 function appName(a){return {designer:'Designer',workspace:'Workspace','metadata-editor':'Metadata Editor',openview:'OpenView'}[a]||a;}
-function runLabel(run){return `${runner(run)} · ${run.profile||'default'} · ${run.updated.slice(5,10)} ${run.updated.slice(11,16)}`;}
 async function load(){INDEX=await api('/api/index');
   const latest=INDEX.runs.find(r=>r.kind==='coordinated');
   summarise();
@@ -96,16 +108,15 @@ function items(){let list;
 const count=(n,word)=>`${n} ${word}${n===1?'':'s'}`;
 function summarise(){$('#summary').textContent=`${count(INDEX.runs.length,'retained review')} · ${count(INDEX.decisions.length,'decision')} · ${count(Object.keys(A().issues).length,'answer')}`;}
 function answered(list){return list.filter(i=>V(i)).length;}
-function nav(){let html=`<h2>Needs your decision</h2><button class="entry ${view.kind==='decisions'?'on':''}" data-view="decisions"><span>Design decisions</span><span>${answered(INDEX.decisions)}/${INDEX.decisions.length}</span></button><h2>Reviews</h2>`;
-  const byApp={};INDEX.runs.forEach(r=>(byApp[r.app]??=[]).push(r));
-  for(const [app,runs] of Object.entries(byApp)){html+=`<h3>${esc(appName(app))}</h3>`;
-    const shown=expanded[app]?runs:runs.slice(0,4);
-    for(const run of shown)html+=`<button class="entry ${view.kind==='run'&&view.id===run.id?'on':''}" data-run="${esc(run.id)}" title="${esc(run.name)}"><span>${esc(runLabel(run))}</span><span>${run.findings}</span></button>`;
-    if(runs.length>4)html+=`<button class="more" data-app="${esc(app)}">${expanded[app]?'Show fewer':`Show ${runs.length-4} older`}</button>`;}
+function nav(){const {current,earlier}=partition();
+  if(view.kind==='run'&&earlier.some(r=>r.id===view.id))earlierOpen=true;
+  let html=`<h2>Needs your decision</h2><button class="entry ${view.kind==='decisions'?'on':''}" data-view="decisions"><span class="name">Design decisions</span><span class="sub">${answered(INDEX.decisions)} of ${INDEX.decisions.length} answered</span></button>`;
+  html+=`<h2>Current reviews</h2>${byApp(current,false)}`;
+  if(earlier.length)html+=`<button class="fold" id="earlier" aria-expanded="${earlierOpen}">${earlierOpen?'▾':'▸'} Earlier reviews (${earlier.length})</button>${earlierOpen?byApp(earlier,true):''}`;
   $('#nav').innerHTML=html;
   $('#nav').querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view={kind:'decisions'};cursor=0;render();});
   $('#nav').querySelectorAll('[data-run]').forEach(b=>b.onclick=async()=>{filter='all';await openRun(b.dataset.run);render();});
-  $('#nav').querySelectorAll('[data-app]').forEach(b=>b.onclick=()=>{expanded[b.dataset.app]=!expanded[b.dataset.app];nav();});}
+  $('#earlier')?.addEventListener('click',()=>{earlierOpen=!earlierOpen;nav();});}
 function chips(i){const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
   if(i.severity)s+=`<span class="chip sev-${esc(i.severity)}">${esc(i.severity)}</span>`;
   if(i.provisional)s+='<span class="chip provisional">Provisional</span>';
