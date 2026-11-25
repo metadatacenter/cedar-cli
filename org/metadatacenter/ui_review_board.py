@@ -153,12 +153,38 @@ def _captions(*findings):
     return captions
 
 
-def _images(reports, root, names, captions=None):
+def _screens(directory):
+    """For a coordinated review, each image's state and the reviewer's own note on that state.
+
+    A review made before findings had to caption their images still says what each screen shows: every
+    state's assessment opens with the reviewer's description of it, which serves as the caption.
+    """
+    capture = _optional(directory / 'packet' / 'capture.json') or {}
+    coverage = _optional(directory / 'coverage.json') or {}
+    notes = {row.get('id'): (row.get('assessment') or {}).get('visualObservation', '') for row in coverage.get('states', [])}
+    screens = {}
+    for state in capture.get('states', []):
+        crops = state.get('crops', [])
+        for name in [state.get('screenshot'), *crops]:
+            if isinstance(name, str):
+                part = '' if name == state.get('screenshot') else Path(name).stem[len(state['id']):].strip('-').replace('-', ' ')
+                screens[name] = {'title': state['id'] + (f', {part}' if part else ''), 'note': notes.get(state['id'], '')}
+    return screens
+
+
+def _images(reports, root, names, captions=None, screens=None):
     # Later single reviews cite evidence as {path, sha256}; earlier ones cite the file name alone.
     names = [name.get('path') if isinstance(name, dict) else name for name in names]
-    captions = captions or {}
-    return [{'src': image_url(reports, root / name), 'label': name, 'caption': captions.get(name, '')}
-            for name in names if isinstance(name, str) and Path(name).suffix.lower() in IMAGE_TYPES and (root / name).is_file()]
+    captions, screens = captions or {}, screens or {}
+    images = []
+    for name in names:
+        if not (isinstance(name, str) and Path(name).suffix.lower() in IMAGE_TYPES and (root / name).is_file()):
+            continue
+        screen = screens.get(name, {})
+        caption = captions.get(name, '')
+        images.append({'src': image_url(reports, root / name), 'label': screen.get('title') or name,
+                       'caption': caption or screen.get('note', ''), 'screenNote': not caption and bool(screen.get('note'))})
+    return images
 
 
 def _occurrence(reports, root, finding):
@@ -177,6 +203,7 @@ def run_contents(reports, run_id):
     if kind == 'coordinated':
         report = read_json(directory / 'report.json')
         packet = directory / 'packet'
+        screens = _screens(directory)
         items = []
         for section, groups in (('findings', report.get('findings', [])), ('designDecisions', report.get('designDecisions', [])),
                                 ('dismissed', report.get('dismissed', []))):
@@ -195,7 +222,7 @@ def run_contents(reports, run_id):
                               else APP_NAMES.get(report.get('app'), report.get('app', '')),
                               'states': group.get('stateIds', []), 'occurrences': occurrences,
                               'images': _images(reports, packet, group.get('evidence', []),
-                                                _captions(group, *group.get('occurrences', [])))})
+                                                _captions(group, *group.get('occurrences', [])), screens)})
         coverage = _optional(directory / 'coverage.json') or {'states': []}
         states = []
         for row in coverage.get('states', []):

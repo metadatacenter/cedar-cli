@@ -66,7 +66,7 @@ table{border-collapse:collapse;font-size:13px;max-width:920px}td{border-top:1px 
 <header>
   <h1>UI Review Board</h1><span class="muted" id="summary">Loading…</span>
   <button id="answersButton" class="opt">My answers</button>
-  <span class="keys"><kbd>j</kbd><kbd>k</kbd> next and previous · <kbd>1</kbd>–<kbd>4</kbd> choose · <kbd>a</kbd> approve · <kbd>x</kbd> needs fix · <kbd>d</kbd> defer · <kbd>f</kbd> note · <kbd>u</kbd> clear · <kbd>l</kbd> same issue · <kbd>Enter</kbd> enlarge · <kbd>h</kbd> hide answered</span>
+  <span class="keys"><kbd>j</kbd><kbd>k</kbd> next and previous · <kbd>1</kbd>–<kbd>4</kbd> choose · <kbd>x</kbd> fix it · <kbd>a</kbd> leave as is · <kbd>d</kbd> decide later · <kbd>f</kbd> note · <kbd>u</kbd> clear · <kbd>l</kbd> same issue · <kbd>Enter</kbd> enlarge · <kbd>h</kbd> hide answered</span>
 </header>
 <nav id="nav" aria-label="Reviews"></nav>
 <div id="list" aria-label="Items"></div>
@@ -77,7 +77,15 @@ table{border-collapse:collapse;font-size:13px;max-width:920px}td{border-top:1px 
 <script>
 const LABEL={decision:'Needs your decision',confirmed:'Confirmed defect',uncertain:'Uncertain',design:'Design decision',
 'not-verified':'Not verified',dismissed:'Dismissed by verifier',passed:'Reviewer passed',raised:'Reviewer raised',
-approved:'You approved','needs-fix':'You: needs fix',deferred:'You deferred',option:'You chose'};
+approved:'You: leave as is','needs-fix':'You: fix it',deferred:'You: decide later',option:'You chose'};
+// The question a finding puts to a person depends on what the reviewer and its verifier concluded.
+const QUESTION={confirmed:'The reviewer and a separate verifier both found this a defect. Should it be fixed?',
+design:'The reviewer proposes a change, and the verifier judged it a design choice. Should the product change?',
+uncertain:'The verifier could not settle this from the screens. Should it be fixed?',
+'not-verified':'No verifier has checked this finding. Should it be fixed?',
+dismissed:'The verifier found that the screens contradict this finding. Should it be fixed anyway?'};
+const CHOICES=[['needs-fix','x','Fix it','Change the product. Say how in the note when it matters.'],
+['approved','a','Leave as is','The current behavior is acceptable or intended.'],['deferred','d','Decide later','Keep it open.']];
 const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,earlierOpen=false;
@@ -86,7 +94,7 @@ const A=()=>INDEX.answers;
 const issueOf=i=>i.selfIdentified?i.id:(A().links[i.id]||{}).issue;
 const V=i=>A().issues[issueOf(i)];
 const sharing=i=>{const issue=issueOf(i);return issue&&!i.selfIdentified?Object.values(A().links).filter(l=>l.issue===issue).length-1:0;};
-function answerLabel(v,options){const o=v.option&&(options||[]).find(x=>x.key===v.option);return `${LABEL[v.status]||v.status}${o?': '+o.label:''}`;}
+function answerLabel(v,options,screen){const o=v.option&&(options||[]).find(x=>x.key===v.option);return `${screen&&v.status==='approved'?'You agreed':LABEL[v.status]||v.status}${o?': '+o.label:''}`;}
 async function api(path,options){const r=await fetch(path,options);const body=await r.json();if(!r.ok)throw new Error(body.error||r.statusText);return body;}
 function runner(run){const s=(run.runner||'').toLowerCase();return run.kind==='single'?'Single reviewer':s.includes('claude')?(s.includes('manual')?'Claude, hand-run':'Claude'):s.includes('codex')?'Codex':'Coordinated';}
 const PROFILES={chromium:'Mouse','webkit-touch':'Touch'},APPS=['designer','workspace','metadata-editor','openview'];
@@ -128,7 +136,7 @@ function chips(i){const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABE
   if(i.provisional)s+='<span class="chip provisional">Provisional</span>';
   if((i.problems||[]).length)s+='<span class="chip provisional">Not ready to decide</span>';
   if(i.area)s+=`<span class="chip">${esc(i.area)}</span>`;if(i.group)s+=`<span class="chip">${esc(i.group)}</span>`;
-  if(v)s+=`<span class="chip mine ${esc(v.status)}">${esc(answerLabel(v,i.options))}</span>`;
+  if(v)s+=`<span class="chip mine ${esc(v.status)}">${esc(answerLabel(v,i.options,(i.id||'').includes('/state/')))}</span>`;
   else if((i.matches||[]).length)s+=`<span class="chip repeat">${i.matches[0].likely?'Likely repeat':'Possible repeat'}</span>`;return s;}
 function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.length-1);
   let head='';if(view.kind==='run'){const run=RUNS[view.id];const n=k=>k==='all'?run.items.length:k==='screens'?run.states.length:run.items.filter(i=>i.status===k).length;
@@ -145,8 +153,11 @@ function shots(images){return images.length?`<div class="shots">${images.map((s,
 function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
   const v=V(i)||{},state=filter==='screens'&&view.kind==='run',shared=sharing(i);
   const options=(i.options||[]).map(o=>`<button class="opt ${o.recommended?'rec':''} ${v.option===o.key?'on':''}" data-option="${esc(o.key)}"><kbd>${esc(o.key)}</kbd><span><b>${esc(o.label)}</b>${o.recommended?' <small>(recommended)</small>':''}<br><small>${esc(o.detail||'')}</small></span></button>`).join('');
-  const acts=(options?'':`<button data-status="approved" class="${v.status==='approved'?'on':''}"><kbd>a</kbd> ${state?'Agree':'Approve'}</button>`)+
-    `<button data-status="needs-fix" class="${v.status==='needs-fix'?'on':''}"><kbd>x</kbd> Needs fix</button><button data-status="deferred" class="${v.status==='deferred'?'on':''}"><kbd>d</kbd> Defer</button>`+(V(i)?`<button data-status="clear"><kbd>u</kbd> ${shared?'Unlink':'Clear'}</button>`:'');
+  const finding=!options&&!state&&!i.selfIdentified;
+  const choices=finding?`<p class="question">${esc(QUESTION[i.status]||'Should this be fixed?')}</p><div class="opts">${CHOICES.map(([status,key,label,detail])=>
+    `<button class="opt ${v.status===status?'on':''}" data-status="${status}"><kbd>${key}</kbd><span><b>${label}</b><br><small>${detail}</small></span></button>`).join('')}</div>`:'';
+  const acts=(finding||options?'':(`<button data-status="approved" class="${v.status==='approved'?'on':''}"><kbd>a</kbd> ${state?'Agree':'Leave as is'}</button>`)+
+    `<button data-status="needs-fix" class="${v.status==='needs-fix'?'on':''}"><kbd>x</kbd> ${state?'Needs fix':'Fix it'}</button><button data-status="deferred" class="${v.status==='deferred'?'on':''}"><kbd>d</kbd> Decide later</button>`)+(V(i)?`<button data-status="clear"><kbd>u</kbd> ${shared?'Unlink':'Clear'}</button>`:'');
   const linked=shared?`<p class="note">Issue ${esc(issueOf(i))} also covers ${count(shared,'other finding')}; an answer here applies to all of them, and Unlink detaches this one.</p>`:'';
   const matches=!V(i)&&(i.matches||[]).length?`<div class="match"><b>${i.matches[0].likely?'Likely':'Possibly'} the same issue as one you answered</b>${i.matches.map((m,n)=>{const a=A().issues[m.issue];
     return `<button class="opt" data-link="${esc(m.issue)}">${n?'':'<kbd>l</kbd>'}<span><b>${esc(m.title)}</b><br><small>${esc(m.issue)} · ${a?esc(answerLabel(a)):''}${a&&a.note?' — '+esc(a.note):''}</small></span></button>`;}).join('')}</div>`:'';
@@ -158,9 +169,9 @@ function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div cl
   $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><div class="chips">${chips(i)}</div><p${decision?' class="question"':''}>${esc(i.summary)}</p>${i.note?`<p class="note">${esc(i.note)}</p>`:''}
     ${decision&&(i.problems||[]).length?`<p class="note">Not ready to decide: ${esc(i.problems.join('; '))}.</p>`:''}
     ${decision?`${i.background?`<p>${esc(i.background)}</p>`:''}${steps(i.images||[])}`:''}
-    ${matches}${options?`<div class="opts">${options}</div>`:''}<div class="acts">${acts}</div>${linked}
+    ${matches}${choices}${options?`<div class="opts">${options}</div>`:''}<div class="acts">${acts}</div>${linked}
     <textarea id="note" placeholder="Suggested fix or conditions (press f). Saved when you leave the box.">${esc(v.note||'')}</textarea>
-    ${decision?'':(i.images||[]).some(s=>s.caption)?steps(i.images):shots(i.images||[])}${aspects}${occ?`<h3>Reviewer findings</h3>${occ}`:''}`;
+    ${decision?'':(i.images||[]).some(s=>s.caption)?`${(i.images||[]).some(s=>s.screenNote)?'<p class="note">This review predates captions written for each finding, so each screen is described by the reviewer\'s own note on it.</p>':''}${steps(i.images)}`:shots(i.images||[])}${aspects}${occ?`<h3>Reviewer findings</h3>${occ}`:''}`;
   $('#detail').querySelectorAll('[data-option]').forEach(b=>b.onclick=()=>answer({status:'option',option:b.dataset.option}));
   $('#detail').querySelectorAll('[data-status]').forEach(b=>b.onclick=()=>b.dataset.status==='clear'?clear():answer({status:b.dataset.status}));
   $('#detail').querySelectorAll('[data-shot]').forEach(f=>f.onclick=()=>enlarge(+f.dataset.shot));

@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from typer.testing import CliRunner
 
 from org.metadatacenter import test_processes, ui_review_board as board
+from org.metadatacenter.ui_review_board import read_json
 
 
 def write(path, value):
@@ -117,6 +118,22 @@ class BoardContentTest(unittest.TestCase):
         self.assertEqual([''], [i['caption'] for i in by_id['A-F3']['images']], 'a review from before captions shows none')
         self.assertEqual({'type-text': 'passed', 'term-picker-open-1440': 'raised'},
                          {s['title']: s['status'] for s in contents['states']})
+
+    def test_an_uncaptioned_screen_is_titled_by_state_and_described_by_the_reviewers_note(self):
+        run = self.reports / 'ui-review-coordinator/designer-run'
+        (run / 'packet/type-text-card-1.png').write_bytes(b'png')
+        write(run / 'packet/capture.json', {'app': 'designer', 'profile': 'chromium', 'states': [
+            {'id': 'type-text', 'screenshot': 'type-text.png', 'crops': ['type-text-card-1.png']},
+            {'id': 'term-picker-open-1440', 'screenshot': 'term-picker-open-1440.png', 'crops': []}]})
+        report = read_json(run / 'report.json')
+        report['designDecisions'][1]['evidence'] = ['type-text.png', 'type-text-card-1.png']
+        write(run / 'report.json', report)
+        by_id = {i['id'].rsplit('/', 1)[1]: i for i in board.run_contents(self.reports, 'coordinated/designer-run')['items']}
+        self.assertEqual([('type-text', 'A card.', True), ('type-text, card 1', 'A card.', True)],
+                         [(i['label'], i['caption'], i['screenNote']) for i in by_id['A-F3']['images']])
+        self.assertEqual([('type-text', 'The card, where Save covers the name.', False)],
+                         [(i['label'], i['caption'], i['screenNote']) for i in by_id['A-F1']['images']],
+                         "a reviewer's caption for the finding wins over the note on the screen")
 
     def test_area_names_cee_only_for_findings_on_preview_alone(self):
         self.assertEqual('CEE Preview', board.designer_area(['type-image-preview', 'phone-preview-375']))
