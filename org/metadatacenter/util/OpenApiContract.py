@@ -20,6 +20,7 @@ OpenApiWorker, which keeps these decisions testable against a document in memory
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Mapping, Tuple
 
@@ -87,6 +88,7 @@ RULE_REQUEST_BODY = 'request body'
 RULE_REQUEST_CLASSIFICATION = 'request body classification'
 RULE_CROSS_SERVICE = 'cross-service agreement'
 RULE_DOCUMENT = 'document'
+RULE_PATH_PARAMETERS = 'path parameters'
 
 
 @dataclass(frozen=True)
@@ -153,12 +155,47 @@ def analyze_document(repository: str, location: str, document: Mapping[str, Any]
             if not isinstance(operation, Mapping):
                 continue
             report.operations += 1
+            _check_path_parameters(document, report, method, path, path_item, operation)
             _check_responses(document, report, method, path, operation)
             _check_request_body(document, report, method, path, operation)
 
     _check_schema_references(document, report, schemas)
     _check_stub_schemas(report, schemas)
     return report
+
+
+def _check_path_parameters(document, report, method, path, path_item, operation) -> None:
+    """A generated client must supply exactly the placeholders in its URL template."""
+    where = f'{method.upper()} {path}'
+    parameters = {}
+    # Operation-level declarations override inherited parameters by name and location.
+    for scope in (path_item, operation):
+        for parameter in scope.get('parameters') or []:
+            seen = set()
+            while isinstance(parameter, Mapping) and '$ref' in parameter:
+                ref = parameter['$ref']
+                if ref in seen:
+                    parameter = None
+                    break
+                seen.add(ref)
+                parameter = _resolve(document, ref)
+            if not isinstance(parameter, Mapping):
+                report.findings.append(Finding(RULE_PATH_PARAMETERS, where,
+                                              'parameter reference does not resolve'))
+                continue
+            parameters[(parameter.get('name'), parameter.get('in'))] = parameter
+    expected = set(re.findall(r'\{([^{}]+)\}', path))
+    declared = {name for (name, location) in parameters if location == 'path'}
+    for name in sorted(expected - declared):
+        report.findings.append(Finding(RULE_PATH_PARAMETERS, where,
+                                      f'URL placeholder {name} has no path parameter'))
+    for name in sorted(declared - expected, key=str):
+        report.findings.append(Finding(RULE_PATH_PARAMETERS, where,
+                                      f'path parameter {name} has no URL placeholder'))
+    for name in sorted(declared, key=str):
+        if parameters[(name, 'path')].get('required') is not True:
+            report.findings.append(Finding(RULE_PATH_PARAMETERS, where,
+                                          f'path parameter {name} must be required'))
 
 
 def cross_document_findings(documents: Mapping[str, Mapping[str, Any]]) -> Dict[str, List[Finding]]:

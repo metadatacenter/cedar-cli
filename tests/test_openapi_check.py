@@ -10,6 +10,7 @@ from org.metadatacenter.util import OpenApiContract
 from org.metadatacenter.util.OpenApiContract import (
     EMPTY_RESPONSES,
     RULE_EMPTY_RESPONSE,
+    RULE_PATH_PARAMETERS,
     RULE_BARE_STRING,
     RULE_NO_SUCCESS,
     RULE_CROSS_SERVICE,
@@ -60,7 +61,7 @@ class OpenApiRuleTest(unittest.TestCase):
 
     def test_a_204_describes_itself_and_an_error_response_is_not_checked(self):
         report = analyze_document('cedar-user-server', '/doc', document(
-            {'/users/{id}': {'delete': {'responses': {'204': {'description': 'Deleted'},
+            {'/users/{id}': {'parameters': [{'name': 'id', 'in': 'path', 'required': True}], 'delete': {'responses': {'204': {'description': 'Deleted'},
                                                       '404': {'description': 'Not found'}}}}}))
 
         self.assertEqual([], rules(report))
@@ -214,6 +215,45 @@ class OpenApiRuleTest(unittest.TestCase):
         self.assertIn('cedar-user-server', diverging['cedar-group-server'][0].detail)
 
 
+class PathParameterTest(unittest.TestCase):
+    def report(self, path, inherited=(), local=(), components=None):
+        doc = document({path: {'parameters': list(inherited), 'get': {
+            'parameters': list(local), 'responses': {'200': USER_RESPONSE}}}})
+        doc['components']['parameters'] = components or {}
+        return analyze_document('test', '/doc', doc)
+
+    def test_missing_and_extra_parameters_fail(self):
+        missing = self.report('/groups/{id}')
+        extra = self.report('/categories/tree', local=[
+            {'name': 'id', 'in': 'path', 'required': True}])
+        self.assertEqual([RULE_PATH_PARAMETERS], rules(missing))
+        self.assertIn('no path parameter', missing.failures[0].detail)
+        self.assertEqual([RULE_PATH_PARAMETERS], rules(extra))
+        self.assertIn('no URL placeholder', extra.failures[0].detail)
+
+    def test_query_parameter_cannot_supply_a_path_placeholder(self):
+        report = self.report('/groups/{id}', local=[{'name': 'id', 'in': 'query'}])
+        self.assertEqual([RULE_PATH_PARAMETERS], rules(report))
+
+    def test_inheritance_references_and_operation_override(self):
+        ref = {'$ref': '#/components/parameters/Id'}
+        parameter = {'name': 'id', 'in': 'path', 'required': True}
+        self.assertEqual([], rules(self.report('/groups/{id}', inherited=[ref],
+                                              components={'Id': parameter})))
+        optional = dict(parameter, required=False)
+        self.assertEqual([], rules(self.report('/groups/{id}', inherited=[optional], local=[parameter])))
+        for value in (False, None, 'true'):
+            report = self.report('/groups/{id}', local=[dict(parameter, required=value)])
+            self.assertEqual([RULE_PATH_PARAMETERS], rules(report))
+
+    def test_unresolved_and_cyclic_references_fail(self):
+        ref = {'$ref': '#/components/parameters/Id'}
+        for components in ({}, {'Id': ref}):
+            report = self.report('/groups', local=[ref], components=components)
+            self.assertEqual([RULE_PATH_PARAMETERS], rules(report))
+            self.assertIn('does not resolve', report.failures[0].detail)
+
+
 class OpenApiWorkerTest(unittest.TestCase):
     """The command's walk over the estate: which documents it reads and what it exits with."""
 
@@ -318,7 +358,7 @@ class BareStringPayloadTest(unittest.TestCase):
 
     def test_a_json_response_typed_as_a_string_fails(self):
         document = {
-            'paths': {'/templates/{id}': {'get': {'responses': {'200': {
+            'paths': {'/templates/{id}': {'parameters': [{'name': 'id', 'in': 'path', 'required': True}], 'get': {'responses': {'200': {
                 'content': {'application/json': {'schema': {'type': 'string'}}}}}}}},
         }
         report = analyze_document('cedar-artifact-server', 'swagger.json', document)
@@ -339,7 +379,7 @@ class BareStringPayloadTest(unittest.TestCase):
 
     def test_a_described_schema_and_an_unstructured_media_type_pass(self):
         document = {
-            'paths': {'/templates/{id}/download': {'get': {'responses': {'200': {'content': {
+            'paths': {'/templates/{id}/download': {'parameters': [{'name': 'id', 'in': 'path', 'required': True}], 'get': {'responses': {'200': {'content': {
                 'application/json': {'schema': {'$ref': '#/components/schemas/Artifact'}},
                 'text/plain': {'schema': {'type': 'string'}}}}}}}},
             'components': {'schemas': {'Artifact': {'type': 'object', 'additionalProperties': True}}},
@@ -371,7 +411,7 @@ class UnannotatedOperationTest(unittest.TestCase):
         self.assertEqual(0, report.described_responses)
 
     def test_a_delete_declaring_only_204_passes(self):
-        doc = document(paths={'/groups/{id}': {'delete': {'responses': {'204': {
+        doc = document(paths={'/groups/{id}': {'parameters': [{'name': 'id', 'in': 'path', 'required': True}], 'delete': {'responses': {'204': {
             'description': 'Deleted'}}}}})
         report = analyze_document('cedar-group-server', 'swagger.json', doc)
 
@@ -391,13 +431,13 @@ class EmptyResponseTest(unittest.TestCase):
         self.assertEqual(1, report.described_responses)
 
     def test_artifact_deletion_must_describe_its_acceptance_body(self):
-        doc = document(paths={'/templates/{id}': {'delete': {'responses': {
+        doc = document(paths={'/templates/{id}': {'parameters': [{'name': 'id', 'in': 'path', 'required': True}], 'delete': {'responses': {
             '202': {'description': 'Deletion recorded'}}}}})
         report = analyze_document('cedar-resource-server', 'swagger.json', doc)
         self.assertEqual([RULE_RESPONSE_CONTENT], rules(report))
 
     def test_an_unlisted_empty_response_still_fails(self):
-        doc = document(paths={'/templates/{id}': {'get': {'responses': {
+        doc = document(paths={'/templates/{id}': {'parameters': [{'name': 'id', 'in': 'path', 'required': True}], 'get': {'responses': {
             '200': {'description': 'The template'}}}}})
         report = analyze_document('cedar-resource-server', 'swagger.json', doc)
 
