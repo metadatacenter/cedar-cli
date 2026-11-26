@@ -139,6 +139,7 @@ class InfrastructureProbeBoundsTest(unittest.TestCase):
             self.admin_port = admin_port
             self.tag = tag
             self.check_running = check_running
+            self.response_path = ""
 
     def _servers(self, tag, check_running, count=3):
         return [self._Server(f"server-{n}", 9000 + n, 9100 + n, tag, check_running)
@@ -166,6 +167,22 @@ class InfrastructureProbeBoundsTest(unittest.TestCase):
             ServerWorker.check_status_of("infra", status)
 
         self.assertEqual(ServerWorker.PROBE_TIMEOUT_SECONDS, head.call_args.kwargs.get("timeout"))
+
+    def test_keycloak_probes_discovery_instead_of_its_redirecting_root(self):
+        from org.metadatacenter.config.ServersFactory import ServersFactory
+        from org.metadatacenter.model.ServerStatus import ServerStatus
+        server = ServersFactory.build_servers().map["Keycloak"]
+        for code, expected in [(200, ServerStatus.OK), (503, ServerStatus.NOT_RUNNING)]:
+            with self.subTest(code=code), \
+                    patch.object(ServerWorker, "is_port_open", return_value=True), \
+                    patch("org.metadatacenter.worker.ServerWorker.requests.head") as head:
+                head.return_value.status_code = code
+                status = {}
+                ServerWorker.check_status_by_response(server, status)
+                head.assert_called_once_with(
+                    "http://localhost:8080/realms/master/.well-known/openid-configuration",
+                    timeout=ServerWorker.PROBE_TIMEOUT_SECONDS)
+                self.assertEqual(expected, status["Keycloak"].status)
 
     def test_one_slow_server_does_not_hold_up_the_others(self):
         """Serial probing costs their sum; the table is worth the slowest of them."""

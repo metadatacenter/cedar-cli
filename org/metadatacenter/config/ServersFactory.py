@@ -26,7 +26,8 @@ class ServersFactory:
         servers.add_infra('OpenSearch-REST', 9200)
         servers.add_infra('OpenSearch-Transport', 9300, check_running=CheckRunning.OPEN_PORT)
         servers.add_infra('NGINX', 80)
-        servers.add_infra('Keycloak', 8080)
+        # Keycloak 26 redirects / to its public admin URL; discovery answers locally on 22 and 26.
+        servers.add_infra('Keycloak', 8080, response_path='/realms/master/.well-known/openid-configuration')
         servers.add_infra('Neo4j', 7474)
         servers.add_infra('Redis-persistent', 6379, check_running=CheckRunning.OPEN_PORT)
         servers.add_infra('MySQL', 3306, check_running=CheckRunning.OPEN_PORT)

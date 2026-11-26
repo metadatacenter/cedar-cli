@@ -21,11 +21,13 @@ class Servers:
                         )
         self.map[name] = server
 
-    def add_infra(self, name: str, port: int, check_running: CheckRunning = CheckRunning.RESPONSE):
+    def add_infra(self, name: str, port: int, check_running: CheckRunning = CheckRunning.RESPONSE,
+                  response_path: str = ""):
         server = Server(name,
                         tag=ServerTag.INFRASTRUCTURE,
                         port=port,
-                        check_running=check_running
+                        check_running=check_running,
+                        response_path=response_path
                         )
         self.map[name] = server
 

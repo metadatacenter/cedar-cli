@@ -322,7 +322,7 @@ class ServerWorker(Worker):
             server_status_report.status = ServerStatus.NOT_RUNNING
             server_status_report.exception = "Port not open"
         else:
-            url = 'http://localhost:' + str(server.port)
+            url = 'http://localhost:' + str(server.port) + server.response_path
             try:
                 response = requests.head(url, timeout=ServerWorker.PROBE_TIMEOUT_SECONDS)
                 server_status_report.set_status_code(response.status_code)
