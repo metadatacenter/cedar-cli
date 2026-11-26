@@ -578,6 +578,18 @@ class CalibrationAnswerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'wrong number of items'):
             c.validate_calibration({'cases': []}, self.calibration)
 
+    def test_every_verdict_follows_its_reasoning(self):
+        # A reviewer writes properties in schema order; a verdict listed first is committed before
+        # the reasoning that could contradict it.
+        def before(schema, reasoning, verdict):
+            order = list(schema['properties'])
+            self.assertLess(order.index(reasoning), order.index(verdict), (reasoning, verdict))
+        before(c.calibration_schema(self.calibration)['properties']['cases']['items'], 'reason', 'issue')
+        before(c.VERIFICATION_SCHEMA['properties']['decisions']['items'], 'reason', 'decision')
+        for aspect in c.ASSESSMENT_SCHEMA['properties']['aspects']['properties'].values():
+            before(aspect, 'observation', 'status')
+        before(c.FINDING_SCHEMA, 'impact', 'kind')
+
     def test_a_short_answer_is_asked_again_once_in_the_same_session(self):
         runner = ShortCalibrationRunner(self.packet, short=1)
         self.assertEqual(0, c.coordinate(self.packet, self.root / 'review', self.home, batch_size=2, runner=runner,

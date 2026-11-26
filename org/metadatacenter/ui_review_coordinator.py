@@ -101,20 +101,24 @@ FINDING_SCHEMA = object_schema({
     **{key: array_schema(text_schema()) for key in ('stateIds', 'steps', 'evidence')},
     'evidenceCaptions': array_schema(object_schema({'file': text_schema(), 'caption': text_schema()})),
 })
+# A reviewer writes an answer's properties in the order the schema lists them, so every verdict
+# follows the observation or reasoning behind it. Listed first, a verdict was committed before the
+# reasoning, and a reason that then contradicted it ("the issue flag should be true") could not
+# change it.
 ASSESSMENT_SCHEMA = object_schema({
     'id': text_schema(), 'images': array_schema(text_schema()), 'visualObservation': text_schema(),
     'aspects': object_schema({aspect: object_schema({
-        'status': {'type': 'string', 'enum': ['acceptable', 'concern', 'uncertain', 'not-applicable']},
-        'observation': text_schema()}) for aspect in ASPECTS}),
+        'observation': text_schema(),
+        'status': {'type': 'string', 'enum': ['acceptable', 'concern', 'uncertain', 'not-applicable']}})
+        for aspect in ASPECTS}),
 })
 REVIEW_SCHEMA = object_schema({'assessments': array_schema(ASSESSMENT_SCHEMA),
                              'findings': array_schema(FINDING_SCHEMA)})
 CALIBRATION_SCHEMA = object_schema({'cases': array_schema(object_schema({
-    'id': text_schema(), 'issue': {'type': 'boolean'}, 'reason': text_schema()}))})
+    'id': text_schema(), 'reason': text_schema(), 'issue': {'type': 'boolean'}}))})
 VERIFICATION_SCHEMA = object_schema({'decisions': array_schema(object_schema({
-    'id': text_schema(),
-    'decision': {'type': 'string', 'enum': ['confirmed', 'design-decision', 'uncertain', 'dismissed']},
-    'reason': text_schema(), 'evidence': array_schema(text_schema())}))})
+    'id': text_schema(), 'evidence': array_schema(text_schema()), 'reason': text_schema(),
+    'decision': {'type': 'string', 'enum': ['confirmed', 'design-decision', 'uncertain', 'dismissed']}}))})
 
 
 def review_schema(states):
@@ -800,9 +804,9 @@ def reviewed_job(directory, prompt, images, schema, runner, packet, calibration,
     cal_dir = directory / 'calibration'
     cal_images = [packet / 'calibration' / name for c in calibration for name in c['images']]
     cal_prompt = ('Your application assessment is now sealed. Do not revise it. Inspect every '
-                  'attached calibration image. For each case decide whether the illustrated '
-                  'behavior or composition has a concern. Give the observation supporting your '
-                  'answer. Answer every case once. No tools. Image order follows cases and their '
+                  'attached calibration image. For each case, first give your observation of '
+                  'what the images show, then decide whether the illustrated behavior or '
+                  'composition has a concern. Answer every case once. No tools. Image order follows cases and their '
                   'images below.\n' + json.dumps(calibration))
 
     def ask():
@@ -1076,7 +1080,7 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
             evidence = evidence_json(rows)
             prompt = (rubric(plan['app']).split('Give each state')[0] + '\nThis is independent verification of candidate findings, which may be wrong. '
                       'Use the supplied before/after sequences, including related states from other review batches. '
-                      'Do not return per-state checklists; return a concise decision and evidence for each candidate. '
+                      'Do not return per-state checklists; for each candidate, give its evidence and reason, then a concise decision. '
                       'For EVERY candidate return confirmed only for an evidenced defect, design-decision '
                       'for an optional design choice, uncertain when evidence cannot settle it, or dismissed '
                       'when the evidence refutes it. Explain the actual observation, not agreement with the '
