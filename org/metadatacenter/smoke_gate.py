@@ -1190,7 +1190,7 @@ def _run_tiers(home, *, rest_workers, split_lanes, split_timeout_cap, runner, cl
             record["budgetSeconds"] = REST_BUDGET_SECONDS
             record["timedOut"] = timed_out
             inventory = e2e / "rest" / "expected-checks.json"
-            record.update(_rest_details(rest_report, inventory))
+            record.update(_rest_details(rest_report, inventory, allow_dirty_mcp=subject is None))
             dropped, unanswered = dropped_rest_checks(home, inventory, runner)
             record["droppedChecks"] = dropped
             if dropped or unanswered:
@@ -1378,26 +1378,31 @@ def dropped_rest_checks(cedar_home, inventory_path: Path, runner=subprocess.run)
 REST_MCP = "cedar-artifact-rest-mcp"
 
 
-def mcp_source_problem(sources) -> str | None:
+def mcp_source_problem(sources, *, allow_dirty: bool = False) -> str | None:
     """Why the REST report cannot say which MCP commit its mcp suite ran, or None when it can.
 
-    The MCP servers are outside the train, so only the REST report records their heads. A jar built
-    from a tree with uncommitted changes holds code no commit does.
+    The MCP servers are outside the train, so only the REST report records their heads. Development
+    may identify uncommitted bytes by their jar digest; release evidence still requires a clean head.
     """
     entry = sources.get(REST_MCP) if isinstance(sources, dict) else None
     if not isinstance(entry, dict) or not isinstance(entry.get("head"), str) \
             or not re.fullmatch(r"[0-9a-f]{40}", entry["head"]) or not isinstance(entry.get("dirty"), bool):
         return f"the REST report records no commit of {REST_MCP}, whose jar its mcp suite ran"
-    if entry["dirty"]:
+    if entry["dirty"] and allow_dirty:
+        if not isinstance(entry.get("jarSha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", entry["jarSha256"]):
+            return f"the dirty {REST_MCP} jar has no SHA-256 identifying the development bytes tested"
+    elif entry["dirty"]:
         return f"{REST_MCP} had uncommitted changes when its jar ran in the REST tier's mcp suite"
     return None
 
 
-def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path | None = None) -> dict:
+def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path | None = None,
+                  *, allow_dirty_mcp: bool = False) -> dict:
     """Require complete REST evidence, independently of the subprocess exit code.
 
     A skipped check counts only when the committed allowlist beside the inventory names it with the
-    reason the run recorded. The report must also name the commit of the MCP server the mcp suite ran.
+    reason the run recorded. The report must identify the MCP server the mcp suite ran; a dirty jar
+    is accepted only for native development and never becomes release evidence.
     """
     details = {"report": str(rest_report), "evidenceValid": False}
     try:
@@ -1433,7 +1438,7 @@ def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path 
                         and set(statuses) <= {"passed", "skipped"})
         started = dt.datetime.fromisoformat(payload["startedAt"].replace("Z", "+00:00"))
         finished = dt.datetime.fromisoformat(payload["finishedAt"].replace("Z", "+00:00"))
-        mcp_problem = mcp_source_problem(payload.get("mcpSources"))
+        mcp_problem = mcp_source_problem(payload.get("mcpSources"), allow_dirty=allow_dirty_mcp)
         valid = (payload.get("schemaVersion") == 1 and payload.get("verdict") == "PASS"
                  and payload.get("interrupted") is False
                  and isinstance(payload.get("runId"), str) and bool(payload["runId"].strip())
@@ -1443,6 +1448,9 @@ def _rest_details(rest_report: Path, inventory_path: Path, allowlist_path: Path 
         details.update({"runId": payload.get("runId"), "runnerVerdict": payload.get("verdict"),
                         "counts": counts, "inventoryMatched": matched, "evidenceValid": valid,
                         "unallowedSkips": unallowed, "mcpSources": payload.get("mcpSources")})
+        if mcp_problem is None and payload["mcpSources"][REST_MCP]["dirty"]:
+            # Development checks can prove working-tree bytes without authorizing a release.
+            details["developmentOnly"] = True
         if unallowed:
             details["reportError"] = (f"{len(unallowed)} REST check(s) skipped that rest/allowed-skips.json does not "
                                       f"allow with the reason given, such as {unallowed[0].replace(chr(31), ' / ')}")
@@ -1753,6 +1761,10 @@ def evaluate(report: Mapping, expected: Mapping[str, str]) -> list[str]:
                             "rest/allowed-skips.json does not allow")
         elif tier == "rest" and record.get("evidenceValid") is not True:
             findings.append("the REST smoke has no validated complete check evidence")
+        elif tier == "rest" and record.get("developmentOnly"):
+            findings.append(f"{REST_MCP} had uncommitted changes when its jar ran in the REST tier's mcp suite")
+        elif tier == "rest" and "mcpSources" in record and (problem := mcp_source_problem(record["mcpSources"])):
+            findings.append(problem)
         elif tier == "search" and record.get("evidenceValid") is not True:
             findings.append("the search smoke has no complete matrix and cleanup evidence")
         elif tier in ("browser", "split") and record.get("evidenceValid") is not True:

@@ -455,6 +455,32 @@ class RunSmokeTest(unittest.TestCase):
                 self.assertTrue(evaluate(report, HEADS))
                 self.assertEqual(4, len(runner.commands("npm", "run")))
 
+    def test_native_smoke_accepts_identified_dirty_mcp_bytes_but_release_evidence_refuses_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fake_home(directory)
+            payload = rest_payload()
+            payload["mcpSources"]["cedar-artifact-rest-mcp"].update(dirty=True, jarSha256="d" * 64)
+            runner = runner_for(home, rest=rest_runner(payload=payload))
+            self.assertEqual(0, run_smoke(home, runner=runner, clock=clock(), environment={"PATH": "/usr/bin"}))
+            report = read_report(home, HEADS)
+            rest = report["tiers"]["rest"]
+            self.assertTrue(rest["evidenceValid"])
+            self.assertTrue(rest["developmentOnly"])
+            self.assertEqual("d" * 64, rest["mcpSources"]["cedar-artifact-rest-mcp"]["jarSha256"])
+            self.assertTrue(any("cedar-artifact-rest-mcp had uncommitted changes" in problem
+                                for problem in evaluate(report, HEADS)))
+            del rest["developmentOnly"]
+            self.assertTrue(any("cedar-artifact-rest-mcp had uncommitted changes" in problem
+                                for problem in evaluate(report, HEADS)))
+            strict = smoke_gate._rest_details(Path(rest["report"]), home / smoke_gate.E2E / "rest" / "expected-checks.json")
+            self.assertFalse(strict["evidenceValid"])
+
+    def test_dirty_mcp_development_evidence_requires_a_valid_artifact_digest(self):
+        for digest in (None, "", "d" * 63, "not-a-sha256"):
+            with self.subTest(digest=digest):
+                sources = {"cedar-artifact-rest-mcp": {"head": "c" * 40, "dirty": True, "jarSha256": digest}}
+                self.assertIsNotNone(smoke_gate.mcp_source_problem(sources, allow_dirty=True))
+
     def test_rest_report_cannot_invent_its_own_check_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
             home = fake_home(directory)

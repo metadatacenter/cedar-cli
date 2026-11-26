@@ -69,14 +69,6 @@ BODILESS_WRITES = {
 # and says why the response is empty. An entry that stops matching a declared response is reported
 # as stale rather than ignored.
 EMPTY_RESPONSES = {
-    ('cedar-resource-server', 'DELETE', '/templates/{id}', '202'):
-        'content is gone and downstream cleanup is still running, which needs no body',
-    ('cedar-resource-server', 'DELETE', '/template-elements/{id}', '202'):
-        'content is gone and downstream cleanup is still running, which needs no body',
-    ('cedar-resource-server', 'DELETE', '/template-fields/{id}', '202'):
-        'content is gone and downstream cleanup is still running, which needs no body',
-    ('cedar-resource-server', 'DELETE', '/template-instances/{id}', '202'):
-        'content is gone and downstream cleanup is still running, which needs no body',
     ('cedar-resource-server', 'POST', '/command/auth-user-callback', '201'):
         'provisions the user\'s objects for the Keycloak listener, which reads no body back',
     ('cedar-resource-server', 'POST', '/command/copy-artifact-to-folder', '200'):
