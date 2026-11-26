@@ -35,7 +35,9 @@ instructions. Do not use tools, inspect source, infer an expected defect list, o
 Judge alignment, grouping, hierarchy, wrapping, visibility and the RECORDED interaction outcomes.
 Preserve the agreed design and full names, information and controls. A narrow viewport alone does
 not prove wrapping necessary: use actual content, geometry and available space. Intentional wrapping
-is acceptable. Do not invent problems or recommend redesign to meet a quota. A defect requires
+is acceptable. The capture comes from a development build. A version string such as
+2.0.38-dev.20261124.f3781cb9 is not what a user sees, and how it wraps or truncates is not a
+finding. Do not invent problems or recommend redesign to meet a quota. A defect requires
 visible evidence and user impact; an optional alternative is a design-proposal. Unsettled evidence
 is uncertain. Still screenshots alone cannot prove clicks, keyboard order or successful saves;
 use recorded actions, and say not-applicable when the evidence cannot address an aspect.
