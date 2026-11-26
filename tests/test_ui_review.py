@@ -100,6 +100,31 @@ class UIReviewTest(unittest.TestCase):
                 ui_review.run_review(diagnostic=True, output=directory)
         self.assertEqual(run.call_count, 1)
 
+    @patch.object(ui_review, '_invoke', return_value=0)
+    @patch.object(ui_review, 'invocation_environment', return_value={})
+    def test_coverage_reads_each_capture_census_and_refuses_one_without(self, environment, run):
+        with tempfile.TemporaryDirectory() as parent, patch.object(ui_review.Util, 'cedar_home', parent):
+            first, second = Path(parent) / 'workspace', Path(parent) / 'designer'
+            for directory in (first, second):
+                directory.mkdir()
+            (first / 'component-census.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'no component census'):
+                ui_review.run_coverage(captures=[first, second])
+            run.assert_not_called()
+            (second / 'component-census.json').write_text('{}')
+            self.assertEqual(ui_review.run_coverage(captures=[first, second], output=Path(parent) / 'report.json'), 0)
+        command = run.call_args.args[0]
+        self.assertTrue(command[1].endswith('ui-review/ui-coverage.mjs'))
+        self.assertEqual(command[2:4], [str(first.resolve()), str(second.resolve())])
+        self.assertTrue(command[4].startswith('--out='))
+        self.assertEqual(run.call_args.kwargs['env']['CEDAR_HOME'], str(Path(parent).resolve()))
+
+    @patch.object(ui_review, 'run_coverage', return_value=0)
+    def test_cli_forwards_every_coverage_capture(self, run):
+        result = CliRunner().invoke(test_processes.app, ['ui-review-coverage', '--capture', 'a', '--capture', 'b'])
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual([str(path) for path in run.call_args.kwargs['captures']], ['a', 'b'])
+
     @patch.object(ui_review, 'run_review', return_value=0)
     def test_cli_forwards_application_selector(self, run):
         result = CliRunner().invoke(test_processes.app, ['ui-review', '--app', 'all', '--plan'])

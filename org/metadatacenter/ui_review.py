@@ -81,6 +81,26 @@ def _invoke(command, *, cwd, env):
         return 130
 
 
+def run_coverage(*, captures, output=None):
+    """Which declared components the captures render and show, and how much served script they run."""
+    home = Path(Util.cedar_home).resolve()
+    root = home / 'cedar-development/ops/e2e'
+    environment = dict(invocation_environment())
+    environment['CEDAR_HOME'] = str(home)
+    caller = Path(environment.get('CEDAR_CLI_CALLER_DIR', Path.cwd()))
+    def absolute(value):
+        path = Path(value)
+        return (path if path.is_absolute() else caller / path).resolve()
+    directories = [absolute(capture) for capture in captures]
+    for directory in directories:
+        if not (directory / 'component-census.json').is_file():
+            raise ValueError(f'{directory} holds no component census; capture it with the current harness')
+    command = ['node', str(root / 'ui-review/ui-coverage.mjs'), *map(str, directories)]
+    if output:
+        command.append('--out=' + str(absolute(output)))
+    return _invoke(command, cwd=root, env=environment)
+
+
 def run_review(*, plan=False, output=None, review=None, seal_review=False, diagnostic=False, app="designer",
                profile="chromium"):
     home = Path(Util.cedar_home).resolve()

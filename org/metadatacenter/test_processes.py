@@ -82,6 +82,19 @@ def ui_review(
         raise typer.Exit(2) from error
 
 
+@app.command("ui-review-coverage")
+def ui_review_coverage(
+        capture: list[Path] = typer.Option(..., "--capture", help="A capture directory; repeat it for each application and profile."),
+        output: Optional[Path] = typer.Option(None, help="Where to write the report as JSON.")):
+    """Report which declared components the captures render and show, and how much served script they run."""
+    from org.metadatacenter.ui_review import run_coverage
+    try:
+        raise typer.Exit(run_coverage(captures=capture, output=output))
+    except (ValueError, OSError) as error:
+        console.print(str(error), markup=False)
+        raise typer.Exit(2) from error
+
+
 @app.command("frontend-performance")
 def frontend_performance(
         samples: int = typer.Option(5, min=1, max=30, help="Repetitions per page/profile, each with cold and warm cache."),
