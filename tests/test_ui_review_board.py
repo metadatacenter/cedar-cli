@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -89,6 +91,12 @@ def tree_digest(root):
 
 
 class BoardContentTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Client checks need Node')
+    def test_client_note_ordering(self):
+        result = subprocess.run(['node', '--test', str(Path(__file__).with_name('ui-review-board-client.test.mjs'))],
+                                capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.reports = fixture(Path(self.temporary.name))

@@ -236,10 +236,27 @@ function detail(){if(view.kind==='screens'&&coverageOverview){showCoverage();ret
   $('#detail').querySelectorAll('[data-shot]').forEach(f=>f.onclick=()=>enlarge(+f.dataset.shot));
   $('#detail').querySelectorAll('[data-link]').forEach(b=>b.onclick=()=>link(b.dataset.link));
   $('#note').onchange=e=>answer({note:e.target.value},true);}
-async function saveScreenNote(i,change){const note=$('#screen-note')?.value??i.human?.note??'';
-  try{const human=await api('/api/screen-note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({capture:i.capture.id,state:i.id,evidenceId:i.evidenceId,status:i.human?.status??null,note,...change})});
-    const stored=SCREENS[view.profile].find(c=>c.id===i.capture.id)?.screens.find(s=>s.id===i.id);if(stored)stored.human=human;const capture=SCREENS[view.profile].find(c=>c.id===i.capture.id);if(capture){for(const row of capture.coverageRows)row.inspected=capture.screens.filter(s=>s.group===row.group&&s.human?.status==='inspected'&&s.required).length;}list();detail();if($('#screen-note-status'))$('#screen-note-status').textContent='Saved';
-  }catch(e){if($('#screen-note-status'))$('#screen-note-status').textContent='Not saved: '+e.message;}}
+let screenNoteWrites=Promise.resolve();
+function saveScreenNote(i,change){
+  const note=$('#screen-note')?.value??i.human?.note??'', profile=view.profile;
+  // A textarea blur followed by a status click produces two writes. Keep their order, and
+  // take the latest stored status when each write runs so a note cannot undo a bookmark.
+  screenNoteWrites=screenNoteWrites.then(async()=>{
+    const capture=SCREENS[profile]?.find(c=>c.id===i.capture.id), stored=capture?.screens.find(s=>s.id===i.id);
+    const current=()=>view.kind==='screens'&&view.profile===profile&&items()[cursor]?.evidenceId===i.evidenceId;
+    try{const human=await api('/api/screen-note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({capture:i.capture.id,state:i.id,evidenceId:i.evidenceId,status:stored?.human?.status??null,note,...change})});
+      if(stored)stored.human=human;
+      if(capture)for(const row of capture.coverageRows)row.inspected=capture.screens.filter(s=>s.group===row.group&&s.human?.status==='inspected'&&s.required).length;
+      if(current()){
+        // Do not replace text the user has typed since this save began.
+        const newerText=$('#screen-note')?.value!==note;
+        list();if(!newerText)detail();
+        if($('#screen-note-status'))$('#screen-note-status').textContent=newerText?'Earlier note saved; current edit is not yet saved':'Saved';
+      }
+    }catch(e){if(current()&&$('#screen-note-status'))$('#screen-note-status').textContent='Not saved: '+e.message;}
+  });
+  return screenNoteWrites;
+}
 function render(){nav();list();detail();}
 async function post(body){INDEX.answers=await api('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   // Matches depend on every answer, so reviews read before this one are read again when opened.
