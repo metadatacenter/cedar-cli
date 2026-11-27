@@ -263,22 +263,53 @@ def discover_captures(reports):
         if not isinstance(states, list) or not states:
             continue
         relative = path.parent.relative_to(root).as_posix()
+        coverage = _optional(path.parent / 'coverage.json') or {}
+        scenarios = coverage.get('scenarios', [])
+        missing = [s['id'] for s in scenarios if s.get('capture') != 'captured']
+        unavailable = [s['id'] for s in states if not _capture_image(path.parent, s.get('screenshot'))]
+        problems = [str(row.get('error', row)) if isinstance(row, dict) else str(row)
+                    for row in capture.get('incomplete', [])]
+        provenance = capture.get('provenance') or {}
+        complete = bool(scenarios) and not (missing or unavailable or problems)
+        verified = provenance.get('current') is True and capture.get('servedVerified') is True
+        status = 'complete' if complete and verified else 'partial' if missing or unavailable or problems else 'unverified'
         captures.append({'id': relative, 'app': capture.get('app') or _app_from_path(relative),
-                         'profile': capture.get('profile') or 'chromium', 'states': len(states), 'updated': _updated(path)})
+                         'profile': capture.get('profile') or 'chromium',
+                         'states': len(states) - len(unavailable), 'updated': _updated(path),
+                         'status': status, 'required': len(scenarios), 'missing': missing,
+                         'unavailable': unavailable, 'problems': problems,
+                         'build': provenance.get('build', ''), 'catalog': capture.get('catalogSha256', ''),
+                         'verifiedAtCapture': verified})
     return sorted(captures, key=lambda capture: capture['updated'], reverse=True)
 
 
+def _capture_image(directory, name):
+    if not isinstance(name, str):
+        return None
+    path = (directory / name).resolve()
+    return path if path.parent == directory.resolve() and path.suffix.lower() in IMAGE_TYPES and path.is_file() else None
+
+
 def latest_captures(reports):
-    """The newest capture of each application under each profile."""
+    """Prefer complete, verified-at-capture evidence; never imply it is today's deployment."""
     latest = {}
     for capture in discover_captures(reports):
-        latest.setdefault((capture['profile'], capture['app']), capture)
+        key = capture['profile'], capture['app']
+        previous = latest.get(key)
+        if previous is None or previous['status'] != 'complete' and capture['status'] == 'complete':
+            latest[key] = capture
     return latest
 
 
-def screens(reports, profile):
+def screens(reports, profile, selected=()):
     """Every state of the newest capture of each application under one profile, in catalog order."""
     latest = latest_captures(reports)
+    available = discover_captures(reports)
+    for identifier in selected:
+        chosen = next((c for c in available if c['id'] == identifier and c['profile'] == profile), None)
+        if chosen is None:
+            raise ValueError('Unknown capture for this profile')
+        latest[(profile, chosen['app'])] = chosen
     order = [app for app in APP_NAMES if (profile, app) in latest]
     out = []
     for app in order:
@@ -288,12 +319,15 @@ def screens(reports, profile):
         states = []
         for state in capture.get('states', []):
             shot = state.get('screenshot')
-            if not isinstance(shot, str) or not (directory / shot).is_file():
+            if not _capture_image(directory, shot):
                 continue
             relative = (directory / shot).resolve().relative_to(Path(reports).resolve()).as_posix()
             states.append({'id': state['id'], 'group': state_group(state['id']) if app == 'designer' else '',
-                           'note': state.get('note', ''), 'src': '/image?path=' + relative})
-        out.append({**meta, 'name': APP_NAMES[app], 'screens': states})
+                           'note': state.get('note', ''), 'diagnostic': state['id'].endswith('-unreached'),
+                           'src': '/image?path=' + relative})
+        choices = [c for c in available if c['profile'] == profile and c['app'] == app]
+        out.append({**meta, 'name': APP_NAMES[app], 'screens': states, 'choices': choices,
+                    'newerAvailable': choices[0]['id'] != meta['id']})
     return out
 
 
@@ -542,7 +576,7 @@ def make_handler(reports):
                     return self.respond(200, json.dumps(run_contents(reports, query.get('id', [''])[0])).encode())
                 if url.path == '/api/screens':
                     return self.respond(200, json.dumps({'profile': query.get('profile', ['chromium'])[0],
-                                                         'captures': screens(reports, query.get('profile', ['chromium'])[0])}).encode())
+                                                         'captures': screens(reports, query.get('profile', ['chromium'])[0], query.get('capture', []))}).encode())
                 if url.path == '/image':
                     target = (reports / query.get('path', [''])[0]).resolve()
                     if reports not in target.parents or target.suffix.lower() not in IMAGE_TYPES or not target.is_file():

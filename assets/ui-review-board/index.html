@@ -89,7 +89,7 @@ const CHOICES=[['needs-fix','x','Fix it','Change the product. Say how in the not
 ['approved','a','Leave as is','The current behavior is acceptable or intended.'],['deferred','d','Decide later','Keep it open.']];
 const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let SCREENS={},appFilter='all';
+let SCREENS={},captureChoices={},appFilter='all';
 let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,earlierOpen=false;
 const A=()=>INDEX.answers;
 // A finding answers through the issue it is linked to; a decision or a screen answers under its own identifier.
@@ -117,8 +117,8 @@ async function load(){INDEX=await api('/api/index');
   summarise();
   if(INDEX.decisions.length)view={kind:'decisions'};else if(latest)await openRun(latest.id);render();}
 async function openRun(id){if(!RUNS[id])RUNS[id]=await api('/api/run?id='+encodeURIComponent(id));view={kind:'run',id};cursor=0;}
-// Every captured state of the newest capture of each application, for looking through rather than answering.
-function screenList(){return (SCREENS[view.profile]||[]).flatMap(c=>c.screens.map(s=>({...s,kind:'screen',title:s.id,app:c.app,area:c.name,captured:c.updated})));}
+// Every captured state of the latest complete capture where available, for looking through rather than answering.
+function screenList(){return (SCREENS[view.profile]||[]).flatMap(c=>c.screens.map(s=>({...s,kind:'screen',title:s.id,app:c.app,area:c.name,captured:c.updated,capture:c})));}
 function items(){let list;
   if(view.kind==='screens'){const all=screenList();return appFilter==='all'?all:all.filter(s=>s.app===appFilter);}
   if(view.kind==='decisions')list=INDEX.decisions.map(d=>({...d,status:'decision',kind:'decision'}));
@@ -133,14 +133,15 @@ function nav(){const {current,earlier}=partition();
   html+=`<h2>Current reviews</h2>${byApp(current,false)}`;
   const counts=INDEX.screens||{};
   html+=`<h2>All screens</h2>`+[['chromium','Mouse'],['webkit-touch','Touch']].filter(([p])=>counts[p]).map(([p,label])=>
-    `<button class="entry ${view.kind==='screens'&&view.profile===p?'on':''}" data-screens="${p}"><span class="name">${label}</span><span class="sub">${count(counts[p],'screen')}, newest capture of each application</span></button>`).join('');
+    `<button class="entry ${view.kind==='screens'&&view.profile===p?'on':''}" data-screens="${p}"><span class="name">${label}</span><span class="sub">${count(counts[p],'screen')}, latest complete capture where available</span></button>`).join('');
   if(earlier.length)html+=`<button class="fold" id="earlier" aria-expanded="${earlierOpen}">${earlierOpen?'▾':'▸'} Earlier reviews (${earlier.length})</button>${earlierOpen?byApp(earlier,true):''}`;
   $('#nav').innerHTML=html;
   $('#nav').querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view={kind:'decisions'};cursor=0;render();});
   $('#nav').querySelectorAll('[data-run]').forEach(b=>b.onclick=async()=>{filter='all';await openRun(b.dataset.run);render();});
   $('#earlier')?.addEventListener('click',()=>{earlierOpen=!earlierOpen;nav();});
   $('#nav').querySelectorAll('[data-screens]').forEach(b=>b.onclick=async()=>{const p=b.dataset.screens;
-    if(!SCREENS[p])SCREENS[p]=(await api('/api/screens?profile='+encodeURIComponent(p))).captures;view={kind:'screens',profile:p};appFilter='all';cursor=0;render();});}
+    if(!SCREENS[p])SCREENS[p]=(await api('/api/screens?profile='+encodeURIComponent(p))).captures;captureChoices={};view={kind:'screens',profile:p};appFilter='all';cursor=0;render();});}
+async function chooseCapture(app,id){captureChoices[app]=id;const query=new URLSearchParams({profile:view.profile});for(const value of Object.values(captureChoices))query.append('capture',value);SCREENS[view.profile]=(await api('/api/screens?'+query)).captures;cursor=0;render();}
 function chips(i){if(i.kind==='screen')return `<span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}`;
   const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
   if(i.severity)s+=`<span class="chip sev-${esc(i.severity)}">${esc(i.severity)}</span>`;
@@ -166,9 +167,10 @@ function steps(images){return images.length?`<ol class="steps">${images.map((s,n
 function shots(images){return images.length?`<div class="shots">${images.map((s,n)=>`<figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"><figcaption>${esc(s.label)}</figcaption></figure>`).join('')}</div>`:'<p class="note">No screenshot retained for this item.</p>';}
 function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
   if(i.kind==='screen'){const all=items();
-    $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><div class="chips"><span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}<span class="chip">captured ${esc(day(i.captured))} ${esc(clock(i.captured))}</span></div>
+    $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><label>Capture <select id="capture-choice" aria-label="Capture for this application">${i.capture.choices.map(c=>`<option value="${esc(c.id)}" ${c.id===i.capture.id?'selected':''}>${esc(c.updated)} · ${esc(c.status)} · ${c.states} images · ${esc(c.id)}</option>`).join('')}</select></label><p class="note">${esc(i.capture.status)} at capture · ${i.capture.required} required states · ${i.capture.missing.length} missing · build ${esc(i.capture.build.slice(0,12)||'unknown')}. Historical evidence; current deployment has not been checked.</p>${i.capture.newerAvailable?'<p class="note">A newer capture is available in the selector.</p>':''}${i.capture.problems.length?`<details><summary>Capture limitations (${i.capture.problems.length})</summary><p>${i.capture.problems.map(esc).join('<br>')}</p></details>`:''}${i.diagnostic?'<p class="chip provisional">Diagnostic image: the requested state was not reached.</p>':''}<div class="chips"><span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}<span class="chip">captured ${esc(day(i.captured))} ${esc(clock(i.captured))}</span></div>
       ${i.note?`<p>${esc(i.note)}</p>`:''}<p class="note">Screen ${cursor+1} of ${all.length} · <kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>Enter</kbd> full size</p>
       <figure class="screen" data-shot="${cursor}"><img src="${esc(i.src)}" alt="${esc(i.title)}"></figure>`;
+    $('#capture-choice').onchange=e=>chooseCapture(i.app,e.target.value);
     $('#detail').querySelector('[data-shot]').onclick=()=>enlarge(cursor);
     // The neighbours load while this screen is looked at, so stepping does not wait for them.
     [cursor+1,cursor-1,cursor+2].forEach(k=>{if(all[k]){const image=new Image();image.src=all[k].src;}});

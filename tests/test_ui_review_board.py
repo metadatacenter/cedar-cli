@@ -158,6 +158,29 @@ class BoardContentTest(unittest.TestCase):
         self.assertEqual('CEE Preview', board.designer_area(['type-image-preview', 'phone-preview-375']))
         self.assertEqual('Designer', board.designer_area(['empty', 'single-preview-a']))
         self.assertEqual('Term picker', board.designer_area(['type-text-preview', 'term-picker-open-1440']))
+
+    def test_partial_capture_does_not_replace_complete_evidence_and_can_be_selected(self):
+        root = self.reports / 'ui-review'
+        for name, complete in [('full', True), ('partial', False)]:
+            directory = root / name
+            write(directory / 'capture.json', {'app': 'workspace', 'profile': 'chromium',
+                'provenance': {'current': True, 'build': 'build-a'}, 'servedVerified': True,
+                'states': [{'id': 'listing', 'screenshot': 'listing.png'}],
+                'incomplete': [] if complete else [{'state': 'dialog', 'error': 'Timeout'}]})
+            write(directory / 'coverage.json', {'scenarios': [{'id': 'listing', 'capture': 'captured'},
+                *([] if complete else [{'id': 'dialog', 'capture': 'blocked'}])]})
+            (directory / 'listing.png').write_bytes(b'png')
+        os.utime(root / 'full/capture.json', (time.time() - 100, time.time() - 100))
+        chosen = next(c for c in board.screens(self.reports, 'chromium') if c['app'] == 'workspace')
+        self.assertEqual('full', chosen['id'])
+        self.assertTrue(chosen['newerAvailable'])
+        partial = next(c for c in board.screens(self.reports, 'chromium', ['partial']) if c['app'] == 'workspace')
+        self.assertEqual(['dialog'], partial['missing'])
+        self.assertEqual('partial', partial['status'])
+        with self.assertRaises(ValueError):
+            board.screens(self.reports, 'webkit-touch', ['partial'])
+        (root / 'full/listing.png').unlink()
+        self.assertNotEqual('complete', board.latest_captures(self.reports)[('chromium', 'workspace')]['status'])
         self.assertEqual('Designer', board.designer_area([]))
 
     def test_single_reviews_are_shown_unverified(self):
