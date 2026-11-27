@@ -18,7 +18,7 @@ console = Console()
 
 @app.command("ui-review-coordinate")
 def ui_review_coordinate(
-        capture: Path = typer.Option(..., help="Existing application capture directory: Designer, Workspace, Metadata Editor or OpenView."),
+        capture: Path = typer.Option(..., help="Existing application capture directory: Designer, Field Designer, Workspace, Metadata Editor or OpenView."),
         output: Path = typer.Option(..., help="Separate review directory; never overwrites the capture."),
         plan: bool = typer.Option(False, help="Verify evidence and list every assigned state without calling AI."),
         resume: bool = typer.Option(False, help="Resume the same immutable packet and coordinator configuration."),

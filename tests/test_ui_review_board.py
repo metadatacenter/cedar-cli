@@ -162,6 +162,16 @@ class BoardContentTest(unittest.TestCase):
         self.assertEqual(['workspace'], [c['app'] for c in board.screens(self.reports, 'webkit-touch')])
         self.assertTrue(mouse['workspace']['screens'][0]['src'].startswith('/image?path=ui-review/automatic/20261125/workspace/'))
 
+    def test_field_designer_capture_is_browsable_before_an_llm_review(self):
+        directory = self.reports / 'ui-review/field-designer-current'
+        write(directory / 'capture.json', {'app': 'field-designer', 'profile': 'chromium',
+              'states': [{'id': 'chooser-open-375', 'screenshot': 'chooser.png', 'note': 'Real field host.'}]})
+        (directory / 'chooser.png').write_bytes(b'png')
+        captures = {row['app']: row for row in board.screens(self.reports, 'chromium')}
+        self.assertEqual('Field Designer', captures['field-designer']['name'])
+        self.assertEqual('chooser-open-375', captures['field-designer']['screens'][0]['id'])
+        self.assertEqual('field-designer', board._app_from_path('field-designer-current'))
+
     def test_area_names_cee_only_for_findings_on_preview_alone(self):
         self.assertEqual('CEE Preview', board.designer_area(['type-image-preview', 'phone-preview-375']))
         self.assertEqual('Designer', board.designer_area(['empty', 'single-preview-a']))

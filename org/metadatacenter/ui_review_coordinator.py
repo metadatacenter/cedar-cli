@@ -25,7 +25,7 @@ import uuid
 
 ASPECTS = ('alignment', 'grouping', 'hierarchy', 'wrapping', 'visibility', 'interaction')
 # The applications the review catalog captures, by the name a capture records and the name a person reads.
-APPS = {'designer': 'Designer', 'workspace': 'Workspace', 'metadata-editor': 'Metadata Editor', 'openview': 'OpenView'}
+APPS = {'designer': 'Designer', 'field-designer': 'Field Designer', 'workspace': 'Workspace', 'metadata-editor': 'Metadata Editor', 'openview': 'OpenView'}
 SCOPE = ('Review of recorded Designer evidence, not live interaction verification or release '
          'certification. Image delivery and complete assessments are recorded; model attention '
          'and absence of missed defects cannot be proved.')

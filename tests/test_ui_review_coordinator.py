@@ -172,17 +172,19 @@ class CoordinatorTest(unittest.TestCase):
                             harness=kwargs.pop('harness', OfflineHarness()), printer=lambda *_: None, **kwargs)
 
     def test_any_catalogued_application_is_reviewed_under_its_own_name(self):
-        home, packet = fixture(self.root / 'openview', app='openview')
-        output = self.root / 'openview-review'
-        runner = OfflineRunner(packet)
-        self.assertEqual(0, c.coordinate(packet, output, home, batch_size=2, runner=runner, harness=OfflineHarness(),
-                                         printer=lambda *_: None))
-        report = c.read_json(output / 'report.json')
-        self.assertEqual('openview', report['app'])
-        self.assertTrue(report['scope'].startswith('Review of recorded OpenView evidence'), report['scope'])
-        self.assertIn('<h1>OpenView: REVIEWED</h1>', (output / 'report.html').read_text())
-        self.assertTrue(all('assembled CEDAR OpenView' in (d / 'prompt.txt').read_text()
-                            for d, _, _ in runner.calls if (d / 'prompt.txt').exists() and d.name == 'assessment'))
+        for app, title in [('openview', 'OpenView'), ('field-designer', 'Field Designer')]:
+            with self.subTest(app=app):
+                home, packet = fixture(self.root / app, app=app)
+                output = self.root / (app + '-review')
+                runner = OfflineRunner(packet)
+                self.assertEqual(0, c.coordinate(packet, output, home, batch_size=2, runner=runner, harness=OfflineHarness(),
+                                                 printer=lambda *_: None))
+                report = c.read_json(output / 'report.json')
+                self.assertEqual(app, report['app'])
+                self.assertTrue(report['scope'].startswith(f'Review of recorded {title} evidence'), report['scope'])
+                self.assertIn(f'<h1>{title}: REVIEWED</h1>', (output / 'report.html').read_text())
+                self.assertTrue(all(f'assembled CEDAR {title}' in (d / 'prompt.txt').read_text()
+                                    for d, _, _ in runner.calls if (d / 'prompt.txt').exists() and d.name == 'assessment'))
         self.assertEqual('designer', c.make_plan(self.packet, self.home, 2)['app'])
         _, unknown = fixture(self.root / 'unknown', app='monitoring')
         with self.assertRaisesRegex(ValueError, 'no application the review catalog covers'):

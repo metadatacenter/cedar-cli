@@ -28,7 +28,7 @@ PAGE = Path(__file__).resolve().parents[2] / 'assets' / 'ui-review-board' / 'ind
 STATUSES = ('approved', 'needs-fix', 'deferred', 'option')
 IMAGE_TYPES = ('.png', '.jpg', '.jpeg', '.webp')
 DEFAULT_PORT = 47831
-APP_NAMES = {'designer': 'Designer', 'workspace': 'Workspace', 'metadata-editor': 'Metadata Editor', 'openview': 'OpenView'}
+APP_NAMES = {'designer': 'Designer', 'field-designer': 'Field Designer', 'workspace': 'Workspace', 'metadata-editor': 'Metadata Editor', 'openview': 'OpenView'}
 ANSWERS = 'answers.json'
 _BOARD_WRITES = threading.Lock()
 _ID = re.compile(r'^[\w./:@-]{1,300}$')
@@ -91,7 +91,7 @@ def state_group(state_id):
 
 def _app_from_path(relative):
     """Captures made before the catalog covered several applications record none; they were all Designer."""
-    for app in ('metadata-editor', 'workspace', 'openview', 'designer'):
+    for app in ('field-designer', 'metadata-editor', 'workspace', 'openview', 'designer'):
         if app in relative:
             return app
     return 'designer'
