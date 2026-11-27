@@ -189,6 +189,16 @@ class BoardContentTest(unittest.TestCase):
         self.assertEqual(1, sum(row['captured'] for row in partial['coverageRows']))
         with self.assertRaises(ValueError):
             board.screens(self.reports, 'webkit-touch', ['partial'])
+        path = root / 'full/capture.json'
+        capture = read_json(path)
+        for key in ('runtimeErrors', 'cleanupErrors'):
+            capture[key] = ['Retained failure']
+            write(path, capture)
+            metadata = next(c for c in board.discover_captures(self.reports) if c['id'] == 'full')
+            self.assertEqual('partial', metadata['status'])
+            self.assertTrue(any('Retained failure' in p for p in metadata['problems']))
+            capture.pop(key)
+        write(path, capture)
         (root / 'full/listing.png').unlink()
         self.assertNotEqual('complete', board.latest_captures(self.reports)[('chromium', 'workspace')]['status'])
 

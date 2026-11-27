@@ -273,6 +273,10 @@ def discover_captures(reports):
         unavailable = [s['id'] for s in states if not _capture_image(path.parent, s.get('screenshot'))]
         problems = [str(row.get('error', row)) if isinstance(row, dict) else str(row)
                     for row in capture.get('incomplete', [])]
+        problems.extend('Browser: ' + str(error) for error in capture.get('runtimeErrors', []))
+        problems.extend('Cleanup: ' + str(error) for error in capture.get('cleanupErrors', []))
+        if len(ids) != len(states):
+            problems.append('Duplicate captured state IDs')
         provenance = capture.get('provenance') or {}
         complete = bool(scenarios) and not (missing or unavailable or problems)
         verified = provenance.get('current') is True and capture.get('servedVerified') is True
