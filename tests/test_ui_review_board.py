@@ -177,6 +177,8 @@ class BoardContentTest(unittest.TestCase):
         partial = next(c for c in board.screens(self.reports, 'chromium', ['partial']) if c['app'] == 'workspace')
         self.assertEqual(['dialog'], partial['missing'])
         self.assertEqual('partial', partial['status'])
+        self.assertEqual(2, sum(row['required'] for row in partial['coverageRows']))
+        self.assertEqual(1, sum(row['captured'] for row in partial['coverageRows']))
         with self.assertRaises(ValueError):
             board.screens(self.reports, 'webkit-touch', ['partial'])
         (root / 'full/listing.png').unlink()

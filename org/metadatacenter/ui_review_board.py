@@ -268,7 +268,8 @@ def discover_captures(reports):
         relative = path.parent.relative_to(root).as_posix()
         coverage = _optional(path.parent / 'coverage.json') or {}
         scenarios = coverage.get('scenarios', [])
-        missing = [s['id'] for s in scenarios if s.get('capture') != 'captured']
+        ids = {s['id'] for s in states}
+        missing = [s['id'] for s in scenarios if s.get('capture') != 'captured' or s['id'] not in ids]
         unavailable = [s['id'] for s in states if not _capture_image(path.parent, s.get('screenshot'))]
         problems = [str(row.get('error', row)) if isinstance(row, dict) else str(row)
                     for row in capture.get('incomplete', [])]
@@ -348,10 +349,10 @@ def screens(reports, profile, selected=()):
             change = ('unchanged' if digest == image_digest(prior_dir, prior, before['screenshot']) else 'changed') if before_image else ('new' if previous else 'no-baseline')
             identity = screen_identity(capture, state, digest)
             states.append({'id': state['id'], 'title': definition.get('title') or human_title(state['id']),
-                           'group': group, 'width': width, 'viewport': state.get('viewport'),
+                           'group': group, 'width': width, 'viewport': state.get('viewport'), 'required': state['id'] in definitions,
                            'note': state.get('note', ''), 'diagnostic': state['id'].endswith('-unreached'),
                            'change': change, 'previous': image_url(reports, before_image) if before_image else None,
-                           'duplicateOf': seen_images.get(digest), 'evidenceId': identity, 'human': notes.get(identity),
+                           'imageSha256': digest, 'duplicateOf': seen_images.get(digest), 'evidenceId': identity, 'human': notes.get(identity),
                            'src': '/image?path=' + relative})
             seen_images.setdefault(digest, state['id'])
         present = {s['id'] for s in states}
@@ -369,7 +370,21 @@ def screens(reports, profile, selected=()):
                            'previous': image_url(reports, before_image) if before_image else None,
                            'note': 'No image in this capture. This state was not inspected.'})
         choices = [c for c in available if c['profile'] == profile and c['app'] == app]
+        coverage_rows = {}
+        by_id = {s['id']: s for s in states}
+        for identifier, definition in definitions.items():
+            screen = by_id.get(identifier, {})
+            group = screen.get('group') or human_title(definition.get('category', 'Other states'))
+            row = coverage_rows.setdefault(group, {'group': group, 'required': 0, 'captured': 0, 'inspected': 0, 'widths': {}})
+            row['required'] += 1
+            row['captured'] += bool(screen.get('src'))
+            row['inspected'] += (screen.get('human') or {}).get('status') == 'inspected'
+            width = str(screen.get('width') or definition.get('width') or 'unspecified')
+            cell = row['widths'].setdefault(width, {'required': 0, 'captured': 0})
+            cell['required'] += 1
+            cell['captured'] += bool(screen.get('src'))
         out.append({**meta, 'name': APP_NAMES[app], 'screens': states, 'choices': choices,
+                    'coverageRows': list(coverage_rows.values()),
                     'previousCapture': previous,
                     'newerAvailable': choices[0]['id'] != meta['id']})
     return out

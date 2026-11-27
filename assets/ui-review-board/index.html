@@ -55,7 +55,7 @@ textarea{width:100%;max-width:920px;min-height:56px;font:inherit;color:var(--fg)
 .steps p{margin:4px 0 0}
 details{margin:8px 0;max-width:920px}summary{cursor:pointer;color:var(--accent)}
 .occ{border-left:3px solid var(--line);padding:2px 10px;margin:8px 0}.occ dt{font-weight:600;font-size:12px;color:var(--muted)}.occ dd{margin:0 0 4px}
-table{border-collapse:collapse;font-size:13px;max-width:920px}td{border-top:1px solid var(--line);padding:3px 8px;vertical-align:top}
+table{border-collapse:collapse;font-size:13px;max-width:920px}th{text-align:left;padding:5px 8px}td{border-top:1px solid var(--line);padding:3px 8px;vertical-align:top}
 .empty{color:var(--muted);padding:20px}
 .overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;z-index:9}
 .overlay.on{display:flex}#lightbox{background:rgba(0,0,0,.86)}#lightbox img{max-width:96vw;max-height:88vh;background:#fff}#lightbox div{color:#ddd;font-size:12px;margin-top:6px}
@@ -95,7 +95,7 @@ const CHOICES=[['needs-fix','x','Fix it','Change the product. Say how in the not
 ['approved','a','Leave as is','The current behavior is acceptable or intended.'],['deferred','d','Decide later','Keep it open.']];
 const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let SCREENS={},captureChoices={},appFilter='all',screenSearch='',groupFilter='all',widthFilter='all',thumbnails=false,changeFilter='all',humanFilter='all',uniqueImages=false;
+let SCREENS={},captureChoices={},appFilter='all',screenSearch='',groupFilter='all',widthFilter='all',thumbnails=false,changeFilter='all',humanFilter='all',uniqueImages=false,coverageOverview=false;
 let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,earlierOpen=false;
 const A=()=>INDEX.answers;
 // A finding answers through the issue it is linked to; a decision or a screen answers under its own identifier.
@@ -126,7 +126,7 @@ async function openRun(id){if(!RUNS[id])RUNS[id]=await api('/api/run?id='+encode
 // Every captured state of the latest complete capture where available, for looking through rather than answering.
 function screenList(){return (SCREENS[view.profile]||[]).flatMap(c=>c.screens.map(s=>({...s,kind:'screen',title:s.title||s.id,app:c.app,area:c.name,captured:c.updated,capture:c})));}
 function items(){let list;
-  if(view.kind==='screens'){const terms=screenSearch.toLowerCase().split(/\s+/).filter(Boolean);return screenList().filter(s=>(appFilter==='all'||s.app===appFilter)&&(groupFilter==='all'||s.group===groupFilter)&&(widthFilter==='all'||String(s.width)===widthFilter)&&(changeFilter==='all'||s.change===changeFilter)&&(humanFilter==='all'||(humanFilter==='uninspected'?!s.human?.status:s.human?.status===humanFilter))&&(!uniqueImages||!s.duplicateOf)&&terms.every(t=>[s.id,s.title,s.note,s.group,s.area].join(' ').toLowerCase().includes(t)));}
+  if(view.kind==='screens'){const terms=screenSearch.toLowerCase().split(/\s+/).filter(Boolean),seen=new Set();return screenList().filter(s=>(appFilter==='all'||s.app===appFilter)&&(groupFilter==='all'||s.group===groupFilter)&&(widthFilter==='all'||String(s.width)===widthFilter)&&(changeFilter==='all'||s.change===changeFilter)&&(humanFilter==='all'||(humanFilter==='uninspected'?!s.human?.status:s.human?.status===humanFilter))&&terms.every(t=>[s.id,s.title,s.note,s.group,s.area].join(' ').toLowerCase().includes(t))).filter(s=>{if(!uniqueImages||!s.imageSha256)return true;const key=s.app+'|'+s.imageSha256;if(seen.has(key))return false;seen.add(key);return true;});}
   if(view.kind==='decisions')list=INDEX.decisions.map(d=>({...d,status:'decision',kind:'decision'}));
   else{const run=RUNS[view.id];if(!run)return[];list=filter==='screens'?run.states:filter==='all'?run.items:run.items.filter(i=>i.status===filter);}
   return hide?list.filter(i=>!V(i)):list;}
@@ -171,7 +171,7 @@ function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.le
     head+=`<input id="screen-search" type="search" placeholder="Search screens" aria-label="Search screens" value="${esc(screenSearch)}">`+
       select('screen-group','All categories',groupFilter,[...new Set(every.map(s=>s.group))].sort())+
       select('screen-width','All widths',widthFilter,[...new Set(every.map(s=>s.width).filter(Boolean))].sort((a,b)=>a-b))+
-      `<button id="thumbnails" aria-pressed="${thumbnails}">${thumbnails?'Hide thumbnails':'Show thumbnails'}</button><span class="note">${all.length} matching</span>`+select('screen-change','All changes',changeFilter,['new','changed','unchanged','missing','removed','no-baseline'])+select('screen-human','All inspection states',humanFilter,['uninspected','inspected','attention','bookmark'])+`<label><input id="unique-images" type="checkbox" ${uniqueImages?'checked':''}> Hide identical images</label>`;}
+      `<button id="coverage-overview" aria-pressed="${coverageOverview}">Coverage overview</button><button id="thumbnails" aria-pressed="${thumbnails}">${thumbnails?'Hide thumbnails':'Show thumbnails'}</button><span class="note">${all.length} matching</span>`+select('screen-change','All changes',changeFilter,['new','changed','unchanged','missing','removed','no-baseline'])+select('screen-human','All inspection states',humanFilter,['uninspected','inspected','attention','bookmark'])+`<label><input id="unique-images" type="checkbox" ${uniqueImages?'checked':''}> Hide identical images</label>`;}
   else if(view.kind==='run'){const run=RUNS[view.id];const n=k=>k==='all'?run.items.length:k==='screens'?run.states.length:run.items.filter(i=>i.status===k).length;
     head=FILTERS.filter(([k])=>k==='all'||n(k)).map(([k,l])=>`<button data-filter="${k}" class="${filter===k?'on':''}">${l} ${n(k)}</button>`).join('');}
   $('#list').innerHTML=`<div id="filters">${head}${view.kind==='screens'?'':`<label><input type="checkbox" id="hide" ${hide?'checked':''}> Hide answered</label>`}</div>`+
@@ -184,14 +184,18 @@ function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.le
   if($('#screen-change'))$('#screen-change').onchange=e=>{changeFilter=e.target.value;cursor=0;render();};
   if($('#screen-human'))$('#screen-human').onchange=e=>{humanFilter=e.target.value;cursor=0;render();};
   if($('#unique-images'))$('#unique-images').onchange=e=>{uniqueImages=e.target.checked;cursor=0;render();};
+  if($('#coverage-overview'))$('#coverage-overview').onclick=()=>{coverageOverview=!coverageOverview;render();};
   if($('#thumbnails'))$('#thumbnails').onclick=()=>{thumbnails=!thumbnails;render();};
   $('#list').querySelectorAll('[data-app-filter]').forEach(b=>b.onclick=()=>{appFilter=b.dataset.appFilter;cursor=0;render();});
-  $('#list').querySelectorAll('.row').forEach(r=>r.onclick=()=>{cursor=+r.dataset.n;list();detail();});
+  $('#list').querySelectorAll('.row').forEach(r=>r.onclick=()=>{coverageOverview=false;cursor=+r.dataset.n;list();detail();});
   $('#list .row.on')?.scrollIntoView({block:'nearest'});}
 // A decision's screens, in order, each beside what it shows.
 function steps(images){return images.length?`<ol class="steps">${images.map((s,n)=>`<li><figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"></figure><div><b>${n+1}. ${esc(s.label)}</b>${s.caption?`<p>${esc(s.caption)}</p>`:''}</div></li>`).join('')}</ol>`:'';}
 function shots(images){return images.length?`<div class="shots">${images.map((s,n)=>`<figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"><figcaption>${esc(s.label)}</figcaption></figure>`).join('')}</div>`:'<p class="note">No screenshot retained for this item.</p>';}
-function detail(){rememberScreen();const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
+function showCoverage(){const captures=(SCREENS[view.profile]||[]).filter(c=>appFilter==='all'||c.app===appFilter);
+  $('#detail').innerHTML='<h2>Captured state coverage</h2><p class="note">Required catalog states by category and viewport width. This measures the maintained catalog, not every state the product could have. Supplemental and diagnostic images do not increase required-state coverage.</p>'+captures.map(c=>`<h3>${esc(c.name)}</h3><p>${c.required} required states · ${c.states} available images · ${esc(c.status)} at capture</p><table><thead><tr><th>Category</th><th>Captured / required</th><th>Human inspected</th><th>Widths: captured / required</th></tr></thead><tbody>${c.coverageRows.map(r=>`<tr><td><button data-matrix-app="${esc(c.app)}" data-matrix-group="${esc(r.group)}">${esc(r.group)}</button></td><td>${r.captured} / ${r.required}</td><td>${r.inspected}</td><td>${Object.entries(r.widths).map(([w,v])=>`${esc(w)}: ${v.captured}/${v.required}`).join(' · ')}</td></tr>`).join('')}</tbody></table>`).join('');
+  $('#detail').querySelectorAll('[data-matrix-app]').forEach(b=>b.onclick=()=>{appFilter=b.dataset.matrixApp;groupFilter=b.dataset.matrixGroup;screenSearch='';widthFilter='all';changeFilter='all';humanFilter='all';coverageOverview=false;cursor=0;render();});}
+function detail(){if(view.kind==='screens'&&coverageOverview){showCoverage();return;}rememberScreen();const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
   if(i.kind==='screen'){const all=items();
     $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><label>Capture <select id="capture-choice" class="capture-select" aria-label="Capture for this application">${i.capture.choices.map(c=>`<option value="${esc(c.id)}" ${c.id===i.capture.id?'selected':''}>${esc(c.updated)} · ${esc(c.status)} · ${c.states} images · ${esc(c.id)}</option>`).join('')}</select></label><p class="note">${esc(i.capture.status)} at capture · ${i.capture.required} required states · ${i.capture.missing.length} missing · build ${esc(i.capture.build.slice(0,12)||'unknown')}. Historical evidence; current deployment has not been checked.</p>${i.capture.newerAvailable?'<p class="note">A newer capture is available in the selector.</p>':''}${i.capture.problems.length?`<details><summary>Capture limitations (${i.capture.problems.length})</summary><p>${i.capture.problems.map(esc).join('<br>')}</p></details>`:''}${i.diagnostic?'<p class="chip provisional">Diagnostic image: the requested state was not reached.</p>':''}<div class="chips"><span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}<span class="chip">captured ${esc(day(i.captured))} ${esc(clock(i.captured))}</span></div>
       <p class="note">${esc(i.id)}${i.viewport?` · ${i.viewport.width} × ${i.viewport.height}`:''}</p>${i.note?`<p>${esc(i.note)}</p>`:''}<p class="note">Screen ${cursor+1} of ${all.length} · <kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>Enter</kbd> full size</p>
@@ -234,7 +238,7 @@ function detail(){rememberScreen();const i=items()[cursor];if(!i){$('#detail').i
   $('#note').onchange=e=>answer({note:e.target.value},true);}
 async function saveScreenNote(i,change){const note=$('#screen-note')?.value??i.human?.note??'';
   try{const human=await api('/api/screen-note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({capture:i.capture.id,state:i.id,evidenceId:i.evidenceId,status:i.human?.status??null,note,...change})});
-    const stored=SCREENS[view.profile].find(c=>c.id===i.capture.id)?.screens.find(s=>s.id===i.id);if(stored)stored.human=human;list();detail();if($('#screen-note-status'))$('#screen-note-status').textContent='Saved';
+    const stored=SCREENS[view.profile].find(c=>c.id===i.capture.id)?.screens.find(s=>s.id===i.id);if(stored)stored.human=human;const capture=SCREENS[view.profile].find(c=>c.id===i.capture.id);if(capture){for(const row of capture.coverageRows)row.inspected=capture.screens.filter(s=>s.group===row.group&&s.human?.status==='inspected'&&s.required).length;}list();detail();if($('#screen-note-status'))$('#screen-note-status').textContent='Saved';
   }catch(e){if($('#screen-note-status'))$('#screen-note-status').textContent='Not saved: '+e.message;}}
 function render(){nav();list();detail();}
 async function post(body){INDEX.answers=await api('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -266,8 +270,8 @@ document.addEventListener('keydown',e=>{
   if($('#lightbox').classList.contains('on')){if(['Escape','Enter',' '].includes(e.key))close();else if(e.key==='ArrowRight')enlarge(shot+1);else if(e.key==='ArrowLeft')enlarge(shot-1);e.preventDefault();return;}
   if(['INPUT','SELECT','BUTTON'].includes(e.target.tagName))return;
   const all=items(),i=all[cursor];
-  if(e.key==='j'||e.key==='ArrowDown'){cursor=Math.min(all.length-1,cursor+1);list();detail();}
-  else if(e.key==='k'||e.key==='ArrowUp'){cursor=Math.max(0,cursor-1);list();detail();}
+  if(e.key==='j'||e.key==='ArrowDown'){coverageOverview=false;cursor=Math.min(all.length-1,cursor+1);list();detail();}
+  else if(e.key==='k'||e.key==='ArrowUp'){coverageOverview=false;cursor=Math.max(0,cursor-1);list();detail();}
   else if(/^[1-9]$/.test(e.key)&&i&&(i.options||[]).some(o=>o.key===e.key))answer({status:'option',option:e.key});
   else if(e.key==='a'&&i&&!(i.options||[]).length)answer({status:'approved'});
   else if(e.key==='x')answer({status:'needs-fix'});else if(e.key==='d')answer({status:'deferred'});else if(e.key==='u')clear();
