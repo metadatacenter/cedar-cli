@@ -348,7 +348,8 @@ def screens(reports, profile, selected=()):
             before_image = _capture_image(prior_dir, before.get('screenshot')) if before else None
             change = ('unchanged' if digest == image_digest(prior_dir, prior, before['screenshot']) else 'changed') if before_image else ('new' if previous else 'no-baseline')
             identity = screen_identity(capture, state, digest)
-            states.append({'id': state['id'], 'title': definition.get('title') or human_title(state['id']),
+            states.append({'id': state['id'], 'title': state.get('title') or definition.get('title') or human_title(state['id']),
+                           'description': state.get('description') or definition.get('description', ''),
                            'group': group, 'width': width, 'viewport': state.get('viewport'), 'required': state['id'] in definitions,
                            'note': state.get('note', ''), 'diagnostic': state['id'].endswith('-unreached'),
                            'change': change, 'previous': image_url(reports, before_image) if before_image else None,

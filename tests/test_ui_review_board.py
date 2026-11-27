@@ -208,6 +208,13 @@ class BoardContentTest(unittest.TestCase):
         current = rows()
         self.assertEqual({'same':'unchanged','changed':'changed','new':'new','gone':'removed'},
                          {k:v['change'] for k,v in current.items()})
+        path = root / 'after/capture.json'
+        capture = read_json(path)
+        capture['states'][1].update(title='Changed sample', description='The intended scenario setup.')
+        write(path, capture)
+        current = rows()
+        self.assertEqual('Changed sample', current['changed']['title'])
+        self.assertEqual('The intended scenario setup.', current['changed']['description'])
         before = tree_digest(self.reports)
         body = {'capture':'after','state':'changed','evidenceId':current['changed']['evidenceId'],
                 'status':'attention','note':'The name is clipped.'}

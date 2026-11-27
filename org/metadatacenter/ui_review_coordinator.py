@@ -325,6 +325,9 @@ def state_input(packet, capture, ids):
             names = state_images(state)
             rows.append({'id': state['id'], 'note': state.get('note', ''), 'images': names,
                          'relatedStates': state.get('relatedStates', []),
+                         'scenarioSetup': {'title': state.get('title', ''), 'description': state.get('description', ''),
+                                           'category': state.get('category', ''),
+                                           'scope': 'Intended collector setup, not a verified rendering or review verdict.'},
                          'accessibility': (packet / state['aria']).read_text(),
                          'geometry': visible_geometry(read_json(packet / state['metrics'])),
                          'recordedActions': actions[prior:end]})

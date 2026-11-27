@@ -224,6 +224,15 @@ class CoordinatorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'existing captured state'):
             c.make_plan(self.packet, self.home, selected_states=['unknown'])
 
+    def test_scenario_setup_reaches_reviewer_separately_from_observations(self):
+        capture = c.read_json(self.packet / 'capture.json')
+        capture['states'][0].update(title='One text field', description='Preview is opened.', category='authoring')
+        rows, _ = c.state_input(self.packet, capture, {'state-0'})
+        self.assertEqual('One text field', rows[0]['scenarioSetup']['title'])
+        self.assertEqual('Preview is opened.', rows[0]['scenarioSetup']['description'])
+        self.assertIn('not a verified', rows[0]['scenarioSetup']['scope'])
+        self.assertEqual(capture['states'][0].get('note', ''), rows[0]['note'])
+
     def test_targeted_plan_includes_linked_sequences(self):
         path = self.packet / 'capture.json'
         capture = c.read_json(path)
