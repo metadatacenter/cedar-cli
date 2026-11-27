@@ -12,6 +12,7 @@ an unlinked finding resembles. A design decision and a captured state keep their
 which are already stable.
 """
 from collections import Counter
+import hashlib
 import json
 import math
 import mimetypes
@@ -29,6 +30,7 @@ IMAGE_TYPES = ('.png', '.jpg', '.jpeg', '.webp')
 DEFAULT_PORT = 47831
 APP_NAMES = {'designer': 'Designer', 'workspace': 'Workspace', 'metadata-editor': 'Metadata Editor', 'openview': 'OpenView'}
 ANSWERS = 'answers.json'
+_BOARD_WRITES = threading.Lock()
 _ID = re.compile(r'^[\w./:@-]{1,300}$')
 # A suggestion is offered from SUGGEST and called likely from LIKELY. Both were set by scoring every
 # pair of findings across six retained Designer runs: above 0.6 the pairs were the same problem.
@@ -305,6 +307,7 @@ def screens(reports, profile, selected=()):
     """Every state of the newest capture of each application under one profile, in catalog order."""
     latest = latest_captures(reports)
     available = discover_captures(reports)
+    notes = (_optional(board_dir(reports) / 'screen-notes.json') or {}).get('notes', {})
     for identifier in selected:
         chosen = next((c for c in available if c['id'] == identifier and c['profile'] == profile), None)
         if chosen is None:
@@ -320,6 +323,12 @@ def screens(reports, profile, selected=()):
         definitions = {s['id']: s for s in catalog.get('scenarios', [])}
         if not definitions:
             definitions = {s['id']: s for s in (_optional(directory / 'coverage.json') or {}).get('scenarios', [])}
+        previous = next((c for c in available if c['app'] == app and c['profile'] == profile
+                         and c['status'] == 'complete' and c['updated'] < meta['updated']), None)
+        prior_dir = Path(reports) / 'ui-review' / previous['id'] if previous else None
+        prior = (_optional(prior_dir / 'capture.json') or {}) if prior_dir else {}
+        prior_states = {s['id']: s for s in prior.get('states', [])}
+        seen_images = {}
         states = []
         for state in capture.get('states', []):
             shot = state.get('screenshot')
@@ -332,12 +341,35 @@ def screens(reports, profile, selected=()):
             group = state_group(state['id']) if app == 'designer' else human_title(category or 'Other states')
             if group == 'Other states' and category and category != 'authoring':
                 group = human_title(category)
+            digest = image_digest(directory, capture, shot)
+            before = prior_states.get(state['id'])
+            before_image = _capture_image(prior_dir, before.get('screenshot')) if before else None
+            change = ('unchanged' if digest == image_digest(prior_dir, prior, before['screenshot']) else 'changed') if before_image else ('new' if previous else 'no-baseline')
+            identity = screen_identity(capture, state, digest)
             states.append({'id': state['id'], 'title': definition.get('title') or human_title(state['id']),
                            'group': group, 'width': width, 'viewport': state.get('viewport'),
                            'note': state.get('note', ''), 'diagnostic': state['id'].endswith('-unreached'),
+                           'change': change, 'previous': image_url(reports, before_image) if before_image else None,
+                           'duplicateOf': seen_images.get(digest), 'evidenceId': identity, 'human': notes.get(identity),
                            'src': '/image?path=' + relative})
+            seen_images.setdefault(digest, state['id'])
+        present = {s['id'] for s in states}
+        absent = dict.fromkeys([*meta['missing'], *meta['unavailable'], *(s for s in prior_states if s not in present)])
+        for identifier in absent:
+            if identifier in present:
+                continue
+            before = prior_states.get(identifier)
+            before_image = _capture_image(prior_dir, before.get('screenshot')) if before else None
+            definition = definitions.get(identifier, {})
+            states.append({'id': identifier, 'title': definition.get('title') or human_title(identifier),
+                           'group': human_title(definition.get('category', 'Other states')),
+                           'width': definition.get('width'), 'src': None,
+                           'change': 'missing' if identifier in definitions or identifier in meta['unavailable'] else 'removed',
+                           'previous': image_url(reports, before_image) if before_image else None,
+                           'note': 'No image in this capture. This state was not inspected.'})
         choices = [c for c in available if c['profile'] == profile and c['app'] == app]
         out.append({**meta, 'name': APP_NAMES[app], 'screens': states, 'choices': choices,
+                    'previousCapture': previous,
                     'newerAvailable': choices[0]['id'] != meta['id']})
     return out
 
@@ -345,6 +377,47 @@ def screens(reports, profile, selected=()):
 def human_title(identifier):
     words = re.sub(r'-(1440|1100|1024|900|768|375)$', '', identifier).replace('-', ' ')
     return words[:1].upper() + words[1:]
+
+
+def image_digest(directory, capture, name):
+    digest = capture.get('files', {}).get(name)
+    return digest if isinstance(digest, str) else hashlib.sha256((directory / name).read_bytes()).hexdigest()
+
+
+def screen_identity(capture, state, screenshot_digest):
+    files = capture.get('files', {})
+    evidence = {k: files.get(state.get(k)) for k in ('aria', 'metrics', 'checks')}
+    evidence['crops'] = {name: files.get(name) for name in state.get('crops', [])}
+    value = {'app': capture.get('app', 'designer'), 'profile': capture.get('profile', 'chromium'),
+             'state': state, 'image': screenshot_digest, 'evidence': evidence}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def record_screen_note(reports, body):
+    """Human inspection is scoped to exact evidence, independently of model findings."""
+    capture_meta = next((c for c in discover_captures(reports) if c['id'] == body.get('capture')), None)
+    if not capture_meta:
+        raise ValueError('Unknown capture')
+    directory = Path(reports) / 'ui-review' / capture_meta['id']
+    capture = read_json(directory / 'capture.json')
+    state = next((s for s in capture['states'] if s['id'] == body.get('state')), None)
+    if not state or not _capture_image(directory, state.get('screenshot')):
+        raise ValueError('No captured screen to annotate')
+    identity = screen_identity(capture, state, image_digest(directory, capture, state['screenshot']))
+    if identity != body.get('evidenceId'):
+        raise ValueError('The evidence changed; reload before recording an inspection')
+    status, note = body.get('status'), body.get('note', '')
+    if status not in ('inspected', 'attention', 'bookmark', None) or not isinstance(note, str) or len(note) > 10000:
+        raise ValueError('Invalid screen note')
+    path = board_dir(reports) / 'screen-notes.json'
+    store = _optional(path) or {'notes': {}}
+    if body.get('clear'):
+        store['notes'].pop(identity, None)
+    else:
+        store['notes'][identity] = {'status': status, 'note': note, 'capture': capture_meta['id'],
+                                  'state': state['id'], 'at': time.strftime('%Y-%m-%dT%H:%M:%S')}
+    write_json(path, store)
+    return store['notes'].get(identity)
 
 
 def decision_problems(reports, decision):
@@ -604,7 +677,8 @@ def make_handler(reports):
             self.fail(404, 'Not found')
 
         def do_POST(self):
-            if urlparse(self.path).path != '/api/answer':
+            endpoint = urlparse(self.path).path
+            if endpoint not in ('/api/answer', '/api/screen-note'):
                 return self.fail(404, 'Not found')
             origin = self.headers.get('Origin')
             if origin and urlparse(origin).hostname not in ('127.0.0.1', 'localhost', '::1'):
@@ -613,7 +687,9 @@ def make_handler(reports):
                 length = int(self.headers.get('Content-Length', '0'))
                 if length > 20000:
                     raise ValueError('Answer too large')
-                stored = record_answer(reports, json.loads(self.rfile.read(length) or b'{}'))
+                body = json.loads(self.rfile.read(length) or b'{}')
+                with _BOARD_WRITES:
+                    stored = (record_screen_note if endpoint == '/api/screen-note' else record_answer)(reports, body)
             except (ValueError, TypeError) as error:
                 return self.fail(400, str(error))
             self.respond(200, json.dumps(stored).encode())

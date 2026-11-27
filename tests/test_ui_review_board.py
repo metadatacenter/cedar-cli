@@ -149,7 +149,7 @@ class BoardContentTest(unittest.TestCase):
         os.utime(older / 'capture.json', (time.time() - 1000, time.time() - 1000))
         mouse = {c['app']: c for c in board.screens(self.reports, 'chromium')}
         self.assertEqual('automatic/20261125/workspace', mouse['workspace']['id'])
-        self.assertEqual([('listing', 'Seen.')], [(s['id'], s['note']) for s in mouse['workspace']['screens']],
+        self.assertEqual([('listing', 'Seen.')], [(s['id'], s['note']) for s in mouse['workspace']['screens'] if s['src']],
                          'a state whose screenshot is missing is left out')
         self.assertEqual(['workspace'], [c['app'] for c in board.screens(self.reports, 'webkit-touch')])
         self.assertTrue(mouse['workspace']['screens'][0]['src'].startswith('/image?path=ui-review/automatic/20261125/workspace/'))
@@ -181,6 +181,33 @@ class BoardContentTest(unittest.TestCase):
             board.screens(self.reports, 'webkit-touch', ['partial'])
         (root / 'full/listing.png').unlink()
         self.assertNotEqual('complete', board.latest_captures(self.reports)[('chromium', 'workspace')]['status'])
+
+    def test_comparison_and_human_inspection_follow_evidence_without_editing_packets(self):
+        root = self.reports / 'ui-review'
+        for name, states in [('before', ['same', 'changed', 'gone']), ('after', ['same', 'changed', 'new'])]:
+            directory = root / name
+            write(directory / 'capture.json', {'app': 'workspace', 'profile': 'chromium',
+                'provenance': {'current': True}, 'servedVerified': True,
+                'states': [{'id': s, 'screenshot': s+'.png'} for s in states]})
+            write(directory / 'coverage.json', {'scenarios': [{'id': s, 'capture': 'captured'} for s in states]})
+            for state in states:
+                (directory / (state+'.png')).write_bytes((name if state == 'changed' else state).encode())
+        os.utime(root / 'before/capture.json', (time.time()-100, time.time()-100))
+        def rows():
+            return {s['id']: s for c in board.screens(self.reports, 'chromium') if c['app']=='workspace' for s in c['screens']}
+        current = rows()
+        self.assertEqual({'same':'unchanged','changed':'changed','new':'new','gone':'removed'},
+                         {k:v['change'] for k,v in current.items()})
+        before = tree_digest(self.reports)
+        body = {'capture':'after','state':'changed','evidenceId':current['changed']['evidenceId'],
+                'status':'attention','note':'The name is clipped.'}
+        board.record_screen_note(self.reports, body)
+        self.assertEqual('attention', rows()['changed']['human']['status'])
+        self.assertEqual(before, tree_digest(self.reports))
+        (root/'after/changed.png').write_bytes(b'revised')
+        self.assertIsNone(rows()['changed']['human'])
+        with self.assertRaisesRegex(ValueError, 'evidence changed'):
+            board.record_screen_note(self.reports, body)
         self.assertEqual('Designer', board.designer_area([]))
 
     def test_single_reviews_are_shown_unverified(self):

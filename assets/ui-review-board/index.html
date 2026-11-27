@@ -66,6 +66,7 @@ select,input[type=search]{font:inherit;color:var(--fg);background:var(--bg);bord
 .capture-select{width:100%}.row img{display:block;width:100%;height:140px;object-fit:contain;background:var(--panel);margin-bottom:5px}
 #lightbox .lightbox-tools{position:fixed;top:8px;right:12px;display:flex;gap:8px;background:var(--bg);padding:5px;border-radius:5px}
 #lightbox.actual{overflow:auto;display:block;padding:60px 20px 30px}#lightbox.actual img{max-width:none;max-height:none;display:block;margin:auto}
+.comparison{display:grid;grid-template-columns:1fr 1fr;gap:12px}.comparison figure{margin:0;min-width:0}.comparison img{max-width:100%}#comparison{max-width:none}
 </style>
 </head>
 <body>
@@ -94,7 +95,7 @@ const CHOICES=[['needs-fix','x','Fix it','Change the product. Say how in the not
 ['approved','a','Leave as is','The current behavior is acceptable or intended.'],['deferred','d','Decide later','Keep it open.']];
 const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let SCREENS={},captureChoices={},appFilter='all',screenSearch='',groupFilter='all',widthFilter='all',thumbnails=false;
+let SCREENS={},captureChoices={},appFilter='all',screenSearch='',groupFilter='all',widthFilter='all',thumbnails=false,changeFilter='all',humanFilter='all',uniqueImages=false;
 let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,earlierOpen=false;
 const A=()=>INDEX.answers;
 // A finding answers through the issue it is linked to; a decision or a screen answers under its own identifier.
@@ -125,7 +126,7 @@ async function openRun(id){if(!RUNS[id])RUNS[id]=await api('/api/run?id='+encode
 // Every captured state of the latest complete capture where available, for looking through rather than answering.
 function screenList(){return (SCREENS[view.profile]||[]).flatMap(c=>c.screens.map(s=>({...s,kind:'screen',title:s.title||s.id,app:c.app,area:c.name,captured:c.updated,capture:c})));}
 function items(){let list;
-  if(view.kind==='screens'){const terms=screenSearch.toLowerCase().split(/\s+/).filter(Boolean);return screenList().filter(s=>(appFilter==='all'||s.app===appFilter)&&(groupFilter==='all'||s.group===groupFilter)&&(widthFilter==='all'||String(s.width)===widthFilter)&&terms.every(t=>[s.id,s.title,s.note,s.group,s.area].join(' ').toLowerCase().includes(t)));}
+  if(view.kind==='screens'){const terms=screenSearch.toLowerCase().split(/\s+/).filter(Boolean);return screenList().filter(s=>(appFilter==='all'||s.app===appFilter)&&(groupFilter==='all'||s.group===groupFilter)&&(widthFilter==='all'||String(s.width)===widthFilter)&&(changeFilter==='all'||s.change===changeFilter)&&(humanFilter==='all'||(humanFilter==='uninspected'?!s.human?.status:s.human?.status===humanFilter))&&(!uniqueImages||!s.duplicateOf)&&terms.every(t=>[s.id,s.title,s.note,s.group,s.area].join(' ').toLowerCase().includes(t)));}
   if(view.kind==='decisions')list=INDEX.decisions.map(d=>({...d,status:'decision',kind:'decision'}));
   else{const run=RUNS[view.id];if(!run)return[];list=filter==='screens'?run.states:filter==='all'?run.items:run.items.filter(i=>i.status===filter);}
   return hide?list.filter(i=>!V(i)):list;}
@@ -146,16 +147,16 @@ function nav(){const {current,earlier}=partition();
   $('#earlier')?.addEventListener('click',()=>{earlierOpen=!earlierOpen;nav();});
   $('#nav').querySelectorAll('[data-screens]').forEach(b=>b.onclick=()=>openScreens(b.dataset.screens));}
 function browseMemory(){try{return JSON.parse(localStorage.getItem('cedar-ui-review-browse')||'null');}catch{return null;}}
-function rememberScreen(){if(view.kind!=='screens')return;try{localStorage.setItem('cedar-ui-review-browse',JSON.stringify({profile:view.profile,appFilter,screenSearch,groupFilter,widthFilter,thumbnails,state:items()[cursor]?.id,app:items()[cursor]?.app}));}catch{}}
+function rememberScreen(){if(view.kind!=='screens')return;try{localStorage.setItem('cedar-ui-review-browse',JSON.stringify({profile:view.profile,appFilter,screenSearch,groupFilter,widthFilter,thumbnails,changeFilter,humanFilter,uniqueImages,state:items()[cursor]?.id,app:items()[cursor]?.app}));}catch{}}
 async function openScreens(p){
   if(!SCREENS[p])SCREENS[p]=(await api('/api/screens?profile='+encodeURIComponent(p))).captures;
   captureChoices=Object.fromEntries(SCREENS[p].map(c=>[c.app,c.id]));view={kind:'screens',profile:p};
   const saved=browseMemory();appFilter=saved?.profile===p?saved.appFilter:'all';screenSearch=saved?.profile===p?saved.screenSearch:'';
-  groupFilter=saved?.profile===p?saved.groupFilter:'all';widthFilter=saved?.profile===p?saved.widthFilter:'all';thumbnails=!!saved?.thumbnails;
+  groupFilter=saved?.profile===p?saved.groupFilter:'all';widthFilter=saved?.profile===p?saved.widthFilter:'all';thumbnails=!!saved?.thumbnails;changeFilter=saved?.profile===p?saved.changeFilter||'all':'all';humanFilter=saved?.profile===p?saved.humanFilter||'all':'all';uniqueImages=!!saved?.uniqueImages;
   cursor=Math.max(0,items().findIndex(s=>s.id===saved?.state&&s.app===saved?.app));render();
 }
 async function chooseCapture(app,id){captureChoices[app]=id;const query=new URLSearchParams({profile:view.profile});for(const value of Object.values(captureChoices))query.append('capture',value);SCREENS[view.profile]=(await api('/api/screens?'+query)).captures;cursor=0;render();}
-function chips(i){if(i.kind==='screen')return `<span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}${i.width?`<span class="chip">${i.width}px</span>`:''}`;
+function chips(i){if(i.kind==='screen')return `<span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}${i.width?`<span class="chip">${i.width}px</span>`:''}<span class="chip">${esc(i.change)}</span>${i.human?.status?`<span class="chip mine">${esc(i.human.status)}</span>`:''}`;
   const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
   if(i.severity)s+=`<span class="chip sev-${esc(i.severity)}">${esc(i.severity)}</span>`;
   if(i.provisional)s+='<span class="chip provisional">Provisional</span>';
@@ -170,16 +171,19 @@ function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.le
     head+=`<input id="screen-search" type="search" placeholder="Search screens" aria-label="Search screens" value="${esc(screenSearch)}">`+
       select('screen-group','All categories',groupFilter,[...new Set(every.map(s=>s.group))].sort())+
       select('screen-width','All widths',widthFilter,[...new Set(every.map(s=>s.width).filter(Boolean))].sort((a,b)=>a-b))+
-      `<button id="thumbnails" aria-pressed="${thumbnails}">${thumbnails?'Hide thumbnails':'Show thumbnails'}</button><span class="note">${all.length} matching</span>`;}
+      `<button id="thumbnails" aria-pressed="${thumbnails}">${thumbnails?'Hide thumbnails':'Show thumbnails'}</button><span class="note">${all.length} matching</span>`+select('screen-change','All changes',changeFilter,['new','changed','unchanged','missing','removed','no-baseline'])+select('screen-human','All inspection states',humanFilter,['uninspected','inspected','attention','bookmark'])+`<label><input id="unique-images" type="checkbox" ${uniqueImages?'checked':''}> Hide identical images</label>`;}
   else if(view.kind==='run'){const run=RUNS[view.id];const n=k=>k==='all'?run.items.length:k==='screens'?run.states.length:run.items.filter(i=>i.status===k).length;
     head=FILTERS.filter(([k])=>k==='all'||n(k)).map(([k,l])=>`<button data-filter="${k}" class="${filter===k?'on':''}">${l} ${n(k)}</button>`).join('');}
   $('#list').innerHTML=`<div id="filters">${head}${view.kind==='screens'?'':`<label><input type="checkbox" id="hide" ${hide?'checked':''}> Hide answered</label>`}</div>`+
-    (all.map((i,n)=>`<div class="row ${n===cursor?'on':''}" data-n="${n}">${i.kind==='screen'&&thumbnails?`<img loading="lazy" src="${esc(i.src)}" alt="">`:""}<div class="t">${esc(i.title)}</div><div class="chips">${chips(i)}</div></div>`).join('')||'<div class="empty">Nothing here.</div>');
+    (all.map((i,n)=>`<div class="row ${n===cursor?'on':''}" data-n="${n}">${i.kind==='screen'&&thumbnails&&i.src?`<img loading="lazy" src="${esc(i.src)}" alt="">`:""}<div class="t">${esc(i.title)}</div><div class="chips">${chips(i)}</div></div>`).join('')||'<div class="empty">Nothing here.</div>');
   $('#list').querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;cursor=0;render();});
   if($('#hide'))$('#hide').onchange=e=>{hide=e.target.checked;cursor=0;render();};
   if($('#screen-search'))$('#screen-search').oninput=e=>{screenSearch=e.target.value;const position=e.target.selectionStart;cursor=0;list();detail();$('#screen-search').focus();$('#screen-search').setSelectionRange(position,position);};
   if($('#screen-group'))$('#screen-group').onchange=e=>{groupFilter=e.target.value;cursor=0;render();};
   if($('#screen-width'))$('#screen-width').onchange=e=>{widthFilter=e.target.value;cursor=0;render();};
+  if($('#screen-change'))$('#screen-change').onchange=e=>{changeFilter=e.target.value;cursor=0;render();};
+  if($('#screen-human'))$('#screen-human').onchange=e=>{humanFilter=e.target.value;cursor=0;render();};
+  if($('#unique-images'))$('#unique-images').onchange=e=>{uniqueImages=e.target.checked;cursor=0;render();};
   if($('#thumbnails'))$('#thumbnails').onclick=()=>{thumbnails=!thumbnails;render();};
   $('#list').querySelectorAll('[data-app-filter]').forEach(b=>b.onclick=()=>{appFilter=b.dataset.appFilter;cursor=0;render();});
   $('#list').querySelectorAll('.row').forEach(r=>r.onclick=()=>{cursor=+r.dataset.n;list();detail();});
@@ -191,11 +195,16 @@ function detail(){rememberScreen();const i=items()[cursor];if(!i){$('#detail').i
   if(i.kind==='screen'){const all=items();
     $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><label>Capture <select id="capture-choice" class="capture-select" aria-label="Capture for this application">${i.capture.choices.map(c=>`<option value="${esc(c.id)}" ${c.id===i.capture.id?'selected':''}>${esc(c.updated)} · ${esc(c.status)} · ${c.states} images · ${esc(c.id)}</option>`).join('')}</select></label><p class="note">${esc(i.capture.status)} at capture · ${i.capture.required} required states · ${i.capture.missing.length} missing · build ${esc(i.capture.build.slice(0,12)||'unknown')}. Historical evidence; current deployment has not been checked.</p>${i.capture.newerAvailable?'<p class="note">A newer capture is available in the selector.</p>':''}${i.capture.problems.length?`<details><summary>Capture limitations (${i.capture.problems.length})</summary><p>${i.capture.problems.map(esc).join('<br>')}</p></details>`:''}${i.diagnostic?'<p class="chip provisional">Diagnostic image: the requested state was not reached.</p>':''}<div class="chips"><span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}<span class="chip">captured ${esc(day(i.captured))} ${esc(clock(i.captured))}</span></div>
       <p class="note">${esc(i.id)}${i.viewport?` · ${i.viewport.width} × ${i.viewport.height}`:''}</p>${i.note?`<p>${esc(i.note)}</p>`:''}<p class="note">Screen ${cursor+1} of ${all.length} · <kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>Enter</kbd> full size</p>
-      <figure class="screen" data-shot="${cursor}"><img src="${esc(i.src)}" alt="${esc(i.title)}"></figure>`;
+      <p class="note">Image: ${esc(i.change)}${i.capture.previousCapture?` compared with ${esc(day(i.capture.previousCapture.updated))} ${esc(clock(i.capture.previousCapture.updated))} · build ${esc(i.capture.previousCapture.build.slice(0,12))}`:''}. ${i.duplicateOf?`Identical screenshot also shown by ${esc(i.duplicateOf)}.`:''}</p>
+      ${i.src?`<div class="acts"><button data-screen-status="inspected">Mark inspected</button><button data-screen-status="attention">Needs attention</button><button data-screen-status="bookmark">Bookmark</button>${i.human?'<button id="clear-screen-note">Clear inspection</button>':''}<span class="note">${esc(i.human?.status||'Not inspected')}</span></div><textarea id="screen-note" aria-label="Screen note" placeholder="Note about this captured state">${esc(i.human?.note||'')}</textarea><p id="screen-note-status" role="status"></p><figure class="screen" data-shot="${cursor}"><img src="${esc(i.src)}" alt="${esc(i.title)}"></figure>`:'<p>No screenshot was captured for this state.</p>'}
+      ${i.previous?`<details id="comparison"><summary>Compare previous and selected capture</summary><div class="comparison"><figure><figcaption>Previous capture</figcaption><img src="${esc(i.previous)}" alt="Previous ${esc(i.title)}"></figure><figure><figcaption>Selected capture</figcaption>${i.src?`<img src="${esc(i.src)}" alt="Selected ${esc(i.title)}">`:'No current image'}</figure></div></details>`:''}`;
     $('#capture-choice').onchange=e=>chooseCapture(i.app,e.target.value);
-    $('#detail').querySelector('[data-shot]').onclick=()=>enlarge(cursor);
+    $('#detail').querySelector('[data-shot]')?.addEventListener('click',()=>enlarge(cursor));
+    $('#detail').querySelectorAll('[data-screen-status]').forEach(b=>b.onclick=()=>saveScreenNote(i,{status:b.dataset.screenStatus}));
+    if($('#screen-note'))$('#screen-note').onchange=()=>saveScreenNote(i,{});
+    if($('#clear-screen-note'))$('#clear-screen-note').onclick=()=>saveScreenNote(i,{clear:true});
     // The neighbours load while this screen is looked at, so stepping does not wait for them.
-    [cursor+1,cursor-1,cursor+2].forEach(k=>{if(all[k]){const image=new Image();image.src=all[k].src;}});
+    [cursor+1,cursor-1,cursor+2].forEach(k=>{if(all[k]?.src){const image=new Image();image.src=all[k].src;}});
     $('#detail').scrollTop=0;return;}
   const v=V(i)||{},state=filter==='screens'&&view.kind==='run',shared=sharing(i);
   const options=(i.options||[]).map(o=>`<button class="opt ${o.recommended?'rec':''} ${v.option===o.key?'on':''}" data-option="${esc(o.key)}"><kbd>${esc(o.key)}</kbd><span><b>${esc(o.label)}</b>${o.recommended?' <small>(recommended)</small>':''}<br><small>${esc(o.detail||'')}</small></span></button>`).join('');
@@ -223,6 +232,10 @@ function detail(){rememberScreen();const i=items()[cursor];if(!i){$('#detail').i
   $('#detail').querySelectorAll('[data-shot]').forEach(f=>f.onclick=()=>enlarge(+f.dataset.shot));
   $('#detail').querySelectorAll('[data-link]').forEach(b=>b.onclick=()=>link(b.dataset.link));
   $('#note').onchange=e=>answer({note:e.target.value},true);}
+async function saveScreenNote(i,change){const note=$('#screen-note')?.value??i.human?.note??'';
+  try{const human=await api('/api/screen-note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({capture:i.capture.id,state:i.id,evidenceId:i.evidenceId,status:i.human?.status??null,note,...change})});
+    const stored=SCREENS[view.profile].find(c=>c.id===i.capture.id)?.screens.find(s=>s.id===i.id);if(stored)stored.human=human;list();detail();if($('#screen-note-status'))$('#screen-note-status').textContent='Saved';
+  }catch(e){if($('#screen-note-status'))$('#screen-note-status').textContent='Not saved: '+e.message;}}
 function render(){nav();list();detail();}
 async function post(body){INDEX.answers=await api('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   // Matches depend on every answer, so reviews read before this one are read again when opened.
@@ -235,7 +248,7 @@ async function clear(){const i=items()[cursor];if(!i||i.kind==='screen')return;a
 async function link(issue){const i=items()[cursor];if(!i||!issue)return;try{await post({id:i.id,link:issue});}catch(e){alert('Link not saved: '+e.message);}render();}
 function enlarge(n){
   if(view.kind==='screens'){const all=items();if(!all.length)return;cursor=(n+all.length)%all.length;shot=cursor;list();detail();
-    const s=all[cursor];$('#lightbox img').src=s.src;$('#image-caption').textContent=`${s.area} · ${s.title}${s.note?'. '+s.note:''}  ·  ←/→ to step, Esc to close`;$('#lightbox').classList.add('on');return;}
+    const s=all[cursor];if(!s.src){close();return;}$('#lightbox img').src=s.src;$('#image-caption').textContent=`${s.area} · ${s.title}${s.note?'. '+s.note:''}  ·  ←/→ to step, Esc to close`;$('#lightbox').classList.add('on');return;}
   const i=items()[cursor];if(!i||!(i.images||[]).length)return;shot=(n+i.images.length)%i.images.length;
   $('#lightbox img').src=i.images[shot].src;const s=i.images[shot];$('#image-caption').textContent=(s.caption?`${s.label}. ${s.caption}`:s.label)+'  ·  ←/→ to step, Esc to close';$('#lightbox').classList.add('on');}
 function close(){$('#lightbox').classList.remove('on');$('#answers').classList.remove('on');shot=-1;}
