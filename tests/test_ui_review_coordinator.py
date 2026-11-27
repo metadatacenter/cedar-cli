@@ -211,6 +211,28 @@ class CoordinatorTest(unittest.TestCase):
         self.assertTrue((self.output / 'report.html').exists())
         self.assertTrue(all(resume for directory, resume, _ in runner.calls if directory.name == 'calibration'))
 
+    def test_targeted_review_is_explicit_and_never_claims_whole_capture_coverage(self):
+        self.assertEqual(0, self.run_coordinator(selected_states=['state-0']))
+        report = c.read_json(self.output / 'report.json')
+        self.assertEqual('TARGETED_REVIEWED', report['verdict'])
+        self.assertEqual(3, report['coverage']['captured'])
+        self.assertEqual(1, report['coverage']['assessed'])
+        self.assertEqual(['state-1', 'supplemental'], report['coverage']['notReviewed'])
+        self.assertIn('No full-application acceptance', report['scope'])
+        with self.assertRaisesRegex(ValueError, 'partition changed'):
+            self.run_coordinator(resume=True, selected_states=['state-1'])
+        with self.assertRaisesRegex(ValueError, 'existing captured state'):
+            c.make_plan(self.packet, self.home, selected_states=['unknown'])
+
+    def test_targeted_plan_includes_linked_sequences(self):
+        path = self.packet / 'capture.json'
+        capture = c.read_json(path)
+        capture['states'][0]['relatedStates'] = ['state-1']
+        c.write_json(path, capture)
+        plan = c.make_plan(self.packet, self.home, selected_states=['state-0'])
+        self.assertEqual(['state-0', 'state-1'], plan['states'])
+        self.assertEqual(['supplemental'], plan['notReviewed'])
+
     def test_omitted_state_never_passes_even_if_audit_reviewer_assesses_it(self):
         self.assertEqual(self.run_coordinator(runner=OfflineRunner(self.packet, omit='supplemental')), 2)
         report = c.read_json(self.output / 'report.json')

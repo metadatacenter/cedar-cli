@@ -110,6 +110,7 @@ def discover_runs(reports):
         capture = _optional(directory / 'packet' / 'capture.json') or {}
         groups = report.get('findings', []) + report.get('designDecisions', []) + report.get('dismissed', [])
         runs.append({'id': 'coordinated/' + directory.name, 'kind': 'coordinated', 'name': directory.name,
+                     'targeted': bool(report.get('targeted')),
                      'app': report.get('app', 'designer'), 'profile': capture.get('profile', ''),
                      'verdict': report.get('verdict', ''), 'coverage': report.get('coverage', {}),
                      'runner': runner.get('runner', ''), 'model': runner.get('requestedModel', ''),

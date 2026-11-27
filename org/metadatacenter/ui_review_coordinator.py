@@ -246,21 +246,41 @@ def approved_rules(home):
     return text[start:end].strip()
 
 
-def make_plan(source, home, batch_size=8, model=None):
+def make_plan(source, home, batch_size=8, model=None, selected_states=None):
     if not 1 <= batch_size <= 12:
         raise ValueError('Batch size must be between 1 and 12')
     capture, sha, calibration, cal_sha = inspect_packet(source)
     rules = approved_rules(home)
+    selected = capture['states']
+    if selected_states is not None:
+        wanted = set(selected_states)
+        by_id = {s['id']: s for s in selected}
+        if not wanted or wanted - by_id.keys():
+            raise ValueError('Select at least one existing captured state; unknown: ' + ', '.join(sorted(wanted - by_id.keys())))
+        # Before/after sequences are primary evidence too, not optional context a batch can omit.
+        pending = list(wanted)
+        while pending:
+            for related in by_id[pending.pop()].get('relatedStates', []):
+                if related not in wanted:
+                    wanted.add(related)
+                    pending.append(related)
+        selected = [s for s in selected if s['id'] in wanted]
     jobs = [{'id': f'batch-{index // batch_size + 1:03}',
-             'states': [s['id'] for s in capture['states'][index:index + batch_size]]}
-            for index in range(0, len(capture['states']), batch_size)]
+             'states': [s['id'] for s in selected[index:index + batch_size]]}
+            for index in range(0, len(selected), batch_size)]
     # Recheck one state per batch, chosen deterministically without selecting only reported defects.
     audit = [min(job['states'], key=lambda id_: digest(id_.encode())) for job in jobs]
-    return {'schemaVersion': 1, 'app': capture['app'], 'captureSha256': sha,
+    plan = {'schemaVersion': 1, 'app': capture['app'], 'captureSha256': sha,
             'calibrationSha256': cal_sha, 'coordinatorSha256': digest(Path(__file__).read_bytes()),
             'rules': rules, 'rulesSha256': digest(rules.encode()), 'model': model,
-            'batchSize': batch_size, 'states': [s['id'] for s in capture['states']],
+            'batchSize': batch_size, 'states': [s['id'] for s in selected],
             'jobs': jobs, 'auditStates': audit, 'calibrationCases': len(calibration), 'scope': scope(capture['app'])}
+    if selected_states is not None:
+        plan.update({'targeted': True, 'requestedStates': sorted(set(selected_states)),
+                     'notReviewed': [s['id'] for s in capture['states'] if s['id'] not in wanted]})
+        plan['scope'] = (f'Targeted review of {len(selected)} of {len(capture["states"])} captured states, including linked sequences. '
+                         'No full-application acceptance is claimed. ' + plan['scope'])
+    return plan
 
 
 def copy_packet(source, target, capture, calibration):
@@ -976,7 +996,8 @@ def render_report(output, report):
 
 
 def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, timeout=900,
-               resume=False, plan_only=False, reviewer='codex', runner=None, harness=None, printer=print):
+               resume=False, plan_only=False, reviewer='codex', runner=None, harness=None, printer=print,
+               selected_states=None):
     source, output, home = Path(source).resolve(), Path(output).resolve(), Path(home).resolve()
     if output == source or source in output.parents or output in source.parents:
         raise ValueError('Review output must be separate from the original capture')
@@ -984,7 +1005,7 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
         raise ValueError('Workers must be between 1 and 4')
     if runner is None and reviewer not in REVIEWERS:
         raise ValueError('Unknown reviewer: ' + str(reviewer))
-    plan = make_plan(source, home, batch_size, model)
+    plan = make_plan(source, home, batch_size, model, selected_states=selected_states)
     if plan_only:
         printer(json.dumps({**plan, 'rules': '(approved rules fingerprinted above)'}, indent=2))
         return 0
@@ -1167,10 +1188,16 @@ def coordinate(source, output, home, *, batch_size=8, workers=2, model=None, tim
                 errors.append('Finding consolidation: ' + str(error))
         blockers += errors
         verdict = 'INCOMPLETE' if blockers else 'FINDINGS' if findings or automatic else 'DESIGN_REVIEW' if designs else 'REVIEWED'
+        if plan.get('targeted') and not blockers:
+            verdict = 'TARGETED_' + verdict
         report = {'schemaVersion': 1, 'app': plan['app'], 'verdict': verdict, 'captureSha256': sha,
                   'coverage': {'captured': len(ledger), 'assessed': len(ledger) - len(missing), 'missing': missing},
                   'findings': group_findings(findings, assignments), 'designDecisions': group_findings(designs, assignments),
                   'automaticFindings': automatic, 'dismissed': dismissed, 'blockers': blockers, 'scope': plan['scope']}
+        if plan.get('targeted'):
+            report['targeted'] = True
+            report['coverage'].update({'captured': len(capture['states']), 'selected': len(ledger),
+                                       'notReviewed': plan['notReviewed']})
         write_json(output / 'coverage.json', {'captureSha256': sha, 'states': ledger})
         write_json(output / 'report.json', report)
         render_report(output, report)

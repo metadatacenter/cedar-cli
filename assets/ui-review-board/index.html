@@ -108,13 +108,13 @@ function runner(run){const s=(run.runner||'').toLowerCase();return run.kind==='s
 const PROFILES={chromium:'Mouse','webkit-touch':'Touch'},APPS=['designer','workspace','metadata-editor','openview'];
 const day=ts=>new Date(ts).toLocaleDateString('en-GB',{day:'numeric',month:'short'}),clock=ts=>ts.slice(11,16);
 // The run's profile and reviewer; a run without a profile, or an earlier one, also needs its date to be told apart.
-function runTitle(run,earlier){return [PROFILES[run.profile],runner(run),(earlier||!PROFILES[run.profile])&&day(run.updated)+(earlier?' '+clock(run.updated):'')].filter(Boolean).join(' · ');}
+function runTitle(run,earlier){return [run.targeted?'Targeted':null,PROFILES[run.profile],runner(run),(earlier||!PROFILES[run.profile])&&day(run.updated)+(earlier?' '+clock(run.updated):'')].filter(Boolean).join(' · ');}
 function answeredIn(run){const prefix=run.id+'/';return Object.keys(A().links).filter(k=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')).length;}
 function runCounts(run){return `${run.kind==='single'?count(run.findings,'finding'):count(run.confirmed,'defect')} · ${answeredIn(run)} answered`;}
 function runEntry(run,earlier){return `<button class="entry ${view.kind==='run'&&view.id===run.id?'on':''}" data-run="${esc(run.id)}" title="${esc(run.name)}, reviewed ${esc(day(run.updated))} ${esc(clock(run.updated))}"><span class="name">${esc(runTitle(run,earlier))}</span><span class="sub">${esc(runCounts(run))}</span></button>`;}
 // The newest review of each application and profile is current; every other one is earlier. A capture
 // that records no profile predates them, when every capture drove Chromium with a mouse.
-function partition(){const seen=new Set(),current=[],earlier=[];for(const run of INDEX.runs){const key=run.app+'|'+(run.profile||'chromium');(seen.has(key)?earlier:current).push(run);seen.add(key);}return {current,earlier};}
+function partition(){const seen=new Set(),current=[],earlier=[];for(const run of INDEX.runs){const key=run.app+'|'+(run.profile||'chromium')+'|'+!!run.targeted;(seen.has(key)?earlier:current).push(run);seen.add(key);}return {current,earlier};}
 function byApp(runs,earlier){const order=[...APPS,...new Set(runs.map(r=>r.app).filter(a=>!APPS.includes(a)))];
   return order.filter(app=>runs.some(r=>r.app===app)).map(app=>`<h3>${esc(appName(app))}</h3>`+runs.filter(r=>r.app===app).map(r=>runEntry(r,earlier)).join('')).join('');}
 function appName(a){return {designer:'Designer',workspace:'Workspace','metadata-editor':'Metadata Editor',openview:'OpenView'}[a]||a;}
