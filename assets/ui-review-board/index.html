@@ -35,7 +35,7 @@ nav .fold{display:block;border:0;background:none;padding:0;margin:14px 12px 4px;
 .chip.approved,.chip.option,.chip.passed,.chip.dismissed{background:var(--ok-bg);color:var(--ok)}
 .chip.mine{outline:1px solid currentColor}.chip.repeat{background:var(--sel);color:var(--accent)}
 .match{border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:8px 0;max-width:920px}.match .opt{width:100%;margin-top:4px}.chip.sev-high,.chip.sev-medium{font-weight:600}
-main{overflow:auto;padding:14px 18px 60px}main h2{font-size:19px;margin:0 0 4px}
+main{min-width:0;overflow:auto;padding:14px 18px 60px}main h2{font-size:19px;margin:0 0 4px}
 p{margin:6px 0;max-width:920px}.note{color:var(--muted)}
 .opts{display:grid;gap:6px;margin:10px 0;max-width:920px}
 .opt{display:flex;gap:10px;text-align:left;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:7px 10px}
@@ -47,7 +47,7 @@ textarea{width:100%;max-width:920px;min-height:56px;font:inherit;color:var(--fg)
 .shots figure{margin:0;width:230px;cursor:zoom-in}.shots img{width:100%;height:160px;object-fit:cover;object-position:top;border:1px solid var(--line);border-radius:4px;display:block;background:var(--panel)}
 .shots figcaption{font-size:11px;color:var(--muted);word-break:break-all}
 .question{font-size:16px;font-weight:500}
-.screen{margin:10px 0 0;max-width:1440px;cursor:zoom-in}.screen img{width:100%;height:auto;display:block;border:1px solid var(--line);border-radius:4px;background:var(--panel)}
+.screen{margin:10px 0 0;max-width:1440px;cursor:zoom-in}.screen img{width:auto;max-width:100%;height:auto;display:block;border:1px solid var(--line);border-radius:4px;background:var(--panel)}
 .steps{list-style:none;padding:0;margin:12px 0;max-width:1100px}
 .steps li{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
 .steps li>div{flex:1 1 260px;min-width:0}
@@ -61,6 +61,11 @@ table{border-collapse:collapse;font-size:13px;max-width:920px}td{border-top:1px 
 .overlay.on{display:flex}#lightbox{background:rgba(0,0,0,.86)}#lightbox img{max-width:96vw;max-height:88vh;background:#fff}#lightbox div{color:#ddd;font-size:12px;margin-top:6px}
 #answers{background:rgba(0,0,0,.45);padding:16px}#answers .box{background:var(--bg);border-radius:8px;padding:14px;width:min(760px,100%)}#answers textarea{min-height:260px}
 @media (max-width:980px){body{grid-template:auto auto auto 1fr/1fr;height:auto}nav,#list{max-height:45vh;border-right:0;border-bottom:1px solid var(--line)}.keys{display:none}.shots figure{width:calc(50% - 4px)}.shots img{height:auto}}
+select,input[type=search]{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:4px;max-width:100%}
+#filters input[type=search]{width:100%}#filters select{max-width:165px;font-size:12px}
+.capture-select{width:100%}.row img{display:block;width:100%;height:140px;object-fit:contain;background:var(--panel);margin-bottom:5px}
+#lightbox .lightbox-tools{position:fixed;top:8px;right:12px;display:flex;gap:8px;background:var(--bg);padding:5px;border-radius:5px}
+#lightbox.actual{overflow:auto;display:block;padding:60px 20px 30px}#lightbox.actual img{max-width:none;max-height:none;display:block;margin:auto}
 </style>
 </head>
 <body>
@@ -72,7 +77,7 @@ table{border-collapse:collapse;font-size:13px;max-width:920px}td{border-top:1px 
 <nav id="nav" aria-label="Reviews"></nav>
 <div id="list" aria-label="Items"></div>
 <main id="detail"><div class="empty">Choose a review on the left.</div></main>
-<div id="lightbox" class="overlay"><img alt=""><div></div></div>
+<div id="lightbox" class="overlay"><div class="lightbox-tools"><button id="actual-size">Actual size</button><button id="close-image">Close</button></div><img alt=""><div id="image-caption"></div></div>
 <div id="answers" class="overlay"><div class="box"><b>My answers</b><p class="note">Every answer is also saved on this machine. Copy this text to share it.</p>
 <textarea readonly></textarea><div class="acts"><button id="answersCopy">Copy</button><button id="answersClose">Close</button></div></div></div>
 <script>
@@ -89,7 +94,7 @@ const CHOICES=[['needs-fix','x','Fix it','Change the product. Say how in the not
 ['approved','a','Leave as is','The current behavior is acceptable or intended.'],['deferred','d','Decide later','Keep it open.']];
 const FILTERS=[['all','All'],['confirmed','Confirmed'],['uncertain','Uncertain'],['design','Design'],['not-verified','Not verified'],['dismissed','Dismissed'],['screens','Screens']];
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let SCREENS={},captureChoices={},appFilter='all';
+let SCREENS={},captureChoices={},appFilter='all',screenSearch='',groupFilter='all',widthFilter='all',thumbnails=false;
 let INDEX={runs:[],decisions:[],answers:{issues:{},links:{}}},RUNS={},view={kind:'decisions'},filter='all',hide=false,cursor=0,shot=-1,earlierOpen=false;
 const A=()=>INDEX.answers;
 // A finding answers through the issue it is linked to; a decision or a screen answers under its own identifier.
@@ -115,12 +120,12 @@ function appName(a){return {designer:'Designer',workspace:'Workspace','metadata-
 async function load(){INDEX=await api('/api/index');
   const latest=INDEX.runs.find(r=>r.kind==='coordinated');
   summarise();
-  if(INDEX.decisions.length)view={kind:'decisions'};else if(latest)await openRun(latest.id);render();}
+  if(browseMemory()?.profile&&INDEX.screens?.[browseMemory().profile])return openScreens(browseMemory().profile);if(INDEX.decisions.length)view={kind:'decisions'};else if(latest)await openRun(latest.id);render();}
 async function openRun(id){if(!RUNS[id])RUNS[id]=await api('/api/run?id='+encodeURIComponent(id));view={kind:'run',id};cursor=0;}
 // Every captured state of the latest complete capture where available, for looking through rather than answering.
-function screenList(){return (SCREENS[view.profile]||[]).flatMap(c=>c.screens.map(s=>({...s,kind:'screen',title:s.id,app:c.app,area:c.name,captured:c.updated,capture:c})));}
+function screenList(){return (SCREENS[view.profile]||[]).flatMap(c=>c.screens.map(s=>({...s,kind:'screen',title:s.title||s.id,app:c.app,area:c.name,captured:c.updated,capture:c})));}
 function items(){let list;
-  if(view.kind==='screens'){const all=screenList();return appFilter==='all'?all:all.filter(s=>s.app===appFilter);}
+  if(view.kind==='screens'){const terms=screenSearch.toLowerCase().split(/\s+/).filter(Boolean);return screenList().filter(s=>(appFilter==='all'||s.app===appFilter)&&(groupFilter==='all'||s.group===groupFilter)&&(widthFilter==='all'||String(s.width)===widthFilter)&&terms.every(t=>[s.id,s.title,s.note,s.group,s.area].join(' ').toLowerCase().includes(t)));}
   if(view.kind==='decisions')list=INDEX.decisions.map(d=>({...d,status:'decision',kind:'decision'}));
   else{const run=RUNS[view.id];if(!run)return[];list=filter==='screens'?run.states:filter==='all'?run.items:run.items.filter(i=>i.status===filter);}
   return hide?list.filter(i=>!V(i)):list;}
@@ -139,10 +144,18 @@ function nav(){const {current,earlier}=partition();
   $('#nav').querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view={kind:'decisions'};cursor=0;render();});
   $('#nav').querySelectorAll('[data-run]').forEach(b=>b.onclick=async()=>{filter='all';await openRun(b.dataset.run);render();});
   $('#earlier')?.addEventListener('click',()=>{earlierOpen=!earlierOpen;nav();});
-  $('#nav').querySelectorAll('[data-screens]').forEach(b=>b.onclick=async()=>{const p=b.dataset.screens;
-    if(!SCREENS[p])SCREENS[p]=(await api('/api/screens?profile='+encodeURIComponent(p))).captures;captureChoices={};view={kind:'screens',profile:p};appFilter='all';cursor=0;render();});}
+  $('#nav').querySelectorAll('[data-screens]').forEach(b=>b.onclick=()=>openScreens(b.dataset.screens));}
+function browseMemory(){try{return JSON.parse(localStorage.getItem('cedar-ui-review-browse')||'null');}catch{return null;}}
+function rememberScreen(){if(view.kind!=='screens')return;try{localStorage.setItem('cedar-ui-review-browse',JSON.stringify({profile:view.profile,appFilter,screenSearch,groupFilter,widthFilter,thumbnails,state:items()[cursor]?.id,app:items()[cursor]?.app}));}catch{}}
+async function openScreens(p){
+  if(!SCREENS[p])SCREENS[p]=(await api('/api/screens?profile='+encodeURIComponent(p))).captures;
+  captureChoices=Object.fromEntries(SCREENS[p].map(c=>[c.app,c.id]));view={kind:'screens',profile:p};
+  const saved=browseMemory();appFilter=saved?.profile===p?saved.appFilter:'all';screenSearch=saved?.profile===p?saved.screenSearch:'';
+  groupFilter=saved?.profile===p?saved.groupFilter:'all';widthFilter=saved?.profile===p?saved.widthFilter:'all';thumbnails=!!saved?.thumbnails;
+  cursor=Math.max(0,items().findIndex(s=>s.id===saved?.state&&s.app===saved?.app));render();
+}
 async function chooseCapture(app,id){captureChoices[app]=id;const query=new URLSearchParams({profile:view.profile});for(const value of Object.values(captureChoices))query.append('capture',value);SCREENS[view.profile]=(await api('/api/screens?'+query)).captures;cursor=0;render();}
-function chips(i){if(i.kind==='screen')return `<span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}`;
+function chips(i){if(i.kind==='screen')return `<span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}${i.width?`<span class="chip">${i.width}px</span>`:''}`;
   const v=V(i);let s=`<span class="chip ${esc(i.status)}">${LABEL[i.status]||esc(i.status)}</span>`;
   if(i.severity)s+=`<span class="chip sev-${esc(i.severity)}">${esc(i.severity)}</span>`;
   if(i.provisional)s+='<span class="chip provisional">Provisional</span>';
@@ -152,23 +165,32 @@ function chips(i){if(i.kind==='screen')return `<span class="chip">${esc(i.area)}
   else if((i.matches||[]).length)s+=`<span class="chip repeat">${i.matches[0].likely?'Likely repeat':'Possible repeat'}</span>`;return s;}
 function list(){const all=items();if(cursor>=all.length)cursor=Math.max(0,all.length-1);
   let head='';if(view.kind==='screens'){const every=screenList();const apps=[...new Set(every.map(s=>s.app))];
-    head=[['all','All',every.length],...apps.map(a=>[a,appName(a),every.filter(s=>s.app===a).length])].map(([k,l,n])=>`<button data-app-filter="${k}" class="${appFilter===k?'on':''}">${esc(l)} ${n}</button>`).join('');}
+    head=[['all','All',every.length],...apps.map(a=>[a,appName(a),every.filter(s=>s.app===a).length])].map(([k,l,n])=>`<button data-app-filter="${k}" class="${appFilter===k?'on':''}">${esc(l)} ${n}</button>`).join('');
+    const select=(id,label,value,values)=>`<select id="${id}" aria-label="${label}"><option value="all">${label}</option>${values.map(v=>`<option ${String(v)===value?'selected':''} value="${esc(v)}">${esc(v)}</option>`).join('')}</select>`;
+    head+=`<input id="screen-search" type="search" placeholder="Search screens" aria-label="Search screens" value="${esc(screenSearch)}">`+
+      select('screen-group','All categories',groupFilter,[...new Set(every.map(s=>s.group))].sort())+
+      select('screen-width','All widths',widthFilter,[...new Set(every.map(s=>s.width).filter(Boolean))].sort((a,b)=>a-b))+
+      `<button id="thumbnails" aria-pressed="${thumbnails}">${thumbnails?'Hide thumbnails':'Show thumbnails'}</button><span class="note">${all.length} matching</span>`;}
   else if(view.kind==='run'){const run=RUNS[view.id];const n=k=>k==='all'?run.items.length:k==='screens'?run.states.length:run.items.filter(i=>i.status===k).length;
     head=FILTERS.filter(([k])=>k==='all'||n(k)).map(([k,l])=>`<button data-filter="${k}" class="${filter===k?'on':''}">${l} ${n(k)}</button>`).join('');}
   $('#list').innerHTML=`<div id="filters">${head}${view.kind==='screens'?'':`<label><input type="checkbox" id="hide" ${hide?'checked':''}> Hide answered</label>`}</div>`+
-    (all.map((i,n)=>`<div class="row ${n===cursor?'on':''}" data-n="${n}"><div class="t">${esc(i.title)}</div><div class="chips">${chips(i)}</div></div>`).join('')||'<div class="empty">Nothing here.</div>');
+    (all.map((i,n)=>`<div class="row ${n===cursor?'on':''}" data-n="${n}">${i.kind==='screen'&&thumbnails?`<img loading="lazy" src="${esc(i.src)}" alt="">`:""}<div class="t">${esc(i.title)}</div><div class="chips">${chips(i)}</div></div>`).join('')||'<div class="empty">Nothing here.</div>');
   $('#list').querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;cursor=0;render();});
   if($('#hide'))$('#hide').onchange=e=>{hide=e.target.checked;cursor=0;render();};
+  if($('#screen-search'))$('#screen-search').oninput=e=>{screenSearch=e.target.value;const position=e.target.selectionStart;cursor=0;list();detail();$('#screen-search').focus();$('#screen-search').setSelectionRange(position,position);};
+  if($('#screen-group'))$('#screen-group').onchange=e=>{groupFilter=e.target.value;cursor=0;render();};
+  if($('#screen-width'))$('#screen-width').onchange=e=>{widthFilter=e.target.value;cursor=0;render();};
+  if($('#thumbnails'))$('#thumbnails').onclick=()=>{thumbnails=!thumbnails;render();};
   $('#list').querySelectorAll('[data-app-filter]').forEach(b=>b.onclick=()=>{appFilter=b.dataset.appFilter;cursor=0;render();});
   $('#list').querySelectorAll('.row').forEach(r=>r.onclick=()=>{cursor=+r.dataset.n;list();detail();});
   $('#list .row.on')?.scrollIntoView({block:'nearest'});}
 // A decision's screens, in order, each beside what it shows.
 function steps(images){return images.length?`<ol class="steps">${images.map((s,n)=>`<li><figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"></figure><div><b>${n+1}. ${esc(s.label)}</b>${s.caption?`<p>${esc(s.caption)}</p>`:''}</div></li>`).join('')}</ol>`:'';}
 function shots(images){return images.length?`<div class="shots">${images.map((s,n)=>`<figure data-shot="${n}"><img loading="lazy" src="${esc(s.src)}" alt="${esc(s.label)}"><figcaption>${esc(s.label)}</figcaption></figure>`).join('')}</div>`:'<p class="note">No screenshot retained for this item.</p>';}
-function detail(){const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
+function detail(){rememberScreen();const i=items()[cursor];if(!i){$('#detail').innerHTML='<div class="empty">Nothing selected.</div>';return;}
   if(i.kind==='screen'){const all=items();
-    $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><label>Capture <select id="capture-choice" aria-label="Capture for this application">${i.capture.choices.map(c=>`<option value="${esc(c.id)}" ${c.id===i.capture.id?'selected':''}>${esc(c.updated)} · ${esc(c.status)} · ${c.states} images · ${esc(c.id)}</option>`).join('')}</select></label><p class="note">${esc(i.capture.status)} at capture · ${i.capture.required} required states · ${i.capture.missing.length} missing · build ${esc(i.capture.build.slice(0,12)||'unknown')}. Historical evidence; current deployment has not been checked.</p>${i.capture.newerAvailable?'<p class="note">A newer capture is available in the selector.</p>':''}${i.capture.problems.length?`<details><summary>Capture limitations (${i.capture.problems.length})</summary><p>${i.capture.problems.map(esc).join('<br>')}</p></details>`:''}${i.diagnostic?'<p class="chip provisional">Diagnostic image: the requested state was not reached.</p>':''}<div class="chips"><span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}<span class="chip">captured ${esc(day(i.captured))} ${esc(clock(i.captured))}</span></div>
-      ${i.note?`<p>${esc(i.note)}</p>`:''}<p class="note">Screen ${cursor+1} of ${all.length} · <kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>Enter</kbd> full size</p>
+    $('#detail').innerHTML=`<h2>${esc(i.title)}</h2><label>Capture <select id="capture-choice" class="capture-select" aria-label="Capture for this application">${i.capture.choices.map(c=>`<option value="${esc(c.id)}" ${c.id===i.capture.id?'selected':''}>${esc(c.updated)} · ${esc(c.status)} · ${c.states} images · ${esc(c.id)}</option>`).join('')}</select></label><p class="note">${esc(i.capture.status)} at capture · ${i.capture.required} required states · ${i.capture.missing.length} missing · build ${esc(i.capture.build.slice(0,12)||'unknown')}. Historical evidence; current deployment has not been checked.</p>${i.capture.newerAvailable?'<p class="note">A newer capture is available in the selector.</p>':''}${i.capture.problems.length?`<details><summary>Capture limitations (${i.capture.problems.length})</summary><p>${i.capture.problems.map(esc).join('<br>')}</p></details>`:''}${i.diagnostic?'<p class="chip provisional">Diagnostic image: the requested state was not reached.</p>':''}<div class="chips"><span class="chip">${esc(i.area)}</span>${i.group?`<span class="chip">${esc(i.group)}</span>`:''}<span class="chip">captured ${esc(day(i.captured))} ${esc(clock(i.captured))}</span></div>
+      <p class="note">${esc(i.id)}${i.viewport?` · ${i.viewport.width} × ${i.viewport.height}`:''}</p>${i.note?`<p>${esc(i.note)}</p>`:''}<p class="note">Screen ${cursor+1} of ${all.length} · <kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>Enter</kbd> full size</p>
       <figure class="screen" data-shot="${cursor}"><img src="${esc(i.src)}" alt="${esc(i.title)}"></figure>`;
     $('#capture-choice').onchange=e=>chooseCapture(i.app,e.target.value);
     $('#detail').querySelector('[data-shot]').onclick=()=>enlarge(cursor);
@@ -213,20 +235,23 @@ async function clear(){const i=items()[cursor];if(!i||i.kind==='screen')return;a
 async function link(issue){const i=items()[cursor];if(!i||!issue)return;try{await post({id:i.id,link:issue});}catch(e){alert('Link not saved: '+e.message);}render();}
 function enlarge(n){
   if(view.kind==='screens'){const all=items();if(!all.length)return;cursor=(n+all.length)%all.length;shot=cursor;list();detail();
-    const s=all[cursor];$('#lightbox img').src=s.src;$('#lightbox div').textContent=`${s.area} · ${s.title}${s.note?'. '+s.note:''}  ·  ←/→ to step, Esc to close`;$('#lightbox').classList.add('on');return;}
+    const s=all[cursor];$('#lightbox img').src=s.src;$('#image-caption').textContent=`${s.area} · ${s.title}${s.note?'. '+s.note:''}  ·  ←/→ to step, Esc to close`;$('#lightbox').classList.add('on');return;}
   const i=items()[cursor];if(!i||!(i.images||[]).length)return;shot=(n+i.images.length)%i.images.length;
-  $('#lightbox img').src=i.images[shot].src;const s=i.images[shot];$('#lightbox div').textContent=(s.caption?`${s.label}. ${s.caption}`:s.label)+'  ·  ←/→ to step, Esc to close';$('#lightbox').classList.add('on');}
+  $('#lightbox img').src=i.images[shot].src;const s=i.images[shot];$('#image-caption').textContent=(s.caption?`${s.label}. ${s.caption}`:s.label)+'  ·  ←/→ to step, Esc to close';$('#lightbox').classList.add('on');}
 function close(){$('#lightbox').classList.remove('on');$('#answers').classList.remove('on');shot=-1;}
 function answerText(){
   return Object.entries(A().issues).map(([id,v])=>{const d=INDEX.decisions.find(x=>x.id===id);const n=Object.values(A().links).filter(l=>l.issue===id).length;
     return `${v.title} [${id}]: ${answerLabel(v,d&&d.options)}${n>1?` (${n} findings)`:''}${v.note?' — '+v.note:''}`;}).join('\n')||'No answers yet.';}
-$('#lightbox').onclick=close;$('#answersClose').onclick=close;
+$('#lightbox').onclick=e=>{if(e.target===$('#lightbox')&&!$('#lightbox').classList.contains('actual'))close();};
+$('#close-image').onclick=close;
+$('#actual-size').onclick=()=>{const actual=$('#lightbox').classList.toggle('actual');$('#actual-size').textContent=actual?'Fit to window':'Actual size';};$('#answersClose').onclick=close;
 $('#answersButton').onclick=()=>{$('#answers textarea').value=answerText();$('#answers').classList.add('on');};
 $('#answersCopy').onclick=async()=>{const t=$('#answers textarea');t.select();try{await navigator.clipboard.writeText(t.value);}catch(e){document.execCommand('copy');}$('#answersCopy').textContent='Copied';};
 document.addEventListener('keydown',e=>{
   if($('#answers').classList.contains('on')){if(e.key==='Escape')close();return;}
-  if(e.target.tagName==='TEXTAREA'){if(e.key==='Escape')e.target.blur();return;}if(e.target.tagName==='INPUT')return;
+  if(e.target.tagName==='TEXTAREA'){if(e.key==='Escape')e.target.blur();return;}
   if($('#lightbox').classList.contains('on')){if(['Escape','Enter',' '].includes(e.key))close();else if(e.key==='ArrowRight')enlarge(shot+1);else if(e.key==='ArrowLeft')enlarge(shot-1);e.preventDefault();return;}
+  if(['INPUT','SELECT','BUTTON'].includes(e.target.tagName))return;
   const all=items(),i=all[cursor];
   if(e.key==='j'||e.key==='ArrowDown'){cursor=Math.min(all.length-1,cursor+1);list();detail();}
   else if(e.key==='k'||e.key==='ArrowUp'){cursor=Math.max(0,cursor-1);list();detail();}

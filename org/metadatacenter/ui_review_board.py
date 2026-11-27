@@ -316,19 +316,35 @@ def screens(reports, profile, selected=()):
         meta = latest[(profile, app)]
         directory = Path(reports) / 'ui-review' / meta['id']
         capture = _optional(directory / 'capture.json') or {}
+        catalog = _optional(directory / 'collector.json') or {}
+        definitions = {s['id']: s for s in catalog.get('scenarios', [])}
+        if not definitions:
+            definitions = {s['id']: s for s in (_optional(directory / 'coverage.json') or {}).get('scenarios', [])}
         states = []
         for state in capture.get('states', []):
             shot = state.get('screenshot')
             if not _capture_image(directory, shot):
                 continue
             relative = (directory / shot).resolve().relative_to(Path(reports).resolve()).as_posix()
-            states.append({'id': state['id'], 'group': state_group(state['id']) if app == 'designer' else '',
+            definition = definitions.get(state['id'], {})
+            width = (state.get('viewport') or {}).get('width') or definition.get('width')
+            category = definition.get('category', '')
+            group = state_group(state['id']) if app == 'designer' else human_title(category or 'Other states')
+            if group == 'Other states' and category and category != 'authoring':
+                group = human_title(category)
+            states.append({'id': state['id'], 'title': definition.get('title') or human_title(state['id']),
+                           'group': group, 'width': width, 'viewport': state.get('viewport'),
                            'note': state.get('note', ''), 'diagnostic': state['id'].endswith('-unreached'),
                            'src': '/image?path=' + relative})
         choices = [c for c in available if c['profile'] == profile and c['app'] == app]
         out.append({**meta, 'name': APP_NAMES[app], 'screens': states, 'choices': choices,
                     'newerAvailable': choices[0]['id'] != meta['id']})
     return out
+
+
+def human_title(identifier):
+    words = re.sub(r'-(1440|1100|1024|900|768|375)$', '', identifier).replace('-', ' ')
+    return words[:1].upper() + words[1:]
 
 
 def decision_problems(reports, decision):
